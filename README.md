@@ -55,13 +55,13 @@ mio help
 
 - `check`：执行词法、语法、名称和静态类型检查。
 - `run`：检查源码，编译为字节码并执行。
-- `build`：基础字节码生成 Mochi v2，新核心类型指令使用 Mochi v8。
-- `exec`：执行 Mochi v1 至 v8 文件。
+- `build`：按所用特性生成兼容的 Mochi 字节码，固定宽度整数使用 Mochi v11。
+- `exec`：执行 Mochi v1 至 v11 文件。
 - `disasm`：显示常量、主指令流和函数指令流。
 
 ## 已实现
 
-- `int64`、`float64`、`bool`、`string`、`T?`、`unit` 和一维同质数组类型语义。
+- `int8`、`int16`、`int32`、`int64`、`uint8`、`uint16`、`uint32`、`float32`、`float64`、`bool`、`string`、`T?`、`unit` 和一维同质数组类型语义。
 - `kaku` 变量声明、赋值和词法作用域。
 - `moshi` / `sore` 条件分支。
 - 顶层 `waza` 函数、静态参数与返回类型、递归和相互递归。
@@ -72,10 +72,12 @@ mio help
 - 算术、比较、相等、逻辑运算和短路求值。
 - `chant` 内置输出函数。
 - 数组字面量、变量推断、索引读取、共享元素修改、长度查询，以及数组函数参数和返回值。
-- Mochi v1 至 v8 兼容读取；v8 追加结构体、枚举、Map 与函数值指令。
+- Mochi v1 至 v11 兼容读取；v11 追加固定宽度整数常量与转换指令。
 - VM 栈限制、递归限制、指令预算和运行时字节码检查。
 
 完整语法和类型规则见 [docs/LANGUAGE.md](docs/LANGUAGE.md)，字节码格式见 [docs/MOCHI.md](docs/MOCHI.md)。
+
+标准库的物理目录、公开命名空间和实现前置条件见 [docs/BUNKO.md](docs/BUNKO.md)。
 
 ## 尚未实现
 
