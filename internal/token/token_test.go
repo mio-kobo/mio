@@ -12,6 +12,10 @@ func TestLookupIdent(t *testing.T) {
 		{"waza", V01, Function},
 		{"aida", V01, Ident},
 		{"aida", V02, While},
+		{"nukeru", V01, Ident},
+		{"nukeru", V02, Break},
+		{"tsuzuku", V01, Ident},
+		{"tsuzuku", V02, Continue},
 		{"yobu", V02, Ident},
 		{"yobu", V03, Import},
 		{"chant", V01, Ident},
@@ -27,6 +31,19 @@ func TestLookupIdent(t *testing.T) {
 				got,
 				tt.want,
 			)
+		}
+	}
+}
+
+// 测试 v0.4 核心类型关键字
+func TestLookupCoreTypeKeywords(t *testing.T) {
+	tests := map[string]Type{"kata": Struct, "sentaku": Enum, "awase": Match, "baai": Case}
+	for word, want := range tests {
+		if got := LookupIdent(word, V03); got != Ident {
+			t.Fatalf("v0.3 %q=%s", word, got)
+		}
+		if got := LookupIdent(word, V04); got != want {
+			t.Fatalf("v0.4 %q=%s want=%s", word, got, want)
 		}
 	}
 }

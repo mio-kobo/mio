@@ -13,6 +13,9 @@ func WriteLine(out io.Writer, v Value) error {
 	case KindInt:
 		number, _ := v.Int64()
 		text = strconv.FormatInt(number, 10)
+	case KindFloat:
+		number, _ := v.Float64()
+		text = strconv.FormatFloat(number, 'g', -1, 64)
 	case KindBool:
 		boolean, _ := v.Bool()
 		text = "iie"

@@ -48,6 +48,11 @@ func (v *VM) executeComparison(
 			b, _ := right.Int64()
 			result = a == b
 
+		case value.KindFloat:
+			a, _ := left.Float64()
+			b, _ := right.Float64()
+			result = a == b
+
 		case value.KindBool:
 			a, _ := left.Bool()
 			b, _ := right.Bool()
@@ -77,30 +82,32 @@ func (v *VM) executeComparison(
 		code.OpGreater,
 		code.OpGreaterEqual:
 
-		a, okLeft := left.Int64()
-		b, okRight := right.Int64()
-
-		if !okLeft || !okRight {
+		if left.Kind() != right.Kind() || (left.Kind() != value.KindInt && left.Kind() != value.KindFloat) {
 			return fmt.Errorf(
-				"%s requires int64 operands, got %s and %s",
+				"%s requires int64 operands or matching float64 operands, got %s and %s",
 				name,
 				left.Kind(),
 				right.Kind(),
 			)
 		}
 
-		switch op {
-		case code.OpLess:
-			result = a < b
-
-		case code.OpLessEqual:
-			result = a <= b
-
-		case code.OpGreater:
-			result = a > b
-
-		case code.OpGreaterEqual:
-			result = a >= b
+		if left.Kind() == value.KindFloat {
+			a, _ := left.Float64()
+			b, _ := right.Float64()
+			result = compareFloat(op, a, b)
+		} else {
+			a, _ := left.Int64()
+			b, _ := right.Int64()
+			switch op {
+			case code.OpLess:
+				result = a < b
+			case code.OpLessEqual:
+				result = a <= b
+			case code.OpGreater:
+				result = a > b
+			case code.OpGreaterEqual:
+				result = a >= b
+			}
 		}
 
 	default:
@@ -118,4 +125,20 @@ func (v *VM) executeComparison(
 	)
 
 	return nil
+}
+
+// compareFloat 执行浮点大小比较
+func compareFloat(op code.Opcode, left, right float64) bool {
+	switch op {
+	case code.OpLess:
+		return left < right
+	case code.OpLessEqual:
+		return left <= right
+	case code.OpGreater:
+		return left > right
+	case code.OpGreaterEqual:
+		return left >= right
+	default:
+		return false
+	}
 }

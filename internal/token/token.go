@@ -8,6 +8,7 @@ const ( // 定义特殊 Token
 
 	Ident   Type = "IDENT"   // 普通标识符
 	Integer Type = "INTEGER" // 整数字面量
+	Float   Type = "FLOAT"   // 浮点字面量
 	String  Type = "STRING"  // 字符串字面量
 )
 
@@ -19,7 +20,8 @@ const ( // 定义运算符 Token
 	Asterisk Type = "ASTERISK"
 	Slash    Type = "SLASH"
 
-	Bang Type = "BANG"
+	Bang     Type = "BANG"
+	Question Type = "QUESTION"
 
 	Equal    Type = "EQUAL"
 	NotEqual Type = "NOT_EQUAL"
@@ -40,6 +42,9 @@ const ( // 定义分隔符 Token
 	RParen    Type = "RPAREN"
 	LBrace    Type = "LBRACE"
 	RBrace    Type = "RBRACE"
+	LBracket  Type = "LBRACKET"
+	RBracket  Type = "RBRACKET"
+	Dot       Type = "DOT"
 )
 
 const ( // 定义关键字 Token
@@ -57,6 +62,10 @@ const ( // 未来启用关键字 Token
 	While    Type = "WHILE"
 	Break    Type = "BREAK"
 	Continue Type = "CONTINUE"
+	Struct   Type = "STRUCT"
+	Enum     Type = "ENUM"
+	Match    Type = "MATCH"
+	Case     Type = "CASE"
 
 	Import Type = "IMPORT"
 )
@@ -86,6 +95,7 @@ const (
 	V01 LanguageVersion = iota
 	V02
 	V03
+	V04
 )
 
 // 定义关键字表
@@ -112,6 +122,13 @@ var keywordsV03 = map[string]Type{
 	"yobu": Import,
 }
 
+var keywordsV04 = map[string]Type{
+	"kata":    Struct,
+	"sentaku": Enum,
+	"awase":   Match,
+	"baai":    Case,
+}
+
 func LookupIdent(
 	literal string,
 	version LanguageVersion,
@@ -129,6 +146,11 @@ func LookupIdent(
 
 	if version >= V03 {
 		if tok, ok := keywordsV03[literal]; ok {
+			return tok
+		}
+	}
+	if version >= V04 {
+		if tok, ok := keywordsV04[literal]; ok {
 			return tok
 		}
 	}

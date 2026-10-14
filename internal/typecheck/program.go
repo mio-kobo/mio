@@ -4,20 +4,82 @@ import (
 	"fmt"
 
 	"Mio/internal/ast"
+	"Mio/internal/diagnostic"
 	"Mio/internal/resolver"
 )
 
+// FunctionCheckCache 保存已通过的函数体检查结果
+type FunctionCheckCache interface {
+	HasFunctionCheck(key string) bool
+	StoreFunctionCheck(key string)
+}
+
+// IncrementalStats 记录函数体检查复用情况
+type IncrementalStats struct {
+	Hits       int
+	Recomputed int
+}
+
 // CheckProgram 对完成名称解析的程序执行类型检查
 func (c *Checker) CheckProgram(program *ast.Program) error {
+	_, err := c.CheckProgramIncremental(program, nil, nil)
+	return err
+}
+
+// CheckProgramIncremental 对可复用的函数体跳过重复检查
+func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.FunctionStatement]string, cache FunctionCheckCache) (IncrementalStats, error) {
+	var stats IncrementalStats
 	if c.resolver == nil {
-		return fmt.Errorf("type checker requires a name resolver")
+		return stats, fmt.Errorf("type checker requires a name resolver")
 	}
 
 	if program == nil {
-		return fmt.Errorf("cannot type-check a nil program")
+		return stats, fmt.Errorf("cannot type-check a nil program")
+	}
+	if err := c.registerTypeDeclarations(program); err != nil {
+		return stats, err
 	}
 
-	return c.checkStatements(program.Statements)
+	for _, stmt := range program.Statements {
+		fn, ok := stmt.(*ast.FunctionStatement)
+		if !ok {
+			continue
+		}
+		if err := c.registerFunctionSignature(fn); err != nil {
+			return stats, err
+		}
+	}
+
+	for _, stmt := range program.Statements {
+		fn, ok := stmt.(*ast.FunctionStatement)
+		if !ok {
+			if _, typeDeclaration := stmt.(*ast.StructStatement); typeDeclaration {
+				continue
+			}
+			if _, typeDeclaration := stmt.(*ast.EnumStatement); typeDeclaration {
+				continue
+			}
+			if err := c.checkStatement(stmt); err != nil {
+				return stats, err
+			}
+			continue
+		}
+
+		key := keys[fn]
+		if cache != nil && key != "" && cache.HasFunctionCheck(key) {
+			stats.Hits++
+			continue
+		}
+		stats.Recomputed++
+		if err := c.checkFunction(fn); err != nil {
+			return stats, err
+		}
+		if cache != nil && key != "" {
+			cache.StoreFunctionCheck(key)
+		}
+	}
+
+	return stats, nil
 }
 
 // checkStatements 先注册函数签名，再检查语句
@@ -50,13 +112,21 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 
 	// 变量声明
 	case *ast.LetStatement:
-		kind, err := c.checkExpression(n.Value)
+		declared := KindInvalid
+		var err error
+		if n.Name.DeclaredType != nil {
+			declared, err = c.resolveType(n.Name.DeclaredType, c.activeTypeParameters())
+			if err != nil {
+				return err
+			}
+		}
+		kind, err := c.checkExpressionExpected(n.Value, declared)
 		if err != nil {
 			return err
 		}
 
 		// 暂不允许从 mu 推断变量类型
-		if kind == KindNil {
+		if kind == KindNil && declared == KindInvalid {
 			return fmt.Errorf(
 				"cannot infer type of %q from nil",
 				n.Name.Name,
@@ -70,6 +140,10 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 				n.Name.Name,
 			)
 		}
+		if declared != KindInvalid && !isAssignable(declared, kind) {
+			cause := fmt.Errorf("cannot initialize %q as %s with %s", n.Name.Name, declared, kind)
+			return typeDiagnostic("E0301", fmt.Sprintf("变量 %q 的初始化类型不正确", n.Name.Name), n.Value.Span(), declared.String(), kind.String(), cause)
+		}
 
 		symbol, ok := c.resolver.BindingOf(n.Name)
 		if !ok {
@@ -79,7 +153,13 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 			)
 		}
 
+		if declared != KindInvalid {
+			kind = declared
+		}
 		c.types[symbol] = kind
+		if c.functionDepth == 0 {
+			c.globals[symbol] = struct{}{}
+		}
 		return nil
 
 	// 变量赋值
@@ -108,15 +188,14 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 			)
 		}
 
-		actual, err := c.checkExpression(n.Value)
+		actual, err := c.checkExpressionExpected(n.Value, expected)
 		if err != nil {
 			return err
 		}
 
-		if actual != expected {
+		if !isAssignable(expected, actual) {
 			pos := n.Name.Span().Start
-
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"cannot assign %s to %q (declared %s) at %d:%d",
 				actual,
 				n.Name.Name,
@@ -124,8 +203,62 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 				pos.Line,
 				pos.Column,
 			)
+			return typeDiagnostic("E0301", fmt.Sprintf("不能将 %s 赋给 %q", actual, n.Name.Name), n.Value.Span(), expected.String(), actual.String(), cause)
+		}
+		c.factVersions[symbol]++
+		delete(c.narrowings, symbol)
+		if expected.IsNullable() && actual == expected.NonNullable() {
+			c.narrowings[symbol] = actual
 		}
 
+		return nil
+
+	case *ast.IndexAssignStatement:
+		targetType, err := c.checkExpression(n.Target.Left)
+		if err != nil {
+			return err
+		}
+		if targetType.IsMap() {
+			_, args, _ := targetType.NamedParts()
+			keyType, err := c.checkExpressionExpected(n.Target.Index, args[0])
+			if err != nil {
+				return err
+			}
+			if !isAssignable(args[0], keyType) {
+				return typeDiagnostic("E0301", "Map 键类型不一致", n.Target.Index.Span(), args[0].String(), keyType.String(), fmt.Errorf("map key requires %s, got %s", args[0], keyType))
+			}
+			actual, err := c.checkExpressionExpected(n.Value, args[1])
+			if err != nil {
+				return err
+			}
+			if !isAssignable(args[1], actual) {
+				return typeDiagnostic("E0301", "Map 值类型不一致", n.Value.Span(), args[1].String(), actual.String(), fmt.Errorf("map value requires %s, got %s", args[1], actual))
+			}
+			n.Target.Map = true
+			return nil
+		}
+		if !targetType.IsArray() || targetType.IsNullable() {
+			cause := fmt.Errorf("index assignment target must be an array, got %s", targetType)
+			return typeDiagnostic("E0305", "只能对数组元素赋值", n.Target.Left.Span(), "array", targetType.String(), cause)
+		}
+		indexType, err := c.checkExpression(n.Target.Index)
+		if err != nil {
+			return err
+		}
+		if indexType != KindInt {
+			cause := fmt.Errorf("array index must be int64, got %s", indexType)
+			return typeDiagnostic("E0305", "数组索引必须是 int64", n.Target.Index.Span(), KindInt.String(), indexType.String(), cause)
+		}
+		actual, err := c.checkExpressionExpected(n.Value, targetType.ElementKind())
+		if err != nil {
+			return err
+		}
+		expected := targetType.ElementKind()
+		if !isAssignable(expected, actual) {
+			cause := fmt.Errorf("array element assignment requires %s, got %s", expected, actual)
+			return typeDiagnostic("E0301", "数组元素赋值类型不一致", n.Value.Span(), expected.String(), actual.String(), cause)
+		}
+		n.Nullable = expected.IsNullable()
 		return nil
 
 	// 表达式语句
@@ -143,22 +276,139 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 		if conditionType != KindBool {
 			pos := n.Condition.Span().Start
 
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"moshi condition requires bool, got %s at %d:%d",
 				conditionType,
 				pos.Line,
 				pos.Column,
 			)
+			return typeDiagnostic("E0301", "moshi 条件必须是 bool", n.Condition.Span(), KindBool.String(), conditionType.String(), cause)
 		}
 
-		if err := c.checkBlock(n.Consequence); err != nil {
+		symbol, nonNilWhenTrue, canNarrow := c.conditionNarrowing(n.Condition)
+		consequenceVersion := c.factVersions[symbol]
+		if err := c.checkBlockWithNarrowing(n.Consequence, symbol, canNarrow && nonNilWhenTrue); err != nil {
 			return err
 		}
+		consequenceUnchanged := c.factVersions[symbol] == consequenceVersion
 
+		alternativeUnchanged := true
 		if n.Alternative != nil {
-			return c.checkBlock(n.Alternative)
+			alternativeVersion := c.factVersions[symbol]
+			if err := c.checkBlockWithNarrowing(n.Alternative, symbol, canNarrow && !nonNilWhenTrue); err != nil {
+				return err
+			}
+			alternativeUnchanged = c.factVersions[symbol] == alternativeVersion
+		}
+		if canNarrow {
+			if blockAlwaysReturns(n.Consequence) && n.Alternative == nil && !nonNilWhenTrue {
+				c.narrowings[symbol] = c.types[symbol].NonNullable()
+			} else if n.Alternative != nil && blockAlwaysReturns(n.Consequence) && !blockAlwaysReturns(n.Alternative) && !nonNilWhenTrue && alternativeUnchanged {
+				c.narrowings[symbol] = c.types[symbol].NonNullable()
+			} else if n.Alternative != nil && blockAlwaysReturns(n.Alternative) && !blockAlwaysReturns(n.Consequence) && nonNilWhenTrue && consequenceUnchanged {
+				c.narrowings[symbol] = c.types[symbol].NonNullable()
+			}
 		}
 
+		return nil
+
+	case *ast.WhileStatement:
+		conditionType, err := c.checkExpression(n.Condition)
+		if err != nil {
+			return err
+		}
+		if conditionType != KindBool {
+			pos := n.Condition.Span().Start
+			cause := fmt.Errorf(
+				"aida condition requires bool, got %s at %d:%d",
+				conditionType,
+				pos.Line,
+				pos.Column,
+			)
+			return typeDiagnostic("E0301", "aida 条件必须是 bool", n.Condition.Span(), KindBool.String(), conditionType.String(), cause)
+		}
+		symbol, nonNilWhenTrue, canNarrow := c.conditionNarrowing(n.Condition)
+		c.loopDepth++
+		defer func() { c.loopDepth-- }()
+		return c.checkBlockWithNarrowing(n.Body, symbol, canNarrow && nonNilWhenTrue)
+
+	case *ast.BreakStatement:
+		if c.loopDepth == 0 {
+			cause := fmt.Errorf("nukeru outside loop")
+			return diagnostic.NewError("E0203", "nukeru 只能在循环内使用", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		return nil
+
+	case *ast.ContinueStatement:
+		if c.loopDepth == 0 {
+			cause := fmt.Errorf("tsuzuku outside loop")
+			return diagnostic.NewError("E0203", "tsuzuku 只能在循环内使用", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		return nil
+
+	case *ast.StructStatement, *ast.EnumStatement:
+		return nil
+
+	case *ast.MatchStatement:
+		valueType, err := c.checkExpression(n.Value)
+		if err != nil {
+			return err
+		}
+		if valueType.IsNullable() {
+			return fmt.Errorf("awase requires a non-null enum, got %s", valueType)
+		}
+		name, args, ok := valueType.NamedParts()
+		definition, exists := c.enums[name]
+		if !ok || !exists {
+			return fmt.Errorf("awase requires an enum value, got %s", valueType)
+		}
+		bindings := make(map[string]Kind, len(definition.TypeParams))
+		for i, parameter := range definition.TypeParams {
+			bindings[parameter] = args[i]
+		}
+		seen := make(map[string]struct{})
+		for armIndex := range n.Arms {
+			arm := &n.Arms[armIndex]
+			variantIndex := -1
+			var variant EnumVariant
+			for i, candidate := range definition.Variants {
+				if candidate.Name == arm.Variant {
+					variantIndex = i
+					variant = candidate
+					break
+				}
+			}
+			if variantIndex < 0 {
+				return fmt.Errorf("enum %s has no variant %s", name, arm.Variant)
+			}
+			if _, duplicate := seen[arm.Variant]; duplicate {
+				return fmt.Errorf("duplicate baai %s", arm.Variant)
+			}
+			seen[arm.Variant] = struct{}{}
+			if len(arm.Bindings) != len(variant.Fields) {
+				return fmt.Errorf("variant %s expects %d bindings, got %d", arm.Variant, len(variant.Fields), len(arm.Bindings))
+			}
+			arm.Tag = variantIndex
+			for i, binding := range arm.Bindings {
+				symbol, ok := c.resolver.BindingOf(binding)
+				if !ok {
+					return fmt.Errorf("missing match binding %q", binding.Name)
+				}
+				c.types[symbol] = substitute(variant.Fields[i], bindings)
+			}
+			if err := c.checkBlock(arm.Body); err != nil {
+				return err
+			}
+		}
+		if len(seen) != len(definition.Variants) {
+			missing := make([]string, 0)
+			for _, variant := range definition.Variants {
+				if _, ok := seen[variant.Name]; !ok {
+					missing = append(missing, variant.Name)
+				}
+			}
+			return fmt.Errorf("non-exhaustive awase for %s; missing %v", name, missing)
+		}
 		return nil
 
 	// 函数定义
@@ -178,7 +428,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 		actual := KindUnit
 
 		if n.Value != nil {
-			kind, err := c.checkExpression(n.Value)
+			kind, err := c.checkExpressionExpected(n.Value, expected)
 			if err != nil {
 				return err
 			}
@@ -187,16 +437,21 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 		}
 
 		// 检查声明类型与实际返回类型
-		if actual != expected {
+		if !isAssignable(expected, actual) {
 			pos := n.Span().Start
 
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"return type mismatch: expected %s, got %s at %d:%d",
 				expected,
 				actual,
 				pos.Line,
 				pos.Column,
 			)
+			span := n.Span()
+			if n.Value != nil {
+				span = n.Value.Span()
+			}
+			return typeDiagnostic("E0304", "函数返回值类型不正确", span, expected.String(), actual.String(), cause)
 		}
 
 		// unit 函数不允许返回具体表达式
@@ -238,6 +493,18 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 		)
 	}
 
+	savedNarrowings := c.narrowings
+	savedVersions := copyVersions(c.factVersions)
+	c.narrowings = make(map[resolver.Symbol]Kind)
+	c.functionDepth++
+	c.typeParameterScopes = append(c.typeParameterScopes, parameterSet(signature.TypeParams))
+	defer func() {
+		c.functionDepth--
+		c.typeParameterScopes = c.typeParameterScopes[:len(c.typeParameterScopes)-1]
+		c.narrowings = savedNarrowings
+		c.factVersions = savedVersions
+	}()
+
 	// 将形参符号与声明类型绑定
 	for i, param := range fn.Parameters {
 		symbol, ok := c.resolver.BindingOf(param)
@@ -260,10 +527,13 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 
 	// 进入函数时保存预期返回类型
 	c.returnTypes = append(c.returnTypes, signature.ReturnType)
+	outerLoopDepth := c.loopDepth
+	c.loopDepth = 0
 
 	// 离开函数时恢复外层返回类型
 	defer func() {
 		c.returnTypes = c.returnTypes[:len(c.returnTypes)-1]
+		c.loopDepth = outerLoopDepth
 	}()
 
 	// 检查函数体中的全部语句
@@ -274,12 +544,12 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 	// 非 unit 函数必须在所有路径上返回
 	if signature.ReturnType != KindUnit &&
 		!blockAlwaysReturns(fn.Body) {
-
-		return fmt.Errorf(
+		cause := fmt.Errorf(
 			"function %q may exit without returning %s",
 			fn.Name.Name,
 			signature.ReturnType,
 		)
+		return typeDiagnostic("E0304", fmt.Sprintf("函数 %q 可能没有返回值", fn.Name.Name), fn.Name.Span(), signature.ReturnType.String(), KindUnit.String(), cause)
 	}
 
 	return nil
@@ -312,6 +582,20 @@ func blockAlwaysReturns(block *ast.BlockStatement) bool {
 				blockAlwaysReturns(n.Consequence) &&
 				blockAlwaysReturns(n.Alternative) {
 				return true
+			}
+
+		case *ast.MatchStatement:
+			if len(n.Arms) != 0 {
+				allReturn := true
+				for _, arm := range n.Arms {
+					if !blockAlwaysReturns(arm.Body) {
+						allReturn = false
+						break
+					}
+				}
+				if allReturn {
+					return true
+				}
 			}
 		}
 	}

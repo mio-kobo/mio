@@ -5,6 +5,7 @@ import (
 
 	"Mio/internal/ast"
 	"Mio/internal/code"
+	"Mio/internal/diagnostic"
 	"Mio/internal/resolver"
 	"Mio/internal/token"
 	"Mio/internal/value"
@@ -28,6 +29,32 @@ type CompiledFunction struct {
 	ReturnsValue   bool
 }
 
+// FunctionArtifact 保存可搬移的函数编译结果
+type FunctionArtifact struct {
+	Instructions   code.Instructions
+	Constants      []value.Value
+	ParameterCount int
+	LocalCount     int
+	ReturnsValue   bool
+}
+
+// FunctionCache 保存函数编译结果
+type FunctionCache interface {
+	LoadFunction(key string) (FunctionArtifact, bool)
+	StoreFunction(key string, artifact FunctionArtifact)
+}
+
+// IncrementalStats 记录函数编译复用情况
+type IncrementalStats struct {
+	Hits       int
+	Recomputed int
+}
+
+type loopContext struct {
+	conditionStart int
+	breakPositions []int
+}
+
 // Compiler 将 AST 编译为字节码
 type Compiler struct {
 	instructions code.Instructions
@@ -41,6 +68,23 @@ type Compiler struct {
 	functionReturns map[resolver.Symbol]bool
 	functions       []CompiledFunction
 	currentFunction *ast.FunctionStatement
+	loops           []loopContext
+
+	functionKeys  map[string]string
+	functionCache FunctionCache
+	cacheStats    IncrementalStats
+	tempCounter   int
+}
+
+// ConfigureFunctionCache 配置函数级编译缓存
+func (c *Compiler) ConfigureFunctionCache(keys map[string]string, cache FunctionCache) {
+	c.functionKeys = keys
+	c.functionCache = cache
+}
+
+// IncrementalStats 返回函数编译复用统计
+func (c *Compiler) IncrementalStats() IncrementalStats {
+	return c.cacheStats
 }
 
 // New 创建字节码编译器
@@ -85,12 +129,73 @@ func (c *Compiler) Compile(node ast.Node) error {
 	case *ast.CallExpression:
 		return c.compileCall(n)
 
+	case *ast.ConversionExpression:
+		if len(n.Arguments) != 1 {
+			cause := fmt.Errorf("conversion %q expects 1 argument, got %d", n.Target, len(n.Arguments))
+			return diagnostic.NewError("E0401", "数值转换需要一个参数", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		if err := c.Compile(n.Arguments[0]); err != nil {
+			return err
+		}
+		switch n.Target {
+		case "float64":
+			return c.emit(code.OpIntToFloat)
+		case "int64":
+			return c.emit(code.OpFloatToInt)
+		default:
+			return fmt.Errorf("unsupported conversion target %q", n.Target)
+		}
+
+	case *ast.ArrayLiteral:
+		if len(n.Elements) > 0xffff {
+			return fmt.Errorf("array literal has too many elements: %d", len(n.Elements))
+		}
+		for _, element := range n.Elements {
+			if err := c.Compile(element); err != nil {
+				return err
+			}
+		}
+		return c.emit(code.OpArray, len(n.Elements))
+
+	case *ast.IndexExpression:
+		if err := c.Compile(n.Left); err != nil {
+			return err
+		}
+		if err := c.Compile(n.Index); err != nil {
+			return err
+		}
+		if n.Map {
+			return c.emit(code.OpMapGet)
+		}
+		return c.emit(code.OpIndex)
+
+	case *ast.StructLiteral:
+		for _, field := range n.Fields {
+			if err := c.Compile(field.Value); err != nil {
+				return err
+			}
+		}
+		return c.emit(code.OpStruct, len(n.Fields))
+
+	case *ast.FieldExpression:
+		if err := c.Compile(n.Left); err != nil {
+			return err
+		}
+		return c.emit(code.OpGetField, n.Index)
+
 	case *ast.FunctionStatement:
 		return c.compileFunction(n)
 
+	case *ast.StructStatement, *ast.EnumStatement:
+		return nil
+
+	case *ast.MatchStatement:
+		return c.compileMatchStatement(n)
+
 	case *ast.ReturnStatement:
 		if c.currentFunction == nil {
-			return fmt.Errorf("kaesu outside function")
+			cause := fmt.Errorf("kaesu outside function")
+			return diagnostic.NewError("E0401", "无法编译函数外的 kaesu", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
 		}
 		if n.Value == nil {
 			return c.emit(code.OpReturn)
@@ -107,6 +212,14 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 
+		return c.emit(code.OpConstant, index)
+
+	// 编译浮点字面量
+	case *ast.FloatLiteral:
+		index, err := c.addConstant(value.NewFloat(n.Value))
+		if err != nil {
+			return err
+		}
 		return c.emit(code.OpConstant, index)
 
 	// 编译已解码的字符串字面量
@@ -133,6 +246,21 @@ func (c *Compiler) Compile(node ast.Node) error {
 		// 逻辑运算使用短路编译
 		if n.Operator == token.And || n.Operator == token.Or {
 			return c.compileLogicalExpression(n)
+		}
+		if n.Operator == token.Equal || n.Operator == token.NotEqual {
+			operand, ok := nilComparisonOperand(n)
+			if ok {
+				if err := c.Compile(operand); err != nil {
+					return err
+				}
+				if err := c.emit(code.OpIsNil); err != nil {
+					return err
+				}
+				if n.Operator == token.NotEqual {
+					return c.emit(code.OpNot)
+				}
+				return nil
+			}
 		}
 
 		// 根据运算符选择字节码指令
@@ -236,6 +364,29 @@ func (c *Compiler) Compile(node ast.Node) error {
 	case *ast.IfStatement:
 		return c.compileIfStatement(n)
 
+	case *ast.WhileStatement:
+		return c.compileWhileStatement(n)
+
+	case *ast.BreakStatement:
+		if len(c.loops) == 0 {
+			cause := fmt.Errorf("nukeru outside loop")
+			return diagnostic.NewError("E0401", "无法编译循环外的 nukeru", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		position := len(c.instructions)
+		if err := c.emit(code.OpJump, 0xffff); err != nil {
+			return err
+		}
+		index := len(c.loops) - 1
+		c.loops[index].breakPositions = append(c.loops[index].breakPositions, position)
+		return nil
+
+	case *ast.ContinueStatement:
+		if len(c.loops) == 0 {
+			cause := fmt.Errorf("tsuzuku outside loop")
+			return diagnostic.NewError("E0401", "无法编译循环外的 tsuzuku", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		return c.emit(code.OpJump, c.loops[len(c.loops)-1].conditionStart)
+
 	// 编译变量声明
 	case *ast.LetStatement:
 		symbol, err := c.boundVariable(n.Name)
@@ -279,6 +430,15 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 	// 编译变量引用
 	case *ast.Identifier:
+		if c.resolver != nil {
+			if symbol, ok := c.resolver.BindingOf(n); ok && symbol.Kind == resolver.SymbolFunction {
+				id, exists := c.functionIDs[symbol]
+				if !exists {
+					return fmt.Errorf("function %q has no FunctionID", n.Name)
+				}
+				return c.emit(code.OpFunction, id)
+			}
+		}
 		index, local, err := c.variableSlot(n)
 		if err != nil {
 			return err
@@ -307,11 +467,171 @@ func (c *Compiler) Compile(node ast.Node) error {
 		}
 		return c.emit(code.OpSetGlobal, index)
 
+	case *ast.IndexAssignStatement:
+		if err := c.Compile(n.Target.Left); err != nil {
+			return err
+		}
+		if err := c.Compile(n.Target.Index); err != nil {
+			return err
+		}
+		if err := c.Compile(n.Value); err != nil {
+			return err
+		}
+		if n.Target.Map {
+			return c.emit(code.OpMapSet)
+		}
+		if n.Nullable {
+			return c.emit(code.OpSetNullableIndex)
+		}
+		return c.emit(code.OpSetIndex)
+
 	default:
 		return fmt.Errorf(
 			"unsupported AST node %T",
 			node,
 		)
+	}
+}
+
+// compileMatchStatement 编译枚举穷尽分支
+func (c *Compiler) compileMatchStatement(statement *ast.MatchStatement) error {
+	if err := c.Compile(statement.Value); err != nil {
+		return err
+	}
+	temp, local, err := c.allocateTemporary()
+	if err != nil {
+		return err
+	}
+	setOp, getOp := code.OpSetGlobal, code.OpGetGlobal
+	if local {
+		setOp, getOp = code.OpSetLocal, code.OpGetLocal
+	}
+	if err := c.emit(setOp, temp); err != nil {
+		return err
+	}
+	endJumps := make([]int, 0, len(statement.Arms))
+	for armIndex := range statement.Arms {
+		arm := &statement.Arms[armIndex]
+		if err := c.emit(getOp, temp); err != nil {
+			return err
+		}
+		if err := c.emit(code.OpEnumTag); err != nil {
+			return err
+		}
+		constant, err := c.addConstant(value.NewInt(int64(arm.Tag)))
+		if err != nil {
+			return err
+		}
+		if err := c.emit(code.OpConstant, constant); err != nil {
+			return err
+		}
+		if err := c.emit(code.OpEqual); err != nil {
+			return err
+		}
+		falseJump := len(c.instructions)
+		if err := c.emit(code.OpJumpIfFalse, 0xffff); err != nil {
+			return err
+		}
+		for index, binding := range arm.Bindings {
+			if err := c.emit(getOp, temp); err != nil {
+				return err
+			}
+			if err := c.emit(code.OpGetEnumValue, index); err != nil {
+				return err
+			}
+			symbol, ok := c.resolver.BindingOf(binding)
+			if !ok {
+				return fmt.Errorf("missing match binding %q", binding.Name)
+			}
+			slot, bindingLocal, err := c.allocateSymbol(symbol)
+			if err != nil {
+				return err
+			}
+			op := code.OpSetGlobal
+			if bindingLocal {
+				op = code.OpSetLocal
+			}
+			if err := c.emit(op, slot); err != nil {
+				return err
+			}
+		}
+		if err := c.Compile(arm.Body); err != nil {
+			return err
+		}
+		jump := len(c.instructions)
+		if err := c.emit(code.OpJump, 0xffff); err != nil {
+			return err
+		}
+		endJumps = append(endJumps, jump)
+		if err := c.patchJump(falseJump, len(c.instructions)); err != nil {
+			return err
+		}
+	}
+	end := len(c.instructions)
+	for _, jump := range endJumps {
+		if err := c.patchJump(jump, end); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Compiler) allocateTemporary() (int, bool, error) {
+	c.tempCounter++
+	symbol := resolver.Symbol{Name: fmt.Sprintf("$temp%d", c.tempCounter), Kind: resolver.SymbolVariable}
+	return c.allocateSymbol(symbol)
+}
+
+func (c *Compiler) allocateSymbol(symbol resolver.Symbol) (int, bool, error) {
+	slots := c.globals
+	local := false
+	if c.currentFunction != nil {
+		slots = c.locals
+		local = true
+	}
+	if len(slots) >= 1<<16 {
+		return 0, local, fmt.Errorf("variable slot overflow")
+	}
+	index := len(slots)
+	slots[symbol] = index
+	return index, local, nil
+}
+
+func nilComparisonOperand(expression *ast.InfixExpression) (ast.Expression, bool) {
+	if isNilExpression(expression.Left) {
+		if supportsNilCheck(expression.Right) {
+			return expression.Right, true
+		}
+		return nil, false
+	}
+	if isNilExpression(expression.Right) {
+		if supportsNilCheck(expression.Left) {
+			return expression.Left, true
+		}
+	}
+	return nil, false
+}
+
+func isNilExpression(expression ast.Expression) bool {
+	for {
+		group, ok := expression.(*ast.GroupedExpression)
+		if !ok {
+			break
+		}
+		expression = group.Expr
+	}
+	_, ok := expression.(*ast.NilLiteral)
+	return ok
+}
+
+func supportsNilCheck(expression ast.Expression) bool {
+	switch n := expression.(type) {
+	case *ast.Identifier, *ast.CallExpression, *ast.IndexExpression:
+		return true
+	case *ast.GroupedExpression:
+		return supportsNilCheck(n.Expr)
+	default:
+		return false
 	}
 }
 
@@ -459,6 +779,42 @@ func (c *Compiler) compileIfStatement(
 	)
 }
 
+// compileWhileStatement 编译循环条件及回跳。
+func (c *Compiler) compileWhileStatement(n *ast.WhileStatement) error {
+	conditionStart := len(c.instructions)
+	if err := c.Compile(n.Condition); err != nil {
+		return err
+	}
+
+	jumpFalsePos := len(c.instructions)
+	if err := c.emit(code.OpJumpIfFalse, 0xffff); err != nil {
+		return err
+	}
+
+	c.loops = append(c.loops, loopContext{conditionStart: conditionStart})
+	loopIndex := len(c.loops) - 1
+	if err := c.Compile(n.Body); err != nil {
+		c.loops = c.loops[:loopIndex]
+		return err
+	}
+	context := c.loops[loopIndex]
+	c.loops = c.loops[:loopIndex]
+
+	if err := c.emit(code.OpJump, conditionStart); err != nil {
+		return err
+	}
+	end := len(c.instructions)
+	if err := c.patchJump(jumpFalsePos, end); err != nil {
+		return err
+	}
+	for _, position := range context.breakPositions {
+		if err := c.patchJump(position, end); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // compileLogicalExpression 编译短路逻辑表达式
 func (c *Compiler) compileLogicalExpression(
 	n *ast.InfixExpression,
@@ -604,14 +960,39 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 		return fmt.Errorf("function %q has no FunctionID", fn.Name.Name)
 	}
 
+	key := c.functionKeys[fn.Name.Name]
+	if c.functionCache != nil && key != "" {
+		if artifact, found := c.functionCache.LoadFunction(key); found {
+			instructions, err := relocateFunctionConstants(artifact.Instructions, len(c.constants))
+			if err == nil && len(c.constants)+len(artifact.Constants) <= 1<<16 {
+				c.constants = append(c.constants, artifact.Constants...)
+				c.functions[id] = CompiledFunction{
+					ID:             id,
+					Name:           fn.Name.Name,
+					Instructions:   instructions,
+					ParameterCount: artifact.ParameterCount,
+					LocalCount:     artifact.LocalCount,
+					ReturnsValue:   artifact.ReturnsValue,
+				}
+				c.cacheStats.Hits++
+				return nil
+			}
+		}
+	}
+	c.cacheStats.Recomputed++
+
 	outerInstructions := c.instructions
 	outerLocals := c.locals
+	outerLoops := c.loops
 	c.instructions = make(code.Instructions, 0)
 	c.locals = make(map[resolver.Symbol]int)
+	c.loops = nil
 	c.currentFunction = fn
+	constantStart := len(c.constants)
 	defer func() {
 		c.instructions = outerInstructions
 		c.locals = outerLocals
+		c.loops = outerLoops
 		c.currentFunction = nil
 	}()
 
@@ -640,7 +1021,65 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 		LocalCount:     len(c.locals),
 		ReturnsValue:   c.functionReturns[symbol],
 	}
+	if c.functionCache != nil && key != "" {
+		normalized, err := normalizeFunctionConstants(c.instructions, constantStart)
+		if err == nil {
+			c.functionCache.StoreFunction(key, FunctionArtifact{
+				Instructions:   normalized,
+				Constants:      append([]value.Value(nil), c.constants[constantStart:]...),
+				ParameterCount: len(fn.Parameters),
+				LocalCount:     len(c.locals),
+				ReturnsValue:   c.functionReturns[symbol],
+			})
+		}
+	}
 	return nil
+}
+
+func normalizeFunctionConstants(instructions code.Instructions, base int) (code.Instructions, error) {
+	return rewriteFunctionConstants(instructions, func(index int) (int, error) {
+		if index < base {
+			return 0, fmt.Errorf("function constant %d precedes base %d", index, base)
+		}
+		return index - base, nil
+	})
+}
+
+func relocateFunctionConstants(instructions code.Instructions, base int) (code.Instructions, error) {
+	return rewriteFunctionConstants(instructions, func(index int) (int, error) {
+		if index > 0xffff-base {
+			return 0, fmt.Errorf("constant pool index overflow")
+		}
+		return base + index, nil
+	})
+}
+
+func rewriteFunctionConstants(instructions code.Instructions, rewrite func(int) (int, error)) (code.Instructions, error) {
+	result := append(code.Instructions(nil), instructions...)
+	for offset := 0; offset < len(result); {
+		op := code.Opcode(result[offset])
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return nil, err
+		}
+		operands, width, err := code.ReadOperands(definition, result[offset+1:])
+		if err != nil {
+			return nil, err
+		}
+		if op == code.OpConstant {
+			index, err := rewrite(operands[0])
+			if err != nil {
+				return nil, err
+			}
+			encoded, err := code.Make(op, index)
+			if err != nil {
+				return nil, err
+			}
+			copy(result[offset:offset+len(encoded)], encoded)
+		}
+		offset += 1 + width
+	}
+	return result, nil
 }
 
 // boundVariable 获取变量标识符绑定的符号

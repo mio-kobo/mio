@@ -619,6 +619,30 @@ func TestAssignStatement(t *testing.T) {
 	}
 }
 
+// 测试数组元素赋值语句
+func TestIndexAssignStatement(t *testing.T) {
+	p := New(lexer.New("values[index + 1] = value;", token.V01))
+	program, err := p.ParseProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assign, ok := program.Statements[0].(*ast.IndexAssignStatement)
+	if !ok {
+		t.Fatalf("expected IndexAssignStatement, got %T", program.Statements[0])
+	}
+	target, ok := assign.Target.Left.(*ast.Identifier)
+	if !ok || target.Name != "values" {
+		t.Fatalf("target=%T", assign.Target.Left)
+	}
+	if _, ok := assign.Target.Index.(*ast.InfixExpression); !ok {
+		t.Fatalf("index=%T", assign.Target.Index)
+	}
+	value, ok := assign.Value.(*ast.Identifier)
+	if !ok || value.Name != "value" {
+		t.Fatalf("value=%T", assign.Value)
+	}
+}
+
 // 测试相等比较与赋值语句的区分
 func TestEqualityIsNotAssignment(t *testing.T) {
 	l := lexer.New("score == 10;", token.V01)

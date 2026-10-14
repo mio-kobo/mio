@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"Mio/internal/code"
@@ -67,6 +68,9 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 	v.resetExecutionState()
 	defer func() {
 		if runErr != nil {
+			if _, ok := runErr.(*RuntimeError); !ok {
+				runErr = v.wrapRuntimeError(runErr)
+			}
 			v.resetExecutionState()
 		}
 	}()
@@ -187,11 +191,216 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 			if len(v.stack) <= v.operandBase() {
 				return fmt.Errorf("stack underflow for OpNeg at %d", ip)
 			}
-			number, ok := v.stack[len(v.stack)-1].Int64()
-			if !ok {
-				return fmt.Errorf("OpNeg requires int64, got %s at %d", v.stack[len(v.stack)-1].Kind(), ip)
+			operand := v.stack[len(v.stack)-1]
+			switch operand.Kind() {
+			case value.KindInt:
+				number, _ := operand.Int64()
+				v.stack[len(v.stack)-1] = value.NewInt(-number)
+			case value.KindFloat:
+				number, _ := operand.Float64()
+				v.stack[len(v.stack)-1] = value.NewFloat(-number)
+			default:
+				return fmt.Errorf("OpNeg requires int64 or float64, got %s at %d", operand.Kind(), ip)
 			}
-			v.stack[len(v.stack)-1] = value.NewInt(-number)
+
+		case code.OpIntToFloat:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpIntToFloat at %d", ip)
+			}
+			integer, ok := v.stack[len(v.stack)-1].Int64()
+			if !ok {
+				return fmt.Errorf("OpIntToFloat requires int64, got %s at %d", v.stack[len(v.stack)-1].Kind(), ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewFloat(float64(integer))
+
+		case code.OpFloatToInt:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpFloatToInt at %d", ip)
+			}
+			floating, ok := v.stack[len(v.stack)-1].Float64()
+			if !ok {
+				return fmt.Errorf("OpFloatToInt requires float64, got %s at %d", v.stack[len(v.stack)-1].Kind(), ip)
+			}
+			limit := math.Ldexp(1, 63)
+			if math.IsNaN(floating) || math.IsInf(floating, 0) || floating < -limit || floating >= limit {
+				return fmt.Errorf("OpFloatToInt value %g is outside int64 range at %d", floating, ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewInt(int64(math.Trunc(floating)))
+
+		case code.OpArray:
+			count := operands[0]
+			if len(v.stack)-v.operandBase() < count {
+				return fmt.Errorf("stack underflow for OpArray at %d", ip)
+			}
+			start := len(v.stack) - count
+			elements := append([]value.Value(nil), v.stack[start:]...)
+			v.stack = v.stack[:start]
+			if err := v.push(value.NewArray(elements)); err != nil {
+				return fmt.Errorf("OpArray at %d: %w", ip, err)
+			}
+
+		case code.OpStruct:
+			count := operands[0]
+			if len(v.stack)-v.operandBase() < count {
+				return fmt.Errorf("stack underflow for OpStruct at %d", ip)
+			}
+			start := len(v.stack) - count
+			fields := append([]value.Value(nil), v.stack[start:]...)
+			v.stack = v.stack[:start]
+			if err := v.push(value.NewStruct("", fields)); err != nil {
+				return fmt.Errorf("OpStruct at %d: %w", ip, err)
+			}
+
+		case code.OpGetField:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpGetField at %d", ip)
+			}
+			field, ok := v.stack[len(v.stack)-1].StructField(operands[0])
+			if !ok {
+				return fmt.Errorf("invalid struct field %d at %d", operands[0], ip)
+			}
+			v.stack[len(v.stack)-1] = field
+
+		case code.OpEnum:
+			count := operands[1]
+			if len(v.stack)-v.operandBase() < count {
+				return fmt.Errorf("stack underflow for OpEnum at %d", ip)
+			}
+			start := len(v.stack) - count
+			values := append([]value.Value(nil), v.stack[start:]...)
+			v.stack = v.stack[:start]
+			if err := v.push(value.NewEnum("", operands[0], values)); err != nil {
+				return fmt.Errorf("OpEnum at %d: %w", ip, err)
+			}
+
+		case code.OpEnumTag:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpEnumTag at %d", ip)
+			}
+			tag, ok := v.stack[len(v.stack)-1].EnumTag()
+			if !ok {
+				return fmt.Errorf("OpEnumTag requires enum, got %s at %d", v.stack[len(v.stack)-1].Kind(), ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewInt(int64(tag))
+
+		case code.OpGetEnumValue:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpGetEnumValue at %d", ip)
+			}
+			associated, ok := v.stack[len(v.stack)-1].EnumValue(operands[0])
+			if !ok {
+				return fmt.Errorf("invalid enum value %d at %d", operands[0], ip)
+			}
+			v.stack[len(v.stack)-1] = associated
+
+		case code.OpMap:
+			if err := v.push(value.NewMap()); err != nil {
+				return fmt.Errorf("OpMap at %d: %w", ip, err)
+			}
+
+		case code.OpMapGet:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpMapGet at %d", ip)
+			}
+			key := v.stack[len(v.stack)-1]
+			mapping := v.stack[len(v.stack)-2]
+			item, found, valid := mapping.MapGet(key)
+			if !valid {
+				return fmt.Errorf("OpMapGet requires Map and hashable key at %d", ip)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+			if !found {
+				item = value.NewNil()
+			}
+			if err := v.push(item); err != nil {
+				return fmt.Errorf("OpMapGet at %d: %w", ip, err)
+			}
+
+		case code.OpMapSet:
+			if len(v.stack)-v.operandBase() < 3 {
+				return fmt.Errorf("stack underflow for OpMapSet at %d", ip)
+			}
+			item := v.stack[len(v.stack)-1]
+			key := v.stack[len(v.stack)-2]
+			mapping := v.stack[len(v.stack)-3]
+			if !mapping.MapSet(key, item) {
+				return fmt.Errorf("OpMapSet requires Map and hashable key at %d", ip)
+			}
+			v.stack = v.stack[:len(v.stack)-3]
+
+		case code.OpIndex:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpIndex at %d", ip)
+			}
+			indexValue := v.stack[len(v.stack)-1]
+			arrayValue := v.stack[len(v.stack)-2]
+			index, ok := indexValue.Int64()
+			if !ok {
+				return fmt.Errorf("OpIndex requires int64 index, got %s at %d", indexValue.Kind(), ip)
+			}
+			length, ok := arrayValue.ArrayLen()
+			if !ok {
+				return fmt.Errorf("OpIndex requires array, got %s at %d", arrayValue.Kind(), ip)
+			}
+			if index < 0 || index >= int64(length) {
+				return fmt.Errorf("array index %d out of bounds for length %d at %d", index, length, ip)
+			}
+			element, _ := arrayValue.ArrayElement(index)
+			v.stack = v.stack[:len(v.stack)-2]
+			if err := v.push(element); err != nil {
+				return fmt.Errorf("OpIndex at %d: %w", ip, err)
+			}
+
+		case code.OpLen:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpLen at %d", ip)
+			}
+			arrayValue := v.stack[len(v.stack)-1]
+			length, ok := arrayValue.ArrayLen()
+			if !ok {
+				return fmt.Errorf("OpLen requires array, got %s at %d", arrayValue.Kind(), ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewInt(int64(length))
+
+		case code.OpSetIndex, code.OpSetNullableIndex:
+			name := def.Name
+			if len(v.stack)-v.operandBase() < 3 {
+				return fmt.Errorf("stack underflow for %s at %d", name, ip)
+			}
+			element := v.stack[len(v.stack)-1]
+			indexValue := v.stack[len(v.stack)-2]
+			arrayValue := v.stack[len(v.stack)-3]
+			index, ok := indexValue.Int64()
+			if !ok {
+				return fmt.Errorf("%s requires int64 index, got %s at %d", name, indexValue.Kind(), ip)
+			}
+			length, ok := arrayValue.ArrayLen()
+			if !ok {
+				return fmt.Errorf("%s requires array, got %s at %d", name, arrayValue.Kind(), ip)
+			}
+			if index < 0 || index >= int64(length) {
+				return fmt.Errorf("array index %d out of bounds for length %d at %d", index, length, ip)
+			}
+			currentElement, ok := arrayValue.ArrayElement(index)
+			if !ok {
+				return fmt.Errorf("array index %d out of bounds for length %d at %d", index, length, ip)
+			}
+			if op == code.OpSetIndex && currentElement.Kind() != element.Kind() {
+				return fmt.Errorf("%s requires %s value, got %s at %d", name, currentElement.Kind(), element.Kind(), ip)
+			}
+			if op == code.OpSetNullableIndex && !currentElement.IsNil() && !element.IsNil() && currentElement.Kind() != element.Kind() {
+				return fmt.Errorf("%s requires %s or nil value, got %s at %d", name, currentElement.Kind(), element.Kind(), ip)
+			}
+			var updated bool
+			if op == code.OpSetNullableIndex {
+				updated = arrayValue.SetNullableArrayElement(index, element)
+			} else {
+				updated = arrayValue.SetArrayElement(index, element)
+			}
+			if !updated {
+				return fmt.Errorf("array index %d out of bounds for length %d at %d", index, length, ip)
+			}
+			v.stack = v.stack[:len(v.stack)-3]
 
 		case code.OpPop:
 			popped, err := v.pop("OpPop", ip)
@@ -222,6 +431,12 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 				return fmt.Errorf("OpNot requires bool, got %s at %d", v.stack[len(v.stack)-1].Kind(), ip)
 			}
 			v.stack[len(v.stack)-1] = value.NewBool(!boolean)
+
+		case code.OpIsNil:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpIsNil at %d", ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewBool(v.stack[len(v.stack)-1].IsNil())
 
 		case code.OpEqual, code.OpNotEqual, code.OpLess, code.OpLessEqual, code.OpGreater, code.OpGreaterEqual:
 			if len(v.stack)-v.operandBase() < 2 {
@@ -290,6 +505,35 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 			}
 			continue
 
+		case code.OpFunction:
+			if operands[0] < 0 || operands[0] >= len(v.bytecode.Functions) {
+				return fmt.Errorf("FunctionID %d out of range at %d", operands[0], ip)
+			}
+			if err := v.push(value.NewFunction(operands[0])); err != nil {
+				return fmt.Errorf("OpFunction at %d: %w", ip, err)
+			}
+
+		case code.OpCallValue:
+			argumentCount := operands[0]
+			functionPosition := len(v.stack) - argumentCount - 1
+			if functionPosition < v.operandBase() {
+				return fmt.Errorf("stack underflow for OpCallValue at %d", ip)
+			}
+			functionID, ok := v.stack[functionPosition].FunctionID()
+			if !ok {
+				return fmt.Errorf("OpCallValue requires function value at %d", ip)
+			}
+			if functionID < 0 || functionID >= len(v.bytecode.Functions) || v.bytecode.Functions[functionID].ParameterCount != argumentCount {
+				return fmt.Errorf("invalid function value call at %d", ip)
+			}
+			copy(v.stack[functionPosition:], v.stack[functionPosition+1:])
+			v.stack = v.stack[:len(v.stack)-1]
+			current.ip = nextIP
+			if err := v.call(functionID, ip); err != nil {
+				return err
+			}
+			continue
+
 		case code.OpReturn:
 			if current.functionID < 0 {
 				return fmt.Errorf("OpReturn outside function at %d", ip)
@@ -336,6 +580,19 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 	}
 
 	return nil
+}
+
+func (v *VM) wrapRuntimeError(cause error) *RuntimeError {
+	stack := make([]RuntimeFrame, 0, len(v.frames))
+	for index := len(v.frames) - 1; index >= 0; index-- {
+		current := v.frames[index]
+		name := "<main>"
+		if current.functionID >= 0 && current.functionID < len(v.bytecode.Functions) {
+			name = v.bytecode.Functions[current.functionID].Name
+		}
+		stack = append(stack, RuntimeFrame{Function: name, Offset: current.ip})
+	}
+	return &RuntimeError{Cause: cause, Stack: stack}
 }
 
 func (v *VM) resetExecutionState() {
@@ -406,13 +663,35 @@ func (v *VM) executeArithmetic(op code.Opcode, name string, ip int) error {
 	}
 	rightValue := v.stack[len(v.stack)-1]
 	leftValue := v.stack[len(v.stack)-2]
+	if leftValue.Kind() != rightValue.Kind() {
+		return fmt.Errorf("%s requires int64 operands or matching float64 operands, got %s and %s at %d", name, leftValue.Kind(), rightValue.Kind(), ip)
+	}
+
+	if leftValue.Kind() == value.KindFloat {
+		right, _ := rightValue.Float64()
+		left, _ := leftValue.Float64()
+		var result float64
+		switch op {
+		case code.OpAdd:
+			result = left + right
+		case code.OpSub:
+			result = left - right
+		case code.OpMul:
+			result = left * right
+		case code.OpDiv:
+			result = left / right
+		}
+		v.stack = v.stack[:len(v.stack)-2]
+		return v.push(value.NewFloat(result))
+	}
+
 	right, ok := rightValue.Int64()
 	if !ok {
-		return fmt.Errorf("%s requires int64 right operand, got %s at %d", name, rightValue.Kind(), ip)
+		return fmt.Errorf("%s requires int64 operands or matching float64 operands, got %s at %d", name, rightValue.Kind(), ip)
 	}
 	left, ok := leftValue.Int64()
 	if !ok {
-		return fmt.Errorf("%s requires int64 left operand, got %s at %d", name, leftValue.Kind(), ip)
+		return fmt.Errorf("%s requires int64 operands or matching float64 operands, got %s at %d", name, leftValue.Kind(), ip)
 	}
 
 	var result int64

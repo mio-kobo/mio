@@ -433,6 +433,10 @@ func TestResolveBuiltinFunction(t *testing.T) {
 			input: `chant("Hello Mio!");`,
 		},
 		{
+			name:  "调用数组长度函数",
+			input: `len([1, 2]);`,
+		},
+		{
 			name: "内置函数访问全局变量",
 			input: `
 kaku age = 18;
@@ -486,6 +490,25 @@ moshi (hai) {
 				)
 			}
 		})
+	}
+}
+
+// 测试用户函数遮蔽内置 len
+func TestResolveLenShadowing(t *testing.T) {
+	program := parseProgram(t, `
+waza len(value: int64) -> int64 { kaesu value; }
+len(1);
+`)
+	r := New()
+	if err := r.ResolveProgram(program); err != nil {
+		t.Fatal(err)
+	}
+	stmt := program.Statements[1].(*ast.ExpressionStatement)
+	call := stmt.Expr.(*ast.CallExpression)
+	name := call.Function.(*ast.Identifier)
+	symbol, ok := r.BindingOf(name)
+	if !ok || symbol.Kind != SymbolFunction {
+		t.Fatalf("symbol=%+v ok=%v", symbol, ok)
 	}
 }
 

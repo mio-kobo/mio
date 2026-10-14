@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"Mio/internal/ast"
+	"Mio/internal/diagnostic"
 	"fmt"
 )
 
@@ -9,6 +10,7 @@ import (
 type Resolver struct {
 	scope         *Scope
 	functionDepth int
+	loopDepth     int
 
 	bindings map[*ast.Identifier]Symbol
 }
@@ -18,11 +20,13 @@ func New() *Resolver {
 	// 创建内置符号作用域
 	builtins := NewScope()
 	// 注册内置函数
-	if err := builtins.DefineSymbol(Symbol{
-		Name: "chant",
-		Kind: SymbolBuiltin,
-	}); err != nil {
-		panic(err)
+	for _, name := range []string{"chant", "len", "Map"} {
+		if err := builtins.DefineSymbol(Symbol{
+			Name: name,
+			Kind: SymbolBuiltin,
+		}); err != nil {
+			panic(err)
+		}
 	}
 
 	// 创建用户程序全局作用域
@@ -59,14 +63,7 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 
 		// 定义到当前作用域
 		if err := r.scope.DefineSymbol(symbol); err != nil {
-			pos := n.Name.Span().Start
-
-			return fmt.Errorf(
-				"%d:%d: %w",
-				pos.Line,
-				pos.Column,
-				err,
-			)
+			return duplicateDiagnostic(r.scope, n.Name, err)
 		}
 
 		// 保存声明节点的符号绑定
@@ -79,19 +76,25 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 		symbol, ok := r.scope.Resolve(n.Name.Name)
 
 		if !ok {
-			pos := n.Name.Span().Start
-
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"undefined assignment target %q at %d:%d",
 				n.Name.Name,
-				pos.Line,
-				pos.Column,
+				n.Name.Span().Start.Line,
+				n.Name.Span().Start.Column,
 			)
+			return diagnostic.NewError("E0201", "未定义的赋值目标", diagnostic.FromPositions(n.Name.Span().Start, n.Name.Span().End)).
+				WithHelp("请先使用 kaku 声明该变量").WithCause(cause)
 		}
 
 		// 保存赋值目标的符号绑定
 		r.bindings[n.Name] = symbol
 
+		return r.resolveExpression(n.Value)
+
+	case *ast.IndexAssignStatement:
+		if err := r.resolveExpression(n.Target); err != nil {
+			return err
+		}
 		return r.resolveExpression(n.Value)
 
 	case *ast.IfStatement:
@@ -111,6 +114,56 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 		}
 		return nil
 
+	case *ast.WhileStatement:
+		if err := r.resolveExpression(n.Condition); err != nil {
+			return err
+		}
+		r.loopDepth++
+		defer func() { r.loopDepth-- }()
+		return r.resolveBlock(n.Body)
+
+	case *ast.BreakStatement:
+		if r.loopDepth == 0 {
+			pos := n.Span().Start
+			cause := fmt.Errorf("nukeru outside loop at %d:%d", pos.Line, pos.Column)
+			return diagnostic.NewError("E0203", "nukeru 只能在循环内使用", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		return nil
+
+	case *ast.ContinueStatement:
+		if r.loopDepth == 0 {
+			pos := n.Span().Start
+			cause := fmt.Errorf("tsuzuku outside loop at %d:%d", pos.Line, pos.Column)
+			return diagnostic.NewError("E0203", "tsuzuku 只能在循环内使用", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
+		}
+		return nil
+
+	case *ast.StructStatement, *ast.EnumStatement:
+		return nil
+
+	case *ast.MatchStatement:
+		if err := r.resolveExpression(n.Value); err != nil {
+			return err
+		}
+		for i := range n.Arms {
+			parent := r.scope
+			r.scope = NewEnclosedScope(parent)
+			for _, binding := range n.Arms[i].Bindings {
+				symbol := Symbol{Name: binding.Name, Kind: SymbolVariable, Decl: binding.Span().Start}
+				if err := r.scope.DefineSymbol(symbol); err != nil {
+					r.scope = parent
+					return duplicateDiagnostic(r.scope, binding, err)
+				}
+				r.bindings[binding] = symbol
+			}
+			err := r.resolveStatements(n.Arms[i].Body.Statements, false)
+			r.scope = parent
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+
 	case *ast.ExpressionStatement:
 		return r.resolveExpression(n.Expr)
 
@@ -120,11 +173,12 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 		if r.functionDepth == 0 {
 			pos := n.Span().Start
 
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"kaesu outside function at %d:%d",
 				pos.Line,
 				pos.Column,
 			)
+			return diagnostic.NewError("E0204", "kaesu 只能在函数内使用", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
 		}
 
 		// 无返回表达式时无需解析名称
@@ -158,13 +212,14 @@ func (r *Resolver) resolveExpression(expr ast.Expression) error {
 
 		if !ok {
 			pos := n.Span().Start
-
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"undefined identifier %q at %d:%d",
 				n.Name,
 				pos.Line,
 				pos.Column,
 			)
+			return diagnostic.NewError("E0201", fmt.Sprintf("未定义的变量 %q", n.Name), diagnostic.FromPositions(n.Span().Start, n.Span().End)).
+				WithHelp("请检查名称拼写或在当前作用域中声明它").WithCause(cause)
 		}
 
 		// 记录标识符对应的符号
@@ -201,8 +256,53 @@ func (r *Resolver) resolveExpression(expr ast.Expression) error {
 		}
 		return nil
 
+	case *ast.TypeApplyExpression:
+		return r.resolveExpression(n.Function)
+
+	case *ast.ConversionExpression:
+		for _, arg := range n.Arguments {
+			if err := r.resolveExpression(arg); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.ArrayLiteral:
+		for _, element := range n.Elements {
+			if err := r.resolveExpression(element); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.IndexExpression:
+		if err := r.resolveExpression(n.Left); err != nil {
+			return err
+		}
+		return r.resolveExpression(n.Index)
+
+	case *ast.FieldExpression:
+		return r.resolveExpression(n.Left)
+
+	case *ast.StructLiteral:
+		for _, field := range n.Fields {
+			if err := r.resolveExpression(field.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case *ast.EnumLiteral:
+		for _, value := range n.Values {
+			if err := r.resolveExpression(value); err != nil {
+				return err
+			}
+		}
+		return nil
+
 	// 基础字面量
 	case *ast.IntegerLiteral,
+		*ast.FloatLiteral,
 		*ast.StringLiteral,
 		*ast.BooleanLiteral,
 		*ast.NilLiteral:
@@ -237,9 +337,11 @@ func (r *Resolver) resolveFunctionStatement(fn *ast.FunctionStatement) error {
 
 	// 保存外层作用域
 	parent := r.scope
+	outerLoopDepth := r.loopDepth
 
 	// 创建函数作用域
 	r.scope = NewEnclosedScope(parent)
+	r.loopDepth = 0
 
 	// 进入函数上下文
 	r.functionDepth++
@@ -247,6 +349,7 @@ func (r *Resolver) resolveFunctionStatement(fn *ast.FunctionStatement) error {
 	// 离开函数时恢复作用域与上下文
 	defer func() {
 		r.functionDepth--
+		r.loopDepth = outerLoopDepth
 		r.scope = parent
 	}()
 
@@ -260,14 +363,7 @@ func (r *Resolver) resolveFunctionStatement(fn *ast.FunctionStatement) error {
 		}
 
 		if err := r.scope.DefineSymbol(symbol); err != nil {
-			pos := param.Span().Start
-
-			return fmt.Errorf(
-				"%d:%d: %w",
-				pos.Line,
-				pos.Column,
-				err,
-			)
+			return duplicateDiagnostic(r.scope, param, err)
 		}
 
 		// 保存形参声明节点的绑定
@@ -280,6 +376,27 @@ func (r *Resolver) resolveFunctionStatement(fn *ast.FunctionStatement) error {
 
 // 解析统一作用域中的语句
 func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions bool) error {
+	for _, stmt := range statements {
+		var name *ast.Identifier
+		switch declaration := stmt.(type) {
+		case *ast.StructStatement:
+			name = declaration.Name
+		case *ast.EnumStatement:
+			name = declaration.Name
+		}
+		if name == nil {
+			continue
+		}
+		if !allowFunctions {
+			return diagnostic.NewError("E0205", "不支持嵌套类型声明", diagnostic.FromPositions(name.Span().Start, name.Span().End)).
+				WithCause(fmt.Errorf("nested type declaration %q is not supported", name.Name))
+		}
+		symbol := Symbol{Name: name.Name, Kind: SymbolType, Decl: name.Span().Start}
+		if err := r.scope.DefineSymbol(symbol); err != nil {
+			return duplicateDiagnostic(r.scope, name, err)
+		}
+		r.bindings[name] = symbol
+	}
 	// 预声明函数名称
 	// 预声明当前作用域中的函数
 	for _, stmt := range statements {
@@ -289,12 +406,13 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 		}
 		if !allowFunctions {
 			pos := fn.Name.Span().Start
-			return fmt.Errorf(
+			cause := fmt.Errorf(
 				"nested function declaration %q is not supported at %d:%d",
 				fn.Name.Name,
 				pos.Line,
 				pos.Column,
 			)
+			return diagnostic.NewError("E0205", "不支持嵌套函数声明", diagnostic.FromPositions(fn.Name.Span().Start, fn.Name.Span().End)).WithCause(cause)
 		}
 
 		// 构造函数符号
@@ -306,14 +424,7 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 
 		// 注册函数名称
 		if err := r.scope.DefineSymbol(symbol); err != nil {
-			pos := fn.Name.Span().Start
-
-			return fmt.Errorf(
-				"%d:%d: %w",
-				pos.Line,
-				pos.Column,
-				err,
-			)
+			return duplicateDiagnostic(r.scope, fn.Name, err)
 		}
 
 		// 保存函数声明节点的绑定
@@ -334,4 +445,16 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 func (r *Resolver) BindingOf(ident *ast.Identifier) (Symbol, bool) {
 	symbol, ok := r.bindings[ident]
 	return symbol, ok
+}
+
+func duplicateDiagnostic(scope *Scope, ident *ast.Identifier, cause error) error {
+	d := diagnostic.NewError("E0202", fmt.Sprintf("重复声明 %q", ident.Name), diagnostic.FromPositions(ident.Span().Start, ident.Span().End)).
+		WithHelp("请重命名或移除重复声明").WithCause(cause)
+	if previous, ok := scope.ResolveLocal(ident.Name); ok && previous.Decl.Line > 0 {
+		end := previous.Decl
+		end.Offset += len(ident.Name)
+		end.Column += len([]rune(ident.Name))
+		d.WithLabel(diagnostic.FromPositions(previous.Decl, end), "首次声明在这里")
+	}
+	return d
 }

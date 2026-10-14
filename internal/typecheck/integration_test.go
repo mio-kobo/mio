@@ -13,7 +13,7 @@ import (
 // checkMioSource 执行完整的前端语义检查
 func checkMioSource(input string) error {
 	// 创建词法分析器
-	l, err := lexer.NewChecked(input, token.V01)
+	l, err := lexer.NewChecked(input, token.V04)
 	if err != nil {
 		return err
 	}

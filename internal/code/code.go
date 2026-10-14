@@ -36,11 +36,29 @@ const (
 	OpChant        Opcode = 22
 
 	// 函数相关 Opcode 从 23 开始固定编号
-	OpSetLocal    Opcode = 23
-	OpGetLocal    Opcode = 24
-	OpCall        Opcode = 25
-	OpReturn      Opcode = 26
-	OpReturnValue Opcode = 27
+	OpSetLocal         Opcode = 23
+	OpGetLocal         Opcode = 24
+	OpCall             Opcode = 25
+	OpReturn           Opcode = 26
+	OpReturnValue      Opcode = 27
+	OpIntToFloat       Opcode = 28
+	OpFloatToInt       Opcode = 29
+	OpArray            Opcode = 30
+	OpIndex            Opcode = 31
+	OpLen              Opcode = 32
+	OpSetIndex         Opcode = 33
+	OpIsNil            Opcode = 34
+	OpSetNullableIndex Opcode = 35
+	OpStruct           Opcode = 36
+	OpGetField         Opcode = 37
+	OpEnum             Opcode = 38
+	OpEnumTag          Opcode = 39
+	OpGetEnumValue     Opcode = 40
+	OpMap              Opcode = 41
+	OpMapGet           Opcode = 42
+	OpMapSet           Opcode = 43
+	OpFunction         Opcode = 44
+	OpCallValue        Opcode = 45
 )
 
 // Definition 描述指令名称及操作数长度
@@ -132,6 +150,9 @@ var definitions = map[Opcode]Definition{
 		Name:          "OpGetLocal",
 		OperandWidths: []int{2},
 	},
+	OpIsNil: {
+		Name: "OpIsNil",
+	},
 	OpCall: {
 		Name:          "OpCall",
 		OperandWidths: []int{2},
@@ -141,6 +162,56 @@ var definitions = map[Opcode]Definition{
 	},
 	OpReturnValue: {
 		Name: "OpReturnValue",
+	},
+	OpIntToFloat: {
+		Name: "OpIntToFloat",
+	},
+	OpFloatToInt: {
+		Name: "OpFloatToInt",
+	},
+	OpArray: {
+		Name:          "OpArray",
+		OperandWidths: []int{2},
+	},
+	OpIndex: {
+		Name: "OpIndex",
+	},
+	OpLen: {
+		Name: "OpLen",
+	},
+	OpSetIndex: {
+		Name: "OpSetIndex",
+	},
+	OpSetNullableIndex: {
+		Name: "OpSetNullableIndex",
+	},
+	OpStruct: {
+		Name:          "OpStruct",
+		OperandWidths: []int{2},
+	},
+	OpGetField: {
+		Name:          "OpGetField",
+		OperandWidths: []int{2},
+	},
+	OpEnum: {
+		Name:          "OpEnum",
+		OperandWidths: []int{2, 2},
+	},
+	OpEnumTag: {Name: "OpEnumTag"},
+	OpGetEnumValue: {
+		Name:          "OpGetEnumValue",
+		OperandWidths: []int{2},
+	},
+	OpMap:    {Name: "OpMap"},
+	OpMapGet: {Name: "OpMapGet"},
+	OpMapSet: {Name: "OpMapSet"},
+	OpFunction: {
+		Name:          "OpFunction",
+		OperandWidths: []int{2},
+	},
+	OpCallValue: {
+		Name:          "OpCallValue",
+		OperandWidths: []int{2},
 	},
 }
 

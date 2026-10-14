@@ -21,7 +21,7 @@ func TestResolveTypeRef(t *testing.T) {
 		{"int64", KindInt, ""},
 		{"bool", KindBool, ""},
 		{"string", KindString, ""},
-		{"float64", KindInvalid, "unknown type"},
+		{"float64", KindFloat, ""},
 		{"unknown", KindInvalid, "unknown type"},
 	}
 
@@ -181,11 +181,11 @@ waza f(a: int64) {
 		{
 			name: "未知形参类型",
 			input: `
-waza f(a: float64) -> int64 {
-    kaesu 10;
+waza f(a: decimal) -> int64 {
+	kaesu 10;
 }
 `,
-			wantErr: `unknown type "float64"`,
+			wantErr: `unknown type "decimal"`,
 		},
 		{
 			name: "未知返回类型",

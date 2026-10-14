@@ -14,6 +14,7 @@ const (
 	SymbolFunction  SymbolKind = "function"
 	SymbolParameter SymbolKind = "parameter"
 	SymbolBuiltin   SymbolKind = "builtin"
+	SymbolType      SymbolKind = "type"
 )
 
 // 符号信息
@@ -63,6 +64,12 @@ func (s *Scope) DefineSymbol(symbol Symbol) error {
 
 	s.symbols[symbol.Name] = symbol
 	return nil
+}
+
+// ResolveLocal 查找当前作用域中的符号
+func (s *Scope) ResolveLocal(name string) (Symbol, bool) {
+	symbol, ok := s.symbols[name]
+	return symbol, ok
 }
 
 // 查找当前及父作用域中的符号

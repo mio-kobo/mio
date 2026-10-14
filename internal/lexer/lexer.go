@@ -3,6 +3,7 @@ package lexer
 import (
 	"Mio/internal/token"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -231,6 +232,11 @@ func (l *Lexer) NextToken() token.Token {
 				Literal: "!",
 			}
 		}
+	case '?':
+		tok = token.Token{
+			Type:    token.Question,
+			Literal: "?",
+		}
 
 	case '<':
 		if l.peekChar() == '=' {
@@ -318,11 +324,23 @@ func (l *Lexer) NextToken() token.Token {
 			Type:    token.RBrace,
 			Literal: "}",
 		}
+	case '[':
+		tok = token.Token{
+			Type:    token.LBracket,
+			Literal: "[",
+		}
+	case ']':
+		tok = token.Token{
+			Type:    token.RBracket,
+			Literal: "]",
+		}
 	case ',':
 		tok = token.Token{
 			Type:    token.Comma,
 			Literal: ",",
 		}
+	case '.':
+		tok = token.Token{Type: token.Dot, Literal: "."}
 
 	case ':':
 		tok = token.Token{
@@ -345,9 +363,7 @@ func (l *Lexer) NextToken() token.Token {
 		}
 
 		if isDigit(l.ch) { // 数字判断
-			literal, valid := l.readNumber()
-
-			tokenType := token.Integer
+			literal, tokenType, valid := l.readNumber()
 
 			if !valid {
 				tokenType = token.Illegal
@@ -356,7 +372,7 @@ func (l *Lexer) NextToken() token.Token {
 					l.lexErr = &LexicalError{
 						Kind:     ErrInvalidNumber,
 						Position: start,
-						Message:  "invalid integer literal: " + literal,
+						Message:  "invalid number literal: " + literal,
 					}
 				}
 			}
@@ -421,29 +437,58 @@ func (l *Lexer) readIdentifier() string {
 	return l.input[start:l.position]
 }
 
-func (l *Lexer) readNumber() (string, bool) {
+func (l *Lexer) readNumber() (string, token.Type, bool) {
 	start := l.position
 	valid := true
+	tokenType := token.Integer
 
 	for isDigit(l.ch) {
 		l.readChar()
 	}
 
-	if isLetter(l.ch) || l.ch == '.' {
-		valid = false
+	if l.ch == '.' {
+		tokenType = token.Float
+		l.readChar()
+		if !isDigit(l.ch) {
+			valid = false
+		}
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+	}
 
+	if l.ch == 'e' || l.ch == 'E' {
+		tokenType = token.Float
+		l.readChar()
+		if l.ch == '+' || l.ch == '-' {
+			l.readChar()
+		}
+		if !isDigit(l.ch) {
+			valid = false
+		}
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+	}
+
+	if isLetter(l.ch) || isDigit(l.ch) || l.ch == '.' {
+		valid = false
 		for isLetter(l.ch) || isDigit(l.ch) || l.ch == '.' {
 			l.readChar()
 		}
-
 	}
+
 	literal := l.input[start:l.position]
 
-	if len(literal) > 1 && literal[0] == '0' {
+	integerDigits := literal
+	if index := strings.IndexAny(integerDigits, ".eE"); index >= 0 {
+		integerDigits = integerDigits[:index]
+	}
+	if len(integerDigits) > 1 && integerDigits[0] == '0' {
 		valid = false
 	}
 
-	return literal, valid
+	return literal, tokenType, valid
 }
 
 func (l *Lexer) readString() (string, bool) {

@@ -22,6 +22,17 @@ func TestReadChar(t *testing.T) {
 	}
 }
 
+// 测试核心类型语法的词法单元
+func TestCoreTypeTokens(t *testing.T) {
+	l := New(`kata Box<T> { value: T; } Box.value;`, token.V04)
+	want := []token.Type{token.Struct, token.Ident, token.Less, token.Ident, token.Greater, token.LBrace, token.Ident, token.Colon, token.Ident, token.Semicolon, token.RBrace, token.Ident, token.Dot, token.Ident, token.Semicolon, token.EOF}
+	for i, expected := range want {
+		if got := l.NextToken(); got.Type != expected {
+			t.Fatalf("token %d=%s want=%s", i, got.Type, expected)
+		}
+	}
+}
+
 func TestNextToken(t *testing.T) {
 	input := "+-*/"
 
@@ -395,7 +406,11 @@ func TestNumberValidation(t *testing.T) {
 		{"0", token.Integer, "0"},
 		{"0123", token.Illegal, "0123"},
 		{"123abc", token.Illegal, "123abc"},
-		{"3.14", token.Illegal, "3.14"},
+		{"3.14", token.Float, "3.14"},
+		{"1e3", token.Float, "1e3"},
+		{"2.5e-4", token.Float, "2.5e-4"},
+		{"1.", token.Illegal, "1."},
+		{"1e", token.Illegal, "1e"},
 		{"0xFF", token.Illegal, "0xFF"},
 	}
 

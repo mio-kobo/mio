@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"Mio/internal/ast"
 	"Mio/internal/compiler"
+	"Mio/internal/diagnostic"
 	"Mio/internal/lexer"
 	"Mio/internal/mochi"
 	"Mio/internal/parser"
@@ -56,15 +58,16 @@ func runCLI(
 
 	switch args[0] {
 	case "check", "run":
-		if len(args) != 2 {
+		path, options, ok := parseDiagnosticArgs(args[1:])
+		if !ok {
 			printUsage(stderr)
 			return 2
 		}
 
 		// 读取、解析并检查 Mio 源码
-		program, r, err := parseAndCheckFile(args[1])
+		program, r, err := parseAndCheckFile(path)
 		if err != nil {
-			fmt.Fprintln(stderr, "mio:", err)
+			renderCLIError(stderr, path, err, options, false)
 			return 1
 		}
 
@@ -76,14 +79,14 @@ func runCLI(
 
 		bytecode, err := compileProgram(program, r)
 		if err != nil {
-			fmt.Fprintln(stderr, "mio: compile:", err)
+			renderCLIError(stderr, path, err, options, false)
 			return 1
 		}
 
 		runtimeError, err := executeBytecode(bytecode, stdout)
 		if err != nil {
 			if runtimeError {
-				fmt.Fprintln(stderr, "mio: runtime:", err)
+				renderCLIError(stderr, "", err, options, true)
 			} else {
 				fmt.Fprintln(stderr, "mio:", err)
 			}
@@ -101,7 +104,7 @@ func runCLI(
 
 		program, r, err := parseAndCheckFile(sourcePath)
 		if err != nil {
-			fmt.Fprintln(stderr, "mio:", err)
+			renderCLIError(stderr, sourcePath, err, cliDiagnosticOptions{}, false)
 			return 1
 		}
 		bytecode, err := compileProgram(program, r)
@@ -138,7 +141,7 @@ func runCLI(
 		runtimeError, err := executeBytecode(bytecode, stdout)
 		if err != nil {
 			if runtimeError {
-				fmt.Fprintln(stderr, "mio: runtime:", err)
+				renderCLIError(stderr, "", err, cliDiagnosticOptions{}, true)
 			} else {
 				fmt.Fprintln(stderr, "mio:", err)
 			}
@@ -150,6 +153,85 @@ func runCLI(
 		printUsage(stderr)
 		return 2
 	}
+}
+
+type cliDiagnosticOptions struct {
+	color   diagnostic.ColorMode
+	format  diagnostic.Format
+	verbose bool
+}
+
+func parseDiagnosticArgs(args []string) (string, cliDiagnosticOptions, bool) {
+	options := cliDiagnosticOptions{color: diagnostic.ColorAuto, format: diagnostic.FormatHuman}
+	path := ""
+	for _, arg := range args {
+		switch arg {
+		case "--color=auto":
+			options.color = diagnostic.ColorAuto
+		case "--color=always":
+			options.color = diagnostic.ColorAlways
+		case "--color=never":
+			options.color = diagnostic.ColorNever
+		case "--format=human":
+			options.format = diagnostic.FormatHuman
+		case "--format=short":
+			options.format = diagnostic.FormatShort
+		case "--format=json":
+			options.format = diagnostic.FormatJSON
+		case "--verbose":
+			options.verbose = true
+		default:
+			if strings.HasPrefix(arg, "--") || path != "" || arg == "" {
+				return "", cliDiagnosticOptions{}, false
+			}
+			path = arg
+		}
+	}
+	return path, options, path != ""
+}
+
+func renderCLIError(out io.Writer, path string, err error, options cliDiagnosticOptions, runtime bool) {
+	d := diagnosticFromError(err, runtime)
+	source := ""
+	if path != "" {
+		if content, readErr := os.ReadFile(path); readErr == nil {
+			source = string(content)
+		}
+	}
+	d.Path = path
+	renderer := diagnostic.Renderer{Writer: out, Source: source, Path: path, Color: options.color, Format: options.format, Verbose: options.verbose}
+	if renderErr := renderer.Render(d); renderErr != nil {
+		fmt.Fprintln(out, "mio:", err)
+	}
+}
+
+func diagnosticFromError(err error, runtime bool) *diagnostic.Diagnostic {
+	var existing *diagnostic.Diagnostic
+	if errors.As(err, &existing) {
+		return existing
+	}
+	var lexical *lexer.LexicalError
+	if errors.As(err, &lexical) {
+		end := lexical.Position
+		end.Offset++
+		end.Column++
+		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err)
+	}
+	if runtime {
+		d := &diagnostic.Diagnostic{Code: "E0501", Severity: diagnostic.SeverityError, Message: "运行时错误: mio: runtime: " + err.Error(), Cause: err}
+		var runtimeErr *vm.RuntimeError
+		if errors.As(err, &runtimeErr) {
+			for index, frame := range runtimeErr.Stack {
+				prefix := "发生于"
+				if index > 0 {
+					prefix = "调用自"
+				}
+				d.Notes = append(d.Notes, diagnostic.Note{Message: fmt.Sprintf("%s %s，字节码偏移 %d", prefix, frame.Function, frame.Offset)})
+			}
+		}
+		return d
+	}
+	return (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
 }
 
 // compileProgram 将经过检查的 AST 编译为字节码
@@ -252,6 +334,9 @@ func printDisassembly(out io.Writer, bytecode *compiler.Bytecode) error {
 		case value.KindInt:
 			integer, _ := constant.Int64()
 			display = strconv.FormatInt(integer, 10)
+		case value.KindFloat:
+			floating, _ := constant.Float64()
+			display = strconv.FormatFloat(floating, 'g', -1, 64)
 		case value.KindString:
 			text, _ := constant.Text()
 			display = strconv.Quote(text)
@@ -310,7 +395,7 @@ func parseAndCheckFile(
 	// 词法分析
 	l, err := lexer.NewChecked(
 		string(source),
-		token.V01,
+		token.V04,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -356,6 +441,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "Usage:")
 	fmt.Fprintln(out, "  mio check <file.mio>")
 	fmt.Fprintln(out, "  mio run <file.mio>")
+	fmt.Fprintln(out, "  options: --color=auto|always|never --format=human|short|json --verbose")
 	fmt.Fprintln(out, "  mio build [-o <file.mochi>] <file.mio>")
 	fmt.Fprintln(out, "  mio exec <file.mochi>")
 	fmt.Fprintln(out, "  mio disasm <file.mochi>")

@@ -173,8 +173,8 @@ func TestRoundTripV2Functions(t *testing.T) {
 	}
 
 	got, encoded := roundTrip(t, bytecode)
-	if binary.BigEndian.Uint16(encoded[5:7]) != Version {
-		t.Fatalf("encoded version = %d, want %d", binary.BigEndian.Uint16(encoded[5:7]), Version)
+	if binary.BigEndian.Uint16(encoded[5:7]) != VersionV2 {
+		t.Fatalf("encoded version = %d, want %d", binary.BigEndian.Uint16(encoded[5:7]), VersionV2)
 	}
 	if !reflect.DeepEqual(got, bytecode) {
 		t.Fatalf("decoded bytecode:\n got %#v\nwant %#v", got, bytecode)
@@ -386,6 +386,11 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(rawFile(0, nil, 0, nil))
 	f.Add(rawV2Function(0, 0))
+	var v8 bytes.Buffer
+	if err := Encode(&v8, &compiler.Bytecode{Instructions: mustInstructionForFuzz(code.OpMap)}); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(v8.Bytes())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		bytecode, err := Decode(bytes.NewReader(data))
 		if err != nil {
@@ -395,4 +400,12 @@ func FuzzDecode(f *testing.F) {
 			t.Fatalf("Decode returned invalid bytecode: %v", err)
 		}
 	})
+}
+
+func mustInstructionForFuzz(op code.Opcode) code.Instructions {
+	instructions, err := code.Make(op)
+	if err != nil {
+		panic(err)
+	}
+	return instructions
 }

@@ -14,6 +14,8 @@ const (
 	precProduct
 	precPrefix
 	precCall
+	precIndex
+	precField
 )
 
 var precedences = map[token.Type]precedence{
@@ -34,7 +36,9 @@ var precedences = map[token.Type]precedence{
 	token.Asterisk: precProduct,
 	token.Slash:    precProduct,
 
-	token.LParen: precCall,
+	token.LParen:   precCall,
+	token.LBracket: precIndex,
+	token.Dot:      precField,
 }
 
 func (p *Parser) peekPrecedence() precedence {
