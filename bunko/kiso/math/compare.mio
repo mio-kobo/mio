@@ -1,0 +1,37 @@
+koukai waza min<T: Number>(left: T, right: T) -> T {
+    moshi (left != left) { kaesu left; }
+    moshi (right != right) { kaesu right; }
+    moshi (left < right) { kaesu left; }
+    moshi (right < left) { kaesu right; }
+    moshi (__is_negative(left)) { kaesu left; }
+    kaesu right;
+}
+
+koukai waza max<T: Number>(left: T, right: T) -> T {
+    moshi (left != left) { kaesu left; }
+    moshi (right != right) { kaesu right; }
+    moshi (left > right) { kaesu left; }
+    moshi (right > left) { kaesu right; }
+    moshi (__is_negative(left)) { kaesu right; }
+    kaesu left;
+}
+
+koukai waza checked_abs<T: Signed>(value: T) -> T? {
+    moshi (__neg_overflows(value)) { kaesu mu; }
+    moshi (__is_negative(value)) { kaesu -value; }
+    kaesu value;
+}
+
+koukai waza abs<T: Signed>(value: T) -> T {
+    kaku result: T? = checked_abs(value);
+    moshi (result != mu) { kaesu result; }
+    __math_error("kiso/math.abs: int64 overflow");
+    kaesu value;
+}
+
+koukai waza clamp<T: Number>(value: T, lower: T, upper: T) -> T {
+    moshi (lower > upper) {
+        __math_error("kiso/math.clamp: lower bound is greater than upper bound");
+    }
+    kaesu min(max(value, lower), upper);
+}

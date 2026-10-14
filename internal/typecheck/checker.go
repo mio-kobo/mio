@@ -11,10 +11,19 @@ import (
 
 func typeDiagnostic(code, message string, span ast.Span, expected, actual string, cause error) error {
 	d := diagnostic.NewError(code, message, diagnostic.FromPositions(span.Start, span.End)).WithTypes(expected, actual).WithCause(cause)
-	if (expected == KindFloat.String() && actual == KindInt.String()) || (expected == KindInt.String() && actual == KindFloat.String()) {
+	if numericTypeName(expected) && numericTypeName(actual) && expected != actual {
 		d.WithHelp(fmt.Sprintf("请使用 %s(...) 进行显式转换", expected))
 	}
 	return d
+}
+
+func numericTypeName(name string) bool {
+	switch name {
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64":
+		return true
+	default:
+		return false
+	}
 }
 
 // Checker 负责静态类型检查
@@ -32,6 +41,39 @@ type Checker struct {
 	loopDepth           int
 	functionDepth       int
 	typeParameterScopes []map[string]struct{}
+	constraintScopes    []map[string]string
+}
+
+func (c *Checker) numeric(kind Kind) bool {
+	if kind.IsInteger() || kind == KindFloat32 || kind == KindFloat {
+		return true
+	}
+	if !kind.IsTypeParameter() || len(c.constraintScopes) == 0 {
+		return false
+	}
+	constraint := c.constraintScopes[len(c.constraintScopes)-1][kind.TypeParameterName()]
+	return constraint == "Number" || constraint == "Integer" || constraint == "Signed" || constraint == "Float"
+}
+
+func (c *Checker) signed(kind Kind) bool {
+	if kind.IsSignedInteger() || kind == KindFloat32 || kind == KindFloat {
+		return true
+	}
+	if !kind.IsTypeParameter() || len(c.constraintScopes) == 0 {
+		return false
+	}
+	constraint := c.constraintScopes[len(c.constraintScopes)-1][kind.TypeParameterName()]
+	return constraint == "Signed" || constraint == "Float"
+}
+
+func (c *Checker) floating(kind Kind) bool {
+	if kind == KindFloat32 || kind == KindFloat {
+		return true
+	}
+	if !kind.IsTypeParameter() || len(c.constraintScopes) == 0 {
+		return false
+	}
+	return c.constraintScopes[len(c.constraintScopes)-1][kind.TypeParameterName()] == "Float"
 }
 
 func (c *Checker) activeTypeParameters() map[string]struct{} {
@@ -67,9 +109,21 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 
 	// 基础字面量
 	case *ast.IntegerLiteral:
+		if kind := integerKind(n.Type); kind != KindInvalid {
+			return kind, nil
+		}
 		return KindInt, nil
 
+	case *ast.RuneLiteral:
+		if kind := integerKind(n.Type); kind != KindInvalid {
+			return kind, nil
+		}
+		return KindInt32, nil
+
 	case *ast.FloatLiteral:
+		if n.Bits == 32 {
+			return KindFloat32, nil
+		}
 		return KindFloat, nil
 
 	case *ast.BooleanLiteral:
@@ -81,6 +135,9 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 	case *ast.NilLiteral:
 		return KindNil, nil
 
+	case *ast.FunctionLiteral:
+		return c.checkFunctionLiteral(n)
+
 	case *ast.ArrayLiteral:
 		if len(n.Elements) == 0 {
 			cause := fmt.Errorf("cannot infer element type of empty array")
@@ -91,9 +148,15 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 			return KindInvalid, err
 		}
 		for i, element := range n.Elements[1:] {
-			actual, err := c.checkExpression(element)
+			actual, err := c.checkExpressionExpected(element, elementType)
 			if err != nil {
 				return KindInvalid, err
+			}
+			if elementType == KindInt && actual.IsInteger() && actual != KindInt && contextualIntegerExpression(n.Elements[0]) {
+				elementType, err = c.checkExpressionExpected(n.Elements[0], actual)
+				if err != nil {
+					return KindInvalid, err
+				}
 			}
 			common := commonArrayElement(elementType, actual)
 			if common == KindInvalid {
@@ -183,9 +246,9 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 
 		switch n.Operator {
 		case token.Minus:
-			if right != KindInt && right != KindFloat {
+			if !c.signed(right) {
 				return KindInvalid, fmt.Errorf(
-					"operator '-' requires int64 or float64, got %s",
+					"operator '-' requires int64 or another signed number, got %s",
 					right,
 				)
 			}
@@ -222,6 +285,16 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 		if err != nil {
 			return KindInvalid, err
 		}
+		if left != right {
+			if left.IsInteger() && left != KindInt && contextualIntegerExpression(n.Right) {
+				right, err = c.checkExpressionExpected(n.Right, left)
+			} else if right.IsInteger() && right != KindInt && contextualIntegerExpression(n.Left) {
+				left, err = c.checkExpressionExpected(n.Left, right)
+			}
+			if err != nil {
+				return KindInvalid, err
+			}
+		}
 
 		// 根据运算符验证操作数类型
 		switch n.Operator {
@@ -232,9 +305,9 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 			token.Asterisk,
 			token.Slash:
 
-			if left != right || (left != KindInt && left != KindFloat) {
+			if left != right || !c.numeric(left) {
 				cause := fmt.Errorf(
-					"operator %s requires int64 operands or matching float64 operands, got %s and %s",
+					"operator %s requires int64 operands, matching float32 operands, or matching float64 operands, got %s and %s",
 					n.Operator,
 					left,
 					right,
@@ -250,9 +323,9 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 			token.Greater,
 			token.GreaterEqual:
 
-			if left != right || (left != KindInt && left != KindFloat) {
+			if left != right || !c.numeric(left) {
 				cause := fmt.Errorf(
-					"operator %s requires int64 operands or matching float64 operands, got %s and %s",
+					"operator %s requires int64 operands, matching float32 operands, or matching float64 operands, got %s and %s",
 					n.Operator,
 					left,
 					right,
@@ -277,10 +350,13 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 				)
 				return KindInvalid, typeDiagnostic("E0301", "比较两侧的类型不一致", n.Right.Span(), left.String(), right.String(), cause)
 			}
+			if c.numeric(left) {
+				return KindBool, nil
+			}
 
 			// 基础非空类型继续使用原有相等规则
 			switch left {
-			case KindInt, KindFloat, KindBool, KindString:
+			case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString:
 				return KindBool, nil
 
 			default:
@@ -375,19 +451,37 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 		if err != nil {
 			return KindInvalid, err
 		}
+		target := integerKind(n.Target)
+		if target.IsInteger() {
+			if target == KindInt && (!source.IsInteger() || source == KindInt) && source != KindFloat && source != KindFloat32 {
+				return KindInvalid, fmt.Errorf("conversion to int64 requires float64, got %s", source)
+			}
+			if target == KindInt && source == KindInt {
+				return KindInvalid, fmt.Errorf("conversion to int64 requires float64, got int64")
+			}
+			if !source.IsInteger() && source != KindFloat && source != KindFloat32 {
+				return KindInvalid, fmt.Errorf("conversion to %s requires a numeric value, got %s", target, source)
+			}
+			if source == target {
+				return KindInvalid, fmt.Errorf("conversion to %s requires a different numeric type", target)
+			}
+			n.Source = source.String()
+			return target, nil
+		}
 		switch n.Target {
+		case "float32":
+			if !source.IsInteger() && source != KindFloat {
+				return KindInvalid, fmt.Errorf("conversion to float32 requires an integer or float64, got %s", source)
+			}
+			n.Source = source.String()
+			return KindFloat32, nil
 		case "float64":
-			if source != KindInt {
+			if !source.IsInteger() && source != KindFloat32 {
 				cause := fmt.Errorf("conversion to float64 requires int64, got %s", source)
 				return KindInvalid, typeDiagnostic("E0302", "无效的数值转换", n.Arguments[0].Span(), KindInt.String(), source.String(), cause)
 			}
+			n.Source = source.String()
 			return KindFloat, nil
-		case "int64":
-			if source != KindFloat {
-				cause := fmt.Errorf("conversion to int64 requires float64, got %s", source)
-				return KindInvalid, typeDiagnostic("E0302", "无效的数值转换", n.Arguments[0].Span(), KindFloat.String(), source.String(), cause)
-			}
-			return KindInt, nil
 		default:
 			return KindInvalid, fmt.Errorf("unsupported conversion target %q", n.Target)
 		}
@@ -397,5 +491,28 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 			"unsupported expression %T",
 			expr,
 		)
+	}
+}
+
+func integerKind(name string) Kind {
+	switch name {
+	case "int8":
+		return KindInt8
+	case "int16":
+		return KindInt16
+	case "int32":
+		return KindInt32
+	case "rune":
+		return KindInt32
+	case "int64":
+		return KindInt
+	case "uint8":
+		return KindUint8
+	case "uint16":
+		return KindUint16
+	case "uint32":
+		return KindUint32
+	default:
+		return KindInvalid
 	}
 }

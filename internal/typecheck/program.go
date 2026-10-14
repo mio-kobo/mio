@@ -64,6 +64,9 @@ func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.Fu
 			}
 			continue
 		}
+		if fn.Native {
+			continue
+		}
 
 		key := keys[fn]
 		if cache != nil && key != "" && cache.HasFunctionCheck(key) {
@@ -118,6 +121,11 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 			declared, err = c.resolveType(n.Name.DeclaredType, c.activeTypeParameters())
 			if err != nil {
 				return err
+			}
+		}
+		if _, recursiveClosure := n.Value.(*ast.FunctionLiteral); recursiveClosure && declared.IsFunction() {
+			if symbol, ok := c.resolver.BindingOf(n.Name); ok {
+				c.types[symbol] = declared
 			}
 		}
 		kind, err := c.checkExpressionExpected(n.Value, declared)
@@ -498,9 +506,11 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 	c.narrowings = make(map[resolver.Symbol]Kind)
 	c.functionDepth++
 	c.typeParameterScopes = append(c.typeParameterScopes, parameterSet(signature.TypeParams))
+	c.constraintScopes = append(c.constraintScopes, signature.Constraints)
 	defer func() {
 		c.functionDepth--
 		c.typeParameterScopes = c.typeParameterScopes[:len(c.typeParameterScopes)-1]
+		c.constraintScopes = c.constraintScopes[:len(c.constraintScopes)-1]
 		c.narrowings = savedNarrowings
 		c.factVersions = savedVersions
 	}()
@@ -553,6 +563,57 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 	}
 
 	return nil
+}
+
+// checkFunctionLiteral 检查匿名函数签名与函数体
+func (c *Checker) checkFunctionLiteral(fn *ast.FunctionLiteral) (Kind, error) {
+	if fn.ReturnType == nil {
+		return KindInvalid, fmt.Errorf("anonymous function requires a return type")
+	}
+	result, err := c.resolveType(fn.ReturnType, c.activeTypeParameters())
+	if err != nil {
+		return KindInvalid, err
+	}
+	params := make([]Kind, len(fn.Parameters))
+	for i, param := range fn.Parameters {
+		if param.DeclaredType == nil {
+			return KindInvalid, fmt.Errorf("parameter %q requires a type annotation", param.Name)
+		}
+		kind, err := c.resolveType(param.DeclaredType, c.activeTypeParameters())
+		if err != nil {
+			return KindInvalid, err
+		}
+		if kind == KindUnit {
+			return KindInvalid, fmt.Errorf("function parameter cannot be unit")
+		}
+		params[i] = kind
+		symbol, ok := c.resolver.BindingOf(param)
+		if !ok {
+			return KindInvalid, fmt.Errorf("missing symbol binding for parameter %q", param.Name)
+		}
+		c.types[symbol] = kind
+	}
+	savedNarrowings := c.narrowings
+	savedVersions := copyVersions(c.factVersions)
+	outerLoopDepth := c.loopDepth
+	c.narrowings = make(map[resolver.Symbol]Kind)
+	c.functionDepth++
+	c.loopDepth = 0
+	c.returnTypes = append(c.returnTypes, result)
+	defer func() {
+		c.returnTypes = c.returnTypes[:len(c.returnTypes)-1]
+		c.functionDepth--
+		c.loopDepth = outerLoopDepth
+		c.narrowings = savedNarrowings
+		c.factVersions = savedVersions
+	}()
+	if err := c.checkBlock(fn.Body); err != nil {
+		return KindInvalid, err
+	}
+	if result != KindUnit && !blockAlwaysReturns(fn.Body) {
+		return KindInvalid, fmt.Errorf("anonymous function may exit without returning %s", result)
+	}
+	return FunctionOf(params, result), nil
 }
 
 // checkBlock 检查代码块中的所有语句

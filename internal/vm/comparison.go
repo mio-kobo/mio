@@ -43,14 +43,24 @@ func (v *VM) executeComparison(
 		}
 
 		switch left.Kind() {
-		case value.KindInt:
-			a, _ := left.Int64()
-			b, _ := right.Int64()
+		case value.KindInt, value.KindInt8, value.KindInt16, value.KindInt32:
+			a, _ := left.SignedInteger()
+			b, _ := right.SignedInteger()
+			result = a == b
+
+		case value.KindUint8, value.KindUint16, value.KindUint32:
+			a, _ := left.UnsignedInteger()
+			b, _ := right.UnsignedInteger()
 			result = a == b
 
 		case value.KindFloat:
 			a, _ := left.Float64()
 			b, _ := right.Float64()
+			result = a == b
+
+		case value.KindFloat32:
+			a, _ := left.Float32()
+			b, _ := right.Float32()
 			result = a == b
 
 		case value.KindBool:
@@ -82,9 +92,9 @@ func (v *VM) executeComparison(
 		code.OpGreater,
 		code.OpGreaterEqual:
 
-		if left.Kind() != right.Kind() || (left.Kind() != value.KindInt && left.Kind() != value.KindFloat) {
+		if left.Kind() != right.Kind() || (!left.Kind().IsInteger() && left.Kind() != value.KindFloat32 && left.Kind() != value.KindFloat) {
 			return fmt.Errorf(
-				"%s requires int64 operands or matching float64 operands, got %s and %s",
+				"%s requires int64 operands, matching float32 operands, or matching float64 operands, got %s and %s",
 				name,
 				left.Kind(),
 				right.Kind(),
@@ -95,9 +105,26 @@ func (v *VM) executeComparison(
 			a, _ := left.Float64()
 			b, _ := right.Float64()
 			result = compareFloat(op, a, b)
+		} else if left.Kind() == value.KindFloat32 {
+			a, _ := left.Float32()
+			b, _ := right.Float32()
+			result = compareFloat(op, float64(a), float64(b))
+		} else if left.Kind().IsUnsignedInteger() {
+			a, _ := left.UnsignedInteger()
+			b, _ := right.UnsignedInteger()
+			switch op {
+			case code.OpLess:
+				result = a < b
+			case code.OpLessEqual:
+				result = a <= b
+			case code.OpGreater:
+				result = a > b
+			case code.OpGreaterEqual:
+				result = a >= b
+			}
 		} else {
-			a, _ := left.Int64()
-			b, _ := right.Int64()
+			a, _ := left.SignedInteger()
+			b, _ := right.SignedInteger()
 			switch op {
 			case code.OpLess:
 				result = a < b

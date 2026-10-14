@@ -3,6 +3,8 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"Mio/internal/ast"
 	"Mio/internal/diagnostic"
@@ -39,10 +41,12 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.Integer, p.parseIntegerLiteral)
 	p.registerPrefix(token.Float, p.parseFloatLiteral)
 	p.registerPrefix(token.String, p.parseStringLiteral)
+	p.registerPrefix(token.Rune, p.parseRuneLiteral)
 	p.registerPrefix(token.True, p.parseBooleanLiteral)
 	p.registerPrefix(token.False, p.parseBooleanLiteral)
 	p.registerPrefix(token.Nil, p.parseNilLiteral)
 	p.registerPrefix(token.Ident, p.parseIdentifier)
+	p.registerPrefix(token.Function, p.parseFunctionLiteral)
 
 	// 一元运算与括号分组
 	p.registerPrefix(token.Minus, p.parsePrefixExpression)
@@ -143,6 +147,15 @@ func (p *Parser) ParseProgram() (*ast.Program, error) {
 // parseStatement 根据当前 Token 分发语句解析。
 func (p *Parser) parseStatement() (ast.Statement, error) {
 	switch p.curToken.Type {
+	case token.Import:
+		return p.parseImportStatement()
+
+	case token.Export:
+		return p.parseExportStatement()
+
+	case token.Const:
+		return p.parseConstStatement(false)
+
 	case token.Let:
 		return p.parseLetStatement()
 
@@ -181,6 +194,88 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 	}
 
 	return p.parseExpressionStatement()
+}
+
+// parseImportStatement 解析 yobu 包导入
+func (p *Parser) parseImportStatement() (*ast.ImportStatement, error) {
+	start := p.curToken.Start
+	if p.peekToken.Type != token.String {
+		return nil, p.expected("package path", " after yobu", p.peekToken)
+	}
+	p.nextToken()
+	path := p.curToken.Literal
+	end := p.curToken.End
+	if p.peekToken.Type != token.Semicolon {
+		return nil, p.expected("';'", " after package path", p.peekToken)
+	}
+	p.nextToken()
+	end = p.curToken.End
+	parts := strings.Split(path, "/")
+	return &ast.ImportStatement{Path: path, Alias: parts[len(parts)-1], Range: ast.Span{Start: start, End: end}}, nil
+}
+
+// parseExportStatement 解析 koukai 导出声明
+func (p *Parser) parseExportStatement() (ast.Statement, error) {
+	switch p.peekToken.Type {
+	case token.Const:
+		p.nextToken()
+		return p.parseConstStatement(true)
+	case token.Function:
+		p.nextToken()
+		declaration, err := p.parseFunctionStatement()
+		if err == nil {
+			declaration.Exported = true
+		}
+		return declaration, err
+	case token.Struct:
+		p.nextToken()
+		declaration, err := p.parseStructStatement()
+		if err == nil {
+			declaration.Exported = true
+		}
+		return declaration, err
+	case token.Enum:
+		p.nextToken()
+		declaration, err := p.parseEnumStatement()
+		if err == nil {
+			declaration.Exported = true
+		}
+		return declaration, err
+	default:
+		return nil, p.expected("teisu, waza, kata or sentaku", " after koukai", p.peekToken)
+	}
+}
+
+// parseConstStatement 解析 teisu 编译期常量
+func (p *Parser) parseConstStatement(exported bool) (*ast.ConstStatement, error) {
+	start := p.curToken.Start
+	if p.peekToken.Type != token.Ident {
+		return nil, p.expected("identifier", " after teisu", p.peekToken)
+	}
+	p.nextToken()
+	name := &ast.Identifier{Name: p.curToken.Literal, Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End}}
+	if p.peekToken.Type == token.Colon {
+		p.nextToken()
+		ref, err := p.parseTypeRef()
+		if err != nil {
+			return nil, err
+		}
+		name.DeclaredType = ref
+	}
+	if p.peekToken.Type != token.Assign {
+		return nil, p.expected("'='", " after constant name", p.peekToken)
+	}
+	p.nextToken()
+	p.nextToken()
+	value, err := p.parseExpression(precLowest)
+	if err != nil {
+		return nil, err
+	}
+	if p.peekToken.Type != token.Semicolon {
+		return nil, p.expected("';'", " after constant value", p.peekToken)
+	}
+	p.nextToken()
+	return &ast.ConstStatement{Name: name, Value: value, Exported: exported, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
 }
 
 // parseWhileStatement 解析 aida 循环语句。
@@ -280,7 +375,7 @@ func (p *Parser) parseExpression(prec precedence) (ast.Expression, error) {
 	return left, nil
 }
 
-// parseIntegerLiteral 解析 int64 整数字面量。
+// parseIntegerLiteral 解析整数字面量。
 func (p *Parser) parseIntegerLiteral() (ast.Expression, error) {
 	if p.curToken.Type != token.Integer {
 		return nil, fmt.Errorf("expected INTEGER, got %s", p.curToken.Type)
@@ -309,6 +404,8 @@ func (p *Parser) parseFloatLiteral() (ast.Expression, error) {
 
 	return &ast.FloatLiteral{
 		Value: value,
+		Raw:   p.curToken.Literal,
+		Bits:  64,
 		Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End},
 	}, nil
 }
@@ -336,6 +433,15 @@ func (p *Parser) parseStringLiteral() (ast.Expression, error) {
 			Start: p.curToken.Start,
 			End:   p.curToken.End,
 		},
+	}, nil
+}
+
+// parseRuneLiteral 保存 Lexer 已验证的 Unicode 标量值。
+func (p *Parser) parseRuneLiteral() (ast.Expression, error) {
+	value, _ := utf8.DecodeRuneInString(p.curToken.Literal)
+	return &ast.RuneLiteral{
+		Value: int64(value),
+		Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End},
 	}, nil
 }
 
@@ -413,7 +519,12 @@ func (p *Parser) parseFieldExpression(left ast.Expression) (ast.Expression, erro
 		return nil, p.expected("field name", " after '.'", p.peekToken)
 	}
 	p.nextToken()
-	return &ast.FieldExpression{Left: left, Name: p.curToken.Literal, Range: ast.Span{Start: left.Span().Start, End: p.curToken.End}}, nil
+	field := &ast.FieldExpression{Left: left, Name: p.curToken.Literal, Range: ast.Span{Start: left.Span().Start, End: p.curToken.End}}
+	if packageName, ok := left.(*ast.Identifier); ok && p.peekToken.Type == token.LBrace {
+		qualified := &ast.Identifier{Name: packageName.Name + "." + field.Name, Range: field.Range}
+		return p.parseStructLiteral(qualified)
+	}
+	return field, nil
 }
 
 // parseArrayLiteral 解析数组字面量
@@ -456,7 +567,9 @@ func (p *Parser) parseArrayLiteral() (ast.Expression, error) {
 
 // parseIndexExpression 解析数组索引读取
 func (p *Parser) parseIndexExpression(left ast.Expression) (ast.Expression, error) {
-	if identifier, ok := left.(*ast.Identifier); ok && p.typeArgumentStartsAtPeek() {
+	_, identifier := left.(*ast.Identifier)
+	_, field := left.(*ast.FieldExpression)
+	if (identifier || field) && p.typeArgumentStartsAtPeek() {
 		args := make([]*ast.TypeRef, 0, 1)
 		for {
 			arg, err := p.parseTypeRef()
@@ -475,7 +588,16 @@ func (p *Parser) parseIndexExpression(left ast.Expression) (ast.Expression, erro
 		p.nextToken()
 		switch p.peekToken.Type {
 		case token.LBrace:
-			return p.parseStructLiteralWithArgs(identifier, args)
+			if named, ok := left.(*ast.Identifier); ok {
+				return p.parseStructLiteralWithArgs(named, args)
+			}
+			if qualified, ok := left.(*ast.FieldExpression); ok {
+				if packageName, ok := qualified.Left.(*ast.Identifier); ok {
+					name := &ast.Identifier{Name: packageName.Name + "." + qualified.Name, Range: qualified.Range}
+					return p.parseStructLiteralWithArgs(name, args)
+				}
+			}
+			return nil, fmt.Errorf("invalid generic struct literal target")
 		case token.LParen, token.Dot:
 			return &ast.TypeApplyExpression{Function: left, Args: args, Range: ast.Span{Start: left.Span().Start, End: p.curToken.End}}, nil
 		default:
@@ -507,7 +629,7 @@ func (p *Parser) typeArgumentStartsAtPeek() bool {
 
 func looksLikeTypeName(name string) bool {
 	switch name {
-	case "int64", "float64", "bool", "string", "unit", "Map":
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "Map":
 		return true
 	}
 	return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'
@@ -596,8 +718,7 @@ func (p *Parser) parseCallExpression(function ast.Expression) (ast.Expression, e
 			Start: function.Span().Start,
 			End:   p.curToken.End,
 		}
-		if identifier, ok := function.(*ast.Identifier); ok &&
-			(identifier.Name == "int64" || identifier.Name == "float64") {
+		if identifier, ok := function.(*ast.Identifier); ok && isNumericTypeName(identifier.Name) {
 			return &ast.ConversionExpression{
 				Target:    identifier.Name,
 				Arguments: call.Arguments,
@@ -635,8 +756,7 @@ func (p *Parser) parseCallExpression(function ast.Expression) (ast.Expression, e
 		Start: function.Span().Start,
 		End:   p.curToken.End,
 	}
-	if identifier, ok := function.(*ast.Identifier); ok &&
-		(identifier.Name == "int64" || identifier.Name == "float64") {
+	if identifier, ok := function.(*ast.Identifier); ok && isNumericTypeName(identifier.Name) {
 		return &ast.ConversionExpression{
 			Target:    identifier.Name,
 			Arguments: call.Arguments,
@@ -644,6 +764,15 @@ func (p *Parser) parseCallExpression(function ast.Expression) (ast.Expression, e
 		}, nil
 	}
 	return call, nil
+}
+
+func isNumericTypeName(name string) bool {
+	switch name {
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseExpressionStatement 解析以分号结束的表达式语句。
@@ -998,7 +1127,7 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 			End:   p.curToken.End,
 		},
 	}
-	typeParams, err := p.parseTypeParameters()
+	typeParams, constraints, err := p.parseTypeParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -1043,11 +1172,12 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 	}
 
 	return &ast.FunctionStatement{
-		Name:       name,
-		TypeParams: typeParams,
-		Parameters: params,
-		ReturnType: returnType,
-		Body:       body,
+		Name:        name,
+		TypeParams:  typeParams,
+		Constraints: constraints,
+		Parameters:  params,
+		ReturnType:  returnType,
+		Body:        body,
 		Range: ast.Span{
 			Start: start,
 			End:   body.Span().End,
@@ -1055,29 +1185,74 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 	}, nil
 }
 
+// parseFunctionLiteral 解析匿名函数表达式
+func (p *Parser) parseFunctionLiteral() (ast.Expression, error) {
+	start := p.curToken.Start
+	if p.peekToken.Type != token.LParen {
+		return nil, p.expected("'('", " after waza", p.peekToken)
+	}
+	p.nextToken()
+	params, err := p.parseFunctionParameters()
+	if err != nil {
+		return nil, err
+	}
+	if p.peekToken.Type != token.Arrow {
+		return nil, p.expected("'->'", " after anonymous function parameters", p.peekToken)
+	}
+	p.nextToken()
+	returnType, err := p.parseTypeRef()
+	if err != nil {
+		return nil, fmt.Errorf("expected return type after '->': %w", err)
+	}
+	if p.peekToken.Type != token.LBrace {
+		return nil, p.expected("'{'", " after anonymous function signature", p.peekToken)
+	}
+	p.nextToken()
+	body, err := p.parseBlockStatement()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.FunctionLiteral{
+		Parameters: params,
+		ReturnType: returnType,
+		Body:       body,
+		Range:      ast.Span{Start: start, End: body.Span().End},
+	}, nil
+}
+
 // parseTypeParameters 解析声明上的类型参数
-func (p *Parser) parseTypeParameters() ([]string, error) {
+func (p *Parser) parseTypeParameters() ([]string, map[string]string, error) {
 	params := make([]string, 0)
+	constraints := make(map[string]string)
 	if p.peekToken.Type != token.Less {
-		return params, nil
+		return params, constraints, nil
 	}
 	p.nextToken()
 	for {
 		if p.peekToken.Type != token.Ident {
-			return nil, p.expected("type parameter", " in '<...>'", p.peekToken)
+			return nil, nil, p.expected("type parameter", " in '<...>'", p.peekToken)
 		}
 		p.nextToken()
-		params = append(params, p.curToken.Literal)
+		name := p.curToken.Literal
+		params = append(params, name)
+		if p.peekToken.Type == token.Colon {
+			p.nextToken()
+			if p.peekToken.Type != token.Ident {
+				return nil, nil, p.expected("constraint", " after ':'", p.peekToken)
+			}
+			p.nextToken()
+			constraints[name] = p.curToken.Literal
+		}
 		if p.peekToken.Type != token.Comma {
 			break
 		}
 		p.nextToken()
 	}
 	if p.peekToken.Type != token.Greater {
-		return nil, p.expected("'>'", " after type parameters", p.peekToken)
+		return nil, nil, p.expected("'>'", " after type parameters", p.peekToken)
 	}
 	p.nextToken()
-	return params, nil
+	return params, constraints, nil
 }
 
 // parseStructStatement 解析结构体声明
@@ -1088,7 +1263,7 @@ func (p *Parser) parseStructStatement() (*ast.StructStatement, error) {
 	}
 	p.nextToken()
 	name := &ast.Identifier{Name: p.curToken.Literal, Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End}}
-	typeParams, err := p.parseTypeParameters()
+	typeParams, constraints, err := p.parseTypeParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -1119,7 +1294,7 @@ func (p *Parser) parseStructStatement() (*ast.StructStatement, error) {
 		p.nextToken()
 	}
 	p.nextToken()
-	return &ast.StructStatement{Name: name, TypeParams: typeParams, Fields: fields, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
+	return &ast.StructStatement{Name: name, TypeParams: typeParams, Constraints: constraints, Fields: fields, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
 }
 
 // parseEnumStatement 解析枚举声明
@@ -1130,7 +1305,7 @@ func (p *Parser) parseEnumStatement() (*ast.EnumStatement, error) {
 	}
 	p.nextToken()
 	name := &ast.Identifier{Name: p.curToken.Literal, Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End}}
-	typeParams, err := p.parseTypeParameters()
+	typeParams, constraints, err := p.parseTypeParameters()
 	if err != nil {
 		return nil, err
 	}
@@ -1171,7 +1346,7 @@ func (p *Parser) parseEnumStatement() (*ast.EnumStatement, error) {
 		p.nextToken()
 	}
 	p.nextToken()
-	return &ast.EnumStatement{Name: name, TypeParams: typeParams, Variants: variants, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
+	return &ast.EnumStatement{Name: name, TypeParams: typeParams, Constraints: constraints, Variants: variants, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
 }
 
 // parseMatchStatement 解析枚举穷尽分支
@@ -1246,6 +1421,15 @@ func (p *Parser) parseTypeRef() (*ast.TypeRef, error) {
 		ref = &ast.TypeRef{
 			Name:  p.curToken.Literal,
 			Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End},
+		}
+		if p.peekToken.Type == token.Dot {
+			p.nextToken()
+			if p.peekToken.Type != token.Ident {
+				return nil, p.expected("type name", " after '.'", p.peekToken)
+			}
+			p.nextToken()
+			ref.Name += "." + p.curToken.Literal
+			ref.Range.End = p.curToken.End
 		}
 		if p.peekToken.Type == token.Less {
 			p.nextToken()

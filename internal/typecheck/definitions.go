@@ -2,6 +2,7 @@ package typecheck
 
 import (
 	"fmt"
+	"strings"
 
 	"Mio/internal/ast"
 )
@@ -96,10 +97,24 @@ func (c *Checker) resolveType(ref *ast.TypeRef, parameters map[string]struct{}) 
 		return FunctionOf(params, result), nil
 	}
 	switch ref.Name {
+	case "int8":
+		return KindInt8, nil
+	case "int16":
+		return KindInt16, nil
+	case "int32", "rune":
+		return KindInt32, nil
 	case "int64":
 		return KindInt, nil
+	case "uint8":
+		return KindUint8, nil
+	case "uint16":
+		return KindUint16, nil
+	case "uint32":
+		return KindUint32, nil
 	case "float64":
 		return KindFloat, nil
+	case "float32":
+		return KindFloat32, nil
 	case "bool":
 		return KindBool, nil
 	case "string":
@@ -409,7 +424,7 @@ func containsTypeParameter(kind Kind) bool {
 }
 
 func isHashableType(kind Kind) bool {
-	return kind == KindInt || kind == KindBool || kind == KindString
+	return kind.IsInteger() || kind == KindBool || kind == KindString
 }
 
 func (c *Checker) collectHashableParameters(kind Kind, result map[string]struct{}) {
@@ -447,5 +462,8 @@ func (c *Checker) collectHashableParameters(kind Kind, result map[string]struct{
 }
 
 func isTypeName(name string) bool {
+	if index := strings.LastIndex(name, "::"); index >= 0 {
+		name = name[index+2:]
+	}
 	return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'
 }

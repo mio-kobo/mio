@@ -30,13 +30,38 @@ type Statement interface {
 // 整数字面量
 type IntegerLiteral struct {
 	Value int64
+	Type  string
+	Range Span
+}
+
+// RuneLiteral 表示 Unicode 标量字面量
+type RuneLiteral struct {
+	Value int64
+	Type  string
 	Range Span
 }
 
 // 浮点字面量
 type FloatLiteral struct {
 	Value float64
+	Raw   string
+	Bits  int
 	Range Span
+}
+
+// ImportStatement 表示显式包导入
+type ImportStatement struct {
+	Path  string
+	Alias string
+	Range Span
+}
+
+// ConstStatement 表示编译期常量声明
+type ConstStatement struct {
+	Name     *Identifier
+	Value    Expression
+	Exported bool
+	Range    Span
 }
 
 // 表达式语句
@@ -171,6 +196,7 @@ type TypeApplyExpression struct {
 // 数值转换表达式
 type ConversionExpression struct {
 	Target    string
+	Source    string
 	Arguments []Expression
 	Range     Span
 }
@@ -229,8 +255,19 @@ type ReturnStatement struct {
 
 // waza 函数定义语句
 type FunctionStatement struct {
-	Name       *Identifier
-	TypeParams []string
+	Name        *Identifier
+	TypeParams  []string
+	Constraints map[string]string
+	Parameters  []*Identifier
+	ReturnType  *TypeRef
+	Body        *BlockStatement
+	Exported    bool
+	Native      bool
+	Range       Span
+}
+
+// FunctionLiteral 表示匿名函数表达式
+type FunctionLiteral struct {
 	Parameters []*Identifier
 	ReturnType *TypeRef
 	Body       *BlockStatement
@@ -239,10 +276,12 @@ type FunctionStatement struct {
 
 // StructStatement 表示具名结构体声明
 type StructStatement struct {
-	Name       *Identifier
-	TypeParams []string
-	Fields     []*Identifier
-	Range      Span
+	Name        *Identifier
+	TypeParams  []string
+	Constraints map[string]string
+	Fields      []*Identifier
+	Exported    bool
+	Range       Span
 }
 
 // EnumVariant 表示枚举变体声明
@@ -254,10 +293,12 @@ type EnumVariant struct {
 
 // EnumStatement 表示具名枚举声明
 type EnumStatement struct {
-	Name       *Identifier
-	TypeParams []string
-	Variants   []EnumVariant
-	Range      Span
+	Name        *Identifier
+	TypeParams  []string
+	Constraints map[string]string
+	Variants    []EnumVariant
+	Exported    bool
+	Range       Span
 }
 
 // MatchArm 表示枚举分支
@@ -292,11 +333,25 @@ func (n *IntegerLiteral) Span() Span {
 	return n.Range
 }
 
+func (n *RuneLiteral) expressionNode() {}
+
+func (n *RuneLiteral) Span() Span {
+	return n.Range
+}
+
 func (n *FloatLiteral) expressionNode() {}
 
 func (n *FloatLiteral) Span() Span {
 	return n.Range
 }
+
+func (n *ImportStatement) statementNode() {}
+
+func (n *ImportStatement) Span() Span { return n.Range }
+
+func (n *ConstStatement) statementNode() {}
+
+func (n *ConstStatement) Span() Span { return n.Range }
 
 func (n *ArrayLiteral) expressionNode() {}
 
@@ -321,6 +376,10 @@ func (n *StructLiteral) Span() Span { return n.Range }
 func (n *EnumLiteral) expressionNode() {}
 
 func (n *EnumLiteral) Span() Span { return n.Range }
+
+func (n *FunctionLiteral) expressionNode() {}
+
+func (n *FunctionLiteral) Span() Span { return n.Range }
 
 // 表达式语句
 func (n *ExpressionStatement) statementNode() {}

@@ -1,0 +1,44 @@
+koukai waza checked_gcd(left: int64, right: int64) -> int64? {
+    kaku a = left;
+    kaku b = right;
+    moshi (a > 0) { a = -a; }
+    moshi (b > 0) { b = -b; }
+    aida (b != 0) {
+        kaku remainder = a - (a / b) * b;
+        a = b;
+        b = remainder;
+    }
+    moshi (__neg_overflows(a)) { kaesu mu; }
+    kaesu -a;
+}
+
+koukai waza gcd(left: int64, right: int64) -> int64 {
+    kaku result: int64? = checked_gcd(left, right);
+    moshi (result != mu) { kaesu result; }
+    __math_error("kiso/math.gcd: result does not fit int64");
+    kaesu 0;
+}
+
+koukai waza checked_lcm(left: int64, right: int64) -> int64? {
+    moshi (left == 0 || right == 0) { kaesu 0; }
+    kaku divisor: int64? = checked_gcd(left, right);
+    moshi (divisor != mu) {
+        kaku absolute_left: int64? = checked_abs(left);
+        moshi (absolute_left != mu) {
+            kaku absolute_right: int64? = checked_abs(right);
+            moshi (absolute_right != mu) {
+                kaku factor = absolute_left / divisor;
+                moshi (factor > 9223372036854775807 / absolute_right) { kaesu mu; }
+                kaesu factor * absolute_right;
+            }
+        }
+    }
+    kaesu mu;
+}
+
+koukai waza lcm(left: int64, right: int64) -> int64 {
+    kaku result: int64? = checked_lcm(left, right);
+    moshi (result != mu) { kaesu result; }
+    __math_error("kiso/math.lcm: result does not fit int64");
+    kaesu 0;
+}

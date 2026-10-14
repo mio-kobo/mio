@@ -11,6 +11,8 @@ const (
 	ErrInvalidUTF8              ErrorKind = "invalid UTF-8"
 	ErrInvalidNumber            ErrorKind = "invalid number"
 	ErrInvalidEscape            ErrorKind = "invalid escape"
+	ErrInvalidRune              ErrorKind = "invalid rune"
+	ErrUnterminatedRune         ErrorKind = "unterminated rune"
 	ErrUnterminatedString       ErrorKind = "unterminated string"
 	ErrUnterminatedBlockComment ErrorKind = "unterminated block comment"
 	ErrUnexpectedCharacter      ErrorKind = "unexpected character"

@@ -12,6 +12,32 @@ type Opcode byte
 type Instructions []byte
 
 const (
+	MathSqrt = iota + 1
+	MathFloor
+	MathCeil
+	MathRoundEven
+	MathTrunc
+	MathIsNaN
+	MathIsInf
+	MathIsFinite
+	MathIsNegativeZero
+	MathAddOverflows
+	MathIsNegative
+	MathNegOverflows
+	MathError
+)
+
+const (
+	IntegerInt8 = iota + 1
+	IntegerInt16
+	IntegerInt32
+	IntegerInt64
+	IntegerUint8
+	IntegerUint16
+	IntegerUint32
+)
+
+const (
 	OpConstant     Opcode = 1
 	OpAdd          Opcode = 2
 	OpPop          Opcode = 3
@@ -59,6 +85,16 @@ const (
 	OpMapSet           Opcode = 43
 	OpFunction         Opcode = 44
 	OpCallValue        Opcode = 45
+	OpClosure          Opcode = 46
+	OpGetUpvalue       Opcode = 47
+	OpSetUpvalue       Opcode = 48
+	OpDefineLocal      Opcode = 49
+	OpIntToFloat32     Opcode = 50
+	OpFloat32ToInt     Opcode = 51
+	OpFloat32ToFloat64 Opcode = 52
+	OpFloat64ToFloat32 Opcode = 53
+	OpMath             Opcode = 54
+	OpIntegerConvert   Opcode = 55
 )
 
 // Definition 描述指令名称及操作数长度
@@ -213,6 +249,28 @@ var definitions = map[Opcode]Definition{
 		Name:          "OpCallValue",
 		OperandWidths: []int{2},
 	},
+	OpClosure: {
+		Name:          "OpClosure",
+		OperandWidths: []int{2},
+	},
+	OpGetUpvalue: {
+		Name:          "OpGetUpvalue",
+		OperandWidths: []int{2},
+	},
+	OpSetUpvalue: {
+		Name:          "OpSetUpvalue",
+		OperandWidths: []int{2},
+	},
+	OpDefineLocal: {
+		Name:          "OpDefineLocal",
+		OperandWidths: []int{2},
+	},
+	OpIntToFloat32:     {Name: "OpIntToFloat32"},
+	OpFloat32ToInt:     {Name: "OpFloat32ToInt"},
+	OpFloat32ToFloat64: {Name: "OpFloat32ToFloat64"},
+	OpFloat64ToFloat32: {Name: "OpFloat64ToFloat32"},
+	OpMath:             {Name: "OpMath", OperandWidths: []int{1, 1}},
+	OpIntegerConvert:   {Name: "OpIntegerConvert", OperandWidths: []int{1}},
 }
 
 // Lookup 查询操作码对应的指令定义
@@ -260,6 +318,11 @@ func Make(op Opcode, operands ...int) (Instructions, error) {
 		value := operands[i]
 
 		switch width {
+		case 1:
+			if value < 0 || value > 0xff {
+				return nil, fmt.Errorf("%s operand %d out of range: %d", definition.Name, i+1, value)
+			}
+			ins[offset] = byte(value)
 		case 2:
 			if value < 0 || value > 0xffff {
 				return nil, fmt.Errorf(
@@ -299,6 +362,12 @@ func ReadOperands(
 	// 按照定义依次读取操作数
 	for i, width := range def.OperandWidths {
 		switch width {
+		case 1:
+			if len(ins)-offset < 1 {
+				return nil, 0, fmt.Errorf("%s operand %d: not enough bytes", def.Name, i+1)
+			}
+			operands = append(operands, int(ins[offset]))
+			offset++
 		case 2:
 			// 检查剩余字节是否足够
 			if len(ins)-offset < 2 {

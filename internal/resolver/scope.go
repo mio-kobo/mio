@@ -19,6 +19,7 @@ const (
 
 // 符号信息
 type Symbol struct {
+	ID   uint64
 	Name string
 	Kind SymbolKind
 	Decl token.Position

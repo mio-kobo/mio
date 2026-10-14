@@ -2,6 +2,7 @@ package typecheck
 
 import (
 	"fmt"
+	"strconv"
 
 	"Mio/internal/ast"
 	"Mio/internal/resolver"
@@ -21,6 +22,59 @@ func isAssignable(expected, actual Kind) bool {
 
 // checkExpressionExpected 在明确类型上下文中检查表达式
 func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (Kind, error) {
+	if expected.IsNullable() {
+		if _, nilLiteral := expr.(*ast.NilLiteral); !nilLiteral {
+			return c.checkExpressionExpected(expr, expected.NonNullable())
+		}
+	}
+	if literal, ok := expr.(*ast.IntegerLiteral); ok && expected.IsInteger() {
+		if err := checkIntegerLiteralRange(literal.Value, expected, false); err != nil {
+			return KindInvalid, err
+		}
+		literal.Type = expected.String()
+		return expected, nil
+	}
+	if literal, ok := expr.(*ast.RuneLiteral); ok && expected.IsInteger() {
+		if err := checkIntegerLiteralRange(literal.Value, expected, false); err != nil {
+			return KindInvalid, err
+		}
+		literal.Type = expected.String()
+		return expected, nil
+	}
+	if literal, ok := expr.(*ast.FloatLiteral); ok && expected == KindFloat32 {
+		value, err := strconv.ParseFloat(literal.Raw, 32)
+		if err != nil {
+			return KindInvalid, err
+		}
+		literal.Value = float64(float32(value))
+		literal.Bits = 32
+		return KindFloat32, nil
+	}
+	if grouped, ok := expr.(*ast.GroupedExpression); ok {
+		return c.checkExpressionExpected(grouped.Expr, expected)
+	}
+	if prefix, ok := expr.(*ast.PrefixExpression); ok && (expected.IsInteger() || expected == KindFloat32 || expected == KindFloat) {
+		if literal, direct := prefix.Right.(*ast.IntegerLiteral); direct && prefix.Operator == token.Minus && expected.IsInteger() {
+			if err := checkIntegerLiteralRange(literal.Value, expected, true); err != nil {
+				return KindInvalid, err
+			}
+			literal.Type = expected.String()
+			return expected, nil
+		}
+		if _, err := c.checkExpressionExpected(prefix.Right, expected); err != nil {
+			return KindInvalid, err
+		}
+		return c.checkExpression(expr)
+	}
+	if infix, ok := expr.(*ast.InfixExpression); ok && (expected.IsInteger() || expected == KindFloat32 || expected == KindFloat) {
+		if _, err := c.checkExpressionExpected(infix.Left, expected); err != nil {
+			return KindInvalid, err
+		}
+		if _, err := c.checkExpressionExpected(infix.Right, expected); err != nil {
+			return KindInvalid, err
+		}
+		return c.checkExpression(expr)
+	}
 	if literal, ok := expr.(*ast.StructLiteral); ok {
 		return c.checkStructLiteral(literal, expected)
 	}
@@ -39,7 +93,7 @@ func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (K
 		if arrayType.IsNullable() {
 			arrayType = arrayType.NonNullable()
 		}
-		if needsContext && arrayType.IsArray() {
+		if arrayType.IsArray() && (needsContext || arrayType.ElementKind() == KindFloat32 || arrayType.ElementKind().IsInteger()) {
 			for _, element := range literal.Elements {
 				actual, err := c.checkExpressionExpected(element, arrayType.ElementKind())
 				if err != nil {
@@ -54,6 +108,46 @@ func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (K
 		}
 	}
 	return c.checkExpression(expr)
+}
+
+func contextualIntegerExpression(expr ast.Expression) bool {
+	switch n := expr.(type) {
+	case *ast.IntegerLiteral:
+		return n.Type == "" || n.Type == "int64"
+	case *ast.RuneLiteral:
+		return n.Type == "" || n.Type == "int32"
+	case *ast.GroupedExpression:
+		return contextualIntegerExpression(n.Expr)
+	case *ast.PrefixExpression:
+		return n.Operator == token.Minus && contextualIntegerExpression(n.Right)
+	default:
+		return false
+	}
+}
+
+func checkIntegerLiteralRange(value int64, kind Kind, negative bool) error {
+	if negative {
+		if !kind.IsSignedInteger() {
+			return fmt.Errorf("negative integer literal is outside %s range", kind)
+		}
+		limits := map[Kind]int64{KindInt8: 128, KindInt16: 32768, KindInt32: 2147483648, KindInt: -1 << 63}
+		limit := limits[kind]
+		if kind == KindInt {
+			return nil
+		}
+		if value > limit {
+			return fmt.Errorf("integer literal -%d is outside %s range", value, kind)
+		}
+		return nil
+	}
+	maxima := map[Kind]int64{
+		KindInt8: 127, KindInt16: 32767, KindInt32: 2147483647, KindInt: 1<<63 - 1,
+		KindUint8: 255, KindUint16: 65535, KindUint32: 4294967295,
+	}
+	if value < 0 || value > maxima[kind] {
+		return fmt.Errorf("integer literal %d is outside %s range", value, kind)
+	}
+	return nil
 }
 
 func commonArrayElement(left, right Kind) Kind {
@@ -170,6 +264,14 @@ func (c *Checker) checkBlockWithNarrowing(block *ast.BlockStatement, symbol reso
 
 func (c *Checker) invalidateGlobalFacts() {
 	for symbol := range c.globals {
+		delete(c.narrowings, symbol)
+		c.factVersions[symbol]++
+	}
+}
+
+// invalidateAllFacts 清除可能被闭包修改的收窄事实
+func (c *Checker) invalidateAllFacts() {
+	for symbol := range c.narrowings {
 		delete(c.narrowings, symbol)
 		c.factVersions[symbol]++
 	}

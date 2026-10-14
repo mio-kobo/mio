@@ -10,6 +10,7 @@ const ( // 定义特殊 Token
 	Integer Type = "INTEGER" // 整数字面量
 	Float   Type = "FLOAT"   // 浮点字面量
 	String  Type = "STRING"  // 字符串字面量
+	Rune    Type = "RUNE"    // 字符字面量
 )
 
 const ( // 定义运算符 Token
@@ -68,6 +69,8 @@ const ( // 未来启用关键字 Token
 	Case     Type = "CASE"
 
 	Import Type = "IMPORT"
+	Export Type = "EXPORT"
+	Const  Type = "CONST"
 )
 
 const (
@@ -96,6 +99,7 @@ const (
 	V02
 	V03
 	V04
+	V05
 )
 
 // 定义关键字表
@@ -129,6 +133,11 @@ var keywordsV04 = map[string]Type{
 	"baai":    Case,
 }
 
+var keywordsV05 = map[string]Type{
+	"koukai": Export,
+	"teisu":  Const,
+}
+
 func LookupIdent(
 	literal string,
 	version LanguageVersion,
@@ -151,6 +160,11 @@ func LookupIdent(
 	}
 	if version >= V04 {
 		if tok, ok := keywordsV04[literal]; ok {
+			return tok
+		}
+	}
+	if version >= V05 {
+		if tok, ok := keywordsV05[literal]; ok {
 			return tok
 		}
 	}

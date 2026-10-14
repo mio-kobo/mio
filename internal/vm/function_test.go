@@ -130,7 +130,7 @@ func runFunctionSource(t *testing.T, source string) string {
 
 func compileFunctionSource(t *testing.T, source string) *compiler.Bytecode {
 	t.Helper()
-	l, err := lexer.NewChecked(source, token.V01)
+	l, err := lexer.NewChecked(source, token.V04)
 	if err != nil {
 		t.Fatal(err)
 	}

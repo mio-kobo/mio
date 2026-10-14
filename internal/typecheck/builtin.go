@@ -34,7 +34,7 @@ func (c *Checker) checkBuiltinCall(
 
 		// 仅允许可输出的基础类型
 		switch kind {
-		case KindInt, KindFloat, KindBool, KindString, KindNil:
+		case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString, KindNil:
 			return KindUnit, nil
 
 		default:
@@ -59,6 +59,73 @@ func (c *Checker) checkBuiltinCall(
 			return KindInvalid, typeDiagnostic("E0305", "内置函数 len 只接受数组", args[0].Span(), "array", kind.String(), cause)
 		}
 		return KindInt, nil
+
+	case "$math.sqrt", "$math.floor", "$math.ceil", "$math.round_even", "$math.trunc":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if !c.floating(kind) {
+			return KindInvalid, fmt.Errorf("builtin %q requires float32 or float64, got %s", name, kind)
+		}
+		return kind, nil
+
+	case "$math.is_nan", "$math.is_inf", "$math.is_finite", "$math.is_negative_zero":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if !c.floating(kind) {
+			return KindInvalid, fmt.Errorf("builtin %q requires float32 or float64, got %s", name, kind)
+		}
+		return KindBool, nil
+
+	case "$math.add_overflows":
+		if len(args) != 2 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 2 arguments, got %d", name, len(args))
+		}
+		for _, argument := range args {
+			kind, err := c.checkExpression(argument)
+			if err != nil {
+				return KindInvalid, err
+			}
+			if kind != KindInt {
+				return KindInvalid, fmt.Errorf("builtin %q requires int64, got %s", name, kind)
+			}
+		}
+		return KindBool, nil
+
+	case "$math.is_negative", "$math.neg_overflows":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if !c.numeric(kind) {
+			return KindInvalid, fmt.Errorf("builtin %q requires a number, got %s", name, kind)
+		}
+		return KindBool, nil
+
+	case "$math.error":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if kind != KindString {
+			return KindInvalid, fmt.Errorf("builtin %q requires string, got %s", name, kind)
+		}
+		return KindUnit, nil
 
 	default:
 		return KindInvalid, fmt.Errorf(

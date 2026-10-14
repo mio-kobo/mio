@@ -10,6 +10,7 @@ import (
 // FunctionSignature 保存函数参数与返回类型
 type FunctionSignature struct {
 	TypeParams     []string
+	Constraints    map[string]string
 	ParameterTypes []Kind
 	ReturnType     Kind
 	HashableParams map[string]struct{}
@@ -48,11 +49,26 @@ func resolveTypeRef(ref *ast.TypeRef) (Kind, error) {
 	}
 
 	switch ref.Name {
+	case "int8":
+		return KindInt8, nil
+	case "int16":
+		return KindInt16, nil
+	case "int32", "rune":
+		return KindInt32, nil
 	case "int64":
 		return KindInt, nil
+	case "uint8":
+		return KindUint8, nil
+	case "uint16":
+		return KindUint16, nil
+	case "uint32":
+		return KindUint32, nil
 
 	case "float64":
 		return KindFloat, nil
+
+	case "float32":
+		return KindFloat32, nil
 
 	case "bool":
 		return KindBool, nil
@@ -115,6 +131,14 @@ func (c *Checker) registerFunctionSignature(
 	if err := validateTypeParameters(fn.Name.Name, fn.TypeParams); err != nil {
 		return err
 	}
+	for parameter, constraint := range fn.Constraints {
+		if _, ok := parameterSet(fn.TypeParams)[parameter]; !ok {
+			return fmt.Errorf("constraint for unknown type parameter %s", parameter)
+		}
+		if constraint != "Number" && constraint != "Integer" && constraint != "Signed" && constraint != "Float" {
+			return fmt.Errorf("unsupported generic constraint %q", constraint)
+		}
+	}
 
 	parameters := parameterSet(fn.TypeParams)
 	returnType, err := c.resolveType(fn.ReturnType, parameters)
@@ -124,6 +148,7 @@ func (c *Checker) registerFunctionSignature(
 
 	signature := FunctionSignature{
 		TypeParams:     append([]string(nil), fn.TypeParams...),
+		Constraints:    fn.Constraints,
 		ParameterTypes: make([]Kind, 0, len(fn.Parameters)),
 		ReturnType:     returnType,
 		HashableParams: make(map[string]struct{}),

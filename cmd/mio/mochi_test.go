@@ -55,6 +55,14 @@ waza odd(n: int64) -> bool {
 }
 chant(factorial(6)); chant(even(10));
 `},
+		{name: "词法闭包", source: `
+waza make_counter() -> () -> int64 {
+    kaku count = 0;
+    kaesu waza () -> int64 { count = count + 1; kaesu count; };
+}
+kaku counter = make_counter();
+chant(counter()); chant(counter()); chant(counter());
+`},
 	}
 
 	for _, tt := range tests {

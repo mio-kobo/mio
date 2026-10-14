@@ -58,6 +58,7 @@ func signatureFingerprint(fn *ast.FunctionStatement) string {
 	f.number(uint64(len(fn.Parameters)))
 	for _, parameter := range fn.TypeParams {
 		f.text(parameter)
+		f.text(fn.Constraints[parameter])
 	}
 	for _, parameter := range fn.Parameters {
 		f.typeRef(parameter.DeclaredType)
@@ -228,6 +229,11 @@ func (f *fingerprinter) expression(expression ast.Expression) {
 	case *ast.IntegerLiteral:
 		f.text("int")
 		f.number(uint64(node.Value))
+		f.text(node.Type)
+	case *ast.RuneLiteral:
+		f.text("rune")
+		f.number(uint64(node.Value))
+		f.text(node.Type)
 	case *ast.FloatLiteral:
 		f.text("float")
 		f.number(math.Float64bits(node.Value))
@@ -310,6 +316,14 @@ func (f *fingerprinter) expression(expression ast.Expression) {
 		for _, value := range node.Values {
 			f.expression(value)
 		}
+	case *ast.FunctionLiteral:
+		f.text("function-literal")
+		for _, parameter := range node.Parameters {
+			f.text(parameter.Name)
+			f.typeRef(parameter.DeclaredType)
+		}
+		f.typeRef(node.ReturnType)
+		f.statement(node.Body)
 	default:
 		f.text("unknown-expression")
 	}

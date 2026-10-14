@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 
 	"Mio/internal/ast"
 	"Mio/internal/code"
@@ -27,6 +28,13 @@ type CompiledFunction struct {
 	ParameterCount int
 	LocalCount     int
 	ReturnsValue   bool
+	Captures       []Capture
+}
+
+// Capture 描述闭包从直接外层函数取得的 Cell
+type Capture struct {
+	Local bool
+	Index int
 }
 
 // FunctionArtifact 保存可搬移的函数编译结果
@@ -36,6 +44,17 @@ type FunctionArtifact struct {
 	ParameterCount int
 	LocalCount     int
 	ReturnsValue   bool
+	Captures       []Capture
+}
+
+type compilerContext struct {
+	instructions    code.Instructions
+	locals          map[resolver.Symbol]int
+	loops           []loopContext
+	currentFunction *ast.FunctionStatement
+	currentLiteral  *ast.FunctionLiteral
+	upvalues        map[resolver.Symbol]int
+	captures        []Capture
 }
 
 // FunctionCache 保存函数编译结果
@@ -64,11 +83,17 @@ type Compiler struct {
 	globals  map[resolver.Symbol]int
 	locals   map[resolver.Symbol]int
 
-	functionIDs     map[resolver.Symbol]int
-	functionReturns map[resolver.Symbol]bool
-	functions       []CompiledFunction
-	currentFunction *ast.FunctionStatement
-	loops           []loopContext
+	functionIDs      map[resolver.Symbol]int
+	functionReturns  map[resolver.Symbol]bool
+	omittedFunctions map[resolver.Symbol]bool
+	functions        []CompiledFunction
+	currentFunction  *ast.FunctionStatement
+	currentLiteral   *ast.FunctionLiteral
+	upvalues         map[resolver.Symbol]int
+	captures         []Capture
+	contexts         []compilerContext
+	literalIDs       map[*ast.FunctionLiteral]int
+	loops            []loopContext
 
 	functionKeys  map[string]string
 	functionCache FunctionCache
@@ -90,11 +115,13 @@ func (c *Compiler) IncrementalStats() IncrementalStats {
 // New 创建字节码编译器
 func New() *Compiler {
 	return &Compiler{
-		instructions:    make(code.Instructions, 0),
-		constants:       make([]value.Value, 0),
-		globals:         make(map[resolver.Symbol]int),
-		functionIDs:     make(map[resolver.Symbol]int),
-		functionReturns: make(map[resolver.Symbol]bool),
+		instructions:     make(code.Instructions, 0),
+		constants:        make([]value.Value, 0),
+		globals:          make(map[resolver.Symbol]int),
+		functionIDs:      make(map[resolver.Symbol]int),
+		functionReturns:  make(map[resolver.Symbol]bool),
+		omittedFunctions: make(map[resolver.Symbol]bool),
+		literalIDs:       make(map[*ast.FunctionLiteral]int),
 	}
 }
 
@@ -138,10 +165,30 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 		switch n.Target {
+		case "float32":
+			if _, integer := integerTypeCode(n.Source); integer {
+				return c.emit(code.OpIntToFloat32)
+			}
+			return c.emit(code.OpFloat64ToFloat32)
 		case "float64":
+			if n.Source == "float32" {
+				return c.emit(code.OpFloat32ToFloat64)
+			}
 			return c.emit(code.OpIntToFloat)
 		case "int64":
+			if n.Source == "float32" {
+				return c.emit(code.OpFloat32ToInt)
+			}
+			if n.Source == "float64" {
+				return c.emit(code.OpFloatToInt)
+			}
+			if n.Source != "" {
+				return c.emit(code.OpIntegerConvert, code.IntegerInt64)
+			}
 			return c.emit(code.OpFloatToInt)
+		case "int8", "int16", "int32", "rune", "uint8", "uint16", "uint32":
+			target, _ := integerTypeCode(n.Target)
+			return c.emit(code.OpIntegerConvert, target)
 		default:
 			return fmt.Errorf("unsupported conversion target %q", n.Target)
 		}
@@ -186,6 +233,13 @@ func (c *Compiler) Compile(node ast.Node) error {
 	case *ast.FunctionStatement:
 		return c.compileFunction(n)
 
+	case *ast.FunctionLiteral:
+		id, err := c.compileFunctionLiteral(n)
+		if err != nil {
+			return err
+		}
+		return c.emit(code.OpClosure, id)
+
 	case *ast.StructStatement, *ast.EnumStatement:
 		return nil
 
@@ -193,7 +247,7 @@ func (c *Compiler) Compile(node ast.Node) error {
 		return c.compileMatchStatement(n)
 
 	case *ast.ReturnStatement:
-		if c.currentFunction == nil {
+		if !c.inFunction() {
 			cause := fmt.Errorf("kaesu outside function")
 			return diagnostic.NewError("E0401", "无法编译函数外的 kaesu", diagnostic.FromPositions(n.Span().Start, n.Span().End)).WithCause(cause)
 		}
@@ -207,16 +261,33 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 	// 编译整数字面量
 	case *ast.IntegerLiteral:
-		index, err := c.addConstant(value.NewInt(n.Value))
+		constant := integerLiteralValue(n.Type, n.Value)
+		index, err := c.addConstant(constant)
 		if err != nil {
 			return err
 		}
 
 		return c.emit(code.OpConstant, index)
 
+	// 字符字面量复用整数常量编码
+	case *ast.RuneLiteral:
+		literalType := n.Type
+		if literalType == "" {
+			literalType = "int32"
+		}
+		index, err := c.addConstant(integerLiteralValue(literalType, n.Value))
+		if err != nil {
+			return err
+		}
+		return c.emit(code.OpConstant, index)
+
 	// 编译浮点字面量
 	case *ast.FloatLiteral:
-		index, err := c.addConstant(value.NewFloat(n.Value))
+		constant := value.NewFloat(n.Value)
+		if n.Bits == 32 {
+			constant = value.NewFloat32(float32(n.Value))
+		}
+		index, err := c.addConstant(constant)
 		if err != nil {
 			return err
 		}
@@ -396,9 +467,12 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 		slots := c.globals
 		op := code.OpSetGlobal
-		if c.currentFunction != nil {
+		if c.inFunction() {
 			slots = c.locals
 			op = code.OpSetLocal
+			if len(c.loops) != 0 {
+				op = code.OpDefineLocal
+			}
 		}
 
 		if _, exists := slots[symbol]; exists {
@@ -411,6 +485,25 @@ func (c *Compiler) Compile(node ast.Node) error {
 		if len(slots) >= 1<<16 {
 			return fmt.Errorf("variable slot overflow")
 		}
+		recursiveClosure := false
+		if _, ok := n.Value.(*ast.FunctionLiteral); ok && n.Name.DeclaredType != nil {
+			recursiveClosure = true
+			if c.inFunction() {
+				op = code.OpSetLocal
+			}
+		}
+		index := len(slots)
+		if recursiveClosure {
+			slots[symbol] = index
+			if c.inFunction() {
+				if err := c.emit(code.OpNil); err != nil {
+					return err
+				}
+				if err := c.emit(code.OpDefineLocal, index); err != nil {
+					return err
+				}
+			}
+		}
 
 		// 编译变量初始化表达式
 		if err := c.Compile(n.Value); err != nil {
@@ -418,13 +511,13 @@ func (c *Compiler) Compile(node ast.Node) error {
 		}
 
 		// 为声明符号分配独立物理槽位
-		index := len(slots)
-
 		if err := c.emit(op, index); err != nil {
 			return err
 		}
 
-		slots[symbol] = index
+		if !recursiveClosure {
+			slots[symbol] = index
+		}
 
 		return nil
 
@@ -439,19 +532,22 @@ func (c *Compiler) Compile(node ast.Node) error {
 				return c.emit(code.OpFunction, id)
 			}
 		}
-		index, local, err := c.variableSlot(n)
+		index, location, err := c.variableSlot(n)
 		if err != nil {
 			return err
 		}
 
-		if local {
+		if location == variableLocal {
 			return c.emit(code.OpGetLocal, index)
+		}
+		if location == variableUpvalue {
+			return c.emit(code.OpGetUpvalue, index)
 		}
 		return c.emit(code.OpGetGlobal, index)
 
 		// 编译变量赋值
 	case *ast.AssignStatement:
-		index, local, err := c.variableSlot(n.Name)
+		index, location, err := c.variableSlot(n.Name)
 		if err != nil {
 			return err
 		}
@@ -462,8 +558,11 @@ func (c *Compiler) Compile(node ast.Node) error {
 		}
 
 		// 将新值写回原变量槽位
-		if local {
+		if location == variableLocal {
 			return c.emit(code.OpSetLocal, index)
+		}
+		if location == variableUpvalue {
+			return c.emit(code.OpSetUpvalue, index)
 		}
 		return c.emit(code.OpSetGlobal, index)
 
@@ -490,6 +589,46 @@ func (c *Compiler) Compile(node ast.Node) error {
 			"unsupported AST node %T",
 			node,
 		)
+	}
+}
+
+func integerTypeCode(name string) (int, bool) {
+	switch name {
+	case "int8":
+		return code.IntegerInt8, true
+	case "int16":
+		return code.IntegerInt16, true
+	case "int32", "rune":
+		return code.IntegerInt32, true
+	case "int64":
+		return code.IntegerInt64, true
+	case "uint8":
+		return code.IntegerUint8, true
+	case "uint16":
+		return code.IntegerUint16, true
+	case "uint32":
+		return code.IntegerUint32, true
+	default:
+		return 0, false
+	}
+}
+
+func integerLiteralValue(name string, number int64) value.Value {
+	switch name {
+	case "int8":
+		return value.NewInt8(int8(number))
+	case "int16":
+		return value.NewInt16(int16(number))
+	case "int32", "rune":
+		return value.NewInt32(int32(number))
+	case "uint8":
+		return value.NewUint8(uint8(number))
+	case "uint16":
+		return value.NewUint16(uint16(number))
+	case "uint32":
+		return value.NewUint32(uint32(number))
+	default:
+		return value.NewInt(number)
 	}
 }
 
@@ -585,7 +724,7 @@ func (c *Compiler) allocateTemporary() (int, bool, error) {
 func (c *Compiler) allocateSymbol(symbol resolver.Symbol) (int, bool, error) {
 	slots := c.globals
 	local := false
-	if c.currentFunction != nil {
+	if c.inFunction() {
 		slots = c.locals
 		local = true
 	}
@@ -669,6 +808,7 @@ func (c *Compiler) Bytecode() *Bytecode {
 	for index, function := range c.functions {
 		functions[index] = function
 		functions[index].Instructions = append(code.Instructions(nil), function.Instructions...)
+		functions[index].Captures = append([]Capture(nil), function.Captures...)
 	}
 	return &Bytecode{
 		Instructions: append(
@@ -918,6 +1058,7 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 		return fmt.Errorf("function compilation requires a name resolver")
 	}
 
+	reachable := reachableLibraryFunctions(program)
 	for _, stmt := range program.Statements {
 		fn, ok := stmt.(*ast.FunctionStatement)
 		if !ok {
@@ -930,6 +1071,10 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 		symbol, ok := c.resolver.BindingOf(fn.Name)
 		if !ok || symbol.Kind != resolver.SymbolFunction {
 			return fmt.Errorf("missing function binding for %q", fn.Name.Name)
+		}
+		if strings.Contains(fn.Name.Name, "::") && !reachable[fn.Name.Name] {
+			c.omittedFunctions[symbol] = true
+			continue
 		}
 		id := len(c.functions)
 		c.functionIDs[symbol] = id
@@ -948,7 +1093,7 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 
 // compileFunction 编译独立函数指令流
 func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
-	if c.currentFunction != nil {
+	if c.inFunction() {
 		return fmt.Errorf("nested function declaration %q is not supported", fn.Name.Name)
 	}
 	symbol, ok := c.resolver.BindingOf(fn.Name)
@@ -957,7 +1102,14 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 	}
 	id, ok := c.functionIDs[symbol]
 	if !ok {
+		if c.omittedFunctions[symbol] {
+			return nil
+		}
 		return fmt.Errorf("function %q has no FunctionID", fn.Name.Name)
+	}
+	if fn.Native {
+		c.functions[id].LocalCount = len(fn.Parameters)
+		return nil
 	}
 
 	key := c.functionKeys[fn.Name.Name]
@@ -973,6 +1125,7 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 					ParameterCount: artifact.ParameterCount,
 					LocalCount:     artifact.LocalCount,
 					ReturnsValue:   artifact.ReturnsValue,
+					Captures:       append([]Capture(nil), artifact.Captures...),
 				}
 				c.cacheStats.Hits++
 				return nil
@@ -981,20 +1134,9 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 	}
 	c.cacheStats.Recomputed++
 
-	outerInstructions := c.instructions
-	outerLocals := c.locals
-	outerLoops := c.loops
-	c.instructions = make(code.Instructions, 0)
-	c.locals = make(map[resolver.Symbol]int)
-	c.loops = nil
-	c.currentFunction = fn
+	c.enterFunction(fn, nil)
 	constantStart := len(c.constants)
-	defer func() {
-		c.instructions = outerInstructions
-		c.locals = outerLocals
-		c.loops = outerLoops
-		c.currentFunction = nil
-	}()
+	defer c.leaveFunction()
 
 	for index, parameter := range fn.Parameters {
 		parameterSymbol, ok := c.resolver.BindingOf(parameter)
@@ -1020,6 +1162,7 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 		ParameterCount: len(fn.Parameters),
 		LocalCount:     len(c.locals),
 		ReturnsValue:   c.functionReturns[symbol],
+		Captures:       append([]Capture(nil), c.captures...),
 	}
 	if c.functionCache != nil && key != "" {
 		normalized, err := normalizeFunctionConstants(c.instructions, constantStart)
@@ -1030,10 +1173,90 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 				ParameterCount: len(fn.Parameters),
 				LocalCount:     len(c.locals),
 				ReturnsValue:   c.functionReturns[symbol],
+				Captures:       append([]Capture(nil), c.captures...),
 			})
 		}
 	}
 	return nil
+}
+
+// compileFunctionLiteral 编译匿名函数并返回 FunctionID
+func (c *Compiler) compileFunctionLiteral(fn *ast.FunctionLiteral) (int, error) {
+	if id, ok := c.literalIDs[fn]; ok && len(c.functions[id].Instructions) != 0 {
+		return id, nil
+	}
+	id, ok := c.literalIDs[fn]
+	if !ok {
+		if len(c.functions) >= 1<<16 {
+			return 0, fmt.Errorf("function count overflow")
+		}
+		id = len(c.functions)
+		c.literalIDs[fn] = id
+		c.functions = append(c.functions, CompiledFunction{ID: id, Name: fmt.Sprintf("<closure:%d>", id), ParameterCount: len(fn.Parameters), ReturnsValue: fn.ReturnType != nil && fn.ReturnType.Name != "unit"})
+	}
+	c.enterFunction(nil, fn)
+	defer c.leaveFunction()
+	for index, parameter := range fn.Parameters {
+		symbol, ok := c.resolver.BindingOf(parameter)
+		if !ok || symbol.Kind != resolver.SymbolParameter {
+			return 0, fmt.Errorf("missing parameter binding for %q", parameter.Name)
+		}
+		c.locals[symbol] = index
+	}
+	if err := c.Compile(fn.Body); err != nil {
+		return 0, err
+	}
+	returnsValue := fn.ReturnType != nil && fn.ReturnType.Name != "unit"
+	if !returnsValue {
+		if err := c.emit(code.OpReturn); err != nil {
+			return 0, err
+		}
+	}
+	c.functions[id] = CompiledFunction{
+		ID:             id,
+		Name:           fmt.Sprintf("<closure:%d>", id),
+		Instructions:   append(code.Instructions(nil), c.instructions...),
+		ParameterCount: len(fn.Parameters),
+		LocalCount:     len(c.locals),
+		ReturnsValue:   returnsValue,
+		Captures:       append([]Capture(nil), c.captures...),
+	}
+	return id, nil
+}
+
+// inFunction 判断当前是否正在编译函数体
+func (c *Compiler) inFunction() bool {
+	return c.currentFunction != nil || c.currentLiteral != nil
+}
+
+// enterFunction 保存外层状态并进入函数编译上下文
+func (c *Compiler) enterFunction(fn *ast.FunctionStatement, literal *ast.FunctionLiteral) {
+	c.contexts = append(c.contexts, compilerContext{
+		instructions: c.instructions, locals: c.locals, loops: c.loops,
+		currentFunction: c.currentFunction, currentLiteral: c.currentLiteral,
+		upvalues: c.upvalues, captures: c.captures,
+	})
+	c.instructions = make(code.Instructions, 0)
+	c.locals = make(map[resolver.Symbol]int)
+	c.loops = nil
+	c.currentFunction = fn
+	c.currentLiteral = literal
+	c.upvalues = make(map[resolver.Symbol]int)
+	c.captures = nil
+}
+
+// leaveFunction 恢复外层函数编译上下文
+func (c *Compiler) leaveFunction() {
+	index := len(c.contexts) - 1
+	outer := c.contexts[index]
+	c.contexts = c.contexts[:index]
+	c.instructions = outer.instructions
+	c.locals = outer.locals
+	c.loops = outer.loops
+	c.currentFunction = outer.currentFunction
+	c.currentLiteral = outer.currentLiteral
+	c.upvalues = outer.upvalues
+	c.captures = outer.captures
 }
 
 func normalizeFunctionConstants(instructions code.Instructions, base int) (code.Instructions, error) {
@@ -1117,26 +1340,80 @@ func (c *Compiler) boundVariable(
 	return symbol, nil
 }
 
+type variableLocation uint8
+
+const (
+	variableGlobal variableLocation = iota
+	variableLocal
+	variableUpvalue
+)
+
 // variableSlot 查询变量符号对应的物理槽位
 func (c *Compiler) variableSlot(
 	ident *ast.Identifier,
-) (int, bool, error) {
+) (int, variableLocation, error) {
 	symbol, err := c.boundVariable(ident)
 	if err != nil {
-		return 0, false, err
+		return 0, variableGlobal, err
 	}
 
-	if c.currentFunction != nil {
+	if c.inFunction() {
 		if index, ok := c.locals[symbol]; ok {
-			return index, true, nil
+			return index, variableLocal, nil
 		}
 	}
 	if index, ok := c.globals[symbol]; ok {
-		return index, false, nil
+		return index, variableGlobal, nil
+	}
+	if c.inFunction() {
+		index, ok := c.resolveUpvalue(symbol)
+		if ok {
+			return index, variableUpvalue, nil
+		}
 	}
 
-	return 0, false, fmt.Errorf(
+	return 0, variableGlobal, fmt.Errorf(
 		"variable %q has no allocated slot",
 		ident.Name,
 	)
+}
+
+// resolveUpvalue 为当前函数分配捕获槽位
+func (c *Compiler) resolveUpvalue(symbol resolver.Symbol) (int, bool) {
+	if index, ok := c.upvalues[symbol]; ok {
+		return index, true
+	}
+	if len(c.contexts) == 0 {
+		return 0, false
+	}
+	capture, ok := c.resolveContextCapture(len(c.contexts)-1, symbol)
+	if !ok {
+		return 0, false
+	}
+	index := len(c.captures)
+	c.upvalues[symbol] = index
+	c.captures = append(c.captures, capture)
+	return index, true
+}
+
+// resolveContextCapture 沿外层函数链建立捕获转发
+func (c *Compiler) resolveContextCapture(contextIndex int, symbol resolver.Symbol) (Capture, bool) {
+	outer := &c.contexts[contextIndex]
+	if index, ok := outer.locals[symbol]; ok {
+		return Capture{Local: true, Index: index}, true
+	}
+	if _, ok := c.globals[symbol]; ok || contextIndex == 0 {
+		return Capture{}, false
+	}
+	if index, ok := outer.upvalues[symbol]; ok {
+		return Capture{Index: index}, true
+	}
+	parentCapture, ok := c.resolveContextCapture(contextIndex-1, symbol)
+	if !ok {
+		return Capture{}, false
+	}
+	index := len(outer.captures)
+	outer.upvalues[symbol] = index
+	outer.captures = append(outer.captures, parentCapture)
+	return Capture{Index: index}, true
 }

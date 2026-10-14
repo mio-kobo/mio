@@ -10,13 +10,13 @@ import (
 	"strings"
 
 	"Mio/internal/ast"
+	"Mio/internal/bunko"
 	"Mio/internal/compiler"
+	"Mio/internal/constant"
 	"Mio/internal/diagnostic"
 	"Mio/internal/lexer"
 	"Mio/internal/mochi"
-	"Mio/internal/parser"
 	"Mio/internal/resolver"
-	"Mio/internal/token"
 	"Mio/internal/typecheck"
 	"Mio/internal/value"
 	"Mio/internal/vm"
@@ -334,9 +334,18 @@ func printDisassembly(out io.Writer, bytecode *compiler.Bytecode) error {
 		case value.KindInt:
 			integer, _ := constant.Int64()
 			display = strconv.FormatInt(integer, 10)
+		case value.KindInt8, value.KindInt16, value.KindInt32:
+			integer, _ := constant.SignedInteger()
+			display = strconv.FormatInt(integer, 10)
+		case value.KindUint8, value.KindUint16, value.KindUint32:
+			integer, _ := constant.UnsignedInteger()
+			display = strconv.FormatUint(integer, 10)
 		case value.KindFloat:
 			floating, _ := constant.Float64()
 			display = strconv.FormatFloat(floating, 'g', -1, 64)
+		case value.KindFloat32:
+			floating, _ := constant.Float32()
+			display = strconv.FormatFloat(float64(floating), 'g', -1, 32)
 		case value.KindString:
 			text, _ := constant.Text()
 			display = strconv.Quote(text)
@@ -372,6 +381,15 @@ func printDisassembly(out io.Writer, bytecode *compiler.Bytecode) error {
 		); err != nil {
 			return err
 		}
+		for index, capture := range function.Captures {
+			source := "upvalue"
+			if capture.Local {
+				source = "local"
+			}
+			if _, err := fmt.Fprintf(out, "    Capture %d %s=%d\n", index, source, capture.Index); err != nil {
+				return err
+			}
+		}
 		if _, err := io.WriteString(out, function.Instructions.String()); err != nil {
 			return err
 		}
@@ -383,33 +401,12 @@ func printDisassembly(out io.Writer, bytecode *compiler.Bytecode) error {
 func parseAndCheckFile(
 	path string,
 ) (*ast.Program, *resolver.Resolver, error) {
-	source, err := os.ReadFile(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"read %q: %w",
-			path,
-			err,
-		)
-	}
-
-	// 词法分析
-	l, err := lexer.NewChecked(
-		string(source),
-		token.V04,
-	)
+	loaded, err := bunko.LoadProgram(path, bunkoRoot(path))
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// 语法分析
-	p := parser.New(l)
-
-	program, err := p.ParseProgram()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := l.Err(); err != nil {
+	program := loaded.AST
+	if err := constant.Fold(program); err != nil {
 		return nil, nil, err
 	}
 
@@ -428,6 +425,29 @@ func parseAndCheckFile(
 	}
 
 	return program, r, nil
+}
+
+// bunkoRoot 查找标准库物理目录
+func bunkoRoot(sourcePath string) string {
+	if configured := os.Getenv("MIO_BUNKO"); configured != "" {
+		return configured
+	}
+	absolute, err := filepath.Abs(sourcePath)
+	if err == nil {
+		current := filepath.Dir(absolute)
+		for {
+			candidate := filepath.Join(current, "bunko")
+			if info, statErr := os.Stat(candidate); statErr == nil && info.IsDir() {
+				return candidate
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
+		}
+	}
+	return "bunko"
 }
 
 // printValue 显示 Mio 运行时值

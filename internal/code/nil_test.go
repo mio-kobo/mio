@@ -16,6 +16,13 @@ func TestOpcodeNumbersStable(t *testing.T) {
 	}
 }
 
+// 测试固定宽度整数 Opcode 只追加到末尾
+func TestFixedIntegerOpcodeNumber(t *testing.T) {
+	if OpIntegerConvert != 55 {
+		t.Fatalf("OpIntegerConvert=%d, want 55", OpIntegerConvert)
+	}
+}
+
 func TestNilInstruction(t *testing.T) {
 	ins, err := Make(OpNil)
 	if err != nil {

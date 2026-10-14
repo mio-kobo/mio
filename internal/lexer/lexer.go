@@ -3,6 +3,7 @@ package lexer
 import (
 	"Mio/internal/token"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -303,6 +304,13 @@ func (l *Lexer) NextToken() token.Token {
 				Literal: content,
 			}
 		}
+	case '\'':
+		content, ok := l.readRune()
+		if !ok {
+			tok = token.Token{Type: token.Illegal, Literal: content}
+		} else {
+			tok = token.Token{Type: token.Rune, Literal: content}
+		}
 
 	case '(':
 		tok = token.Token{
@@ -566,6 +574,69 @@ func (l *Lexer) readString() (string, bool) {
 	return string(result), false
 }
 
+// readRune 读取并验证单个 Unicode 标量值
+func (l *Lexer) readRune() (string, bool) {
+	start := l.currentPos
+	l.readChar()
+	escape := false
+	escapeStart := token.Position{}
+
+	for !l.atEOF() {
+		if l.ch == '\n' || l.ch == '\r' {
+			l.reportRuneError(ErrUnterminatedRune, start, "unterminated rune literal")
+			return l.input[start.Offset:l.position], false
+		}
+		if !escape && l.ch == '\'' {
+			raw := l.input[start.Offset : l.position+1]
+			decoded, err := strconv.Unquote(raw)
+			if err != nil {
+				position := start
+				kind := ErrInvalidRune
+				if escapeStart != (token.Position{}) {
+					position = escapeStart
+					if !wellFormedUnicodeEscape(raw) {
+						kind = ErrInvalidEscape
+					}
+				}
+				l.reportRuneError(kind, position, err.Error())
+				return raw, false
+			}
+			value, size := utf8.DecodeRuneInString(decoded)
+			if size == 0 || size != len(decoded) || !utf8.ValidRune(value) {
+				l.reportRuneError(ErrInvalidRune, start, "rune literal must contain exactly one Unicode scalar value")
+				return raw, false
+			}
+			return string(value), true
+		}
+		if escape {
+			escape = false
+		} else if l.ch == '\\' {
+			escape = true
+			escapeStart = l.currentPos
+		}
+		l.readChar()
+	}
+
+	l.reportRuneError(ErrUnterminatedRune, start, "unterminated rune literal")
+	return l.input[start.Offset:l.position], false
+}
+
+func wellFormedUnicodeEscape(raw string) bool {
+	digits := 0
+	if strings.HasPrefix(raw, `'\u`) {
+		digits = 4
+	} else if strings.HasPrefix(raw, `'\U`) {
+		digits = 8
+	} else {
+		return false
+	}
+	if len(raw) != digits+4 || raw[len(raw)-1] != '\'' {
+		return false
+	}
+	_, err := strconv.ParseUint(raw[3:3+digits], 16, 32)
+	return err == nil
+}
+
 // skipLineComment 跳过单行注释
 func (l *Lexer) skipLineComment() {
 	for l.ch != '\n' && l.ch != '\r' && !l.atEOF() {
@@ -624,5 +695,11 @@ func (l *Lexer) reportUnterminatedString(start token.Position) {
 			Position: start,
 			Message:  "unterminated string literal",
 		}
+	}
+}
+
+func (l *Lexer) reportRuneError(kind ErrorKind, position token.Position, message string) {
+	if l.lexErr == nil {
+		l.lexErr = &LexicalError{Kind: kind, Position: position, Message: message}
 	}
 }

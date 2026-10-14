@@ -40,7 +40,12 @@ func validateVersion(bytecode *compiler.Bytecode, version uint16) error {
 	for i, constant := range bytecode.Constants {
 		switch constant.Kind() {
 		case value.KindInt:
+		case value.KindInt8, value.KindInt16, value.KindInt32, value.KindUint8, value.KindUint16, value.KindUint32:
+			if version < Version {
+				return fmt.Errorf("constant %d kind %s requires Mochi v11", i, constant.Kind())
+			}
 		case value.KindFloat:
+		case value.KindFloat32:
 		case value.KindString:
 			text, _ := constant.Text()
 			if len(text) > MaxStringBytes {
@@ -77,6 +82,17 @@ func validateVersion(bytecode *compiler.Bytecode, version uint16) error {
 		if function.LocalCount < function.ParameterCount || function.LocalCount > MaxFunctionSlots {
 			return fmt.Errorf("function %d local count %d is invalid", index, function.LocalCount)
 		}
+		if version < VersionV9 && len(function.Captures) != 0 {
+			return fmt.Errorf("function %d captures require Mochi v9", index)
+		}
+		if len(function.Captures) > MaxFunctionSlots {
+			return fmt.Errorf("function %d capture count %d exceeds limit %d", index, len(function.Captures), MaxFunctionSlots)
+		}
+		for captureIndex, capture := range function.Captures {
+			if capture.Index < 0 || capture.Index >= MaxFunctionSlots {
+				return fmt.Errorf("function %d capture %d index %d is outside range", index, captureIndex, capture.Index)
+			}
+		}
 		if len(function.Instructions) > MaxInstructionBytes {
 			return fmt.Errorf("function %d instruction length %d exceeds limit %d", index, len(function.Instructions), MaxInstructionBytes)
 		}
@@ -108,8 +124,17 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		if version < VersionV7 && (op == code.OpIsNil || op == code.OpSetNullableIndex) {
 			return fmt.Errorf("opcode %d requires Mochi v7 at offset %d", op, offset)
 		}
-		if version < Version && op >= code.OpStruct && op <= code.OpCallValue {
+		if version < VersionV8 && op >= code.OpStruct && op <= code.OpCallValue {
 			return fmt.Errorf("opcode %d requires Mochi v8 at offset %d", op, offset)
+		}
+		if version < VersionV9 && op >= code.OpClosure && op <= code.OpDefineLocal {
+			return fmt.Errorf("opcode %d requires Mochi v9 at offset %d", op, offset)
+		}
+		if version < VersionV10 && op >= code.OpIntToFloat32 && op <= code.OpMath {
+			return fmt.Errorf("opcode %d requires Mochi v10 at offset %d", op, offset)
+		}
+		if version < Version && op == code.OpIntegerConvert {
+			return fmt.Errorf("opcode %d requires Mochi v11 at offset %d", op, offset)
 		}
 		definition, err := code.Lookup(op)
 		if err != nil {
@@ -128,20 +153,59 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 			if operands[0] >= len(bytecode.Constants) {
 				return fmt.Errorf("constant index %d out of range at offset %d", operands[0], offset)
 			}
+		case code.OpMath:
+			if operands[0] < code.MathSqrt || operands[0] > code.MathError {
+				return fmt.Errorf("unknown math primitive %d at offset %d", operands[0], offset)
+			}
+			expected := 1
+			if operands[0] == code.MathAddOverflows {
+				expected = 2
+			}
+			if operands[1] != expected {
+				return fmt.Errorf("math primitive %d expects %d arguments at offset %d", operands[0], expected, offset)
+			}
+		case code.OpIntegerConvert:
+			if operands[0] < code.IntegerInt8 || operands[0] > code.IntegerUint32 {
+				return fmt.Errorf("unknown integer conversion target %d at offset %d", operands[0], offset)
+			}
 		case code.OpSetGlobal, code.OpGetGlobal:
 			if operands[0] >= bytecode.GlobalsCount {
 				return fmt.Errorf("global slot index %d out of range at offset %d", operands[0], offset)
 			}
-		case code.OpSetLocal, code.OpGetLocal:
+		case code.OpSetLocal, code.OpGetLocal, code.OpDefineLocal:
 			if function == nil {
 				return fmt.Errorf("%s outside function at offset %d", definition.Name, offset)
 			}
 			if operands[0] >= function.LocalCount {
 				return fmt.Errorf("local slot index %d out of range at offset %d", operands[0], offset)
 			}
-		case code.OpCall, code.OpFunction:
+		case code.OpCall, code.OpFunction, code.OpClosure:
 			if operands[0] >= len(bytecode.Functions) {
 				return fmt.Errorf("FunctionID %d out of range at offset %d", operands[0], offset)
+			}
+			if (op == code.OpCall || op == code.OpFunction) && len(bytecode.Functions[operands[0]].Captures) != 0 {
+				return fmt.Errorf("%s cannot reference capturing function %d at offset %d", definition.Name, operands[0], offset)
+			}
+			if op == code.OpClosure {
+				for captureIndex, capture := range bytecode.Functions[operands[0]].Captures {
+					if function == nil {
+						return fmt.Errorf("closure function %d capture %d has no enclosing function at offset %d", operands[0], captureIndex, offset)
+					}
+					limit := len(function.Captures)
+					if capture.Local {
+						limit = function.LocalCount
+					}
+					if capture.Index >= limit {
+						return fmt.Errorf("closure function %d capture %d index %d out of range at offset %d", operands[0], captureIndex, capture.Index, offset)
+					}
+				}
+			}
+		case code.OpGetUpvalue, code.OpSetUpvalue:
+			if function == nil {
+				return fmt.Errorf("%s outside function at offset %d", definition.Name, offset)
+			}
+			if operands[0] >= len(function.Captures) {
+				return fmt.Errorf("upvalue index %d out of range at offset %d", operands[0], offset)
 			}
 		case code.OpCallValue:
 			if operands[0] > MaxFunctionSlots {

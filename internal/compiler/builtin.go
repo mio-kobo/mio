@@ -94,18 +94,50 @@ func (c *Compiler) compileCall(call *ast.CallExpression) error {
 	if symbol.Kind != resolver.SymbolBuiltin {
 		return fmt.Errorf("cannot call %s %q", symbol.Kind, symbol.Name)
 	}
-	if len(call.Arguments) != 1 {
+	expectedArguments := 1
+	if symbol.Name == "$math.add_overflows" {
+		expectedArguments = 2
+	}
+	if len(call.Arguments) != expectedArguments {
 		cause := fmt.Errorf("builtin %q expects 1 argument, got %d", symbol.Name, len(call.Arguments))
 		return diagnostic.NewError("E0401", "内置函数参数数量不正确", diagnostic.FromPositions(call.Span().Start, call.Span().End)).WithCause(cause)
 	}
-	if err := c.Compile(call.Arguments[0]); err != nil {
-		return err
+	for _, argument := range call.Arguments {
+		if err := c.Compile(argument); err != nil {
+			return err
+		}
 	}
 	switch symbol.Name {
 	case "chant":
 		return c.emit(code.OpChant)
 	case "len":
 		return c.emit(code.OpLen)
+	case "$math.sqrt":
+		return c.emit(code.OpMath, code.MathSqrt, 1)
+	case "$math.floor":
+		return c.emit(code.OpMath, code.MathFloor, 1)
+	case "$math.ceil":
+		return c.emit(code.OpMath, code.MathCeil, 1)
+	case "$math.round_even":
+		return c.emit(code.OpMath, code.MathRoundEven, 1)
+	case "$math.trunc":
+		return c.emit(code.OpMath, code.MathTrunc, 1)
+	case "$math.is_nan":
+		return c.emit(code.OpMath, code.MathIsNaN, 1)
+	case "$math.is_inf":
+		return c.emit(code.OpMath, code.MathIsInf, 1)
+	case "$math.is_finite":
+		return c.emit(code.OpMath, code.MathIsFinite, 1)
+	case "$math.is_negative_zero":
+		return c.emit(code.OpMath, code.MathIsNegativeZero, 1)
+	case "$math.add_overflows":
+		return c.emit(code.OpMath, code.MathAddOverflows, 2)
+	case "$math.is_negative":
+		return c.emit(code.OpMath, code.MathIsNegative, 1)
+	case "$math.neg_overflows":
+		return c.emit(code.OpMath, code.MathNegOverflows, 1)
+	case "$math.error":
+		return c.emit(code.OpMath, code.MathError, 1)
 	default:
 		return fmt.Errorf("unsupported builtin function %q", symbol.Name)
 	}
@@ -129,7 +161,7 @@ func (c *Compiler) callReturnsValue(call *ast.CallExpression) (bool, error) {
 		return false, fmt.Errorf("missing symbol binding for function %q", callee.Name)
 	}
 	if symbol.Kind == resolver.SymbolBuiltin {
-		return symbol.Name == "len", nil
+		return symbol.Name != "chant" && symbol.Name != "$math.error", nil
 	}
 	returnsValue, ok := c.functionReturns[symbol]
 	if !ok {

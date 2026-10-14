@@ -6,6 +6,7 @@ import (
 
 	"Mio/internal/ast"
 	bytecodecompiler "Mio/internal/compiler"
+	"Mio/internal/constant"
 	"Mio/internal/lexer"
 	"Mio/internal/parser"
 	"Mio/internal/resolver"
@@ -150,6 +151,8 @@ func requiresCoreTypeFallback(program *ast.Program, r *resolver.Resolver) bool {
 	var statementNeedsFallback func(ast.Statement) bool
 	expressionNeedsFallback = func(expression ast.Expression) bool {
 		switch node := expression.(type) {
+		case *ast.FunctionLiteral:
+			return true
 		case *ast.CallExpression:
 			if identifier, ok := node.Function.(*ast.Identifier); ok {
 				if symbol, resolved := r.BindingOf(identifier); resolved && (symbol.Kind == resolver.SymbolVariable || symbol.Kind == resolver.SymbolParameter) {
@@ -240,7 +243,7 @@ func coreTypeRef(ref *ast.TypeRef) bool {
 	if ref.Name == "[]" || ref.Name == "?" {
 		return coreTypeRef(ref.Element)
 	}
-	if ref.Name == "int64" || ref.Name == "float64" || ref.Name == "bool" || ref.Name == "string" || ref.Name == "unit" {
+	if ref.Name == "int8" || ref.Name == "int16" || ref.Name == "int32" || ref.Name == "int64" || ref.Name == "rune" || ref.Name == "uint8" || ref.Name == "uint16" || ref.Name == "uint32" || ref.Name == "float32" || ref.Name == "float64" || ref.Name == "bool" || ref.Name == "string" || ref.Name == "unit" {
 		return false
 	}
 	return true
@@ -299,7 +302,7 @@ func (c *Compiler) StoreFunction(key string, artifact bytecodecompiler.FunctionA
 }
 
 func parseAndResolve(source string) (*ast.Program, *resolver.Resolver, error) {
-	l, err := lexer.NewChecked(source, token.V04)
+	l, err := lexer.NewChecked(source, token.V05)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -308,6 +311,9 @@ func parseAndResolve(source string) (*ast.Program, *resolver.Resolver, error) {
 		return nil, nil, err
 	}
 	if err := l.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := constant.Fold(program); err != nil {
 		return nil, nil, err
 	}
 	r := resolver.New()

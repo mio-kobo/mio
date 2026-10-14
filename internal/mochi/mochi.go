@@ -8,6 +8,9 @@
 // Mochi v6 增加数组长度与元素赋值指令。
 // Mochi v7 增加空值检查指令。
 // Mochi v8 增加结构体、枚举、Map 与函数值指令。
+// Mochi v9 增加闭包捕获元数据与 Upvalue 指令。
+// Mochi v10 增加 binary32 常量、转换与统一数学原语。
+// Mochi v11 增加固定宽度整数常量与显式转换指令。
 //
 //	5 字节     文件签名 "MOCHI"
 //	uint16    格式版本
@@ -20,7 +23,7 @@
 //	uint32    指令字节数
 //	[]byte    指令数据
 //
-//	v2/v3/v4/v5/v6/v7/v8：
+//	v2/v3/v4/v5/v6/v7/v8/v9：
 //	uint32    函数数量
 //	重复的函数数据：
 //	  uint16 FunctionID
@@ -28,6 +31,7 @@
 //	  uint32 参数数量
 //	  uint32 局部槽位数量
 //	  uint8  返回值标志
+//	  v9: uint32 捕获数量，重复的 uint8 来源标志与 uint32 索引
 //	  uint32 指令字节数及对应的指令数据
 //
 // 所有版本都不包含填充和校验和，也不允许文件尾数据。
@@ -48,7 +52,11 @@ import (
 
 const (
 	// Version 表示最新的 Mochi 格式版本
-	Version uint16 = 8
+	Version uint16 = VersionV11
+	// VersionV11 表示固定宽度整数格式版本
+	VersionV11 uint16 = 11
+	// VersionV10 表示包含 binary32 与数学原语的旧格式版本
+	VersionV10 uint16 = 10
 	// VersionV1 表示兼容读取的旧格式版本
 	VersionV1 uint16 = 1
 	// VersionV2 表示包含函数表的旧格式版本
@@ -63,6 +71,10 @@ const (
 	VersionV6 uint16 = 6
 	// VersionV7 表示包含可空类型指令的旧格式版本
 	VersionV7 uint16 = 7
+	// VersionV8 表示包含核心复合类型与函数值指令的旧格式版本
+	VersionV8 uint16 = 8
+	// VersionV9 表示包含闭包捕获的旧格式版本
+	VersionV9 uint16 = 9
 	// Extension 表示 Mochi 字节码文件扩展名
 	Extension = ".mochi"
 
@@ -77,11 +89,35 @@ const (
 	// MaxFunctionSlots 限制函数参数和局部槽位数量
 	MaxFunctionSlots = 1 << 16
 
-	constantTagInt    byte = 1
-	constantTagString byte = 2
-	constantTagFloat  byte = 3
-	fileSignature          = "MOCHI"
+	constantTagInt     byte = 1
+	constantTagString  byte = 2
+	constantTagFloat   byte = 3
+	constantTagFloat32 byte = 4
+	constantTagInt8    byte = 5
+	constantTagInt16   byte = 6
+	constantTagInt32   byte = 7
+	constantTagUint8   byte = 8
+	constantTagUint16  byte = 9
+	constantTagUint32  byte = 10
+	fileSignature           = "MOCHI"
 )
+
+func integerConstantTag(kind value.Kind) byte {
+	switch kind {
+	case value.KindInt8:
+		return constantTagInt8
+	case value.KindInt16:
+		return constantTagInt16
+	case value.KindInt32:
+		return constantTagInt32
+	case value.KindUint8:
+		return constantTagUint8
+	case value.KindUint16:
+		return constantTagUint16
+	default:
+		return constantTagUint32
+	}
+}
 
 // Encode 验证字节码并写入最低可用的 Mochi 版本
 func Encode(w io.Writer, bytecode *compiler.Bytecode) error {
@@ -142,6 +178,35 @@ func Encode(w io.Writer, bytecode *compiler.Bytecode) error {
 			if err := writeUint64(w, math.Float64bits(floating)); err != nil {
 				return fmt.Errorf("mochi: write constant %d float: %w", i, err)
 			}
+		case value.KindFloat32:
+			floating, _ := constant.Float32()
+			if err := writeFull(w, []byte{constantTagFloat32}); err != nil {
+				return fmt.Errorf("mochi: write constant %d tag: %w", i, err)
+			}
+			if err := writeUint32(w, math.Float32bits(floating)); err != nil {
+				return fmt.Errorf("mochi: write constant %d float32: %w", i, err)
+			}
+		case value.KindInt8, value.KindUint8:
+			bits, _ := constant.IntegerBits()
+			if err := writeFull(w, []byte{integerConstantTag(constant.Kind()), byte(bits)}); err != nil {
+				return fmt.Errorf("mochi: write constant %d integer: %w", i, err)
+			}
+		case value.KindInt16, value.KindUint16:
+			bits, _ := constant.IntegerBits()
+			if err := writeFull(w, []byte{integerConstantTag(constant.Kind())}); err != nil {
+				return fmt.Errorf("mochi: write constant %d tag: %w", i, err)
+			}
+			if err := writeUint16(w, uint16(bits)); err != nil {
+				return fmt.Errorf("mochi: write constant %d integer: %w", i, err)
+			}
+		case value.KindInt32, value.KindUint32:
+			bits, _ := constant.IntegerBits()
+			if err := writeFull(w, []byte{integerConstantTag(constant.Kind())}); err != nil {
+				return fmt.Errorf("mochi: write constant %d tag: %w", i, err)
+			}
+			if err := writeUint32(w, uint32(bits)); err != nil {
+				return fmt.Errorf("mochi: write constant %d integer: %w", i, err)
+			}
 		}
 	}
 
@@ -180,6 +245,23 @@ func Encode(w io.Writer, bytecode *compiler.Bytecode) error {
 		if err := writeFull(w, []byte{flags}); err != nil {
 			return fmt.Errorf("mochi: write function %d flags: %w", i, err)
 		}
+		if version >= VersionV9 {
+			if err := writeUint32(w, uint32(len(function.Captures))); err != nil {
+				return fmt.Errorf("mochi: write function %d capture count: %w", i, err)
+			}
+			for captureIndex, capture := range function.Captures {
+				local := byte(0)
+				if capture.Local {
+					local = 1
+				}
+				if err := writeFull(w, []byte{local}); err != nil {
+					return fmt.Errorf("mochi: write function %d capture %d source: %w", i, captureIndex, err)
+				}
+				if err := writeUint32(w, uint32(capture.Index)); err != nil {
+					return fmt.Errorf("mochi: write function %d capture %d index: %w", i, captureIndex, err)
+				}
+			}
+		}
 		if err := writeUint32(w, uint32(len(function.Instructions))); err != nil {
 			return fmt.Errorf("mochi: write function %d instruction length: %w", i, err)
 		}
@@ -191,7 +273,7 @@ func Encode(w io.Writer, bytecode *compiler.Bytecode) error {
 	return nil
 }
 
-// Decode 读取并验证 Mochi v1 至 v7 数据
+// Decode 读取并验证 Mochi v1 至 v11 数据
 // 返回的常量和指令切片均为新分配。
 func Decode(r io.Reader) (*compiler.Bytecode, error) {
 	if r == nil {
@@ -212,7 +294,7 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 	if err != nil {
 		return nil, err
 	}
-	if version != VersionV1 && version != VersionV2 && version != VersionV3 && version != VersionV4 && version != VersionV5 && version != VersionV6 && version != VersionV7 && version != Version {
+	if version < VersionV1 || version > Version {
 		return nil, fmt.Errorf("mochi: unsupported format version %d", version)
 	}
 
@@ -280,6 +362,71 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 				return nil, err
 			}
 			constants[i] = value.NewFloat(math.Float64frombits(bits))
+
+		case constantTagFloat32:
+			if version < VersionV10 {
+				return nil, fmt.Errorf("mochi: constant %d has invalid float32 tag for format version %d", i, version)
+			}
+			declaredSize += 4
+			bits, err := readUint32(limited, fmt.Sprintf("constant %d float32", i))
+			if err != nil {
+				return nil, err
+			}
+			constants[i] = value.NewFloat32(math.Float32frombits(bits))
+
+		case constantTagInt8, constantTagUint8:
+			if version < Version {
+				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
+			}
+			var data [1]byte
+			if err := readFull(limited, data[:], fmt.Sprintf("constant %d integer", i)); err != nil {
+				return nil, err
+			}
+			declaredSize++
+			if err := checkDeclaredSize(declaredSize); err != nil {
+				return nil, err
+			}
+			kind := value.KindInt8
+			if tag[0] == constantTagUint8 {
+				kind = value.KindUint8
+			}
+			constants[i], _ = value.NewIntegerBits(kind, uint64(data[0]))
+
+		case constantTagInt16, constantTagUint16:
+			if version < Version {
+				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
+			}
+			bits, err := readUint16(limited, fmt.Sprintf("constant %d integer", i))
+			if err != nil {
+				return nil, err
+			}
+			declaredSize += 2
+			if err := checkDeclaredSize(declaredSize); err != nil {
+				return nil, err
+			}
+			kind := value.KindInt16
+			if tag[0] == constantTagUint16 {
+				kind = value.KindUint16
+			}
+			constants[i], _ = value.NewIntegerBits(kind, uint64(bits))
+
+		case constantTagInt32, constantTagUint32:
+			if version < Version {
+				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
+			}
+			bits, err := readUint32(limited, fmt.Sprintf("constant %d integer", i))
+			if err != nil {
+				return nil, err
+			}
+			declaredSize += 4
+			if err := checkDeclaredSize(declaredSize); err != nil {
+				return nil, err
+			}
+			kind := value.KindInt32
+			if tag[0] == constantTagUint32 {
+				kind = value.KindUint32
+			}
+			constants[i], _ = value.NewIntegerBits(kind, uint64(bits))
 
 		default:
 			return nil, fmt.Errorf("mochi: constant %d has invalid type tag %d", i, tag[0])
@@ -366,6 +513,37 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 			if flags[0]&^byte(1) != 0 {
 				return nil, fmt.Errorf("mochi: function %d has invalid flags %d", i, flags[0])
 			}
+			var captures []compiler.Capture
+			if version >= VersionV9 {
+				captureCount, err := readUint32(limited, fmt.Sprintf("function %d capture count", i))
+				if err != nil {
+					return nil, err
+				}
+				if captureCount > MaxFunctionSlots {
+					return nil, fmt.Errorf("mochi: function %d capture count %d exceeds limit %d", i, captureCount, MaxFunctionSlots)
+				}
+				declaredSize += 4 + uint64(captureCount)*5
+				if err := checkDeclaredSize(declaredSize); err != nil {
+					return nil, err
+				}
+				if captureCount > 0 {
+					captures = make([]compiler.Capture, int(captureCount))
+				}
+				for captureIndex := range captures {
+					var source [1]byte
+					if err := readFull(limited, source[:], fmt.Sprintf("function %d capture %d source", i, captureIndex)); err != nil {
+						return nil, err
+					}
+					if source[0] > 1 {
+						return nil, fmt.Errorf("mochi: function %d capture %d has invalid source %d", i, captureIndex, source[0])
+					}
+					captureSlot, err := readUint32(limited, fmt.Sprintf("function %d capture %d index", i, captureIndex))
+					if err != nil {
+						return nil, err
+					}
+					captures[captureIndex] = compiler.Capture{Local: source[0] == 1, Index: int(captureSlot)}
+				}
+			}
 			length, err := readUint32(limited, fmt.Sprintf("function %d instruction length", i))
 			if err != nil {
 				return nil, err
@@ -388,6 +566,7 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 				ParameterCount: int(parameterCount),
 				LocalCount:     int(localCount),
 				ReturnsValue:   flags[0]&1 != 0,
+				Captures:       captures,
 			}
 		}
 	}
@@ -420,6 +599,14 @@ func encodedSize(bytecode *compiler.Bytecode) (uint64, error) {
 			size += 1 + 8
 		case value.KindFloat:
 			size += 1 + 8
+		case value.KindFloat32:
+			size += 1 + 4
+		case value.KindInt8, value.KindUint8:
+			size += 1 + 1
+		case value.KindInt16, value.KindUint16:
+			size += 1 + 2
+		case value.KindInt32, value.KindUint32:
+			size += 1 + 4
 		case value.KindString:
 			text, _ := constant.Text()
 			size += 1 + 4 + uint64(len(text))
@@ -428,28 +615,66 @@ func encodedSize(bytecode *compiler.Bytecode) (uint64, error) {
 		}
 	}
 	size += uint64(len(bytecode.Instructions))
+	version := encodedVersion(bytecode)
 	for _, function := range bytecode.Functions {
 		size += 2 + 2 + uint64(len(function.Name)) + 4 + 4 + 1 + 4 + uint64(len(function.Instructions))
+		if version >= VersionV9 {
+			size += 4 + uint64(len(function.Captures))*5
+		}
 	}
 	return size, nil
 }
 
 // encodedVersion 选择可表示当前字节码的最低版本
 func encodedVersion(bytecode *compiler.Bytecode) uint16 {
-	if hasCoreTypeInstructions(bytecode.Instructions) {
-		return Version
-	}
-	for _, function := range bytecode.Functions {
-		if hasCoreTypeInstructions(function.Instructions) {
+	for _, constant := range bytecode.Constants {
+		if constant.Kind().IsInteger() && constant.Kind() != value.KindInt {
 			return Version
 		}
 	}
-	if hasNullableInstructions(bytecode.Instructions) {
+	if hasFixedIntegerInstructions(bytecode.Instructions) {
 		return Version
 	}
 	for _, function := range bytecode.Functions {
-		if hasNullableInstructions(function.Instructions) {
+		if hasFixedIntegerInstructions(function.Instructions) {
 			return Version
+		}
+	}
+	for _, constant := range bytecode.Constants {
+		if constant.Kind() == value.KindFloat32 {
+			return VersionV10
+		}
+	}
+	if hasFloat32Instructions(bytecode.Instructions) {
+		return VersionV10
+	}
+	for _, function := range bytecode.Functions {
+		if hasFloat32Instructions(function.Instructions) {
+			return VersionV10
+		}
+	}
+	for _, function := range bytecode.Functions {
+		if len(function.Captures) != 0 || hasClosureInstructions(function.Instructions) {
+			return VersionV10
+		}
+	}
+	if hasClosureInstructions(bytecode.Instructions) {
+		return VersionV10
+	}
+	if hasCoreTypeInstructions(bytecode.Instructions) {
+		return VersionV10
+	}
+	for _, function := range bytecode.Functions {
+		if hasCoreTypeInstructions(function.Instructions) {
+			return VersionV10
+		}
+	}
+	if hasNullableInstructions(bytecode.Instructions) {
+		return VersionV10
+	}
+	for _, function := range bytecode.Functions {
+		if hasNullableInstructions(function.Instructions) {
+			return VersionV10
 		}
 	}
 	if hasArrayMutationInstructions(bytecode.Instructions) {
@@ -482,6 +707,64 @@ func encodedVersion(bytecode *compiler.Bytecode) uint16 {
 		}
 	}
 	return VersionV2
+}
+
+func hasFloat32Instructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op >= code.OpIntToFloat32 && op <= code.OpMath {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
+}
+
+func hasFixedIntegerInstructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op == code.OpIntegerConvert {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
+}
+
+// hasClosureInstructions 检查指令流是否使用闭包指令
+func hasClosureInstructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op >= code.OpClosure && op <= code.OpDefineLocal {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
 }
 
 func hasCoreTypeInstructions(instructions []byte) bool {

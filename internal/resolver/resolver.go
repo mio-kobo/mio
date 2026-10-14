@@ -3,6 +3,7 @@ package resolver
 import (
 	"Mio/internal/ast"
 	"Mio/internal/diagnostic"
+	"Mio/internal/token"
 	"fmt"
 )
 
@@ -13,6 +14,12 @@ type Resolver struct {
 	loopDepth     int
 
 	bindings map[*ast.Identifier]Symbol
+	nextID   uint64
+}
+
+func (r *Resolver) symbol(name string, kind SymbolKind, decl token.Position) Symbol {
+	r.nextID++
+	return Symbol{ID: r.nextID, Name: name, Kind: kind, Decl: decl}
 }
 
 // 创建名称解析器
@@ -20,7 +27,7 @@ func New() *Resolver {
 	// 创建内置符号作用域
 	builtins := NewScope()
 	// 注册内置函数
-	for _, name := range []string{"chant", "len", "Map"} {
+	for _, name := range []string{"chant", "len", "Map", "$math.sqrt", "$math.floor", "$math.ceil", "$math.round_even", "$math.trunc", "$math.is_nan", "$math.is_inf", "$math.is_finite", "$math.is_negative_zero", "$math.add_overflows", "$math.is_negative", "$math.neg_overflows", "$math.error"} {
 		if err := builtins.DefineSymbol(Symbol{
 			Name: name,
 			Kind: SymbolBuiltin,
@@ -49,17 +56,25 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 
 	// kaku 变量声明
 	case *ast.LetStatement:
+		recursiveClosure := false
+		if _, ok := n.Value.(*ast.FunctionLiteral); ok && n.Name.DeclaredType != nil {
+			symbol := r.symbol(n.Name.Name, SymbolVariable, n.Name.Span().Start)
+			if err := r.scope.DefineSymbol(symbol); err != nil {
+				return duplicateDiagnostic(r.scope, n.Name, err)
+			}
+			r.bindings[n.Name] = symbol
+			recursiveClosure = true
+		}
 		// 先检查初始化表达式
 		if err := r.resolveExpression(n.Value); err != nil {
 			return err
 		}
+		if recursiveClosure {
+			return nil
+		}
 
 		// 构造变量符号
-		symbol := Symbol{
-			Name: n.Name.Name,
-			Kind: SymbolVariable,
-			Decl: n.Name.Span().Start,
-		}
+		symbol := r.symbol(n.Name.Name, SymbolVariable, n.Name.Span().Start)
 
 		// 定义到当前作用域
 		if err := r.scope.DefineSymbol(symbol); err != nil {
@@ -149,7 +164,7 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 			parent := r.scope
 			r.scope = NewEnclosedScope(parent)
 			for _, binding := range n.Arms[i].Bindings {
-				symbol := Symbol{Name: binding.Name, Kind: SymbolVariable, Decl: binding.Span().Start}
+				symbol := r.symbol(binding.Name, SymbolVariable, binding.Span().Start)
 				if err := r.scope.DefineSymbol(symbol); err != nil {
 					r.scope = parent
 					return duplicateDiagnostic(r.scope, binding, err)
@@ -300,8 +315,12 @@ func (r *Resolver) resolveExpression(expr ast.Expression) error {
 		}
 		return nil
 
+	case *ast.FunctionLiteral:
+		return r.resolveFunctionLiteral(n)
+
 	// 基础字面量
 	case *ast.IntegerLiteral,
+		*ast.RuneLiteral,
 		*ast.FloatLiteral,
 		*ast.StringLiteral,
 		*ast.BooleanLiteral,
@@ -314,6 +333,27 @@ func (r *Resolver) resolveExpression(expr ast.Expression) error {
 			expr,
 		)
 	}
+}
+
+func (r *Resolver) resolveFunctionLiteral(fn *ast.FunctionLiteral) error {
+	parent := r.scope
+	outerLoopDepth := r.loopDepth
+	r.scope = NewEnclosedScope(parent)
+	r.loopDepth = 0
+	r.functionDepth++
+	defer func() {
+		r.functionDepth--
+		r.loopDepth = outerLoopDepth
+		r.scope = parent
+	}()
+	for _, param := range fn.Parameters {
+		symbol := r.symbol(param.Name, SymbolParameter, param.Span().Start)
+		if err := r.scope.DefineSymbol(symbol); err != nil {
+			return duplicateDiagnostic(r.scope, param, err)
+		}
+		r.bindings[param] = symbol
+	}
+	return r.resolveStatements(fn.Body.Statements, false)
 }
 
 // 解析代码块中的局部作用域
@@ -356,11 +396,7 @@ func (r *Resolver) resolveFunctionStatement(fn *ast.FunctionStatement) error {
 	// 定义函数形参
 	// 定义函数形参
 	for _, param := range fn.Parameters {
-		symbol := Symbol{
-			Name: param.Name,
-			Kind: SymbolParameter,
-			Decl: param.Span().Start,
-		}
+		symbol := r.symbol(param.Name, SymbolParameter, param.Span().Start)
 
 		if err := r.scope.DefineSymbol(symbol); err != nil {
 			return duplicateDiagnostic(r.scope, param, err)
@@ -391,7 +427,7 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 			return diagnostic.NewError("E0205", "不支持嵌套类型声明", diagnostic.FromPositions(name.Span().Start, name.Span().End)).
 				WithCause(fmt.Errorf("nested type declaration %q is not supported", name.Name))
 		}
-		symbol := Symbol{Name: name.Name, Kind: SymbolType, Decl: name.Span().Start}
+		symbol := r.symbol(name.Name, SymbolType, name.Span().Start)
 		if err := r.scope.DefineSymbol(symbol); err != nil {
 			return duplicateDiagnostic(r.scope, name, err)
 		}
@@ -416,11 +452,7 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 		}
 
 		// 构造函数符号
-		symbol := Symbol{
-			Name: fn.Name.Name,
-			Kind: SymbolFunction,
-			Decl: fn.Name.Span().Start,
-		}
+		symbol := r.symbol(fn.Name.Name, SymbolFunction, fn.Name.Span().Start)
 
 		// 注册函数名称
 		if err := r.scope.DefineSymbol(symbol); err != nil {

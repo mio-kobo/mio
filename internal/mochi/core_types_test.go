@@ -28,7 +28,7 @@ func TestCoreTypeInstructionsRequireMochiV8(t *testing.T) {
 			t.Fatalf("%v accepted by Mochi v7", item.op)
 		}
 		_, encoded := roundTrip(t, bytecode)
-		if version := binary.BigEndian.Uint16(encoded[5:7]); version != Version {
+		if version := binary.BigEndian.Uint16(encoded[5:7]); version != VersionV10 {
 			t.Fatalf("version=%d", version)
 		}
 	}

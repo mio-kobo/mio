@@ -35,6 +35,18 @@ func TestLookupIdent(t *testing.T) {
 	}
 }
 
+// 测试 v0.5 包导出和常量关键字
+func TestLookupPackageKeywords(t *testing.T) {
+	for word, want := range map[string]Type{"koukai": Export, "teisu": Const} {
+		if got := LookupIdent(word, V04); got != Ident {
+			t.Fatalf("v0.4 %q=%s", word, got)
+		}
+		if got := LookupIdent(word, V05); got != want {
+			t.Fatalf("v0.5 %q=%s want=%s", word, got, want)
+		}
+	}
+}
+
 // 测试 v0.4 核心类型关键字
 func TestLookupCoreTypeKeywords(t *testing.T) {
 	tests := map[string]Type{"kata": Struct, "sentaku": Enum, "awase": Match, "baai": Case}

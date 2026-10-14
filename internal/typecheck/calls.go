@@ -9,7 +9,17 @@ import (
 
 func (c *Checker) checkCall(call *ast.CallExpression, expectedResult Kind) (Kind, error) {
 	if field, ok := call.Function.(*ast.FieldExpression); ok {
-		return c.checkEnumConstructor(call, field, expectedResult)
+		left := field.Left
+		if apply, ok := left.(*ast.TypeApplyExpression); ok {
+			left = apply.Function
+		}
+		if identifier, ok := left.(*ast.Identifier); ok {
+			if symbol, resolved := c.resolver.BindingOf(identifier); resolved && symbol.Kind == resolver.SymbolType {
+				if _, enum := c.enums[identifier.Name]; enum {
+					return c.checkEnumConstructor(call, field, expectedResult)
+				}
+			}
+		}
 	}
 	function := call.Function
 	var explicitArgs []*ast.TypeRef
@@ -115,6 +125,25 @@ func (c *Checker) checkCall(call *ast.CallExpression, expectedResult Kind) (Kind
 			return KindInvalid, fmt.Errorf("type argument %s for %s must be hashable", bindings[parameter], parameter)
 		}
 	}
+	for parameter, constraint := range signature.Constraints {
+		argument := bindings[parameter]
+		argumentConstraint := ""
+		if argument.IsTypeParameter() && len(c.constraintScopes) != 0 {
+			argumentConstraint = c.constraintScopes[len(c.constraintScopes)-1][argument.TypeParameterName()]
+		}
+		if constraint == "Number" && !argument.IsInteger() && argument != KindFloat32 && argument != KindFloat && argumentConstraint != "Number" && argumentConstraint != "Integer" && argumentConstraint != "Signed" && argumentConstraint != "Float" {
+			return KindInvalid, fmt.Errorf("type argument %s for %s must satisfy Number", argument, parameter)
+		}
+		if constraint == "Integer" && !argument.IsInteger() && argumentConstraint != "Integer" {
+			return KindInvalid, fmt.Errorf("type argument %s for %s must satisfy Integer", argument, parameter)
+		}
+		if constraint == "Signed" && !argument.IsSignedInteger() && argument != KindFloat32 && argument != KindFloat && argumentConstraint != "Signed" && argumentConstraint != "Float" {
+			return KindInvalid, fmt.Errorf("type argument %s for %s must satisfy Signed", argument, parameter)
+		}
+		if constraint == "Float" && argument != KindFloat32 && argument != KindFloat && argumentConstraint != "Float" {
+			return KindInvalid, fmt.Errorf("type argument %s for %s must satisfy Float", argument, parameter)
+		}
+	}
 	for i, actual := range actuals {
 		expected := substitute(signature.ParameterTypes[i], bindings)
 		if !isAssignable(expected, actual) {
@@ -155,7 +184,7 @@ func (c *Checker) checkDynamicCall(call *ast.CallExpression) (Kind, error) {
 	}
 	call.Dynamic = true
 	call.HasValue = result != KindUnit
-	c.invalidateGlobalFacts()
+	c.invalidateAllFacts()
 	return result, nil
 }
 
