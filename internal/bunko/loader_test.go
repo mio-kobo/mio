@@ -1,6 +1,7 @@
 package bunko
 
 import (
+	"Mio/internal/resolver"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -181,5 +182,29 @@ func TestLoadProgramDeduplicatesDiamondDependency(t *testing.T) {
 	}
 	if loaded.PackagesCompiled != 3 || loaded.SourcesParsed != 3 {
 		t.Fatalf("packages=%d sources=%d", loaded.PackagesCompiled, loaded.SourcesParsed)
+	}
+}
+
+// 测试普通 Bunko 包不能访问数组内部原语
+func TestLoadProgramRejectsArrayInternalOutsideKisoArray(t *testing.T) {
+	root := t.TempDir()
+	bunkoRoot := filepath.Join(root, "bunko")
+	directory := filepath.Join(bunkoRoot, "sample")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "sample.mio"), []byte(`koukai waza bad<T>(capacity: int64) -> []T { kaesu __array_with_capacity(capacity); }`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(root, "main.mio")
+	if err := os.WriteFile(mainPath, []byte(`yobu "sample"; sample.bad[int64](1);`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadProgram(mainPath, bunkoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolver.New().ResolveProgram(loaded.AST); err == nil || !strings.Contains(err.Error(), "__array_with_capacity") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -83,17 +83,18 @@ type Compiler struct {
 	globals  map[resolver.Symbol]int
 	locals   map[resolver.Symbol]int
 
-	functionIDs      map[resolver.Symbol]int
-	functionReturns  map[resolver.Symbol]bool
-	omittedFunctions map[resolver.Symbol]bool
-	functions        []CompiledFunction
-	currentFunction  *ast.FunctionStatement
-	currentLiteral   *ast.FunctionLiteral
-	upvalues         map[resolver.Symbol]int
-	captures         []Capture
-	contexts         []compilerContext
-	literalIDs       map[*ast.FunctionLiteral]int
-	loops            []loopContext
+	functionIDs        map[resolver.Symbol]int
+	functionReturns    map[resolver.Symbol]bool
+	functionIntrinsics map[resolver.Symbol]string
+	omittedFunctions   map[resolver.Symbol]bool
+	functions          []CompiledFunction
+	currentFunction    *ast.FunctionStatement
+	currentLiteral     *ast.FunctionLiteral
+	upvalues           map[resolver.Symbol]int
+	captures           []Capture
+	contexts           []compilerContext
+	literalIDs         map[*ast.FunctionLiteral]int
+	loops              []loopContext
 
 	functionKeys  map[string]string
 	functionCache FunctionCache
@@ -115,13 +116,14 @@ func (c *Compiler) IncrementalStats() IncrementalStats {
 // New 创建字节码编译器
 func New() *Compiler {
 	return &Compiler{
-		instructions:     make(code.Instructions, 0),
-		constants:        make([]value.Value, 0),
-		globals:          make(map[resolver.Symbol]int),
-		functionIDs:      make(map[resolver.Symbol]int),
-		functionReturns:  make(map[resolver.Symbol]bool),
-		omittedFunctions: make(map[resolver.Symbol]bool),
-		literalIDs:       make(map[*ast.FunctionLiteral]int),
+		instructions:       make(code.Instructions, 0),
+		constants:          make([]value.Value, 0),
+		globals:            make(map[resolver.Symbol]int),
+		functionIDs:        make(map[resolver.Symbol]int),
+		functionReturns:    make(map[resolver.Symbol]bool),
+		functionIntrinsics: make(map[resolver.Symbol]string),
+		omittedFunctions:   make(map[resolver.Symbol]bool),
+		literalIDs:         make(map[*ast.FunctionLiteral]int),
 	}
 }
 
@@ -201,6 +203,10 @@ func (c *Compiler) Compile(node ast.Node) error {
 			if err := c.Compile(element); err != nil {
 				return err
 			}
+		}
+		descriptor := arrayTypeDescriptor(n.ElementType)
+		if len(n.Elements) == 0 || descriptor&0x80 != 0 {
+			return c.emit(code.OpArrayTyped, len(n.Elements), descriptor)
 		}
 		return c.emit(code.OpArray, len(n.Elements))
 
@@ -1076,9 +1082,15 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 			c.omittedFunctions[symbol] = true
 			continue
 		}
+		returnsValue := fn.ReturnType != nil && fn.ReturnType.Name != "unit"
+		if fn.Intrinsic != "" {
+			c.functionIntrinsics[symbol] = fn.Intrinsic
+			c.functionReturns[symbol] = returnsValue
+			c.omittedFunctions[symbol] = true
+			continue
+		}
 		id := len(c.functions)
 		c.functionIDs[symbol] = id
-		returnsValue := fn.ReturnType != nil && fn.ReturnType.Name != "unit"
 		c.functionReturns[symbol] = returnsValue
 		c.functions = append(c.functions, CompiledFunction{
 			ID:             id,
@@ -1107,7 +1119,7 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 		}
 		return fmt.Errorf("function %q has no FunctionID", fn.Name.Name)
 	}
-	if fn.Native {
+	if fn.Native || fn.Intrinsic != "" {
 		c.functions[id].LocalCount = len(fn.Parameters)
 		return nil
 	}

@@ -1,5 +1,7 @@
 package value
 
+import "fmt"
+
 // Kind 表示运行时值的种类
 type Kind uint8
 
@@ -97,7 +99,12 @@ type Closure struct {
 type Array struct {
 	elements     []Value
 	byteElements []byte
+	elementKind  Kind
+	nullable     bool
+	reserved     int
 }
+
+const maxArrayAllocationBytes = 256 << 20
 
 // Struct 保存不可变结构体字段
 type Struct struct {
@@ -211,6 +218,36 @@ func NewNil() Value {
 func NewArray(elements []Value) Value {
 	array := &Array{}
 	if isUint8Array(elements) {
+		array.elementKind = KindUint8
+		array.byteElements = make([]byte, len(elements))
+		for index, element := range elements {
+			array.byteElements[index] = uint8(element.integer)
+		}
+	} else {
+		array.elements = append([]Value(nil), elements...)
+		if len(elements) != 0 {
+			array.elementKind = elements[0].kind
+		}
+	}
+	return Value{
+		kind:  KindArray,
+		array: array,
+	}
+}
+
+// NewTypedArray 按元素类型创建数组
+func NewTypedArray(elements []Value, elementKind Kind, nullable bool) Value {
+	if elementKind == KindInvalid {
+		for _, element := range elements {
+			if element.kind == KindNil {
+				nullable = true
+			} else if elementKind == KindInvalid {
+				elementKind = element.kind
+			}
+		}
+	}
+	array := &Array{elementKind: elementKind, nullable: nullable}
+	if elementKind == KindUint8 && !nullable {
 		array.byteElements = make([]byte, len(elements))
 		for index, element := range elements {
 			array.byteElements[index] = uint8(element.integer)
@@ -218,10 +255,86 @@ func NewArray(elements []Value) Value {
 	} else {
 		array.elements = append([]Value(nil), elements...)
 	}
-	return Value{
-		kind:  KindArray,
-		array: array,
+	return Value{kind: KindArray, array: array}
+}
+
+// NewFilledArray 创建指定长度的数组
+func NewFilledArray(length int64, initial Value, elementKind Kind, nullable bool) (result Value, err error) {
+	if elementKind == KindInvalid {
+		if initial.kind == KindNil {
+			nullable = true
+		} else {
+			elementKind = initial.kind
+		}
 	}
+	if err := checkArrayAllocation(length, elementKind); err != nil {
+		return Value{}, err
+	}
+	if !nullable && initial.kind == KindNil {
+		return Value{}, fmt.Errorf("non-nullable array cannot contain nil")
+	}
+	if elementKind != KindInvalid && initial.kind != KindNil && initial.kind != elementKind {
+		return Value{}, fmt.Errorf("array requires %s value, got %s", elementKind, initial.kind)
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = Value{}
+			err = fmt.Errorf("array allocation failed: %v", recovered)
+		}
+	}()
+	array := NewTypedArray(nil, elementKind, nullable)
+	if elementKind == KindUint8 && !nullable {
+		array.array.byteElements = make([]byte, int(length))
+		for index := range array.array.byteElements {
+			array.array.byteElements[index] = uint8(initial.integer)
+		}
+	} else {
+		array.array.elements = make([]Value, int(length))
+		for index := range array.array.elements {
+			array.array.elements[index] = initial
+		}
+	}
+	return array, nil
+}
+
+// NewArrayWithCapacity 创建带预留容量的空数组
+func NewArrayWithCapacity(capacity int64, elementKind Kind, nullable bool) (result Value, err error) {
+	if err := checkArrayAllocation(capacity, elementKind); err != nil {
+		return Value{}, err
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = Value{}
+			err = fmt.Errorf("array allocation failed: %v", recovered)
+		}
+	}()
+	array := &Array{elementKind: elementKind, nullable: nullable}
+	if elementKind == KindInvalid {
+		array.reserved = int(capacity)
+	} else if elementKind == KindUint8 && !nullable {
+		array.byteElements = make([]byte, 0, int(capacity))
+	} else {
+		array.elements = make([]Value, 0, int(capacity))
+	}
+	return Value{kind: KindArray, array: array}, nil
+}
+
+func checkArrayAllocation(count int64, elementKind Kind) error {
+	if count < 0 {
+		return fmt.Errorf("array size cannot be negative: %d", count)
+	}
+	bytesPerElement := arrayElementBytes(elementKind)
+	if count > maxArrayAllocationBytes/bytesPerElement {
+		return fmt.Errorf("array allocation exceeds %d byte limit", maxArrayAllocationBytes)
+	}
+	return nil
+}
+
+func arrayElementBytes(elementKind Kind) int64 {
+	if elementKind == KindUint8 {
+		return 1
+	}
+	return 96
 }
 
 func isUint8Array(elements []Value) bool {
@@ -395,6 +508,197 @@ func (v Value) ArrayLen() (int, bool) {
 		return len(v.array.byteElements), true
 	}
 	return len(v.array.elements), true
+}
+
+// ArrayCapacity 返回数组容量
+func (v Value) ArrayCapacity() (int, bool) {
+	if v.kind != KindArray || v.array == nil {
+		return 0, false
+	}
+	if v.array.reserved != 0 {
+		return v.array.reserved, true
+	}
+	if v.array.byteElements != nil {
+		return cap(v.array.byteElements), true
+	}
+	return cap(v.array.elements), true
+}
+
+// ReserveArray 保证数组具有足够的剩余容量
+func (v Value) ReserveArray(additional int64) (err error) {
+	if v.kind != KindArray || v.array == nil {
+		return fmt.Errorf("reserve requires array")
+	}
+	if additional < 0 {
+		return fmt.Errorf("additional capacity cannot be negative: %d", additional)
+	}
+	length, _ := v.ArrayLen()
+	if additional > int64(^uint(0)>>1)-int64(length) {
+		return fmt.Errorf("array capacity overflow")
+	}
+	required := int64(length) + additional
+	if err := checkArrayAllocation(required, v.array.elementKind); err != nil {
+		return err
+	}
+	capacity, _ := v.ArrayCapacity()
+	if int64(capacity) >= required {
+		return nil
+	}
+	if v.array.elementKind == KindInvalid && v.array.byteElements == nil && v.array.elements == nil {
+		v.array.reserved = int(required)
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("array allocation failed: %v", recovered)
+		}
+	}()
+	maxCapacity := int64(maxArrayAllocationBytes) / arrayElementBytes(v.array.elementKind)
+	newCapacity := grownArrayCapacity(capacity, int(required), int(maxCapacity))
+	if v.array.byteElements != nil {
+		storage := make([]byte, length, newCapacity)
+		copy(storage, v.array.byteElements)
+		v.array.byteElements = storage
+	} else {
+		storage := make([]Value, length, newCapacity)
+		copy(storage, v.array.elements)
+		v.array.elements = storage
+	}
+	return nil
+}
+
+func grownArrayCapacity(current, required, limit int) int {
+	capacity := current
+	if capacity < 4 {
+		capacity = 4
+	}
+	for capacity < required {
+		if capacity < 1024 {
+			capacity *= 2
+		} else {
+			capacity += capacity / 2
+		}
+		if capacity < 0 || capacity > limit {
+			return required
+		}
+	}
+	return capacity
+}
+
+// AppendArrayElement 向共享数组追加元素
+func (v Value) AppendArrayElement(element Value) error {
+	if v.kind != KindArray || v.array == nil {
+		return fmt.Errorf("push requires array")
+	}
+	if element.kind == KindNil && !v.array.nullable {
+		if v.array.elementKind != KindInvalid {
+			return fmt.Errorf("non-nullable array cannot contain nil")
+		}
+		v.array.nullable = true
+	}
+	if element.kind != KindNil && v.array.elementKind != KindInvalid && element.kind != v.array.elementKind {
+		return fmt.Errorf("array requires %s value, got %s", v.array.elementKind, element.kind)
+	}
+	if v.array.elementKind == KindInvalid && element.kind != KindNil {
+		v.array.elementKind = element.kind
+	}
+	if v.array.byteElements == nil && v.array.elements == nil {
+		capacity := v.array.reserved
+		v.array.reserved = 0
+		if v.array.elementKind == KindUint8 && !v.array.nullable {
+			v.array.byteElements = make([]byte, 0, capacity)
+		} else {
+			v.array.elements = make([]Value, 0, capacity)
+		}
+	}
+	if err := v.ReserveArray(1); err != nil {
+		return err
+	}
+	if v.array.byteElements != nil {
+		v.array.byteElements = append(v.array.byteElements, uint8(element.integer))
+	} else {
+		v.array.elements = append(v.array.elements, element)
+	}
+	return nil
+}
+
+// TruncateArray 缩短共享数组并保留容量
+func (v Value) TruncateArray(newLength int64) error {
+	if v.kind != KindArray || v.array == nil {
+		return fmt.Errorf("truncate requires array")
+	}
+	length, _ := v.ArrayLen()
+	if newLength < 0 || newLength > int64(length) {
+		return fmt.Errorf("array length %d is outside range [0, %d]", newLength, length)
+	}
+	if v.array.byteElements != nil {
+		v.array.byteElements = v.array.byteElements[:newLength]
+		return nil
+	}
+	clear(v.array.elements[newLength:])
+	v.array.elements = v.array.elements[:newLength]
+	return nil
+}
+
+// AppendArray 向共享数组批量追加浅复制元素
+func (v Value) AppendArray(source Value) error {
+	if v.kind != KindArray || v.array == nil || source.kind != KindArray || source.array == nil {
+		return fmt.Errorf("append_all requires arrays")
+	}
+	sourceLength, _ := source.ArrayLen()
+	if sourceLength == 0 {
+		return nil
+	}
+	if v.array.elementKind != KindInvalid && source.array.elementKind != KindInvalid && v.array.elementKind != source.array.elementKind {
+		return fmt.Errorf("array requires %s values, got %s", v.array.elementKind, source.array.elementKind)
+	}
+	if !v.array.nullable && source.array.nullable {
+		return fmt.Errorf("non-nullable array cannot append nullable values")
+	}
+	if v.array.elementKind == KindInvalid {
+		v.array.elementKind = source.array.elementKind
+		v.array.nullable = source.array.nullable
+	}
+	if v.array.byteElements == nil && v.array.elements == nil {
+		capacity := v.array.reserved
+		v.array.reserved = 0
+		if v.array.elementKind == KindUint8 && !v.array.nullable {
+			v.array.byteElements = make([]byte, 0, capacity)
+		} else {
+			v.array.elements = make([]Value, 0, capacity)
+		}
+	}
+	if err := v.ReserveArray(int64(sourceLength)); err != nil {
+		return err
+	}
+	destinationLength, _ := v.ArrayLen()
+	if v.array.byteElements != nil && source.array.byteElements != nil {
+		v.array.byteElements = v.array.byteElements[:destinationLength+sourceLength]
+		copy(v.array.byteElements[destinationLength:], source.array.byteElements[:sourceLength])
+		return nil
+	}
+	if v.array.byteElements != nil || source.array.byteElements != nil {
+		return fmt.Errorf("array storage layout mismatch")
+	}
+	v.array.elements = v.array.elements[:destinationLength+sourceLength]
+	copy(v.array.elements[destinationLength:], source.array.elements[:sourceLength])
+	return nil
+}
+
+// CloneArray 创建独立的浅复制数组
+func (v Value) CloneArray() (Value, error) {
+	if v.kind != KindArray || v.array == nil {
+		return Value{}, fmt.Errorf("clone requires array")
+	}
+	clone := &Array{elementKind: v.array.elementKind, nullable: v.array.nullable, reserved: v.array.reserved}
+	if v.array.byteElements != nil {
+		clone.byteElements = make([]byte, len(v.array.byteElements))
+		copy(clone.byteElements, v.array.byteElements)
+	} else {
+		clone.elements = make([]Value, len(v.array.elements))
+		copy(clone.elements, v.array.elements)
+	}
+	return Value{kind: KindArray, array: clone}, nil
 }
 
 // ArrayElement 读取数组元素

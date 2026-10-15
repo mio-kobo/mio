@@ -25,8 +25,8 @@ func TestFixedIntegerRoundTrip(t *testing.T) {
 	if err := Encode(&encoded, bytecode); err != nil {
 		t.Fatal(err)
 	}
-	if version := binary.BigEndian.Uint16(encoded.Bytes()[5:7]); version != Version {
-		t.Fatalf("version=%d, want %d", version, Version)
+	if version := binary.BigEndian.Uint16(encoded.Bytes()[5:7]); version != VersionV11 {
+		t.Fatalf("version=%d, want %d", version, VersionV11)
 	}
 	decoded, err := Decode(bytes.NewReader(encoded.Bytes()))
 	if err != nil {

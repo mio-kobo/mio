@@ -40,8 +40,8 @@ moshi (values[0] == mu) { chant("empty"); }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version := binary.BigEndian.Uint16(data[5:7]); version != mochi.VersionV10 {
-		t.Fatalf("version=%d, want %d", version, mochi.VersionV10)
+	if version := binary.BigEndian.Uint16(data[5:7]); version != mochi.VersionV12 {
+		t.Fatalf("version=%d, want %d", version, mochi.VersionV12)
 	}
 	stdout.Reset()
 	stderr.Reset()

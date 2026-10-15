@@ -104,6 +104,7 @@ func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (K
 					return KindInvalid, typeDiagnostic("E0301", "数组元素类型不一致", element.Span(), arrayType.ElementKind().String(), actual.String(), cause)
 				}
 			}
+			literal.ElementType = c.runtimeTypeName(arrayType.ElementKind())
 			return arrayType, nil
 		}
 	}

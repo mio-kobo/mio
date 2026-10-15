@@ -11,6 +11,8 @@
 // Mochi v9 增加闭包捕获元数据与 Upvalue 指令。
 // Mochi v10 增加 binary32 常量、转换与统一数学原语。
 // Mochi v11 增加固定宽度整数常量与显式转换指令。
+// Mochi v12 增加通用动态数组指令。
+// Mochi v13 增加数组截断与批量追加指令。
 //
 //	5 字节     文件签名 "MOCHI"
 //	uint16    格式版本
@@ -52,7 +54,11 @@ import (
 
 const (
 	// Version 表示最新的 Mochi 格式版本
-	Version uint16 = VersionV11
+	Version uint16 = VersionV13
+	// VersionV13 表示数组批量操作格式版本
+	VersionV13 uint16 = 13
+	// VersionV12 表示通用动态数组格式版本
+	VersionV12 uint16 = 12
 	// VersionV11 表示固定宽度整数格式版本
 	VersionV11 uint16 = 11
 	// VersionV10 表示包含 binary32 与数学原语的旧格式版本
@@ -375,7 +381,7 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 			constants[i] = value.NewFloat32(math.Float32frombits(bits))
 
 		case constantTagInt8, constantTagUint8:
-			if version < Version {
+			if version < VersionV11 {
 				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
 			}
 			var data [1]byte
@@ -393,7 +399,7 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 			constants[i], _ = value.NewIntegerBits(kind, uint64(data[0]))
 
 		case constantTagInt16, constantTagUint16:
-			if version < Version {
+			if version < VersionV11 {
 				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
 			}
 			bits, err := readUint16(limited, fmt.Sprintf("constant %d integer", i))
@@ -411,7 +417,7 @@ func Decode(r io.Reader) (*compiler.Bytecode, error) {
 			constants[i], _ = value.NewIntegerBits(kind, uint64(bits))
 
 		case constantTagInt32, constantTagUint32:
-			if version < Version {
+			if version < VersionV11 {
 				return nil, fmt.Errorf("mochi: constant %d has invalid fixed integer tag for format version %d", i, version)
 			}
 			bits, err := readUint32(limited, fmt.Sprintf("constant %d integer", i))
@@ -627,17 +633,33 @@ func encodedSize(bytecode *compiler.Bytecode) (uint64, error) {
 
 // encodedVersion 选择可表示当前字节码的最低版本
 func encodedVersion(bytecode *compiler.Bytecode) uint16 {
+	if hasArrayBulkInstructions(bytecode.Instructions) {
+		return VersionV13
+	}
+	for _, function := range bytecode.Functions {
+		if hasArrayBulkInstructions(function.Instructions) {
+			return VersionV13
+		}
+	}
+	if hasDynamicArrayInstructions(bytecode.Instructions) {
+		return VersionV12
+	}
+	for _, function := range bytecode.Functions {
+		if hasDynamicArrayInstructions(function.Instructions) {
+			return VersionV12
+		}
+	}
 	for _, constant := range bytecode.Constants {
 		if constant.Kind().IsInteger() && constant.Kind() != value.KindInt {
-			return Version
+			return VersionV11
 		}
 	}
 	if hasFixedIntegerInstructions(bytecode.Instructions) {
-		return Version
+		return VersionV11
 	}
 	for _, function := range bytecode.Functions {
 		if hasFixedIntegerInstructions(function.Instructions) {
-			return Version
+			return VersionV11
 		}
 	}
 	for _, constant := range bytecode.Constants {
@@ -707,6 +729,44 @@ func encodedVersion(bytecode *compiler.Bytecode) uint16 {
 		}
 	}
 	return VersionV2
+}
+
+func hasArrayBulkInstructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op == code.OpArrayTruncate || op == code.OpArrayAppendAll {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
+}
+
+func hasDynamicArrayInstructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op >= code.OpArrayTyped && op <= code.OpArrayClone {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
 }
 
 func hasFloat32Instructions(instructions []byte) bool {

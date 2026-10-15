@@ -178,6 +178,7 @@ type ContinueStatement struct {
 type CallExpression struct {
 	Function  Expression
 	Arguments []Expression
+	TypeArgs  []string
 	EnumType  string
 	Variant   int
 	Dynamic   bool
@@ -203,8 +204,9 @@ type ConversionExpression struct {
 
 // ArrayLiteral 表示数组字面量
 type ArrayLiteral struct {
-	Elements []Expression
-	Range    Span
+	Elements    []Expression
+	ElementType string
+	Range       Span
 }
 
 // IndexExpression 表示数组索引读取
@@ -263,6 +265,7 @@ type FunctionStatement struct {
 	Body        *BlockStatement
 	Exported    bool
 	Native      bool
+	Intrinsic   string
 	Range       Span
 }
 

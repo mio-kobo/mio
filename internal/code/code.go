@@ -62,39 +62,48 @@ const (
 	OpChant        Opcode = 22
 
 	// 函数相关 Opcode 从 23 开始固定编号
-	OpSetLocal         Opcode = 23
-	OpGetLocal         Opcode = 24
-	OpCall             Opcode = 25
-	OpReturn           Opcode = 26
-	OpReturnValue      Opcode = 27
-	OpIntToFloat       Opcode = 28
-	OpFloatToInt       Opcode = 29
-	OpArray            Opcode = 30
-	OpIndex            Opcode = 31
-	OpLen              Opcode = 32
-	OpSetIndex         Opcode = 33
-	OpIsNil            Opcode = 34
-	OpSetNullableIndex Opcode = 35
-	OpStruct           Opcode = 36
-	OpGetField         Opcode = 37
-	OpEnum             Opcode = 38
-	OpEnumTag          Opcode = 39
-	OpGetEnumValue     Opcode = 40
-	OpMap              Opcode = 41
-	OpMapGet           Opcode = 42
-	OpMapSet           Opcode = 43
-	OpFunction         Opcode = 44
-	OpCallValue        Opcode = 45
-	OpClosure          Opcode = 46
-	OpGetUpvalue       Opcode = 47
-	OpSetUpvalue       Opcode = 48
-	OpDefineLocal      Opcode = 49
-	OpIntToFloat32     Opcode = 50
-	OpFloat32ToInt     Opcode = 51
-	OpFloat32ToFloat64 Opcode = 52
-	OpFloat64ToFloat32 Opcode = 53
-	OpMath             Opcode = 54
-	OpIntegerConvert   Opcode = 55
+	OpSetLocal          Opcode = 23
+	OpGetLocal          Opcode = 24
+	OpCall              Opcode = 25
+	OpReturn            Opcode = 26
+	OpReturnValue       Opcode = 27
+	OpIntToFloat        Opcode = 28
+	OpFloatToInt        Opcode = 29
+	OpArray             Opcode = 30
+	OpIndex             Opcode = 31
+	OpLen               Opcode = 32
+	OpSetIndex          Opcode = 33
+	OpIsNil             Opcode = 34
+	OpSetNullableIndex  Opcode = 35
+	OpStruct            Opcode = 36
+	OpGetField          Opcode = 37
+	OpEnum              Opcode = 38
+	OpEnumTag           Opcode = 39
+	OpGetEnumValue      Opcode = 40
+	OpMap               Opcode = 41
+	OpMapGet            Opcode = 42
+	OpMapSet            Opcode = 43
+	OpFunction          Opcode = 44
+	OpCallValue         Opcode = 45
+	OpClosure           Opcode = 46
+	OpGetUpvalue        Opcode = 47
+	OpSetUpvalue        Opcode = 48
+	OpDefineLocal       Opcode = 49
+	OpIntToFloat32      Opcode = 50
+	OpFloat32ToInt      Opcode = 51
+	OpFloat32ToFloat64  Opcode = 52
+	OpFloat64ToFloat32  Opcode = 53
+	OpMath              Opcode = 54
+	OpIntegerConvert    Opcode = 55
+	OpArrayTyped        Opcode = 56
+	OpArrayMake         Opcode = 57
+	OpArrayWithCapacity Opcode = 58
+	OpArrayPush         Opcode = 59
+	OpArrayCapacity     Opcode = 60
+	OpArrayReserve      Opcode = 61
+	OpArrayClone        Opcode = 62
+	OpArrayTruncate     Opcode = 63
+	OpArrayAppendAll    Opcode = 64
 )
 
 // Definition 描述指令名称及操作数长度
@@ -104,7 +113,7 @@ type Definition struct {
 }
 
 // 指令定义表
-var definitions = map[Opcode]Definition{
+var definitions = [...]Definition{
 	OpConstant: {
 		Name:          "OpConstant",
 		OperandWidths: []int{2},
@@ -265,25 +274,33 @@ var definitions = map[Opcode]Definition{
 		Name:          "OpDefineLocal",
 		OperandWidths: []int{2},
 	},
-	OpIntToFloat32:     {Name: "OpIntToFloat32"},
-	OpFloat32ToInt:     {Name: "OpFloat32ToInt"},
-	OpFloat32ToFloat64: {Name: "OpFloat32ToFloat64"},
-	OpFloat64ToFloat32: {Name: "OpFloat64ToFloat32"},
-	OpMath:             {Name: "OpMath", OperandWidths: []int{1, 1}},
-	OpIntegerConvert:   {Name: "OpIntegerConvert", OperandWidths: []int{1}},
+	OpIntToFloat32:      {Name: "OpIntToFloat32"},
+	OpFloat32ToInt:      {Name: "OpFloat32ToInt"},
+	OpFloat32ToFloat64:  {Name: "OpFloat32ToFloat64"},
+	OpFloat64ToFloat32:  {Name: "OpFloat64ToFloat32"},
+	OpMath:              {Name: "OpMath", OperandWidths: []int{1, 1}},
+	OpIntegerConvert:    {Name: "OpIntegerConvert", OperandWidths: []int{1}},
+	OpArrayTyped:        {Name: "OpArrayTyped", OperandWidths: []int{2, 1}},
+	OpArrayMake:         {Name: "OpArrayMake", OperandWidths: []int{1}},
+	OpArrayWithCapacity: {Name: "OpArrayWithCapacity", OperandWidths: []int{1}},
+	OpArrayPush:         {Name: "OpArrayPush"},
+	OpArrayCapacity:     {Name: "OpArrayCapacity"},
+	OpArrayReserve:      {Name: "OpArrayReserve"},
+	OpArrayClone:        {Name: "OpArrayClone"},
+	OpArrayTruncate:     {Name: "OpArrayTruncate"},
+	OpArrayAppendAll:    {Name: "OpArrayAppendAll"},
 }
 
 // Lookup 查询操作码对应的指令定义
 func Lookup(op Opcode) (Definition, error) {
-	definition, ok := definitions[op]
-	if !ok {
+	if int(op) >= len(definitions) || definitions[op].Name == "" {
 		return Definition{}, fmt.Errorf(
 			"unknown opcode %d",
 			op,
 		)
 	}
 
-	return definition, nil
+	return definitions[op], nil
 }
 
 // Make 根据操作码和操作数生成字节码
@@ -356,7 +373,19 @@ func ReadOperands(
 	def Definition,
 	ins Instructions,
 ) ([]int, int, error) {
-	operands := make([]int, 0, len(def.OperandWidths))
+	operands := make([]int, len(def.OperandWidths))
+	offset, err := ReadOperandsInto(def, ins, operands)
+	if err != nil {
+		return nil, 0, err
+	}
+	return operands, offset, nil
+}
+
+// ReadOperandsInto 将操作数解码到调用方提供的缓冲区
+func ReadOperandsInto(def Definition, ins Instructions, operands []int) (int, error) {
+	if len(operands) < len(def.OperandWidths) {
+		return 0, fmt.Errorf("%s operand buffer is too small", def.Name)
+	}
 	offset := 0
 
 	// 按照定义依次读取操作数
@@ -364,14 +393,14 @@ func ReadOperands(
 		switch width {
 		case 1:
 			if len(ins)-offset < 1 {
-				return nil, 0, fmt.Errorf("%s operand %d: not enough bytes", def.Name, i+1)
+				return 0, fmt.Errorf("%s operand %d: not enough bytes", def.Name, i+1)
 			}
-			operands = append(operands, int(ins[offset]))
+			operands[i] = int(ins[offset])
 			offset++
 		case 2:
 			// 检查剩余字节是否足够
 			if len(ins)-offset < 2 {
-				return nil, 0, fmt.Errorf(
+				return 0, fmt.Errorf(
 					"%s operand %d: not enough bytes",
 					def.Name,
 					i+1,
@@ -382,16 +411,16 @@ func ReadOperands(
 				ins[offset : offset+2],
 			)
 
-			operands = append(operands, int(value))
+			operands[i] = int(value)
 			offset += 2
 
 		default:
-			return nil, 0, fmt.Errorf(
+			return 0, fmt.Errorf(
 				"unsupported operand width %d",
 				width,
 			)
 		}
 	}
 
-	return operands, offset, nil
+	return offset, nil
 }

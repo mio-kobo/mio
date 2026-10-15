@@ -57,6 +57,16 @@ func TestVMArrayRuntimeGuards(t *testing.T) {
 	}
 }
 
+// 测试动态数组拒绝非法类型描述符
+func TestVMDynamicArrayDescriptorGuard(t *testing.T) {
+	instruction := mustVMInstruction(t, code.OpArrayWithCapacity, 127)
+	bytecode := &compiler.Bytecode{Instructions: append(mustVMInstruction(t, code.OpConstant, 0), instruction...), Constants: []value.Value{value.NewInt(0)}}
+	err := New(bytecode).Run()
+	if err == nil || !strings.Contains(err.Error(), "invalid element descriptor") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // 测试数组长度与赋值指令拒绝非法字节码状态
 func TestVMArrayMutationRuntimeGuards(t *testing.T) {
 	tests := []struct {

@@ -198,6 +198,26 @@ func TestReadOperands(t *testing.T) {
 	}
 }
 
+// 测试操作数解码复用调用方缓冲区
+func TestReadOperandsInto(t *testing.T) {
+	def, err := Lookup(OpEnum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins, err := Make(OpEnum, 7, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operands [2]int
+	read, err := ReadOperandsInto(def, ins[1:], operands[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read != 4 || operands != [2]int{7, 11} {
+		t.Fatalf("read=%d operands=%v", read, operands)
+	}
+}
+
 // 测试跳转指令的编码与解码
 func TestJumpInstructions(t *testing.T) {
 	tests := []struct {

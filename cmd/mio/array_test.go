@@ -64,7 +64,6 @@ func TestCLIArrayTypeErrors(t *testing.T) {
 		{`kaku value = 1; value[0];`, "index target must be an array"},
 		{`kaku left = [1]; kaku right = [1]; left == right;`, "does not support []int64"},
 		{`waza take(values: []string) -> string { kaesu values[0]; } take([1]);`, "expected []string"},
-		{`kaku values = [[1], [2]];`, "array element type must be a scalar type"},
 	}
 	for _, test := range tests {
 		exit, _, stderr := runSourceCLI(t, "check", test.source)
@@ -197,7 +196,6 @@ func TestCLIArrayMutationTypeErrors(t *testing.T) {
 		{`kaku values = [1, 2]; values[0] = "Mio";`, "array element assignment requires int64"},
 		{`kaku values = [1, 2]; values[1.0] = 3;`, "array index must be int64"},
 		{`kaku text = "Mio"; text[0] = "m";`, "index assignment target must be an array"},
-		{`kaku values = [[1], [2]]; values[0][0] = 3;`, "array element type must be a scalar type"},
 		{`kaku value = 1; len(value);`, `builtin "len" requires array`},
 	}
 	for _, test := range tests {

@@ -42,14 +42,15 @@ type frame struct {
 
 // VM 执行 Mio 字节码
 type VM struct {
-	bytecode *compiler.Bytecode
-	stack    []value.Value
-	frames   []frame
-	globals  []value.Value
-	output   io.Writer
-	registry *mma.ModuleRegistry
-	native   []nativeBinding
-	bound    bool
+	bytecode  *compiler.Bytecode
+	stack     []value.Value
+	frames    []frame
+	globals   []value.Value
+	output    io.Writer
+	registry  *mma.ModuleRegistry
+	native    []nativeBinding
+	bound     bool
+	validated bool
 
 	lastPopped    value.Value
 	hasLastPopped bool
@@ -117,16 +118,24 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 		}
 		v.bound = true
 	}
-	if err := validateInstructionBoundaries(v.bytecode.Instructions); err != nil {
-		return fmt.Errorf("main instructions: %w", err)
-	}
-	for index, function := range v.bytecode.Functions {
-		if err := validateInstructionBoundaries(function.Instructions); err != nil {
-			return fmt.Errorf("function %d instructions: %w", index, err)
+	if !v.validated {
+		if err := validateInstructionBoundaries(v.bytecode.Instructions); err != nil {
+			return fmt.Errorf("main instructions: %w", err)
 		}
+		for index, function := range v.bytecode.Functions {
+			if err := validateInstructionBoundaries(function.Instructions); err != nil {
+				return fmt.Errorf("function %d instructions: %w", index, err)
+			}
+		}
+		v.validated = true
 	}
 
-	v.globals = make([]value.Value, v.bytecode.GlobalsCount)
+	if cap(v.globals) < v.bytecode.GlobalsCount {
+		v.globals = make([]value.Value, v.bytecode.GlobalsCount)
+	} else {
+		v.globals = v.globals[:v.bytecode.GlobalsCount]
+		clear(v.globals)
+	}
 	v.frames = append(v.frames[:0], frame{functionID: -1, instructions: v.bytecode.Instructions})
 
 	ctx := options.Context
@@ -138,6 +147,7 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 		limit = DefaultInstructionLimit
 	}
 	var executed uint64
+	var operands [2]int
 
 	for len(v.frames) > 0 {
 		frameIndex := len(v.frames) - 1
@@ -171,9 +181,12 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("at offset %d: %w", ip, err)
 		}
-		operands, read, err := code.ReadOperands(def, current.instructions[ip+1:])
-		if err != nil {
-			return fmt.Errorf("at offset %d: %w", ip, err)
+		read := 0
+		if len(def.OperandWidths) != 0 {
+			read, err = code.ReadOperandsInto(def, current.instructions[ip+1:], operands[:len(def.OperandWidths)])
+			if err != nil {
+				return fmt.Errorf("at offset %d: %w", ip, err)
+			}
 		}
 		nextIP := ip + 1 + read
 
@@ -335,15 +348,153 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 				return fmt.Errorf("OpArray at %d: %w", ip, err)
 			}
 
+		case code.OpArrayTyped:
+			count := operands[0]
+			if len(v.stack)-v.operandBase() < count {
+				return fmt.Errorf("stack underflow for OpArrayTyped at %d", ip)
+			}
+			start := len(v.stack) - count
+			elementKind, nullable, valid := arrayDescriptor(operands[1], true)
+			if !valid {
+				return fmt.Errorf("OpArrayTyped has invalid element descriptor %d at %d", operands[1], ip)
+			}
+			for _, element := range v.stack[start:] {
+				if element.IsNil() {
+					if !nullable && elementKind != value.KindInvalid {
+						return fmt.Errorf("OpArrayTyped cannot store nil at %d", ip)
+					}
+				} else if elementKind != value.KindInvalid && element.Kind() != elementKind {
+					return fmt.Errorf("OpArrayTyped requires %s value, got %s at %d", elementKind, element.Kind(), ip)
+				}
+			}
+			array := value.NewTypedArray(v.stack[start:], elementKind, nullable)
+			clear(v.stack[start:])
+			v.stack = v.stack[:start]
+			if err := v.push(array); err != nil {
+				return fmt.Errorf("OpArrayTyped at %d: %w", ip, err)
+			}
+
+		case code.OpArrayMake:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpArrayMake at %d", ip)
+			}
+			lengthValue := v.stack[len(v.stack)-2]
+			initial := v.stack[len(v.stack)-1]
+			length, ok := lengthValue.Int64()
+			if !ok {
+				return fmt.Errorf("OpArrayMake requires int64 length at %d", ip)
+			}
+			elementKind, nullable, valid := arrayDescriptor(operands[0], true)
+			if !valid {
+				return fmt.Errorf("OpArrayMake has invalid element descriptor %d at %d", operands[0], ip)
+			}
+			array, err := value.NewFilledArray(length, initial, elementKind, nullable)
+			if err != nil {
+				return fmt.Errorf("OpArrayMake at %d: %w", ip, err)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+			if err := v.push(array); err != nil {
+				return fmt.Errorf("OpArrayMake at %d: %w", ip, err)
+			}
+
+		case code.OpArrayWithCapacity:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpArrayWithCapacity at %d", ip)
+			}
+			capacity, ok := v.stack[len(v.stack)-1].Int64()
+			if !ok {
+				return fmt.Errorf("OpArrayWithCapacity requires int64 capacity at %d", ip)
+			}
+			elementKind, nullable, valid := arrayDescriptor(operands[0], true)
+			if !valid {
+				return fmt.Errorf("OpArrayWithCapacity has invalid element descriptor %d at %d", operands[0], ip)
+			}
+			array, err := value.NewArrayWithCapacity(capacity, elementKind, nullable)
+			if err != nil {
+				return fmt.Errorf("OpArrayWithCapacity at %d: %w", ip, err)
+			}
+			v.stack[len(v.stack)-1] = array
+
+		case code.OpArrayPush:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpArrayPush at %d", ip)
+			}
+			array := v.stack[len(v.stack)-2]
+			element := v.stack[len(v.stack)-1]
+			if err := array.AppendArrayElement(element); err != nil {
+				return fmt.Errorf("OpArrayPush at %d: %w", ip, err)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+
+		case code.OpArrayCapacity:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpArrayCapacity at %d", ip)
+			}
+			capacity, ok := v.stack[len(v.stack)-1].ArrayCapacity()
+			if !ok {
+				return fmt.Errorf("OpArrayCapacity requires array at %d", ip)
+			}
+			v.stack[len(v.stack)-1] = value.NewInt(int64(capacity))
+
+		case code.OpArrayReserve:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpArrayReserve at %d", ip)
+			}
+			array := v.stack[len(v.stack)-2]
+			additional, ok := v.stack[len(v.stack)-1].Int64()
+			if !ok {
+				return fmt.Errorf("OpArrayReserve requires int64 additional capacity at %d", ip)
+			}
+			if err := array.ReserveArray(additional); err != nil {
+				return fmt.Errorf("OpArrayReserve at %d: %w", ip, err)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+
+		case code.OpArrayClone:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpArrayClone at %d", ip)
+			}
+			clone, err := v.stack[len(v.stack)-1].CloneArray()
+			if err != nil {
+				return fmt.Errorf("OpArrayClone at %d: %w", ip, err)
+			}
+			v.stack[len(v.stack)-1] = clone
+
+		case code.OpArrayTruncate:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpArrayTruncate at %d", ip)
+			}
+			array := v.stack[len(v.stack)-2]
+			newLength, ok := v.stack[len(v.stack)-1].Int64()
+			if !ok {
+				return fmt.Errorf("OpArrayTruncate requires int64 length at %d", ip)
+			}
+			if err := array.TruncateArray(newLength); err != nil {
+				return fmt.Errorf("OpArrayTruncate at %d: %w", ip, err)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+
+		case code.OpArrayAppendAll:
+			if len(v.stack)-v.operandBase() < 2 {
+				return fmt.Errorf("stack underflow for OpArrayAppendAll at %d", ip)
+			}
+			destination := v.stack[len(v.stack)-2]
+			source := v.stack[len(v.stack)-1]
+			if err := destination.AppendArray(source); err != nil {
+				return fmt.Errorf("OpArrayAppendAll at %d: %w", ip, err)
+			}
+			v.stack = v.stack[:len(v.stack)-2]
+
 		case code.OpStruct:
 			count := operands[0]
 			if len(v.stack)-v.operandBase() < count {
 				return fmt.Errorf("stack underflow for OpStruct at %d", ip)
 			}
 			start := len(v.stack) - count
-			fields := append([]value.Value(nil), v.stack[start:]...)
+			structure := value.NewStruct("", v.stack[start:])
+			clear(v.stack[start:])
 			v.stack = v.stack[:start]
-			if err := v.push(value.NewStruct("", fields)); err != nil {
+			if err := v.push(structure); err != nil {
 				return fmt.Errorf("OpStruct at %d: %w", ip, err)
 			}
 
@@ -363,9 +514,10 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 				return fmt.Errorf("stack underflow for OpEnum at %d", ip)
 			}
 			start := len(v.stack) - count
-			values := append([]value.Value(nil), v.stack[start:]...)
+			enum := value.NewEnum("", operands[0], v.stack[start:])
+			clear(v.stack[start:])
 			v.stack = v.stack[:start]
-			if err := v.push(value.NewEnum("", operands[0], values)); err != nil {
+			if err := v.push(enum); err != nil {
 				return fmt.Errorf("OpEnum at %d: %w", ip, err)
 			}
 
@@ -725,6 +877,22 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 	return nil
 }
 
+func arrayDescriptor(descriptor int, allowDynamic bool) (value.Kind, bool, bool) {
+	kind := value.Kind(descriptor & 0x7f)
+	return kind, descriptor&0x80 != 0, validArrayElementKind(kind) || allowDynamic && kind == value.KindInvalid
+}
+
+func validArrayElementKind(kind value.Kind) bool {
+	switch kind {
+	case value.KindInt, value.KindFloat, value.KindFloat32, value.KindBool, value.KindString,
+		value.KindArray, value.KindStruct, value.KindEnum, value.KindMap, value.KindFunction,
+		value.KindInt8, value.KindInt16, value.KindInt32, value.KindUint8, value.KindUint16, value.KindUint32:
+		return true
+	default:
+		return false
+	}
+}
+
 // executeMathPrimitive 执行共享数学原语入口
 func (v *VM) executeMathPrimitive(primitive, argumentCount, ip int) error {
 	if argumentCount < 1 || len(v.stack)-v.operandBase() < argumentCount {
@@ -846,7 +1014,8 @@ func (v *VM) wrapRuntimeError(cause error) *RuntimeError {
 func (v *VM) resetExecutionState() {
 	v.stack = v.stack[:0]
 	v.frames = v.frames[:0]
-	v.globals = nil
+	clear(v.globals)
+	v.globals = v.globals[:0]
 	v.lastPopped = value.Value{}
 	v.hasLastPopped = false
 }
@@ -859,6 +1028,7 @@ func validateInstructionBoundaries(instructions code.Instructions) error {
 		target int
 	}
 	var jumps []jumpReference
+	var operands [2]int
 
 	for offset := 0; offset < len(instructions); {
 		boundaries[offset] = true
@@ -867,7 +1037,7 @@ func validateInstructionBoundaries(instructions code.Instructions) error {
 		if err != nil {
 			return fmt.Errorf("at offset %d: %w", offset, err)
 		}
-		operands, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		read, err := code.ReadOperandsInto(definition, instructions[offset+1:], operands[:len(definition.OperandWidths)])
 		if err != nil {
 			return fmt.Errorf("at offset %d: %w", offset, err)
 		}
@@ -1250,7 +1420,7 @@ func (v *VM) callClosure(functionID int, upvalues []*value.Cell, ip int) error {
 	if len(upvalues) != len(function.Captures) {
 		return fmt.Errorf("function %d requires %d captures, got %d at %d", functionID, len(function.Captures), len(upvalues), ip)
 	}
-	v.frames = append(v.frames, frame{functionID: functionID, instructions: function.Instructions, base: base, upvalues: upvalues, cells: make(map[int]*value.Cell)})
+	v.frames = append(v.frames, frame{functionID: functionID, instructions: function.Instructions, base: base, upvalues: upvalues})
 	return nil
 }
 

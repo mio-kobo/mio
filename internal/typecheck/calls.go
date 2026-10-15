@@ -151,9 +151,38 @@ func (c *Checker) checkCall(call *ast.CallExpression, expectedResult Kind) (Kind
 		}
 	}
 	result := substitute(signature.ReturnType, bindings)
+	call.TypeArgs = make([]string, len(signature.TypeParams))
+	for index, parameter := range signature.TypeParams {
+		call.TypeArgs[index] = c.runtimeTypeName(bindings[parameter])
+	}
 	call.HasValue = result != KindUnit
 	c.invalidateGlobalFacts()
 	return result, nil
+}
+
+func (c *Checker) runtimeTypeName(kind Kind) string {
+	if kind.IsNullable() {
+		return "nullable<" + c.runtimeTypeName(kind.NonNullable()) + ">"
+	}
+	if kind.IsArray() {
+		return "array"
+	}
+	if kind.IsMap() {
+		return "map"
+	}
+	if kind.IsFunction() {
+		return "function"
+	}
+	if name, _, ok := kind.NamedParts(); ok {
+		if _, enum := c.enums[name]; enum {
+			return "enum"
+		}
+		return "struct"
+	}
+	if kind.IsTypeParameter() {
+		return ""
+	}
+	return string(kind)
 }
 
 func (c *Checker) checkDynamicCall(call *ast.CallExpression) (Kind, error) {

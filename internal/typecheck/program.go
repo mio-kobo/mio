@@ -500,6 +500,9 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 			fn.Name.Name,
 		)
 	}
+	if fn.Intrinsic != "" {
+		return nil
+	}
 
 	savedNarrowings := c.narrowings
 	savedVersions := copyVersions(c.factVersions)

@@ -41,7 +41,7 @@ func validateVersion(bytecode *compiler.Bytecode, version uint16) error {
 		switch constant.Kind() {
 		case value.KindInt:
 		case value.KindInt8, value.KindInt16, value.KindInt32, value.KindUint8, value.KindUint16, value.KindUint32:
-			if version < Version {
+			if version < VersionV11 {
 				return fmt.Errorf("constant %d kind %s requires Mochi v11", i, constant.Kind())
 			}
 		case value.KindFloat:
@@ -133,8 +133,14 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		if version < VersionV10 && op >= code.OpIntToFloat32 && op <= code.OpMath {
 			return fmt.Errorf("opcode %d requires Mochi v10 at offset %d", op, offset)
 		}
-		if version < Version && op == code.OpIntegerConvert {
+		if version < VersionV11 && op == code.OpIntegerConvert {
 			return fmt.Errorf("opcode %d requires Mochi v11 at offset %d", op, offset)
+		}
+		if version < VersionV12 && op >= code.OpArrayTyped && op <= code.OpArrayClone {
+			return fmt.Errorf("opcode %d requires Mochi v12 at offset %d", op, offset)
+		}
+		if version < VersionV13 && (op == code.OpArrayTruncate || op == code.OpArrayAppendAll) {
+			return fmt.Errorf("opcode %d requires Mochi v13 at offset %d", op, offset)
 		}
 		definition, err := code.Lookup(op)
 		if err != nil {
@@ -167,6 +173,14 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		case code.OpIntegerConvert:
 			if operands[0] < code.IntegerInt8 || operands[0] > code.IntegerUint32 {
 				return fmt.Errorf("unknown integer conversion target %d at offset %d", operands[0], offset)
+			}
+		case code.OpArrayTyped:
+			if !validArrayDescriptor(operands[1]) {
+				return fmt.Errorf("invalid array element descriptor %d at offset %d", operands[1], offset)
+			}
+		case code.OpArrayMake, code.OpArrayWithCapacity:
+			if !validArrayDescriptor(operands[0]) {
+				return fmt.Errorf("invalid array element descriptor %d at offset %d", operands[0], offset)
 			}
 		case code.OpSetGlobal, code.OpGetGlobal:
 			if operands[0] >= bytecode.GlobalsCount {
@@ -241,4 +255,18 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		}
 	}
 	return nil
+}
+
+func validArrayDescriptor(descriptor int) bool {
+	if descriptor == 0 {
+		return true
+	}
+	switch value.Kind(descriptor & 0x7f) {
+	case value.KindInt, value.KindFloat, value.KindFloat32, value.KindBool, value.KindString,
+		value.KindArray, value.KindStruct, value.KindEnum, value.KindMap, value.KindFunction,
+		value.KindInt8, value.KindInt16, value.KindInt32, value.KindUint8, value.KindUint16, value.KindUint32:
+		return descriptor&^0xff == 0
+	default:
+		return false
+	}
 }

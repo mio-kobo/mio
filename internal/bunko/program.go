@@ -274,7 +274,7 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 		}
 		aliases[alias] = dependency.exported
 	}
-	r := &rewriter{top: unit.declared, aliases: aliases, internals: library}
+	r := &rewriter{top: unit.declared, aliases: aliases, internals: library, arrayInternals: unit.path == "kiso/array"}
 	for _, statement := range unit.program.Statements {
 		if _, imported := statement.(*ast.ImportStatement); imported {
 			continue
@@ -293,9 +293,10 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 }
 
 type rewriter struct {
-	top       map[string]string
-	aliases   map[string]map[string]string
-	internals bool
+	top            map[string]string
+	aliases        map[string]map[string]string
+	internals      bool
+	arrayInternals bool
 }
 
 var mathInternals = map[string]string{
@@ -304,6 +305,13 @@ var mathInternals = map[string]string{
 	"__is_inf": "$math.is_inf", "__is_finite": "$math.is_finite", "__is_negative_zero": "$math.is_negative_zero",
 	"__add_overflows": "$math.add_overflows", "__is_negative": "$math.is_negative", "__neg_overflows": "$math.neg_overflows",
 	"__math_error": "$math.error",
+}
+
+var arrayInternals = map[string]string{
+	"__array_make": "$array.make", "__array_with_capacity": "$array.with_capacity",
+	"__array_push": "$array.push", "__array_capacity": "$array.capacity",
+	"__array_reserve": "$array.reserve", "__array_clone": "$array.clone",
+	"__array_truncate": "$array.truncate", "__array_append_all": "$array.append_all",
 }
 
 func cloneScope(scope map[string]bool) map[string]bool {
@@ -373,7 +381,11 @@ func (r *rewriter) statement(statement ast.Statement, scope map[string]bool) err
 		if err := r.typeRef(n.ReturnType); err != nil {
 			return err
 		}
-		return r.block(n.Body, local)
+		if err := r.block(n.Body, local); err != nil {
+			return err
+		}
+		n.Intrinsic = functionIntrinsic(n.Body)
+		return nil
 	case *ast.StructStatement:
 		original := n.Name.Name
 		n.Name.Name = r.top[original]
@@ -472,6 +484,12 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 			if internal, ok := mathInternals[n.Name]; ok {
 				n.Name = internal
 				return nil
+			}
+			if r.arrayInternals {
+				if internal, ok := arrayInternals[n.Name]; ok {
+					n.Name = internal
+					return nil
+				}
 			}
 		}
 		if !scope[n.Name] {
@@ -574,4 +592,28 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 		return r.block(n.Body, local)
 	}
 	return nil
+}
+
+func functionIntrinsic(body *ast.BlockStatement) string {
+	if body == nil || len(body.Statements) != 1 {
+		return ""
+	}
+	var expression ast.Expression
+	switch statement := body.Statements[0].(type) {
+	case *ast.ReturnStatement:
+		expression = statement.Value
+	case *ast.ExpressionStatement:
+		expression = statement.Expr
+	default:
+		return ""
+	}
+	call, ok := expression.(*ast.CallExpression)
+	if !ok {
+		return ""
+	}
+	identifier, ok := call.Function.(*ast.Identifier)
+	if !ok || !strings.HasPrefix(identifier.Name, "$array.") {
+		return ""
+	}
+	return identifier.Name
 }

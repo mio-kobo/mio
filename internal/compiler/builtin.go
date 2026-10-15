@@ -2,11 +2,13 @@ package compiler
 
 import (
 	"fmt"
+	"strings"
 
 	"Mio/internal/ast"
 	"Mio/internal/code"
 	"Mio/internal/diagnostic"
 	"Mio/internal/resolver"
+	"Mio/internal/value"
 )
 
 // compileExpressionStatement 丢弃普通表达式的结果；unit 调用没有栈值可弹出。
@@ -75,6 +77,9 @@ func (c *Compiler) compileCall(call *ast.CallExpression) error {
 		return fmt.Errorf("missing symbol binding for function %q", callee.Name)
 	}
 	if symbol.Kind == resolver.SymbolFunction {
+		if intrinsic := c.functionIntrinsics[symbol]; intrinsic != "" {
+			return c.compileArrayIntrinsic(call, intrinsic)
+		}
 		id, ok := c.functionIDs[symbol]
 		if !ok {
 			return fmt.Errorf("function %q has no FunctionID", symbol.Name)
@@ -141,6 +146,60 @@ func (c *Compiler) compileCall(call *ast.CallExpression) error {
 	default:
 		return fmt.Errorf("unsupported builtin function %q", symbol.Name)
 	}
+}
+
+func (c *Compiler) compileArrayIntrinsic(call *ast.CallExpression, intrinsic string) error {
+	for _, argument := range call.Arguments {
+		if err := c.Compile(argument); err != nil {
+			return err
+		}
+	}
+	descriptor := 0
+	if len(call.TypeArgs) != 0 {
+		descriptor = arrayTypeDescriptor(call.TypeArgs[0])
+	}
+	switch intrinsic {
+	case "$array.make":
+		return c.emit(code.OpArrayMake, descriptor)
+	case "$array.with_capacity":
+		return c.emit(code.OpArrayWithCapacity, descriptor)
+	case "$array.push":
+		return c.emit(code.OpArrayPush)
+	case "$array.capacity":
+		return c.emit(code.OpArrayCapacity)
+	case "$array.reserve":
+		return c.emit(code.OpArrayReserve)
+	case "$array.clone":
+		return c.emit(code.OpArrayClone)
+	case "$array.truncate":
+		return c.emit(code.OpArrayTruncate)
+	case "$array.append_all":
+		return c.emit(code.OpArrayAppendAll)
+	default:
+		return fmt.Errorf("unsupported array intrinsic %q", intrinsic)
+	}
+}
+
+func arrayTypeDescriptor(name string) int {
+	nullable := false
+	if strings.HasPrefix(name, "nullable<") && strings.HasSuffix(name, ">") {
+		nullable = true
+		name = name[len("nullable<") : len(name)-1]
+	}
+	kinds := map[string]value.Kind{
+		"int8": value.KindInt8, "int16": value.KindInt16, "int32": value.KindInt32,
+		"int64": value.KindInt, "uint8": value.KindUint8, "uint16": value.KindUint16,
+		"uint32": value.KindUint32, "float32": value.KindFloat32, "float64": value.KindFloat,
+		"bool": value.KindBool, "string": value.KindString, "array": value.KindArray,
+		"struct": value.KindStruct, "enum": value.KindEnum, "map": value.KindMap,
+		"function": value.KindFunction,
+	}
+	kind := kinds[name]
+	descriptor := int(kind)
+	if nullable {
+		descriptor |= 0x80
+	}
+	return descriptor
 }
 
 // callReturnsValue 判断调用是否产生运行时值

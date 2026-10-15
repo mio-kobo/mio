@@ -45,7 +45,7 @@ func (k Kind) IsSignedInteger() bool {
 
 // ArrayOf 创建数组类型
 func ArrayOf(element Kind) Kind {
-	if element == KindInvalid || element == KindNil || element == KindUnit || element.IsArray() {
+	if element == KindInvalid || element == KindNil || element == KindUnit {
 		return KindInvalid
 	}
 	return Kind("array<" + string(element) + ">")

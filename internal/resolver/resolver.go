@@ -27,7 +27,7 @@ func New() *Resolver {
 	// 创建内置符号作用域
 	builtins := NewScope()
 	// 注册内置函数
-	for _, name := range []string{"chant", "len", "Map", "$math.sqrt", "$math.floor", "$math.ceil", "$math.round_even", "$math.trunc", "$math.is_nan", "$math.is_inf", "$math.is_finite", "$math.is_negative_zero", "$math.add_overflows", "$math.is_negative", "$math.neg_overflows", "$math.error"} {
+	for _, name := range []string{"chant", "len", "Map", "$math.sqrt", "$math.floor", "$math.ceil", "$math.round_even", "$math.trunc", "$math.is_nan", "$math.is_inf", "$math.is_finite", "$math.is_negative_zero", "$math.add_overflows", "$math.is_negative", "$math.neg_overflows", "$math.error", "$array.make", "$array.with_capacity", "$array.push", "$array.capacity", "$array.reserve", "$array.clone", "$array.truncate", "$array.append_all"} {
 		if err := builtins.DefineSymbol(Symbol{
 			Name: name,
 			Kind: SymbolBuiltin,

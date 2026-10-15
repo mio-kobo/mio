@@ -169,6 +169,7 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 		if arrayType == KindInvalid {
 			return KindInvalid, fmt.Errorf("array element type must be a scalar type, got %s", elementType)
 		}
+		n.ElementType = c.runtimeTypeName(elementType)
 		return arrayType, nil
 
 	case *ast.IndexExpression:
