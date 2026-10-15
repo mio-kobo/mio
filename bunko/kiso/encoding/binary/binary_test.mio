@@ -1,0 +1,55 @@
+yobu "kiso/testing";
+
+waza test_endian_and_signed_boundaries() -> unit {
+    kaku data = array.make[uint8](24, uint8(0));
+    testing.expect(write_u16_le(data, 1, uint16(4660)) == mu, "u16 little endian write should succeed");
+    testing.expect(write_u32_be(data, 3, uint32(2309737967)) == mu, "u32 big endian write should succeed");
+    testing.expect(write_i64_le(data, 8, -9223372036854775807 - 1) == mu, "MinInt64 write should succeed");
+    testing.expect(data[1] == uint8(52) && data[2] == uint8(18), "little endian bytes should be ordered");
+    testing.expect(data[3] == uint8(137) && data[6] == uint8(239), "big endian bytes should be ordered");
+    testing.expect(read_u16_le(data, 1).value == uint16(4660), "u16 should round trip");
+    testing.expect(read_u32_be(data, 3).value == uint32(2309737967), "u32 should round trip");
+    testing.expect(read_i64_le(data, 8).value == -9223372036854775807 - 1, "MinInt64 should round trip");
+    kaku signed_data = array.make[uint8](16, uint8(0));
+    write_i8(signed_data, 0, int8(-128));
+    write_i16_be(signed_data, 1, int16(-32768));
+    write_i32_le(signed_data, 3, int32(-2147483647 - 1));
+    write_i64_be(signed_data, 7, 9223372036854775807);
+    testing.expect(read_i8(signed_data, 0).value == int8(-128), "int8 should round trip");
+    testing.expect(read_i16_be(signed_data, 1).value == int16(-32768), "int16 should round trip");
+    testing.expect(read_i32_le(signed_data, 3).value == int32(-2147483647 - 1), "int32 should round trip");
+    testing.expect(read_i64_be(signed_data, 7).value == 9223372036854775807, "MaxInt64 should round trip");
+    kaku short_error = read_u32_le(data, 22).error;
+    testing.expect(short_error != mu, "short input should fail");
+    testing.expect(write_u32_le(data, -1, uint32(1)) != mu, "negative offset should fail");
+}
+
+waza test_varints() -> unit {
+    kaku encoded = write_var_u32(uint32(4294967295));
+    kaku decoded = read_var_u32(encoded.data, 0);
+    kaku decoded_error = decoded.error;
+    testing.expect(decoded_error == mu && decoded.value == uint32(4294967295) && decoded.count == 5, "u32 varint should round trip");
+    kaku overlong_error = read_var_u32([128, 0], 0).error;
+    testing.expect(overlong_error != mu, "overlong u32 varint should fail");
+    kaku overflow_error = read_var_u32([255, 255, 255, 255, 31], 0).error;
+    testing.expect(overflow_error != mu, "overflowing u32 varint should fail");
+
+    kaku minimum = -9223372036854775807 - 1;
+    kaku signed = write_var_i64(minimum);
+    kaku signed_value = read_var_i64(signed.data, 0);
+    kaku signed_error = signed_value.error;
+    testing.expect(signed_error == mu && signed_value.value == minimum, "signed LEB128 MinInt64 should round trip");
+    kaku negative = write_var_i64(-123456789);
+    testing.expect(read_var_i64(negative.data, 0).value == -123456789, "negative signed LEB128 should round trip");
+    kaku truncated_error = read_var_i64([128], 0).error;
+    testing.expect(truncated_error != mu, "truncated signed LEB128 should fail");
+}
+
+waza test_mochi_header_fields() -> unit {
+    kaku header = array.make[uint8](12, uint8(0));
+    header[0] = uint8(77); header[1] = uint8(79); header[2] = uint8(67); header[3] = uint8(72); header[4] = uint8(73);
+    write_u16_be(header, 5, uint16(14));
+    write_u32_be(header, 7, uint32(123456));
+    testing.expect(read_u16_be(header, 5).value == uint16(14), "Mochi version should decode");
+    testing.expect(read_u32_be(header, 7).value == uint32(123456), "Mochi integer field should decode");
+}

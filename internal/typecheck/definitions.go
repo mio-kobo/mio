@@ -121,6 +121,8 @@ func (c *Checker) resolveType(ref *ast.TypeRef, parameters map[string]struct{}) 
 		return KindString, nil
 	case "unit":
 		return KindUnit, nil
+	case "resource":
+		return KindResource, nil
 	}
 	if _, ok := parameters[ref.Name]; ok {
 		if len(ref.Args) != 0 {

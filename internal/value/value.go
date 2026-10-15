@@ -1,6 +1,9 @@
 package value
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 // Kind 表示运行时值的种类
 type Kind uint8
@@ -24,6 +27,7 @@ const (
 	KindUint8
 	KindUint16
 	KindUint32
+	KindResource
 )
 
 // String 返回运行时类型名称
@@ -43,6 +47,8 @@ func (k Kind) String() string {
 		return "uint16"
 	case KindUint32:
 		return "uint32"
+	case KindResource:
+		return "resource"
 	case KindFloat:
 		return "float64"
 	case KindFloat32:
@@ -82,6 +88,7 @@ type Value struct {
 	mapping    *Map
 	function   int
 	closure    *Closure
+	resource   any
 }
 
 // Cell 保存闭包共享的可变绑定
@@ -214,6 +221,12 @@ func NewNil() Value {
 	}
 }
 
+// NewResource 创建不透明资源值
+func NewResource(resource any) Value { return Value{kind: KindResource, resource: resource} }
+
+// Resource 返回不透明资源载荷
+func (v Value) Resource() (any, bool) { return v.resource, v.kind == KindResource && v.resource != nil }
+
 // NewArray 创建数组值
 func NewArray(elements []Value) Value {
 	array := &Array{}
@@ -256,6 +269,42 @@ func NewTypedArray(elements []Value, elementKind Kind, nullable bool) Value {
 		array.elements = append([]Value(nil), elements...)
 	}
 	return Value{kind: KindArray, array: array}
+}
+
+// NewByteArray 创建独立的紧凑 uint8 数组
+func NewByteArray(elements []byte) (result Value, err error) {
+	if err := checkArrayAllocation(int64(len(elements)), KindUint8); err != nil {
+		return Value{}, err
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = Value{}
+			err = fmt.Errorf("array allocation failed: %v", recovered)
+		}
+	}()
+	return Value{
+		kind: KindArray,
+		array: &Array{
+			byteElements: append([]byte(nil), elements...),
+			elementKind:  KindUint8,
+		},
+	}, nil
+}
+
+// NewByteArrayFromString 复制字符串字节到紧凑数组
+func NewByteArrayFromString(text string) (result Value, err error) {
+	if err := checkArrayAllocation(int64(len(text)), KindUint8); err != nil {
+		return Value{}, err
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = Value{}
+			err = fmt.Errorf("array allocation failed: %v", recovered)
+		}
+	}()
+	elements := make([]byte, len(text))
+	copy(elements, text)
+	return Value{kind: KindArray, array: &Array{byteElements: elements, elementKind: KindUint8}}, nil
 }
 
 // NewFilledArray 创建指定长度的数组
@@ -522,6 +571,48 @@ func (v Value) ArrayCapacity() (int, bool) {
 		return cap(v.array.byteElements), true
 	}
 	return cap(v.array.elements), true
+}
+
+// ByteArrayCopy 复制紧凑 uint8 数组
+func (v Value) ByteArrayCopy() ([]byte, bool) {
+	if v.kind != KindArray || v.array == nil || v.array.elementKind != KindUint8 || v.array.nullable {
+		return nil, false
+	}
+	return append([]byte(nil), v.array.byteElements...), true
+}
+
+// ByteArrayRangeCopy 复制紧凑 uint8 数组的指定范围
+func (v Value) ByteArrayRangeCopy(offset, length int64) ([]byte, error) {
+	if v.kind != KindArray || v.array == nil || v.array.elementKind != KindUint8 || v.array.nullable {
+		return nil, fmt.Errorf("operation requires []uint8")
+	}
+	if offset < 0 || length < 0 || offset > int64(len(v.array.byteElements)) || length > int64(len(v.array.byteElements))-offset {
+		return nil, fmt.Errorf("byte range offset %d length %d is out of bounds for length %d", offset, length, len(v.array.byteElements))
+	}
+	return append([]byte(nil), v.array.byteElements[offset:offset+length]...), nil
+}
+
+// WriteByteArrayRange 写入紧凑 uint8 数组的已有范围
+func (v Value) WriteByteArrayRange(offset int64, source []byte) error {
+	if v.kind != KindArray || v.array == nil || v.array.elementKind != KindUint8 || v.array.nullable {
+		return fmt.Errorf("operation requires []uint8")
+	}
+	if offset < 0 || offset > int64(len(v.array.byteElements)) || int64(len(source)) > int64(len(v.array.byteElements))-offset {
+		return fmt.Errorf("byte range offset %d length %d is out of bounds for length %d", offset, len(source), len(v.array.byteElements))
+	}
+	copy(v.array.byteElements[offset:], source)
+	return nil
+}
+
+// UTF8StringCopy 校验并复制紧凑 uint8 数组
+func (v Value) UTF8StringCopy() (string, bool, error) {
+	if v.kind != KindArray || v.array == nil || v.array.elementKind != KindUint8 || v.array.nullable {
+		return "", false, fmt.Errorf("conversion requires []uint8")
+	}
+	if !utf8.Valid(v.array.byteElements) {
+		return "", false, nil
+	}
+	return string(v.array.byteElements), true, nil
 }
 
 // ReserveArray 保证数组具有足够的剩余容量

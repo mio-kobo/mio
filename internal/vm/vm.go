@@ -49,6 +49,7 @@ type VM struct {
 	output    io.Writer
 	registry  *mma.ModuleRegistry
 	native    []nativeBinding
+	resources *mma.ResourceManager
 	bound     bool
 	validated bool
 
@@ -73,7 +74,12 @@ func NewWithOutput(bytecode *compiler.Bytecode, output io.Writer) *VM {
 
 // NewWithRegistryAndOutput 创建绑定原生模块注册表的 VM
 func NewWithRegistryAndOutput(bytecode *compiler.Bytecode, registry *mma.ModuleRegistry, output io.Writer) *VM {
-	return &VM{bytecode: bytecode, stack: make([]value.Value, 0), frames: make([]frame, 0), output: output, registry: registry}
+	return NewWithRuntime(bytecode, registry, output, mma.NewResourceManager())
+}
+
+// NewWithRuntime 创建绑定原生模块和资源表的 VM
+func NewWithRuntime(bytecode *compiler.Bytecode, registry *mma.ModuleRegistry, output io.Writer, resources *mma.ResourceManager) *VM {
+	return &VM{bytecode: bytecode, stack: make([]value.Value, 0), frames: make([]frame, 0), output: output, registry: registry, resources: resources}
 }
 
 // Run 使用默认预算解码并执行字节码
@@ -84,6 +90,13 @@ func (v *VM) Run() error {
 // RunWithOptions 使用指定选项解码并执行字节码
 func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 	v.resetExecutionState()
+	if v.resources != nil {
+		defer func() {
+			if cleanupErr := v.resources.Cleanup(); runErr == nil && cleanupErr != nil {
+				runErr = fmt.Errorf("cleanup native resources: %w", cleanupErr)
+			}
+		}()
+	}
 	defer func() {
 		if runErr != nil {
 			if _, ok := runErr.(*RuntimeError); !ok {
@@ -485,6 +498,36 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 			}
 			v.stack = v.stack[:len(v.stack)-2]
 
+		case code.OpDataConvert:
+			if len(v.stack) <= v.operandBase() {
+				return fmt.Errorf("stack underflow for OpDataConvert at %d", ip)
+			}
+			input := v.stack[len(v.stack)-1]
+			switch operands[0] {
+			case code.DataStringToBytes:
+				text, ok := input.Text()
+				if !ok {
+					return fmt.Errorf("string-to-bytes conversion requires string at %d", ip)
+				}
+				bytes, err := value.NewByteArrayFromString(text)
+				if err != nil {
+					return fmt.Errorf("string-to-bytes conversion at %d: %w", ip, err)
+				}
+				v.stack[len(v.stack)-1] = bytes
+			case code.DataBytesToString:
+				text, valid, err := input.UTF8StringCopy()
+				if err != nil {
+					return fmt.Errorf("bytes-to-string conversion at %d: %w", ip, err)
+				}
+				if !valid {
+					v.stack[len(v.stack)-1] = value.NewNil()
+				} else {
+					v.stack[len(v.stack)-1] = value.NewString(text)
+				}
+			default:
+				return fmt.Errorf("unknown data conversion %d at %d", operands[0], ip)
+			}
+
 		case code.OpStruct:
 			count := operands[0]
 			if len(v.stack)-v.operandBase() < count {
@@ -603,10 +646,14 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 			if len(v.stack) <= v.operandBase() {
 				return fmt.Errorf("stack underflow for OpLen at %d", ip)
 			}
-			arrayValue := v.stack[len(v.stack)-1]
-			length, ok := arrayValue.ArrayLen()
+			input := v.stack[len(v.stack)-1]
+			if text, ok := input.Text(); ok {
+				v.stack[len(v.stack)-1] = value.NewInt(int64(len(text)))
+				break
+			}
+			length, ok := input.ArrayLen()
 			if !ok {
-				return fmt.Errorf("OpLen requires array, got %s at %d", arrayValue.Kind(), ip)
+				return fmt.Errorf("OpLen requires array or string, got %s at %d", input.Kind(), ip)
 			}
 			v.stack[len(v.stack)-1] = value.NewInt(int64(length))
 
@@ -1397,7 +1444,7 @@ func (v *VM) callClosure(functionID int, upvalues []*value.Cell, ip int) error {
 			return fmt.Errorf("native function %d cannot capture values at %d", functionID, ip)
 		}
 		v.frames = append(v.frames, frame{functionID: functionID, base: base})
-		result, hasResult, err := invokeNative(v.native[functionID], v.stack[base:])
+		result, hasResult, err := invokeNative(v.native[functionID], v.stack[base:], v.resources)
 		if err != nil {
 			return fmt.Errorf("native function %s failed: %w", nativeFunctionName(function.Name), err)
 		}
@@ -1456,16 +1503,18 @@ func (v *VM) bindNativeFunctions() error {
 	return nil
 }
 
-func invokeNative(binding nativeBinding, arguments []value.Value) (result value.Value, hasResult bool, callErr error) {
+func invokeNative(binding nativeBinding, arguments []value.Value, resources *mma.ResourceManager) (result value.Value, hasResult bool, callErr error) {
+	active := true
 	converted := make([]mma.Value, len(arguments))
 	for index, argument := range arguments {
-		item, err := toMMAValue(argument)
+		item, err := toMMAValue(argument, &active)
 		if err != nil {
 			return value.Value{}, false, fmt.Errorf("argument %d: %w", index+1, err)
 		}
 		converted[index] = item
 	}
-	returned, hasResult, err := mma.Invoke(binding.function, converted, binding.signature)
+	returned, hasResult, err := mma.InvokeWithResources(binding.function, converted, binding.signature, resources)
+	active = false
 	if err != nil {
 		return value.Value{}, false, err
 	}
@@ -1476,7 +1525,7 @@ func invokeNative(binding nativeBinding, arguments []value.Value) (result value.
 	return result, true, err
 }
 
-func toMMAValue(input value.Value) (mma.Value, error) {
+func toMMAValue(input value.Value, active *bool) (mma.Value, error) {
 	switch input.Kind() {
 	case value.KindBool:
 		item, _ := input.Bool()
@@ -1511,8 +1560,37 @@ func toMMAValue(input value.Value) (mma.Value, error) {
 	case value.KindString:
 		item, _ := input.Text()
 		return mma.Values.String(item), nil
+	case value.KindArray:
+		length, ok := input.ArrayLen()
+		if !ok {
+			return mma.Value{}, fmt.Errorf("invalid array value")
+		}
+		if _, err := input.ByteArrayRangeCopy(0, 0); err != nil {
+			return mma.Value{}, fmt.Errorf("MMA v0.2 only supports []uint8 arrays")
+		}
+		return mma.Values.BorrowBytes(int64(length), func(offset, requested int64) ([]byte, error) {
+			if active == nil || !*active {
+				return nil, fmt.Errorf("mma: byte array argument is no longer active")
+			}
+			return input.ByteArrayRangeCopy(offset, requested)
+		}, func(offset int64, source []byte) error {
+			if active == nil || !*active {
+				return fmt.Errorf("mma: byte array argument is no longer active")
+			}
+			return input.WriteByteArrayRange(offset, source)
+		}, active), nil
+	case value.KindResource:
+		item, ok := input.Resource()
+		if !ok {
+			return mma.Value{}, fmt.Errorf("invalid resource value")
+		}
+		handle, ok := item.(mma.Resource)
+		if !ok {
+			return mma.Value{}, fmt.Errorf("invalid MMA resource value")
+		}
+		return mma.Values.Resource(handle), nil
 	default:
-		return mma.Value{}, fmt.Errorf("MMA v0.1 does not support %s values", input.Kind())
+		return mma.Value{}, fmt.Errorf("MMA v0.2 does not support %s values", input.Kind())
 	}
 }
 
@@ -1545,8 +1623,24 @@ func fromMMAValue(input mma.Value) (value.Value, error) {
 	case mma.TypeString:
 		item, err := mma.Values.AsString(input)
 		return value.NewString(item), err
+	case mma.TypeBytes:
+		item, err := mma.Values.AsBytes(input)
+		if err != nil {
+			return value.Value{}, err
+		}
+		result, err := value.NewByteArray(item)
+		if err != nil {
+			return value.Value{}, mma.Errors.New("resource_limit", "字节数组分配失败", err)
+		}
+		return result, nil
+	case mma.TypeResource:
+		item, err := mma.Values.AsResource(input)
+		if err != nil {
+			return value.Value{}, err
+		}
+		return value.NewResource(item), nil
 	default:
-		return value.Value{}, fmt.Errorf("MMA v0.1 does not support %s results", input.Type())
+		return value.Value{}, fmt.Errorf("MMA v0.2 does not support %s results", input.Type())
 	}
 }
 

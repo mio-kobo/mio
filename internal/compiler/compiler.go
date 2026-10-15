@@ -1078,7 +1078,7 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 		if !ok || symbol.Kind != resolver.SymbolFunction {
 			return fmt.Errorf("missing function binding for %q", fn.Name.Name)
 		}
-		if strings.Contains(fn.Name.Name, "::") && !reachable[fn.Name.Name] {
+		if strings.Contains(fn.Name.Name, "::") && !fn.Test && !reachable[fn.Name.Name] {
 			c.omittedFunctions[symbol] = true
 			continue
 		}

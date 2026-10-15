@@ -275,10 +275,14 @@ chant(utf8.is_valid_rune(rune(-1)));
 
 // 测试大型混合 UTF-8 数据的校验和计数
 func TestCLIKisoUTF8LargeMixedData(t *testing.T) {
-	const repeats = 2048
+	skipInShortMode(t, "跳过大型 UTF-8 数据验证")
+	repeats := 2048
+	if stressTestEnabled() {
+		repeats = 32768
+	}
 	seed := []byte("Mio中文日本語🍡")
 	expectedRunes := stdutf8.RuneCount(seed) * repeats
-	stdout, stderr, exit := runUTF8Source(t, fmt.Sprintf(`
+	source := fmt.Sprintf(`
 yobu "kiso/array";
 yobu "kiso/utf8";
 kaku seed: []uint8 = %s;
@@ -287,10 +291,15 @@ kaku index = 0;
 aida (index < %d) { array.append_all(data, seed); index = index + 1; }
 chant(len(data)); chant(utf8.valid(data));
 kaku count = utf8.rune_count(data); moshi (count != mu) { chant(count); }
-`, mioBytes(seed), repeats, repeats))
+`, mioBytes(seed), repeats, repeats)
+	instructionLimit := uint64(100_000_000)
+	if stressTestEnabled() {
+		instructionLimit = 500_000_000
+	}
+	stdout := runSourceVM(t, source, instructionLimit)
 	want := fmt.Sprintf("%d\nhai\n%d\n", len(seed)*repeats, expectedRunes)
-	if exit != 0 || stderr != "" || stdout != want {
-		t.Fatalf("exit=%d output=%q stderr=%s want=%q", exit, stdout, stderr, want)
+	if stdout != want {
+		t.Fatalf("output=%q want=%q", stdout, want)
 	}
 }
 

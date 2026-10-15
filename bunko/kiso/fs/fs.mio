@@ -1,0 +1,219 @@
+yobu "kiso/array";
+yobu "kiso/io";
+yobu "mio/fs/runtime";
+
+koukai sentaku FsError {
+    NotFound(string);
+    PermissionDenied(string);
+    Closed(string);
+    InvalidArgument(string);
+    NoSpace(string);
+    InvalidPath(string);
+    IOFailure(string);
+}
+
+koukai kata File { handle: resource; }
+koukai kata FileResult { file: File?; error: FsError?; }
+koukai kata ReadAllResult { data: []uint8; error: FsError?; }
+koukai kata UnitResult { error: FsError?; }
+koukai kata StatResult { exists: bool; is_file: bool; is_dir: bool; error: FsError?; }
+koukai kata DirEntry { name: string; is_file: bool; is_dir: bool; }
+koukai kata DirResult { entries: []DirEntry; error: FsError?; }
+
+waza error_from(code: uint8, message: string) -> FsError? {
+    moshi (code == uint8(0)) { kaesu mu; }
+    moshi (code == uint8(1)) { kaesu FsError.NotFound(message); }
+    moshi (code == uint8(2)) { kaesu FsError.PermissionDenied(message); }
+    moshi (code == uint8(3)) { kaesu FsError.Closed(message); }
+    moshi (code == uint8(4)) { kaesu FsError.InvalidArgument(message); }
+    moshi (code == uint8(6)) { kaesu FsError.NoSpace(message); }
+    moshi (code == uint8(7)) { kaesu FsError.InvalidPath(message); }
+    kaesu FsError.IOFailure(message);
+}
+
+waza decode_count(status: []uint8) -> int64 {
+    kaku result = 0;
+    kaku factor = 1;
+    kaku index = 0;
+    aida (index < 8) {
+        result = result + int64(status[index]) * factor;
+        factor = factor * 256;
+        index = index + 1;
+    }
+    kaesu result;
+}
+
+waza open_mode(path: string, mode: int64) -> FileResult {
+    kaku handle = runtime.open(path, mode);
+    kaku status: []uint8 = [0];
+    kaku message = runtime.file_status(handle, status);
+    kaku open_error = error_from(status[0], message);
+    moshi (open_error != mu) {
+        kaku close_status: []uint8 = [0];
+        runtime.close(handle, close_status);
+        kaesu FileResult { file: mu, error: open_error };
+    }
+    kaesu FileResult { file: File { handle: handle }, error: mu };
+}
+
+koukai waza open_read(path: string) -> FileResult { kaesu open_mode(path, 0); }
+koukai waza open_write(path: string) -> FileResult { kaesu open_mode(path, 1); }
+koukai waza open_append(path: string) -> FileResult { kaesu open_mode(path, 2); }
+
+koukai waza read(file: File, destination: []uint8, offset: int64, length: int64) -> io.ReadResult {
+    moshi (offset < 0 || length < 0 || offset > len(destination) || length > len(destination) - offset) {
+        kaesu io.ReadResult { count: 0, eof: iie, error: io.IoError.InvalidArgument() };
+    }
+    kaku status = array.make[uint8](10, uint8(0));
+    kaku message = runtime.read(file.handle, destination, offset, length, status);
+    kaku failure = error_from(status[9], message);
+    moshi (failure == mu) {
+        kaesu io.ReadResult { count: decode_count(status), eof: status[8] != uint8(0), error: mu };
+    }
+    awase (failure) {
+        baai Closed(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Closed() }; }
+        baai InvalidArgument(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.InvalidArgument() }; }
+        baai IOFailure(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Other(detail) }; }
+        baai NotFound(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Other(detail) }; }
+        baai PermissionDenied(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Other(detail) }; }
+        baai NoSpace(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Other(detail) }; }
+        baai InvalidPath(detail) { kaesu io.ReadResult { count: decode_count(status), eof: iie, error: io.IoError.Other(detail) }; }
+    }
+    kaesu io.ReadResult { count: 0, eof: iie, error: io.IoError.Other(message) };
+}
+
+koukai waza write(file: File, source: []uint8, offset: int64, length: int64) -> io.WriteResult {
+    moshi (offset < 0 || length < 0 || offset > len(source) || length > len(source) - offset) {
+        kaesu io.WriteResult { count: 0, error: io.IoError.InvalidArgument() };
+    }
+    kaku status = array.make[uint8](10, uint8(0));
+    kaku message = runtime.write(file.handle, source, offset, length, status);
+    kaku failure = error_from(status[9], message);
+    moshi (failure == mu) { kaesu io.WriteResult { count: decode_count(status), error: mu }; }
+    awase (failure) {
+        baai Closed(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Closed() }; }
+        baai InvalidArgument(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.InvalidArgument() }; }
+        baai IOFailure(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Other(detail) }; }
+        baai NotFound(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Other(detail) }; }
+        baai PermissionDenied(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Other(detail) }; }
+        baai NoSpace(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Other(detail) }; }
+        baai InvalidPath(detail) { kaesu io.WriteResult { count: decode_count(status), error: io.IoError.Other(detail) }; }
+    }
+    kaesu io.WriteResult { count: 0, error: io.IoError.Other(message) };
+}
+
+koukai waza close(file: File) -> UnitResult {
+    kaku status: []uint8 = [0];
+    kaku message = runtime.close(file.handle, status);
+    kaesu UnitResult { error: error_from(status[0], message) };
+}
+
+koukai waza reader(file: File) -> io.Reader {
+    kaesu io.Reader { read: waza (destination: []uint8, offset: int64, length: int64) -> io.ReadResult {
+        kaesu read(file, destination, offset, length);
+    } };
+}
+
+koukai waza writer(file: File) -> io.Writer {
+    kaesu io.Writer { write: waza (source: []uint8, offset: int64, length: int64) -> io.WriteResult {
+        kaesu write(file, source, offset, length);
+    } };
+}
+
+koukai waza read_all(path: string) -> ReadAllResult {
+    kaku opened = open_read(path);
+    kaku open_error = opened.error;
+    moshi (open_error != mu) { kaesu ReadAllResult { data: [], error: open_error }; }
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu ReadAllResult { data: [], error: FsError.IOFailure("missing file handle") }; }
+    kaku output = array.with_capacity[uint8](32768);
+    kaku buffer = array.make[uint8](32768, uint8(0));
+    aida (hai) {
+        kaku result = read(file, buffer, 0, len(buffer));
+        kaku index = 0;
+        aida (index < result.count) {
+            array.push(output, buffer[index]);
+            index = index + 1;
+        }
+        kaku read_error = result.error;
+        moshi (read_error != mu) {
+            close(file);
+            awase (read_error) {
+                baai Closed { kaesu ReadAllResult { data: output, error: FsError.Closed("file is closed") }; }
+                baai InvalidArgument { kaesu ReadAllResult { data: output, error: FsError.InvalidArgument("invalid read range") }; }
+                baai NoProgress { kaesu ReadAllResult { data: output, error: FsError.IOFailure("read made no progress") }; }
+                baai UnexpectedEOF { kaesu ReadAllResult { data: output, error: FsError.IOFailure("unexpected EOF") }; }
+                baai Other(message) { kaesu ReadAllResult { data: output, error: FsError.IOFailure(message) }; }
+            }
+        }
+        moshi (result.eof) { nukeru; }
+        moshi (result.count == 0) {
+            close(file);
+            kaesu ReadAllResult { data: output, error: FsError.IOFailure("read made no progress") };
+        }
+    }
+    kaku closed = close(file);
+    kaesu ReadAllResult { data: output, error: closed.error };
+}
+
+koukai waza write_all(path: string, data: []uint8) -> UnitResult {
+    kaku opened = open_write(path);
+    kaku open_error = opened.error;
+    moshi (open_error != mu) { kaesu UnitResult { error: open_error }; }
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu UnitResult { error: FsError.IOFailure("missing file handle") }; }
+    kaku result = io.write_all(writer(file), data, 0, len(data));
+    kaku write_error = result.error;
+    kaku closed = close(file);
+    moshi (write_error != mu) {
+        awase (write_error) {
+            baai Closed { kaesu UnitResult { error: FsError.Closed("file is closed") }; }
+            baai InvalidArgument { kaesu UnitResult { error: FsError.InvalidArgument("invalid write range") }; }
+            baai NoProgress { kaesu UnitResult { error: FsError.IOFailure("write made no progress") }; }
+            baai UnexpectedEOF { kaesu UnitResult { error: FsError.IOFailure("unexpected EOF") }; }
+            baai Other(message) { kaesu UnitResult { error: FsError.IOFailure(message) }; }
+        }
+    }
+    kaesu closed;
+}
+
+koukai waza stat(path: string) -> StatResult {
+    kaku status: []uint8 = [0, 0];
+    kaku message = runtime.stat(path, status);
+    kaku stat_error = error_from(status[1], message);
+    moshi (status[1] == uint8(1)) {
+        kaesu StatResult { exists: iie, is_file: iie, is_dir: iie, error: mu };
+    }
+    kaesu StatResult { exists: stat_error == mu, is_file: status[0] == uint8(1), is_dir: status[0] == uint8(2), error: stat_error };
+}
+
+koukai waza exists(path: string) -> bool { kaesu stat(path).exists; }
+koukai waza is_file(path: string) -> bool { kaesu stat(path).is_file; }
+koukai waza is_dir(path: string) -> bool { kaesu stat(path).is_dir; }
+
+koukai waza create_dir(path: string) -> UnitResult {
+    kaku status: []uint8 = [0];
+    kaku message = runtime.mkdir(path, status);
+    kaesu UnitResult { error: error_from(status[0], message) };
+}
+
+koukai waza read_dir(path: string) -> DirResult {
+    kaku iterator = runtime.open_dir(path);
+    kaku status: []uint8 = [0];
+    kaku message = runtime.dir_status(iterator, status);
+    kaku directory_error = error_from(status[0], message);
+    kaku entries = array.with_capacity[DirEntry](0);
+    moshi (directory_error != mu) {
+        runtime.dir_close(iterator, status);
+        kaesu DirResult { entries: entries, error: directory_error };
+    }
+    aida (runtime.dir_next(iterator)) {
+        kaku directory = runtime.dir_is_dir(iterator);
+        array.push(entries, DirEntry { name: runtime.dir_name(iterator), is_file: runtime.dir_is_file(iterator), is_dir: directory });
+    }
+    message = runtime.dir_status(iterator, status);
+    directory_error = error_from(status[0], message);
+    message = runtime.dir_close(iterator, status);
+    moshi (directory_error == mu) { directory_error = error_from(status[0], message); }
+    kaesu DirResult { entries: entries, error: directory_error };
+}

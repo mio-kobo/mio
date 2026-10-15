@@ -1,0 +1,98 @@
+yobu "kiso/bytes";
+yobu "kiso/string";
+
+waza parse_negative(data: []uint8, offset: int64, limit: int64) -> int64? {
+    kaku result: int64 = 0;
+    kaku cutoff = limit / 10;
+    kaku last_digit = -(limit - cutoff * 10);
+    kaku current_offset = offset;
+    aida (current_offset < len(data)) {
+        kaku current = data[current_offset];
+        moshi (current < 48 || current > 57) { kaesu mu; }
+        kaku digit = int64(current - 48);
+        moshi (result < cutoff || (result == cutoff && digit > last_digit)) { kaesu mu; }
+        result = result * 10 - digit;
+        current_offset = current_offset + 1;
+    }
+    kaesu result;
+}
+
+waza format_negative(value: int64, negative: bool, capacity: int64) -> string {
+    kaku builder = string.builder_with_capacity(capacity);
+    kaku start: int64 = 0;
+    moshi (negative) {
+        bytes.write_byte(builder.buffer, uint8(45));
+        start = 1;
+    }
+    kaku current = value;
+    moshi (current == 0) {
+        bytes.write_byte(builder.buffer, uint8(48));
+    } sore {
+        aida (current != 0) {
+            kaku digit = -(current - (current / 10) * 10);
+            bytes.write_byte(builder.buffer, uint8(48 + digit));
+            current = current / 10;
+        }
+    }
+    kaku left = start;
+    kaku right = len(builder.buffer.data) - 1;
+    aida (left < right) {
+        kaku temporary = builder.buffer.data[left];
+        builder.buffer.data[left] = builder.buffer.data[right];
+        builder.buffer.data[right] = temporary;
+        left = left + 1;
+        right = right - 1;
+    }
+    kaesu string.builder_string(builder);
+}
+
+koukai waza parse_int(value: string) -> int64? {
+    kaku data = string.to_bytes(value);
+    moshi (len(data) == 0) { kaesu mu; }
+    kaku offset: int64 = 0;
+    kaku negative = iie;
+    moshi (data[0] == 45) {
+        negative = hai;
+        offset = 1;
+    } sore {
+        moshi (data[0] == 43) { offset = 1; }
+    }
+    moshi (offset == len(data)) { kaesu mu; }
+    kaku limit: int64 = -9223372036854775807;
+    moshi (negative) { limit = limit - 1; }
+    kaku result = parse_negative(data, offset, limit);
+    moshi (result == mu) { kaesu mu; }
+    moshi (negative) { kaesu result; }
+    kaesu -result;
+}
+
+koukai waza parse_uint(value: string) -> uint32? {
+    kaku data = string.to_bytes(value);
+    moshi (len(data) == 0) { kaesu mu; }
+    kaku offset: int64 = 0;
+    moshi (data[0] == 43) { offset = 1; }
+    moshi (offset == len(data)) { kaesu mu; }
+    kaku result = parse_negative(data, offset, -4294967295);
+    moshi (result == mu) { kaesu mu; }
+    kaesu uint32(-result);
+}
+
+koukai waza format_int(value: int64) -> string {
+    moshi (value < 0) { kaesu format_negative(value, hai, 20); }
+    kaesu format_negative(-value, iie, 19);
+}
+
+koukai waza format_uint(value: uint32) -> string {
+    kaesu format_negative(-int64(value), iie, 10);
+}
+
+koukai waza parse_bool(value: string) -> bool? {
+    moshi (value == "hai") { kaesu hai; }
+    moshi (value == "iie") { kaesu iie; }
+    kaesu mu;
+}
+
+koukai waza format_bool(value: bool) -> string {
+    moshi (value) { kaesu "hai"; }
+    kaesu "iie";
+}

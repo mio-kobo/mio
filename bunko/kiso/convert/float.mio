@@ -1,0 +1,643 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/math";
+yobu "kiso/string";
+
+kata DecimalBig { limbs: []int64; }
+
+teisu decimal_base: int64 = 1000000000;
+teisu max_float_input_bytes: int64 = 10000;
+
+waza big_zero() -> DecimalBig {
+    kaesu DecimalBig { limbs: array.with_capacity[int64](1) };
+}
+
+waza big_one() -> DecimalBig {
+    kaku result = big_zero();
+    array.push(result.limbs, 1);
+    kaesu result;
+}
+
+waza big_clone(value: DecimalBig) -> DecimalBig {
+    kaesu DecimalBig { limbs: array.clone(value.limbs) };
+}
+
+waza big_normalize(value: DecimalBig) -> unit {
+    aida (len(value.limbs) > 0 && value.limbs[len(value.limbs) - 1] == 0) {
+        array.truncate(value.limbs, len(value.limbs) - 1);
+    }
+}
+
+waza big_compare(left: DecimalBig, right: DecimalBig) -> int64 {
+    moshi (len(left.limbs) < len(right.limbs)) { kaesu -1; }
+    moshi (len(left.limbs) > len(right.limbs)) { kaesu 1; }
+    kaku index = len(left.limbs) - 1;
+    aida (index >= 0) {
+        moshi (left.limbs[index] < right.limbs[index]) { kaesu -1; }
+        moshi (left.limbs[index] > right.limbs[index]) { kaesu 1; }
+        index = index - 1;
+    }
+    kaesu 0;
+}
+
+waza big_subtract(left: DecimalBig, right: DecimalBig) -> unit {
+    kaku borrow: int64 = 0;
+    kaku index: int64 = 0;
+    aida (index < len(left.limbs)) {
+        kaku subtrahend = borrow;
+        moshi (index < len(right.limbs)) { subtrahend = subtrahend + right.limbs[index]; }
+        kaku current = left.limbs[index] - subtrahend;
+        borrow = 0;
+        moshi (current < 0) {
+            current = current + decimal_base;
+            borrow = 1;
+        }
+        left.limbs[index] = current;
+        index = index + 1;
+    }
+    big_normalize(left);
+}
+
+waza big_multiply_small(value: DecimalBig, factor: int64) -> unit {
+    moshi (factor == 0 || len(value.limbs) == 0) {
+        array.truncate(value.limbs, 0);
+        kaesu;
+    }
+    kaku carry: int64 = 0;
+    kaku index: int64 = 0;
+    aida (index < len(value.limbs)) {
+        kaku product = value.limbs[index] * factor + carry;
+        value.limbs[index] = product - (product / decimal_base) * decimal_base;
+        carry = product / decimal_base;
+        index = index + 1;
+    }
+    aida (carry != 0) {
+        array.push(value.limbs, carry - (carry / decimal_base) * decimal_base);
+        carry = carry / decimal_base;
+    }
+}
+
+waza big_multiply_power(value: DecimalBig, factor: int64, exponent: int64) -> unit {
+    kaku remaining = exponent;
+    moshi (factor == 2) {
+        aida (remaining >= 29) {
+            big_multiply_small(value, 536870912);
+            remaining = remaining - 29;
+        }
+    }
+    moshi (factor == 5) {
+        aida (remaining >= 12) {
+            big_multiply_small(value, 244140625);
+            remaining = remaining - 12;
+        }
+    }
+    aida (remaining > 0) {
+        big_multiply_small(value, factor);
+        remaining = remaining - 1;
+    }
+}
+
+waza big_divide_small(value: DecimalBig, divisor: int64) -> int64 {
+    kaku remainder: int64 = 0;
+    kaku index = len(value.limbs) - 1;
+    aida (index >= 0) {
+        kaku current = remainder * decimal_base + value.limbs[index];
+        value.limbs[index] = current / divisor;
+        remainder = current - value.limbs[index] * divisor;
+        index = index - 1;
+    }
+    big_normalize(value);
+    kaesu remainder;
+}
+
+waza big_from_decimal(data: []uint8, start: int64, end: int64) -> DecimalBig {
+    kaku result = big_zero();
+    kaku right = end;
+    aida (right > start) {
+        kaku left = right - 9;
+        moshi (left < start) { left = start; }
+        kaku limb: int64 = 0;
+        kaku index = left;
+        aida (index < right) {
+            limb = limb * 10 + int64(data[index] - 48);
+            index = index + 1;
+        }
+        array.push(result.limbs, limb);
+        right = left;
+    }
+    big_normalize(result);
+    kaesu result;
+}
+
+waza big_from_positive(value: int64) -> DecimalBig {
+    kaku result = big_zero();
+    kaku remaining = value;
+    aida (remaining != 0) {
+        kaku quotient = remaining / decimal_base;
+        array.push(result.limbs, remaining - quotient * decimal_base);
+        remaining = quotient;
+    }
+    kaesu result;
+}
+
+waza append_positive_decimal(buffer: bytes.ByteBuffer, value: int64, width: int64) -> unit {
+    kaku temporary = array.with_capacity[uint8](20);
+    kaku remaining = value;
+    moshi (remaining == 0) { array.push(temporary, uint8(48)); }
+    aida (remaining != 0) {
+        kaku quotient = remaining / 10;
+        array.push(temporary, uint8(48 + remaining - quotient * 10));
+        remaining = quotient;
+    }
+    aida (len(temporary) < width) { array.push(temporary, uint8(48)); }
+    kaku index = len(temporary) - 1;
+    aida (index >= 0) {
+        bytes.write_byte(buffer, temporary[index]);
+        index = index - 1;
+    }
+}
+
+waza big_decimal_bytes(value: DecimalBig) -> []uint8 {
+    kaku buffer = bytes.buffer_with_capacity(len(value.limbs) * 9);
+    kaku index = len(value.limbs) - 1;
+    moshi (index < 0) {
+        bytes.write_byte(buffer, uint8(48));
+        kaesu bytes.buffer_bytes(buffer);
+    }
+    append_positive_decimal(buffer, value.limbs[index], 1);
+    index = index - 1;
+    aida (index >= 0) {
+        append_positive_decimal(buffer, value.limbs[index], 9);
+        index = index - 1;
+    }
+    kaesu bytes.buffer_bytes(buffer);
+}
+
+waza floor_divide(value: int64, divisor: int64) -> int64 {
+    kaku quotient = value / divisor;
+    moshi (value < 0 && value - quotient * divisor != 0) { quotient = quotient - 1; }
+    kaesu quotient;
+}
+
+waza decimal_compare_power(significand: DecimalBig, exponent10: int64, exponent2: int64) -> int64 {
+    kaku left = big_clone(significand);
+    kaku right = big_one();
+    kaku shift: int64 = 0;
+    moshi (exponent10 >= 0) {
+        big_multiply_power(left, 5, exponent10);
+        shift = exponent2 - exponent10;
+    } sore {
+        big_multiply_power(right, 5, -exponent10);
+        shift = exponent2 - exponent10;
+    }
+    moshi (shift >= 0) {
+        big_multiply_power(right, 2, shift);
+    } sore {
+        big_multiply_power(left, 2, -shift);
+    }
+    kaesu big_compare(left, right);
+}
+
+waza decimal_binary_exponent(significand: DecimalBig, decimal_digits: int64, exponent10: int64) -> int64 {
+    kaku adjusted = decimal_digits + exponent10 - 1;
+    kaku exponent2 = floor_divide(adjusted * 3322, 1000);
+    aida (decimal_compare_power(significand, exponent10, exponent2) < 0) {
+        exponent2 = exponent2 - 1;
+    }
+    aida (decimal_compare_power(significand, exponent10, exponent2 + 1) >= 0) {
+        exponent2 = exponent2 + 1;
+    }
+    kaesu exponent2;
+}
+
+waza decimal_round_binary(significand: DecimalBig, exponent10: int64, scale2: int64, precision: int64) -> int64 {
+    kaku numerator = big_clone(significand);
+    kaku denominator = big_one();
+    moshi (exponent10 >= 0) {
+        big_multiply_power(numerator, 5, exponent10);
+    } sore {
+        big_multiply_power(denominator, 5, -exponent10);
+    }
+    kaku shift = exponent10 - scale2;
+    moshi (shift >= 0) {
+        big_multiply_power(numerator, 2, shift);
+    } sore {
+        big_multiply_power(denominator, 2, -shift);
+    }
+
+    kaku multiple = big_clone(denominator);
+    big_multiply_power(multiple, 2, precision);
+    kaku bit_value: int64 = 1;
+    kaku bit_index: int64 = 0;
+    aida (bit_index < precision) {
+        bit_value = bit_value * 2;
+        bit_index = bit_index + 1;
+    }
+    kaku quotient: int64 = 0;
+    kaku current = precision;
+    aida (current >= 0) {
+        moshi (big_compare(numerator, multiple) >= 0) {
+            big_subtract(numerator, multiple);
+            quotient = quotient + bit_value;
+        }
+        moshi (current > 0) { big_divide_small(multiple, 2); }
+        bit_value = bit_value / 2;
+        current = current - 1;
+    }
+
+    kaku doubled = big_clone(numerator);
+    big_multiply_small(doubled, 2);
+    kaku comparison = big_compare(doubled, denominator);
+    moshi (comparison > 0 || (comparison == 0 && quotient - (quotient / 2) * 2 != 0)) {
+        quotient = quotient + 1;
+    }
+    kaesu quotient;
+}
+
+kata ParsedDecimal {
+    negative: bool;
+    zero: bool;
+    significand: DecimalBig;
+    digits: int64;
+    exponent10: int64;
+}
+
+waza parse_finite_decimal(data: []uint8) -> ParsedDecimal? {
+    moshi (len(data) == 0 || len(data) > max_float_input_bytes) { kaesu mu; }
+    kaku offset: int64 = 0;
+    kaku negative = iie;
+    moshi (data[0] == 45) {
+        negative = hai;
+        offset = 1;
+    } sore {
+        moshi (data[0] == 43) { offset = 1; }
+    }
+    moshi (offset == len(data)) { kaesu mu; }
+
+    kaku digits = array.with_capacity[uint8](len(data));
+    kaku fractional_digits: int64 = 0;
+    kaku saw_digit = iie;
+    kaku saw_point = iie;
+    aida (offset < len(data) && data[offset] != 101 && data[offset] != 69) {
+        kaku current = data[offset];
+        moshi (current == 46) {
+            moshi (saw_point) { kaesu mu; }
+            saw_point = hai;
+        } sore {
+            moshi (current < 48 || current > 57) { kaesu mu; }
+            saw_digit = hai;
+            array.push(digits, current);
+            moshi (saw_point) { fractional_digits = fractional_digits + 1; }
+        }
+        offset = offset + 1;
+    }
+    moshi (!saw_digit) { kaesu mu; }
+
+    kaku explicit_exponent: int64 = 0;
+    moshi (offset < len(data)) {
+        offset = offset + 1;
+        kaku exponent_negative = iie;
+        moshi (offset < len(data) && (data[offset] == 43 || data[offset] == 45)) {
+            exponent_negative = data[offset] == 45;
+            offset = offset + 1;
+        }
+        moshi (offset == len(data)) { kaesu mu; }
+        aida (offset < len(data)) {
+            kaku current = data[offset];
+            moshi (current < 48 || current > 57) { kaesu mu; }
+            moshi (explicit_exponent < 20000) {
+                explicit_exponent = explicit_exponent * 10 + int64(current - 48);
+                moshi (explicit_exponent > 20000) { explicit_exponent = 20000; }
+            }
+            offset = offset + 1;
+        }
+        moshi (exponent_negative) { explicit_exponent = -explicit_exponent; }
+    }
+
+    kaku first: int64 = 0;
+    aida (first < len(digits) && digits[first] == 48) { first = first + 1; }
+    moshi (first == len(digits)) {
+        kaesu ParsedDecimal { negative: negative, zero: hai, significand: big_zero(), digits: 1, exponent10: 0 };
+    }
+    kaku last = len(digits) - 1;
+    aida (last > first && digits[last] == 48) { last = last - 1; }
+    kaku trailing = len(digits) - 1 - last;
+    kaku count = last - first + 1;
+    kaesu ParsedDecimal {
+        negative: negative,
+        zero: iie,
+        significand: big_from_decimal(digits, first, last + 1),
+        digits: count,
+        exponent10: explicit_exponent - fractional_digits + trailing,
+    };
+}
+
+waza scale_float64(value: int64, exponent2: int64) -> float64 {
+    kaku result = float64(value);
+    kaku remaining = exponent2;
+    aida (remaining > 0) {
+        result = result * 2.0;
+        remaining = remaining - 1;
+    }
+    aida (remaining < 0) {
+        result = result / 2.0;
+        remaining = remaining + 1;
+    }
+    kaesu result;
+}
+
+waza scale_float32(value: int64, exponent2: int64) -> float32 {
+    kaku result = float32(value);
+    kaku remaining = exponent2;
+    aida (remaining > 0) {
+        result = result * float32(2.0);
+        remaining = remaining - 1;
+    }
+    aida (remaining < 0) {
+        result = result / float32(2.0);
+        remaining = remaining + 1;
+    }
+    kaesu result;
+}
+
+koukai waza parse_float64(value: string) -> float64? {
+    moshi (value == "NaN") { kaesu 0.0 / 0.0; }
+    moshi (value == "Infinity" || value == "+Infinity") { kaesu 1.0 / 0.0; }
+    moshi (value == "-Infinity") { kaesu -1.0 / 0.0; }
+    kaku parsed = parse_finite_decimal(string.to_bytes(value));
+    moshi (parsed == mu) { kaesu mu; }
+    moshi (parsed.zero) {
+        moshi (parsed.negative) { kaesu -0.0; }
+        kaesu 0.0;
+    }
+    kaku adjusted = parsed.digits + parsed.exponent10 - 1;
+    moshi (adjusted > 308) { kaesu mu; }
+    moshi (adjusted < -324) {
+        moshi (parsed.negative) { kaesu -0.0; }
+        kaesu 0.0;
+    }
+    kaku exponent2 = decimal_binary_exponent(parsed.significand, parsed.digits, parsed.exponent10);
+    kaku scale2 = exponent2 - 52;
+    moshi (exponent2 < -1022) { scale2 = -1074; }
+    kaku significand = decimal_round_binary(parsed.significand, parsed.exponent10, scale2, 53);
+    moshi (significand == 9007199254740992 && exponent2 >= 1023) { kaesu mu; }
+    kaku result = scale_float64(significand, scale2);
+    moshi (math.is_inf(result)) { kaesu mu; }
+    moshi (parsed.negative) { result = -result; }
+    kaesu result;
+}
+
+koukai waza parse_float32(value: string) -> float32? {
+    moshi (value == "NaN") { kaesu float32(0.0) / float32(0.0); }
+    moshi (value == "Infinity" || value == "+Infinity") { kaesu float32(1.0) / float32(0.0); }
+    moshi (value == "-Infinity") { kaesu -float32(1.0) / float32(0.0); }
+    kaku parsed = parse_finite_decimal(string.to_bytes(value));
+    moshi (parsed == mu) { kaesu mu; }
+    moshi (parsed.zero) {
+        moshi (parsed.negative) { kaesu -float32(0.0); }
+        kaesu float32(0.0);
+    }
+    kaku adjusted = parsed.digits + parsed.exponent10 - 1;
+    moshi (adjusted > 38) { kaesu mu; }
+    moshi (adjusted < -46) {
+        moshi (parsed.negative) { kaesu -float32(0.0); }
+        kaesu float32(0.0);
+    }
+    kaku exponent2 = decimal_binary_exponent(parsed.significand, parsed.digits, parsed.exponent10);
+    kaku scale2 = exponent2 - 23;
+    moshi (exponent2 < -126) { scale2 = -149; }
+    kaku significand = decimal_round_binary(parsed.significand, parsed.exponent10, scale2, 24);
+    moshi (significand == 16777216 && exponent2 >= 127) { kaesu mu; }
+    kaku result = scale_float32(significand, scale2);
+    moshi (math.is_inf(result)) { kaesu mu; }
+    moshi (parsed.negative) { result = -result; }
+    kaesu result;
+}
+
+waza exact_decimal(significand: int64, exponent2: int64) -> ParsedDecimal {
+    kaku coefficient = big_from_positive(significand);
+    kaku exponent10: int64 = 0;
+    moshi (exponent2 >= 0) {
+        big_multiply_power(coefficient, 2, exponent2);
+    } sore {
+        big_multiply_power(coefficient, 5, -exponent2);
+        exponent10 = exponent2;
+    }
+    aida (len(coefficient.limbs) > 0) {
+        kaku copy = big_clone(coefficient);
+        moshi (big_divide_small(copy, 10) != 0) { nukeru; }
+        coefficient = copy;
+        exponent10 = exponent10 + 1;
+    }
+    kaku digits = big_decimal_bytes(coefficient);
+    kaesu ParsedDecimal { negative: iie, zero: iie, significand: coefficient, digits: len(digits), exponent10: exponent10 };
+}
+
+waza rounded_decimal_coefficient(digits: []uint8, precision: int64) -> int64 {
+    kaku coefficient: int64 = 0;
+    kaku index: int64 = 0;
+    aida (index < precision && index < len(digits)) {
+        coefficient = coefficient * 10 + int64(digits[index] - 48);
+        index = index + 1;
+    }
+    moshi (precision < len(digits)) {
+        kaku next = digits[precision] - 48;
+        kaku sticky = iie;
+        index = precision + 1;
+        aida (index < len(digits)) {
+            moshi (digits[index] != 48) { sticky = hai; nukeru; }
+            index = index + 1;
+        }
+        moshi (next > 5 || (next == 5 && (sticky || coefficient - (coefficient / 2) * 2 != 0))) {
+            coefficient = coefficient + 1;
+        }
+    }
+    kaesu coefficient;
+}
+
+waza decimal_candidate(coefficient_value: int64, exponent10_value: int64) -> string {
+    kaku coefficient = coefficient_value;
+    kaku exponent10 = exponent10_value;
+    aida (coefficient > 9 && coefficient - (coefficient / 10) * 10 == 0) {
+        coefficient = coefficient / 10;
+        exponent10 = exponent10 + 1;
+    }
+    kaku coefficient_bytes = string.to_bytes(format_int(coefficient));
+    kaku point = len(coefficient_bytes) + exponent10;
+
+    kaku fixed = bytes.buffer_with_capacity(len(coefficient_bytes) + 16);
+    moshi (point <= 0) {
+        bytes.write_byte(fixed, uint8(48));
+        bytes.write_byte(fixed, uint8(46));
+        kaku zeros = -point;
+        aida (zeros > 0) { bytes.write_byte(fixed, uint8(48)); zeros = zeros - 1; }
+        bytes.write(fixed, coefficient_bytes);
+    } sore {
+        moshi (point >= len(coefficient_bytes)) {
+            bytes.write(fixed, coefficient_bytes);
+            kaku zeros = point - len(coefficient_bytes);
+            aida (zeros > 0) { bytes.write_byte(fixed, uint8(48)); zeros = zeros - 1; }
+        } sore {
+            kaku index: int64 = 0;
+            aida (index < len(coefficient_bytes)) {
+                moshi (index == point) { bytes.write_byte(fixed, uint8(46)); }
+                bytes.write_byte(fixed, coefficient_bytes[index]);
+                index = index + 1;
+            }
+        }
+    }
+
+    kaku scientific = bytes.buffer_with_capacity(len(coefficient_bytes) + 16);
+    bytes.write_byte(scientific, coefficient_bytes[0]);
+    moshi (len(coefficient_bytes) > 1) {
+        bytes.write_byte(scientific, uint8(46));
+        kaku index: int64 = 1;
+        aida (index < len(coefficient_bytes)) {
+            bytes.write_byte(scientific, coefficient_bytes[index]);
+            index = index + 1;
+        }
+    }
+    kaku scientific_exponent = exponent10 + len(coefficient_bytes) - 1;
+    moshi (scientific_exponent != 0) {
+        bytes.write_byte(scientific, uint8(101));
+        moshi (scientific_exponent > 0) { bytes.write_byte(scientific, uint8(43)); }
+        bytes.write(scientific, string.to_bytes(format_int(scientific_exponent)));
+    }
+    kaku fixed_text = string.from_utf8(bytes.buffer_bytes(fixed));
+    kaku scientific_text = string.from_utf8(bytes.buffer_bytes(scientific));
+    moshi (fixed_text != mu) {
+        moshi (scientific_text != mu) {
+            moshi (string.byte_len(scientific_text) < string.byte_len(fixed_text)) { kaesu scientific_text; }
+            kaesu fixed_text;
+        }
+    }
+    kaesu "";
+}
+
+waza roundtrip_candidate64(value: float64, coefficient: int64, exponent10: int64) -> string? {
+    kaku candidate = decimal_candidate(coefficient, exponent10);
+    kaku parsed = parse_float64(candidate);
+    moshi (parsed != mu) {
+        moshi (parsed == value) { kaesu candidate; }
+    }
+    kaesu mu;
+}
+
+waza roundtrip_candidate32(value: float32, coefficient: int64, exponent10: int64) -> string? {
+    kaku candidate = decimal_candidate(coefficient, exponent10);
+    kaku parsed = parse_float32(candidate);
+    moshi (parsed != mu) {
+        moshi (parsed == value) { kaesu candidate; }
+    }
+    kaesu mu;
+}
+
+waza shorter_candidate(current: string, candidate: string?) -> string {
+    moshi (candidate == mu) { kaesu current; }
+    moshi (current == "" || string.byte_len(candidate) < string.byte_len(current)) { kaesu candidate; }
+    kaesu current;
+}
+
+waza format_finite_float64(value: float64) -> string {
+    kaku normalized = value;
+    kaku exponent2: int64 = 0;
+    aida (normalized >= 2.0) { normalized = normalized / 2.0; exponent2 = exponent2 + 1; }
+    aida (normalized < 1.0) { normalized = normalized * 2.0; exponent2 = exponent2 - 1; }
+    kaku factor: float64 = 1.0;
+    kaku count: int64 = 0;
+    aida (count < 52) { factor = factor * 2.0; count = count + 1; }
+    kaku significand = int64(normalized * factor);
+    exponent2 = exponent2 - 52;
+    aida (significand - (significand / 2) * 2 == 0) { significand = significand / 2; exponent2 = exponent2 + 1; }
+    kaku exact = exact_decimal(significand, exponent2);
+    kaku digits = big_decimal_bytes(exact.significand);
+    kaku lower: int64 = 1;
+    kaku upper: int64 = 17;
+    moshi (len(digits) < upper) { upper = len(digits); }
+    kaku best = "";
+    aida (lower <= upper) {
+        kaku precision = (lower + upper) / 2;
+        kaku coefficient = rounded_decimal_coefficient(digits, precision);
+        kaku exponent10 = exact.exponent10 + len(digits) - precision;
+        kaku current = roundtrip_candidate64(value, coefficient, exponent10);
+        kaku candidate = "";
+        moshi (current != mu) { candidate = current; }
+        moshi (coefficient > 0) {
+            candidate = shorter_candidate(candidate, roundtrip_candidate64(value, coefficient - 1, exponent10));
+        }
+        candidate = shorter_candidate(candidate, roundtrip_candidate64(value, coefficient + 1, exponent10));
+        moshi (candidate != "") {
+            best = candidate;
+            upper = precision - 1;
+        } sore {
+            lower = precision + 1;
+        }
+    }
+    kaesu best;
+}
+
+waza format_finite_float32(value: float32) -> string {
+    kaku normalized = value;
+    kaku exponent2: int64 = 0;
+    aida (normalized >= float32(2.0)) { normalized = normalized / float32(2.0); exponent2 = exponent2 + 1; }
+    aida (normalized < float32(1.0)) { normalized = normalized * float32(2.0); exponent2 = exponent2 - 1; }
+    kaku factor: float32 = float32(1.0);
+    kaku count: int64 = 0;
+    aida (count < 23) { factor = factor * float32(2.0); count = count + 1; }
+    kaku significand = int64(normalized * factor);
+    exponent2 = exponent2 - 23;
+    aida (significand - (significand / 2) * 2 == 0) { significand = significand / 2; exponent2 = exponent2 + 1; }
+    kaku exact = exact_decimal(significand, exponent2);
+    kaku digits = big_decimal_bytes(exact.significand);
+    kaku lower: int64 = 1;
+    kaku upper: int64 = 9;
+    moshi (len(digits) < upper) { upper = len(digits); }
+    kaku best = "";
+    aida (lower <= upper) {
+        kaku precision = (lower + upper) / 2;
+        kaku coefficient = rounded_decimal_coefficient(digits, precision);
+        kaku exponent10 = exact.exponent10 + len(digits) - precision;
+        kaku current = roundtrip_candidate32(value, coefficient, exponent10);
+        kaku candidate = "";
+        moshi (current != mu) { candidate = current; }
+        moshi (coefficient > 0) {
+            candidate = shorter_candidate(candidate, roundtrip_candidate32(value, coefficient - 1, exponent10));
+        }
+        candidate = shorter_candidate(candidate, roundtrip_candidate32(value, coefficient + 1, exponent10));
+        moshi (candidate != "") {
+            best = candidate;
+            upper = precision - 1;
+        } sore {
+            lower = precision + 1;
+        }
+    }
+    kaesu best;
+}
+
+koukai waza format_float64(value: float64) -> string {
+    moshi (math.is_nan(value)) { kaesu "NaN"; }
+    moshi (math.is_inf(value)) {
+        moshi (value < 0.0) { kaesu "-Infinity"; }
+        kaesu "Infinity";
+    }
+    moshi (value == 0.0) {
+        moshi (1.0 / value < 0.0) { kaesu "-0"; }
+        kaesu "0";
+    }
+    moshi (value < 0.0) { kaesu string.concat("-", format_finite_float64(-value)); }
+    kaesu format_finite_float64(value);
+}
+
+koukai waza format_float32(value: float32) -> string {
+    moshi (math.is_nan(value)) { kaesu "NaN"; }
+    moshi (math.is_inf(value)) {
+        moshi (value < float32(0.0)) { kaesu "-Infinity"; }
+        kaesu "Infinity";
+    }
+    moshi (value == float32(0.0)) {
+        moshi (float32(1.0) / value < float32(0.0)) { kaesu "-0"; }
+        kaesu "0";
+    }
+    moshi (value < float32(0.0)) { kaesu string.concat("-", format_finite_float32(-value)); }
+    kaesu format_finite_float32(value);
+}

@@ -629,7 +629,7 @@ func (p *Parser) typeArgumentStartsAtPeek() bool {
 
 func looksLikeTypeName(name string) bool {
 	switch name {
-	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "Map":
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "resource", "Map":
 		return true
 	}
 	return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'

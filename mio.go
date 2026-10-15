@@ -10,6 +10,7 @@ import (
 	"Mio/internal/constant"
 	"Mio/internal/mochi"
 	"Mio/internal/resolver"
+	"Mio/internal/stdlib"
 	"Mio/internal/typecheck"
 	"Mio/internal/vm"
 	"Mio/mma"
@@ -17,7 +18,8 @@ import (
 
 // Environment 隔离一次宿主编译与执行所用的模块注册表
 type Environment struct {
-	registry *mma.ModuleRegistry
+	registry  *mma.ModuleRegistry
+	resources *mma.ResourceManager
 }
 
 // Program 保存经过静态检查的可执行字节码
@@ -30,7 +32,16 @@ func NewEnvironment(registry *mma.ModuleRegistry) *Environment {
 	if registry == nil {
 		registry = mma.NewModuleRegistry()
 	}
-	return &Environment{registry: registry}
+	return &Environment{registry: registry, resources: mma.NewResourceManager()}
+}
+
+// NewStandardEnvironment 创建包含随附原生标准库的环境
+func NewStandardEnvironment() (*Environment, error) {
+	registry, err := stdlib.NewRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return NewEnvironment(registry), nil
 }
 
 // CompileFile 编译源码及其按需依赖
@@ -85,5 +96,13 @@ func (e *Environment) Run(program *Program, output io.Writer) error {
 	if program == nil || program.bytecode == nil {
 		return fmt.Errorf("mio: nil program")
 	}
-	return vm.NewWithRegistryAndOutput(program.bytecode, e.registry, output).Run()
+	return vm.NewWithRuntime(program.bytecode, e.registry, output, e.resources).Run()
+}
+
+// Close 关闭 Environment 中尚未释放的资源
+func (e *Environment) Close() error {
+	if e == nil || e.resources == nil {
+		return nil
+	}
+	return e.resources.Shutdown()
 }

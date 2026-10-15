@@ -127,6 +127,45 @@ func (c *Checker) checkBuiltinCall(
 		}
 		return KindUnit, nil
 
+	case "$data.string_to_bytes":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if kind != KindString {
+			return KindInvalid, fmt.Errorf("builtin %q requires string, got %s", name, kind)
+		}
+		return ArrayOf(KindUint8), nil
+
+	case "$data.bytes_to_string":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if kind != ArrayOf(KindUint8) {
+			return KindInvalid, fmt.Errorf("builtin %q requires []uint8, got %s", name, kind)
+		}
+		return NullableOf(KindString), nil
+
+	case "$data.string_byte_len":
+		if len(args) != 1 {
+			return KindInvalid, fmt.Errorf("builtin %q expects 1 argument, got %d", name, len(args))
+		}
+		kind, err := c.checkExpression(args[0])
+		if err != nil {
+			return KindInvalid, err
+		}
+		if kind != KindString {
+			return KindInvalid, fmt.Errorf("builtin %q requires string, got %s", name, kind)
+		}
+		return KindInt, nil
+
 	default:
 		return KindInvalid, fmt.Errorf(
 			"unsupported builtin function %q",

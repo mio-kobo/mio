@@ -19,6 +19,15 @@ type Program struct {
 	AST              *ast.Program
 	PackagesCompiled int
 	SourcesParsed    int
+	Tests            []TestFunction
+}
+
+// TestFunction 保存测试声明及其源码位置
+type TestFunction struct {
+	Name     string
+	Path     string
+	Source   string
+	Function *ast.FunctionStatement
 }
 
 type packageUnit struct {
@@ -52,11 +61,26 @@ func LoadProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRe
 	if err != nil {
 		return nil, err
 	}
+	return loadRootProgram(root, nil, "", bunkoRoot, registry)
+}
+
+// LoadTestProgramWithRegistry 读取同包普通源码与测试源码
+func LoadTestProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
+	root, tests, err := parseTestInput(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	rootPath := packageImportPath(inputPath, bunkoRoot)
+	return loadRootProgram(root, tests, rootPath, bunkoRoot, registry)
+}
+
+func loadRootProgram(root *ast.Program, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
 	state := &programLoader{
 		loader: New(bunkoRoot), registry: registry, visiting: make(map[string]bool),
 		loaded: make(map[string]*packageUnit), nativeLoaded: make(map[string]bool),
 	}
-	rootUnit := &packageUnit{program: root, imports: make(map[string]string), declared: declarations(root, "")}
+	rootUnit := &packageUnit{path: rootPath, program: root, imports: make(map[string]string), declared: declarations(root, rootPath)}
+	rootUnit.exported = exports(root, rootPath)
 	for _, statement := range root.Statements {
 		if imported, ok := statement.(*ast.ImportStatement); ok {
 			if previous, exists := rootUnit.imports[imported.Alias]; exists && previous != imported.Path {
@@ -68,7 +92,7 @@ func LoadProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRe
 			}
 		}
 	}
-	if err := state.rewrite(rootUnit, false); err != nil {
+	if err := state.rewrite(rootUnit, rootPath != ""); err != nil {
 		return nil, err
 	}
 	statements := make([]ast.Statement, 0, len(state.nativeStatements))
@@ -78,7 +102,20 @@ func LoadProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRe
 	}
 	statements = append(statements, rootUnit.statements...)
 	merged := &ast.Program{Statements: statements, Range: root.Range}
-	return &Program{AST: merged, PackagesCompiled: len(state.ordered), SourcesParsed: state.sources}, nil
+	return &Program{AST: merged, PackagesCompiled: len(state.ordered), SourcesParsed: state.sources, Tests: tests}, nil
+}
+
+func packageImportPath(inputPath, bunkoRoot string) string {
+	root, rootErr := filepath.Abs(bunkoRoot)
+	directory, directoryErr := filepath.Abs(inputPath)
+	if rootErr != nil || directoryErr != nil {
+		return ""
+	}
+	relative, err := filepath.Rel(root, directory)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(relative)
 }
 
 func (s *programLoader) loadDependency(importPath string, chain []string) error {
@@ -103,13 +140,20 @@ func (s *programLoader) loadDependency(importPath string, chain []string) error 
 func nativeFunctionStatement(function mma.RegisteredFunction) *ast.FunctionStatement {
 	parameters := make([]*ast.Identifier, len(function.Signature.Parameters))
 	for index, parameter := range function.Signature.Parameters {
-		parameters[index] = &ast.Identifier{Name: fmt.Sprintf("arg%d", index), DeclaredType: &ast.TypeRef{Name: string(parameter)}}
+		parameters[index] = &ast.Identifier{Name: fmt.Sprintf("arg%d", index), DeclaredType: nativeTypeRef(parameter)}
 	}
 	return &ast.FunctionStatement{
 		Name: &ast.Identifier{Name: function.BindingKey}, Parameters: parameters,
-		ReturnType: &ast.TypeRef{Name: string(function.Signature.Return)}, Body: &ast.BlockStatement{},
+		ReturnType: nativeTypeRef(function.Signature.Return), Body: &ast.BlockStatement{},
 		Exported: true, Native: true,
 	}
+}
+
+func nativeTypeRef(kind mma.Type) *ast.TypeRef {
+	if kind == mma.TypeBytes {
+		return &ast.TypeRef{Name: "[]", Element: &ast.TypeRef{Name: "uint8"}}
+	}
+	return &ast.TypeRef{Name: string(kind)}
 }
 
 func parseInput(inputPath string) (*ast.Program, error) {
@@ -124,7 +168,7 @@ func parseInput(inputPath string) (*ast.Program, error) {
 			return nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
 		}
 		for _, entry := range entries {
-			if entry.Type().IsRegular() && filepath.Ext(entry.Name()) == sourceExtension {
+			if entry.Type().IsRegular() && isRegularSource(entry.Name()) {
 				paths = append(paths, filepath.Join(inputPath, entry.Name()))
 			}
 		}
@@ -133,9 +177,62 @@ func parseInput(inputPath string) (*ast.Program, error) {
 			return nil, fmt.Errorf("source directory %q has no %s files", inputPath, sourceExtension)
 		}
 	} else {
+		if isTestSource(filepath.Base(inputPath)) {
+			return nil, fmt.Errorf("test source %q can only be executed with 'mio test'", inputPath)
+		}
 		paths = []string{inputPath}
 	}
 	return parsePaths(paths)
+}
+
+func parseTestInput(inputPath string) (*ast.Program, []TestFunction, error) {
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %q: %w", inputPath, err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("test target %q is not a source directory", inputPath)
+	}
+	entries, err := os.ReadDir(inputPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && filepath.Ext(entry.Name()) == sourceExtension {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	combined := &ast.Program{}
+	var tests []TestFunction
+	for _, name := range names {
+		filePath := filepath.Join(inputPath, name)
+		content, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return nil, nil, fmt.Errorf("read %q: %w", filePath, readErr)
+		}
+		parsed, parseErr := parseSources([]Source{{Name: name, Path: filePath, Content: content}})
+		if parseErr != nil {
+			return nil, nil, fmt.Errorf("%s: %w", filePath, parseErr)
+		}
+		combined.Statements = append(combined.Statements, parsed.Statements...)
+		if len(combined.Statements) == len(parsed.Statements) {
+			combined.Range.Start = parsed.Range.Start
+		}
+		combined.Range.End = parsed.Range.End
+		if !isTestSource(name) {
+			continue
+		}
+		for _, statement := range parsed.Statements {
+			function, ok := statement.(*ast.FunctionStatement)
+			if ok && strings.HasPrefix(function.Name.Name, "test_") {
+				function.Test = true
+				tests = append(tests, TestFunction{Name: function.Name.Name, Path: filePath, Source: string(content), Function: function})
+			}
+		}
+	}
+	return combined, tests, nil
 }
 
 func parsePaths(paths []string) (*ast.Program, error) {
@@ -274,7 +371,13 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 		}
 		aliases[alias] = dependency.exported
 	}
-	r := &rewriter{top: unit.declared, aliases: aliases, internals: library, arrayInternals: unit.path == "kiso/array"}
+	r := &rewriter{
+		top:             unit.declared,
+		aliases:         aliases,
+		internals:       library,
+		arrayInternals:  unit.path == "kiso/array",
+		stringInternals: unit.path == "kiso/string",
+	}
 	for _, statement := range unit.program.Statements {
 		if _, imported := statement.(*ast.ImportStatement); imported {
 			continue
@@ -293,10 +396,11 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 }
 
 type rewriter struct {
-	top            map[string]string
-	aliases        map[string]map[string]string
-	internals      bool
-	arrayInternals bool
+	top             map[string]string
+	aliases         map[string]map[string]string
+	internals       bool
+	arrayInternals  bool
+	stringInternals bool
 }
 
 var mathInternals = map[string]string{
@@ -312,6 +416,12 @@ var arrayInternals = map[string]string{
 	"__array_push": "$array.push", "__array_capacity": "$array.capacity",
 	"__array_reserve": "$array.reserve", "__array_clone": "$array.clone",
 	"__array_truncate": "$array.truncate", "__array_append_all": "$array.append_all",
+}
+
+var stringInternals = map[string]string{
+	"__string_to_bytes":  "$data.string_to_bytes",
+	"__string_from_utf8": "$data.bytes_to_string",
+	"__string_byte_len":  "$data.string_byte_len",
 }
 
 func cloneScope(scope map[string]bool) map[string]bool {
@@ -491,6 +601,12 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 					return nil
 				}
 			}
+			if r.stringInternals {
+				if internal, ok := stringInternals[n.Name]; ok {
+					n.Name = internal
+					return nil
+				}
+			}
 		}
 		if !scope[n.Name] {
 			if resolved, ok := r.top[n.Name]; ok {
@@ -612,7 +728,7 @@ func functionIntrinsic(body *ast.BlockStatement) string {
 		return ""
 	}
 	identifier, ok := call.Function.(*ast.Identifier)
-	if !ok || !strings.HasPrefix(identifier.Name, "$array.") {
+	if !ok || !(strings.HasPrefix(identifier.Name, "$array.") || strings.HasPrefix(identifier.Name, "$data.")) {
 		return ""
 	}
 	return identifier.Name

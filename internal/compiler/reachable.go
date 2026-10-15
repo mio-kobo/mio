@@ -24,7 +24,7 @@ func reachableLibraryFunctions(program *ast.Program) map[string]bool {
 	}
 	for _, statement := range program.Statements {
 		function, isFunction := statement.(*ast.FunctionStatement)
-		if isFunction && strings.Contains(function.Name.Name, "::") {
+		if isFunction && strings.Contains(function.Name.Name, "::") && !function.Test {
 			continue
 		}
 		walkMathStatement(statement, visit)

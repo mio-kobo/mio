@@ -1,0 +1,133 @@
+yobu "kiso/testing";
+
+waza test_memory_reader_and_writer() -> unit {
+    kaku source: []uint8 = [1, 2, 3, 4];
+    kaku reader = reader_from_bytes(source);
+    kaku destination: []uint8 = [0, 0, 0, 0];
+    kaku first = read(reader, destination, 1, 2);
+    kaku first_error = first.error;
+    testing.expect(first.count == 2 && !first.eof && first_error == mu, "first read should be partial");
+    kaku second = read(reader, destination, 3, 1);
+    testing.expect(second.count == 1 && !second.eof, "second read should advance the cursor");
+    kaku third = read(reader, destination, 0, 1);
+    testing.expect(third.count == 1 && third.eof, "final data may be returned with EOF");
+    testing.expect(destination[0] == uint8(4) && destination[1] == uint8(1), "reader should honor destination offsets");
+
+    kaku buffer = bytes.new_buffer();
+    kaku result = write_all(writer_to_buffer(buffer), destination, 0, len(destination));
+    kaku result_error = result.error;
+    testing.expect(result.count == 4 && result_error == mu, "write_all should fill the buffer");
+    testing.expect(bytes.equal(bytes.buffer_bytes(buffer), destination), "buffer should contain written bytes");
+}
+
+waza test_independent_readers_and_copy() -> unit {
+    kaku source: []uint8 = [10, 20, 30];
+    kaku first = reader_from_bytes(source);
+    kaku second = reader_from_bytes(source);
+    kaku one: []uint8 = [0];
+    read(first, one, 0, 1);
+    source[0] = uint8(99);
+    read(second, one, 0, 1);
+    testing.expect(one[0] == uint8(99), "memory readers should share source storage");
+
+    kaku buffer = bytes.new_buffer();
+    kaku copied = copy_stream(first, writer_to_buffer(buffer));
+    kaku copied_error = copied.error;
+    testing.expect(copied.count == 2 && copied_error == mu, "copy_stream should resume from the reader cursor");
+    testing.expect(bytes.equal(bytes.buffer_bytes(buffer), [20, 30]), "copy_stream should preserve bytes");
+}
+
+waza test_eof_ranges_and_no_progress() -> unit {
+    kaku destination: []uint8 = [0, 0];
+    kaku short = read_full(reader_from_bytes([7]), destination, 0, 2);
+    testing.expect(short.count == 1, "read_full should retain partial progress");
+    kaku short_error = short.error;
+    moshi (short_error != mu) {
+        awase (short_error) {
+            baai UnexpectedEOF { testing.expect(hai, "unexpected EOF expected"); }
+            baai Closed { testing.fail("wrong error"); }
+            baai InvalidArgument { testing.fail("wrong error"); }
+            baai NoProgress { testing.fail("wrong error"); }
+            baai Other(message) { testing.fail(message); }
+        }
+    }
+
+    kaku stalled = Reader { read: waza (data: []uint8, offset: int64, length: int64) -> ReadResult {
+        kaesu ReadResult { count: 0, eof: iie, error: mu };
+    } };
+    kaku no_progress = read_full(stalled, destination, 0, 1);
+    kaku progress_error = no_progress.error;
+    moshi (progress_error != mu) {
+        awase (progress_error) {
+            baai NoProgress { testing.expect(hai, "no progress expected"); }
+            baai Closed { testing.fail("wrong error"); }
+            baai InvalidArgument { testing.fail("wrong error"); }
+            baai UnexpectedEOF { testing.fail("wrong error"); }
+            baai Other(message) { testing.fail(message); }
+        }
+    }
+
+    kaku invalid = read(reader_from_bytes([]), destination, 2, 1);
+    kaku invalid_error = invalid.error;
+    testing.expect(invalid.count == 0 && invalid_error != mu, "invalid range should fail without writes");
+    kaku empty = read(reader_from_bytes([]), destination, 0, 0);
+    kaku empty_error = empty.error;
+    testing.expect(empty.count == 0 && empty.eof && empty_error == mu, "zero length read should report current EOF");
+}
+
+waza test_partial_write_and_error_progress() -> unit {
+    kaku buffer = bytes.new_buffer();
+    kaku short_writer = Writer { write: waza (source: []uint8, offset: int64, length: int64) -> WriteResult {
+        kaku count = length;
+        moshi (count > 2) { count = 2; }
+        kaku index = 0;
+        aida (index < count) {
+            array.push(buffer.data, source[offset + index]);
+            index = index + 1;
+        }
+        kaesu WriteResult { count: count, error: mu };
+    } };
+    kaku written = write_all(short_writer, [1, 2, 3, 4, 5], 0, 5);
+    kaku written_error = written.error;
+    testing.expect(written.count == 5 && written_error == mu, "write_all should handle short writes");
+    testing.expect(bytes.equal(bytes.buffer_bytes(buffer), [1, 2, 3, 4, 5]), "short writes should preserve order");
+
+    kaku stalled = Writer { write: waza (source: []uint8, offset: int64, length: int64) -> WriteResult {
+        kaesu WriteResult { count: 0, error: mu };
+    } };
+    kaku stopped = write_all(stalled, [1], 0, 1);
+    kaku stopped_error = stopped.error;
+    moshi (stopped_error != mu) {
+        awase (stopped_error) {
+            baai NoProgress { testing.expect(hai, "writer no progress expected"); }
+            baai Closed { testing.fail("wrong error"); }
+            baai InvalidArgument { testing.fail("wrong error"); }
+            baai UnexpectedEOF { testing.fail("wrong error"); }
+            baai Other(message) { testing.fail(message); }
+        }
+    }
+
+    kaku failed_reader = Reader { read: waza (destination: []uint8, offset: int64, length: int64) -> ReadResult {
+        destination[offset] = uint8(9);
+        kaesu ReadResult { count: 1, eof: iie, error: IoError.Other("source failed") };
+    } };
+    kaku destination: []uint8 = [0, 0];
+    kaku failed = read_full(failed_reader, destination, 0, 2);
+    kaku failed_error = failed.error;
+    testing.expect(failed.count == 1 && destination[0] == uint8(9), "read errors should retain progress");
+    moshi (failed_error != mu) {
+        awase (failed_error) {
+            baai Other(message) { testing.expect(message == "source failed", "custom error message should be preserved"); }
+            baai Closed { testing.fail("wrong error"); }
+            baai InvalidArgument { testing.fail("wrong error"); }
+            baai NoProgress { testing.fail("wrong error"); }
+            baai UnexpectedEOF { testing.fail("wrong error"); }
+        }
+    }
+
+    bytes.reset(buffer);
+    kaku copied = copy_stream(reader_from_bytes([6, 7, 8, 9, 10]), short_writer);
+    kaku copied_error = copied.error;
+    testing.expect(copied.count == 5 && copied_error == mu, "copy_stream should handle short writes");
+    testing.expect(bytes.equal(bytes.buffer_bytes(buffer), [6, 7, 8, 9, 10]), "copy_stream should preserve short-write data");
+}

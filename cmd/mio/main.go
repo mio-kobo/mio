@@ -17,6 +17,7 @@ import (
 	"Mio/internal/lexer"
 	"Mio/internal/mochi"
 	"Mio/internal/resolver"
+	"Mio/internal/stdlib"
 	"Mio/internal/typecheck"
 	"Mio/internal/value"
 	"Mio/internal/vm"
@@ -57,6 +58,9 @@ func runCLI(
 	}
 
 	switch args[0] {
+	case "test":
+		return runTestCommand(args[1:], stdout, stderr)
+
 	case "check", "run":
 		path, options, ok := parseDiagnosticArgs(args[1:])
 		if !ok {
@@ -198,7 +202,9 @@ func renderCLIError(out io.Writer, path string, err error, options cliDiagnostic
 			source = string(content)
 		}
 	}
-	d.Path = path
+	if d.Path == "" {
+		d.Path = path
+	}
 	renderer := diagnostic.Renderer{Writer: out, Source: source, Path: path, Color: options.color, Format: options.format, Verbose: options.verbose}
 	if renderErr := renderer.Render(d); renderErr != nil {
 		fmt.Fprintln(out, "mio:", err)
@@ -245,7 +251,11 @@ func compileProgram(program *ast.Program, r *resolver.Resolver) (*compiler.Bytec
 
 // executeBytecode 执行字节码并显示最后一条普通表达式
 func executeBytecode(bytecode *compiler.Bytecode, stdout io.Writer) (bool, error) {
-	machine := vm.NewWithOutput(bytecode, stdout)
+	registry, err := stdlib.NewRegistry()
+	if err != nil {
+		return false, err
+	}
+	machine := vm.NewWithRegistryAndOutput(bytecode, registry, stdout)
 	if err := machine.Run(); err != nil {
 		return true, err
 	}
@@ -401,7 +411,11 @@ func printDisassembly(out io.Writer, bytecode *compiler.Bytecode) error {
 func parseAndCheckFile(
 	path string,
 ) (*ast.Program, *resolver.Resolver, error) {
-	loaded, err := bunko.LoadProgram(path, bunkoRoot(path))
+	registry, err := stdlib.NewRegistry()
+	if err != nil {
+		return nil, nil, err
+	}
+	loaded, err := bunko.LoadProgramWithRegistry(path, bunkoRoot(path), registry)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -462,6 +476,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  mio check <file.mio>")
 	fmt.Fprintln(out, "  mio run <file.mio>")
 	fmt.Fprintln(out, "  options: --color=auto|always|never --format=human|short|json --verbose")
+	fmt.Fprintln(out, "  mio test <directory|./...> [--run=<regexp>] [--lang=zh-CN|ja-JP|en-US]")
 	fmt.Fprintln(out, "  mio build [-o <file.mochi>] <file.mio>")
 	fmt.Fprintln(out, "  mio exec <file.mochi>")
 	fmt.Fprintln(out, "  mio disasm <file.mochi>")

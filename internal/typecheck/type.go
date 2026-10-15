@@ -6,21 +6,22 @@ import "strings"
 type Kind string
 
 const (
-	KindInvalid Kind = ""
-	KindInt8    Kind = "int8"
-	KindInt16   Kind = "int16"
-	KindInt32   Kind = "int32"
-	KindInt     Kind = "int64"
-	KindUint8   Kind = "uint8"
-	KindUint16  Kind = "uint16"
-	KindUint32  Kind = "uint32"
-	KindFloat   Kind = "float64"
-	KindFloat32 Kind = "float32"
-	KindBool    Kind = "bool"
-	KindString  Kind = "string"
-	KindNil     Kind = "nil"
-	KindUnit    Kind = "unit"
-	KindArray   Kind = "array"
+	KindInvalid  Kind = ""
+	KindInt8     Kind = "int8"
+	KindInt16    Kind = "int16"
+	KindInt32    Kind = "int32"
+	KindInt      Kind = "int64"
+	KindUint8    Kind = "uint8"
+	KindUint16   Kind = "uint16"
+	KindUint32   Kind = "uint32"
+	KindFloat    Kind = "float64"
+	KindFloat32  Kind = "float32"
+	KindBool     Kind = "bool"
+	KindString   Kind = "string"
+	KindNil      Kind = "nil"
+	KindUnit     Kind = "unit"
+	KindArray    Kind = "array"
+	KindResource Kind = "resource"
 )
 
 // IsInteger 判断类型是否为整数
@@ -45,7 +46,7 @@ func (k Kind) IsSignedInteger() bool {
 
 // ArrayOf 创建数组类型
 func ArrayOf(element Kind) Kind {
-	if element == KindInvalid || element == KindNil || element == KindUnit {
+	if element == KindInvalid || element == KindNil || element == KindUnit || element == KindResource {
 		return KindInvalid
 	}
 	return Kind("array<" + string(element) + ">")

@@ -2,6 +2,13 @@ package mma
 
 import "fmt"
 
+type byteArrayAccess struct {
+	length int64
+	read   func(offset, length int64) ([]byte, error)
+	write  func(offset int64, source []byte) error
+	active *bool
+}
+
 // Value 保存一次原生调用边界上的 Mio 值
 type Value struct {
 	typeOf   Type
@@ -9,6 +16,9 @@ type Value struct {
 	floating float64
 	boolean  bool
 	text     string
+	bytes    []byte
+	access   *byteArrayAccess
+	resource Resource
 }
 
 // ValueAPI 提供基本 Mio 值的安全构造和读取
@@ -54,6 +64,19 @@ func (ValueAPI) Float64(value float64) Value { return Value{typeOf: TypeFloat64,
 
 // String 创建 string 值
 func (ValueAPI) String(value string) Value { return Value{typeOf: TypeString, text: value} }
+
+// Bytes 创建拥有独立输入副本的 []uint8 值
+func (ValueAPI) Bytes(value []byte) Value {
+	return Value{typeOf: TypeBytes, bytes: append([]byte(nil), value...)}
+}
+
+// Resource 创建不透明资源值
+func (ValueAPI) Resource(value Resource) Value { return Value{typeOf: TypeResource, resource: value} }
+
+// BorrowBytes 创建受调用生命周期约束的 []uint8 参数
+func (ValueAPI) BorrowBytes(length int64, read func(offset, length int64) ([]byte, error), write func(offset int64, source []byte) error, active *bool) Value {
+	return Value{typeOf: TypeBytes, access: &byteArrayAccess{length: length, read: read, write: write, active: active}}
+}
 
 // AsBool 读取 bool 值
 func (ValueAPI) AsBool(value Value) (bool, error) {
@@ -133,6 +156,31 @@ func (ValueAPI) AsString(value Value) (string, error) {
 		return "", valueTypeError(TypeString, value.typeOf)
 	}
 	return value.text, nil
+}
+
+// AsResource 读取不透明资源值
+func (ValueAPI) AsResource(value Value) (Resource, error) {
+	if value.typeOf != TypeResource {
+		return Resource{}, valueTypeError(TypeResource, value.typeOf)
+	}
+	return value.resource, nil
+}
+
+// AsBytes 返回 []uint8 的独立快照
+func (ValueAPI) AsBytes(value Value) ([]byte, error) {
+	if value.typeOf != TypeBytes {
+		return nil, valueTypeError(TypeBytes, value.typeOf)
+	}
+	if value.access == nil {
+		return append([]byte(nil), value.bytes...), nil
+	}
+	if value.access.active == nil || !*value.access.active {
+		return nil, fmt.Errorf("mma: byte array argument is no longer active")
+	}
+	if value.access.length < 0 || value.access.read == nil {
+		return nil, fmt.Errorf("mma: invalid byte array access")
+	}
+	return value.access.read(0, value.access.length)
 }
 
 // IntegerBits 读取整数值的位模式

@@ -60,7 +60,7 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type().IsRegular() && filepath.Ext(entry.Name()) == sourceExtension {
+		if entry.Type().IsRegular() && isRegularSource(entry.Name()) {
 			names = append(names, entry.Name())
 		}
 	}
@@ -80,6 +80,14 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 	}
 
 	return &Package{ImportPath: importPath, Directory: directory, Sources: sources}, nil
+}
+
+func isTestSource(name string) bool {
+	return strings.HasSuffix(name, "_test"+sourceExtension)
+}
+
+func isRegularSource(name string) bool {
+	return filepath.Ext(name) == sourceExtension && !isTestSource(name)
 }
 
 // validateImportPath 检查公开导入路径

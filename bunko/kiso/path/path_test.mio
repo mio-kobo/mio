@@ -1,0 +1,20 @@
+yobu "kiso/testing";
+
+waza test_clean_and_join() -> unit {
+    testing.expect(clean("") == ".", "empty path should clean to dot");
+    testing.expect(clean("/a//b/../c/.") == "/a/c", "absolute path should be normalized");
+    testing.expect(clean("../../a/../b") == "../../b", "relative parents should be preserved");
+    testing.expect(join("a/b", "../c") == "a/c", "join should normalize segments");
+    testing.expect(join_all(["a", "b", "..", "c"]) == "a/c", "join_all should normalize the combined path");
+}
+
+waza test_path_parts() -> unit {
+    testing.expect(base("/a/b.txt/") == "b.txt", "base should ignore trailing separators");
+    testing.expect(dir("/a/b.txt") == "/a", "dir should return parent");
+    testing.expect(ext("/a/b.txt") == ".txt", "ext should include final dot");
+    testing.expect(ext(".env") == "", "hidden file should not imply extension");
+    testing.expect(is_abs("/a") && !is_abs("a"), "absolute paths use a leading slash");
+    testing.expect(clean("C:\\temp\\file") == "C:\\temp\\file", "backslashes should remain ordinary characters");
+    kaku parts = split("a/b");
+    testing.expect(parts.dir == "a" && parts.base == "b", "split should return directory and base");
+}

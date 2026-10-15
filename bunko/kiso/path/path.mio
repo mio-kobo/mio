@@ -1,0 +1,138 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata SplitResult { dir: string; base: string; }
+
+waza bytes_to_string(data: []uint8) -> string {
+    kaku result = string.from_utf8(data);
+    moshi (result != mu) { kaesu result; }
+    kaesu "";
+}
+
+waza byte_range(data: []uint8, start: int64, end: int64) -> string {
+    kaku output = array.with_capacity[uint8](end - start);
+    kaku index = start;
+    aida (index < end) {
+        array.push(output, data[index]);
+        index = index + 1;
+    }
+    kaesu bytes_to_string(output);
+}
+
+waza push_segment(segments: []string, data: []uint8, start: int64, end: int64, absolute: bool) -> unit {
+    moshi (end == start) { kaesu; }
+    kaku segment = byte_range(data, start, end);
+    moshi (segment == ".") { kaesu; }
+    moshi (segment == "..") {
+        moshi (len(segments) > 0 && segments[len(segments) - 1] != "..") {
+            array.truncate(segments, len(segments) - 1);
+            kaesu;
+        }
+        moshi (!absolute) { array.push(segments, segment); }
+        kaesu;
+    }
+    array.push(segments, segment);
+}
+
+koukai waza clean(value: string) -> string {
+    kaku data = string.to_bytes(value);
+    kaku absolute = len(data) > 0 && data[0] == uint8(47);
+    kaku segments = array.with_capacity[string](8);
+    kaku start = 0;
+    kaku index = 0;
+    aida (index <= len(data)) {
+        moshi (index == len(data) || data[index] == uint8(47)) {
+            push_segment(segments, data, start, index, absolute);
+            start = index + 1;
+        }
+        index = index + 1;
+    }
+    moshi (len(segments) == 0) {
+        moshi (absolute) { kaesu "/"; }
+        kaesu ".";
+    }
+    kaku builder = string.new_builder();
+    moshi (absolute) { string.write_string(builder, "/"); }
+    index = 0;
+    aida (index < len(segments)) {
+        moshi (index > 0) { string.write_string(builder, "/"); }
+        string.write_string(builder, segments[index]);
+        index = index + 1;
+    }
+    kaesu string.builder_string(builder);
+}
+
+koukai waza join(left: string, right: string) -> string {
+    moshi (left == "") { kaesu clean(right); }
+    moshi (right == "") { kaesu clean(left); }
+    kaku builder = string.builder_with_capacity(string.byte_len(left) + string.byte_len(right) + 1);
+    string.write_string(builder, left);
+    string.write_string(builder, "/");
+    string.write_string(builder, right);
+    kaesu clean(string.builder_string(builder));
+}
+
+koukai waza join_all(parts: []string) -> string {
+    kaku capacity = 0;
+    kaku index = 0;
+    aida (index < len(parts)) {
+        capacity = capacity + string.byte_len(parts[index]) + 1;
+        index = index + 1;
+    }
+    kaku builder = string.builder_with_capacity(capacity);
+    index = 0;
+    aida (index < len(parts)) {
+        moshi (index > 0) { string.write_string(builder, "/"); }
+        string.write_string(builder, parts[index]);
+        index = index + 1;
+    }
+    kaesu clean(string.builder_string(builder));
+}
+
+koukai waza is_abs(value: string) -> bool {
+    kaku data = string.to_bytes(value);
+    kaesu len(data) > 0 && data[0] == uint8(47);
+}
+
+koukai waza base(value: string) -> string {
+    kaku normalized = clean(value);
+    moshi (normalized == "/" || normalized == "." || normalized == "..") { kaesu normalized; }
+    kaku data = string.to_bytes(normalized);
+    kaku index = len(data) - 1;
+    aida (index >= 0) {
+        moshi (data[index] == uint8(47)) { kaesu byte_range(data, index + 1, len(data)); }
+        index = index - 1;
+    }
+    kaesu normalized;
+}
+
+koukai waza dir(value: string) -> string {
+    kaku normalized = clean(value);
+    moshi (normalized == "/") { kaesu "/"; }
+    kaku data = string.to_bytes(normalized);
+    kaku index = len(data) - 1;
+    aida (index >= 0) {
+        moshi (data[index] == uint8(47)) {
+            moshi (index == 0) { kaesu "/"; }
+            kaesu byte_range(data, 0, index);
+        }
+        index = index - 1;
+    }
+    kaesu ".";
+}
+
+koukai waza ext(value: string) -> string {
+    kaku name = base(value);
+    kaku data = string.to_bytes(name);
+    kaku index = len(data) - 1;
+    aida (index > 0) {
+        moshi (data[index] == uint8(46)) { kaesu byte_range(data, index, len(data)); }
+        index = index - 1;
+    }
+    kaesu "";
+}
+
+koukai waza split(value: string) -> SplitResult {
+    kaku normalized = clean(value);
+    kaesu SplitResult { dir: dir(normalized), base: base(normalized) };
+}

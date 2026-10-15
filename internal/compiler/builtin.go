@@ -78,7 +78,7 @@ func (c *Compiler) compileCall(call *ast.CallExpression) error {
 	}
 	if symbol.Kind == resolver.SymbolFunction {
 		if intrinsic := c.functionIntrinsics[symbol]; intrinsic != "" {
-			return c.compileArrayIntrinsic(call, intrinsic)
+			return c.compileIntrinsic(call, intrinsic)
 		}
 		id, ok := c.functionIDs[symbol]
 		if !ok {
@@ -143,12 +143,18 @@ func (c *Compiler) compileCall(call *ast.CallExpression) error {
 		return c.emit(code.OpMath, code.MathNegOverflows, 1)
 	case "$math.error":
 		return c.emit(code.OpMath, code.MathError, 1)
+	case "$data.string_to_bytes":
+		return c.emit(code.OpDataConvert, code.DataStringToBytes)
+	case "$data.bytes_to_string":
+		return c.emit(code.OpDataConvert, code.DataBytesToString)
+	case "$data.string_byte_len":
+		return c.emit(code.OpLen)
 	default:
 		return fmt.Errorf("unsupported builtin function %q", symbol.Name)
 	}
 }
 
-func (c *Compiler) compileArrayIntrinsic(call *ast.CallExpression, intrinsic string) error {
+func (c *Compiler) compileIntrinsic(call *ast.CallExpression, intrinsic string) error {
 	for _, argument := range call.Arguments {
 		if err := c.Compile(argument); err != nil {
 			return err
@@ -175,8 +181,14 @@ func (c *Compiler) compileArrayIntrinsic(call *ast.CallExpression, intrinsic str
 		return c.emit(code.OpArrayTruncate)
 	case "$array.append_all":
 		return c.emit(code.OpArrayAppendAll)
+	case "$data.string_to_bytes":
+		return c.emit(code.OpDataConvert, code.DataStringToBytes)
+	case "$data.bytes_to_string":
+		return c.emit(code.OpDataConvert, code.DataBytesToString)
+	case "$data.string_byte_len":
+		return c.emit(code.OpLen)
 	default:
-		return fmt.Errorf("unsupported array intrinsic %q", intrinsic)
+		return fmt.Errorf("unsupported intrinsic %q", intrinsic)
 	}
 }
 

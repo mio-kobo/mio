@@ -243,7 +243,7 @@ func coreTypeRef(ref *ast.TypeRef) bool {
 	if ref.Name == "[]" || ref.Name == "?" {
 		return coreTypeRef(ref.Element)
 	}
-	if ref.Name == "int8" || ref.Name == "int16" || ref.Name == "int32" || ref.Name == "int64" || ref.Name == "rune" || ref.Name == "uint8" || ref.Name == "uint16" || ref.Name == "uint32" || ref.Name == "float32" || ref.Name == "float64" || ref.Name == "bool" || ref.Name == "string" || ref.Name == "unit" {
+	if ref.Name == "int8" || ref.Name == "int16" || ref.Name == "int32" || ref.Name == "int64" || ref.Name == "rune" || ref.Name == "uint8" || ref.Name == "uint16" || ref.Name == "uint32" || ref.Name == "float32" || ref.Name == "float64" || ref.Name == "bool" || ref.Name == "string" || ref.Name == "unit" || ref.Name == "resource" {
 		return false
 	}
 	return true

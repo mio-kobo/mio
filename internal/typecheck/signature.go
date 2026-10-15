@@ -79,6 +79,9 @@ func resolveTypeRef(ref *ast.TypeRef) (Kind, error) {
 	case "unit":
 		return KindUnit, nil
 
+	case "resource":
+		return KindResource, nil
+
 	default:
 		pos := ref.Span().Start
 

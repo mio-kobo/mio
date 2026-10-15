@@ -13,6 +13,7 @@
 // Mochi v11 增加固定宽度整数常量与显式转换指令。
 // Mochi v12 增加通用动态数组指令。
 // Mochi v13 增加数组截断与批量追加指令。
+// Mochi v14 增加受限数据复制转换指令。
 //
 //	5 字节     文件签名 "MOCHI"
 //	uint16    格式版本
@@ -54,7 +55,9 @@ import (
 
 const (
 	// Version 表示最新的 Mochi 格式版本
-	Version uint16 = VersionV13
+	Version uint16 = VersionV14
+	// VersionV14 表示数据复制转换格式版本
+	VersionV14 uint16 = 14
 	// VersionV13 表示数组批量操作格式版本
 	VersionV13 uint16 = 13
 	// VersionV12 表示通用动态数组格式版本
@@ -279,7 +282,7 @@ func Encode(w io.Writer, bytecode *compiler.Bytecode) error {
 	return nil
 }
 
-// Decode 读取并验证 Mochi v1 至 v11 数据
+// Decode 读取并验证 Mochi v1 至 v14 数据
 // 返回的常量和指令切片均为新分配。
 func Decode(r io.Reader) (*compiler.Bytecode, error) {
 	if r == nil {
@@ -633,6 +636,14 @@ func encodedSize(bytecode *compiler.Bytecode) (uint64, error) {
 
 // encodedVersion 选择可表示当前字节码的最低版本
 func encodedVersion(bytecode *compiler.Bytecode) uint16 {
+	if hasDataConvertInstructions(bytecode.Instructions) {
+		return VersionV14
+	}
+	for _, function := range bytecode.Functions {
+		if hasDataConvertInstructions(function.Instructions) {
+			return VersionV14
+		}
+	}
 	if hasArrayBulkInstructions(bytecode.Instructions) {
 		return VersionV13
 	}
@@ -729,6 +740,25 @@ func encodedVersion(bytecode *compiler.Bytecode) uint16 {
 		}
 	}
 	return VersionV2
+}
+
+func hasDataConvertInstructions(instructions []byte) bool {
+	for offset := 0; offset < len(instructions); {
+		op := code.Opcode(instructions[offset])
+		if op == code.OpDataConvert {
+			return true
+		}
+		definition, err := code.Lookup(op)
+		if err != nil {
+			return false
+		}
+		_, read, err := code.ReadOperands(definition, instructions[offset+1:])
+		if err != nil {
+			return false
+		}
+		offset += 1 + read
+	}
+	return false
 }
 
 func hasArrayBulkInstructions(instructions []byte) bool {

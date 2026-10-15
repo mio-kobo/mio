@@ -1,4 +1,4 @@
-// Package mma 定义 Mio Module API v0.1。
+// Package mma 定义 Mio Module API。
 package mma
 
 import (
@@ -10,18 +10,20 @@ import (
 type Type string
 
 const (
-	TypeUnit    Type = "unit"
-	TypeBool    Type = "bool"
-	TypeInt8    Type = "int8"
-	TypeInt16   Type = "int16"
-	TypeInt32   Type = "int32"
-	TypeInt64   Type = "int64"
-	TypeUint8   Type = "uint8"
-	TypeUint16  Type = "uint16"
-	TypeUint32  Type = "uint32"
-	TypeFloat32 Type = "float32"
-	TypeFloat64 Type = "float64"
-	TypeString  Type = "string"
+	TypeUnit     Type = "unit"
+	TypeBool     Type = "bool"
+	TypeInt8     Type = "int8"
+	TypeInt16    Type = "int16"
+	TypeInt32    Type = "int32"
+	TypeInt64    Type = "int64"
+	TypeUint8    Type = "uint8"
+	TypeUint16   Type = "uint16"
+	TypeUint32   Type = "uint32"
+	TypeFloat32  Type = "float32"
+	TypeFloat64  Type = "float64"
+	TypeString   Type = "string"
+	TypeBytes    Type = "[]uint8"
+	TypeResource Type = "resource"
 )
 
 // FunctionSignature 描述原生函数的静态类型
@@ -30,7 +32,7 @@ type FunctionSignature struct {
 	Return     Type
 }
 
-// Validate 检查函数签名是否可用于 MMA v0.1
+// Validate 检查函数签名是否可用于 MMA
 func (s FunctionSignature) Validate() error {
 	for index, parameter := range s.Parameters {
 		if parameter == TypeUnit || !parameter.valid() {
@@ -46,7 +48,7 @@ func (s FunctionSignature) Validate() error {
 func (t Type) valid() bool {
 	switch t {
 	case TypeUnit, TypeBool, TypeInt8, TypeInt16, TypeInt32, TypeInt64,
-		TypeUint8, TypeUint16, TypeUint32, TypeFloat32, TypeFloat64, TypeString:
+		TypeUint8, TypeUint16, TypeUint32, TypeFloat32, TypeFloat64, TypeString, TypeBytes, TypeResource:
 		return true
 	default:
 		return false

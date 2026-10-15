@@ -142,6 +142,9 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		if version < VersionV13 && (op == code.OpArrayTruncate || op == code.OpArrayAppendAll) {
 			return fmt.Errorf("opcode %d requires Mochi v13 at offset %d", op, offset)
 		}
+		if version < VersionV14 && op == code.OpDataConvert {
+			return fmt.Errorf("opcode %d requires Mochi v14 at offset %d", op, offset)
+		}
 		definition, err := code.Lookup(op)
 		if err != nil {
 			return fmt.Errorf("unknown opcode at offset %d: %w", offset, err)
@@ -173,6 +176,10 @@ func validateInstructions(bytecode *compiler.Bytecode, instructions code.Instruc
 		case code.OpIntegerConvert:
 			if operands[0] < code.IntegerInt8 || operands[0] > code.IntegerUint32 {
 				return fmt.Errorf("unknown integer conversion target %d at offset %d", operands[0], offset)
+			}
+		case code.OpDataConvert:
+			if operands[0] < code.DataStringToBytes || operands[0] > code.DataBytesToString {
+				return fmt.Errorf("unknown data conversion %d at offset %d", operands[0], offset)
 			}
 		case code.OpArrayTyped:
 			if !validArrayDescriptor(operands[1]) {

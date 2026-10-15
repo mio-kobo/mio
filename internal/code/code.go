@@ -104,6 +104,12 @@ const (
 	OpArrayClone        Opcode = 62
 	OpArrayTruncate     Opcode = 63
 	OpArrayAppendAll    Opcode = 64
+	OpDataConvert       Opcode = 65
+)
+
+const (
+	DataStringToBytes = 1 + iota
+	DataBytesToString
 )
 
 // Definition 描述指令名称及操作数长度
@@ -289,6 +295,7 @@ var definitions = [...]Definition{
 	OpArrayClone:        {Name: "OpArrayClone"},
 	OpArrayTruncate:     {Name: "OpArrayTruncate"},
 	OpArrayAppendAll:    {Name: "OpArrayAppendAll"},
+	OpDataConvert:       {Name: "OpDataConvert", OperandWidths: []int{1}},
 }
 
 // Lookup 查询操作码对应的指令定义

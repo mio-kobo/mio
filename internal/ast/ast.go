@@ -265,6 +265,7 @@ type FunctionStatement struct {
 	Body        *BlockStatement
 	Exported    bool
 	Native      bool
+	Test        bool
 	Intrinsic   string
 	Range       Span
 }

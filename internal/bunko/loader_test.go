@@ -25,6 +25,9 @@ func TestLoaderMapsPublicImportPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "README.md"), []byte("ignored"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(directory, "basic_test.mio"), []byte("ignored test"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	loaded, err := New(root).Load("kiso/math")
 	if err != nil {

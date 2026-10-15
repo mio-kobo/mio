@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+// stressTestEnabled 判断是否启用专项压力测试
+func stressTestEnabled() bool {
+	return os.Getenv("MIO_STRESS_TEST") == "1"
+}
+
+// skipInShortMode 跳过日常测试中的高负载用例
+func skipInShortMode(t *testing.T, reason string) {
+	t.Helper()
+	if testing.Short() && !stressTestEnabled() {
+		t.Skip(reason)
+	}
+}
+
 // 测试 Mio 命令行工具
 func TestCLI(t *testing.T) {
 	tests := []struct {
