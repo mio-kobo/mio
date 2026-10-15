@@ -1,3 +1,7 @@
+yobu "kiso/array";
+
+koukai kata ByteBuffer { data: []uint8; }
+
 koukai waza equal(left: []uint8, right: []uint8) -> bool {
     moshi (len(left) != len(right)) { kaesu iie; }
     kaku index = 0;
@@ -74,4 +78,46 @@ koukai waza fill(values: []uint8, value: uint8) -> unit {
         index = index + 1;
     }
     kaesu;
+}
+
+koukai waza clone(values: []uint8) -> []uint8 {
+    kaesu array.clone(values);
+}
+
+koukai waza new_buffer() -> ByteBuffer {
+    kaesu ByteBuffer { data: array.with_capacity[uint8](0) };
+}
+
+koukai waza buffer_with_capacity(capacity: int64) -> ByteBuffer {
+    kaesu ByteBuffer { data: array.with_capacity[uint8](capacity) };
+}
+
+koukai waza write_byte(buffer: ByteBuffer, value: uint8) -> unit {
+    array.push(buffer.data, value);
+}
+
+koukai waza write(buffer: ByteBuffer, source: []uint8) -> int64 {
+    kaku count = len(source);
+    array.append_all(buffer.data, source);
+    kaesu count;
+}
+
+koukai waza buffer_len(buffer: ByteBuffer) -> int64 {
+    kaesu len(buffer.data);
+}
+
+koukai waza buffer_capacity(buffer: ByteBuffer) -> int64 {
+    kaesu array.capacity(buffer.data);
+}
+
+koukai waza reset(buffer: ByteBuffer) -> unit {
+    array.truncate(buffer.data, 0);
+}
+
+koukai waza buffer_clone(buffer: ByteBuffer) -> ByteBuffer {
+    kaesu ByteBuffer { data: array.clone(buffer.data) };
+}
+
+koukai waza buffer_bytes(buffer: ByteBuffer) -> []uint8 {
+    kaesu array.clone(buffer.data);
 }

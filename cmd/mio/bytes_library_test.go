@@ -96,6 +96,79 @@ chant(len(empty));
 	}
 }
 
+// 测试 bytes.clone 返回独立的紧凑字节数组
+func TestCLIKisoBytesClone(t *testing.T) {
+	stdout, stderr, exit := runBytesSource(t, `
+yobu "kiso/bytes";
+kaku original: []uint8 = [0, 255];
+kaku copy = bytes.clone(original);
+copy[0] = uint8(7);
+chant(original[0]); chant(copy[0]); chant(len(copy));
+`)
+	if exit != 0 || stderr != "" || stdout != "0\n7\n2\n" {
+		t.Fatalf("exit=%d output=%q stderr=%s", exit, stdout, stderr)
+	}
+}
+
+// 测试 ByteBuffer 写入、共享、重置、克隆和独立导出
+func TestCLIKisoByteBuffer(t *testing.T) {
+	stdout, stderr, exit := runBytesSource(t, `
+yobu "kiso/bytes";
+kata Holder { buffer: bytes.ByteBuffer; }
+waza relay(buffer: bytes.ByteBuffer) -> bytes.ByteBuffer { kaesu buffer; }
+waza resetter(buffer: bytes.ByteBuffer) -> () -> unit {
+    kaesu waza () -> unit { bytes.reset(buffer); kaesu; };
+}
+kaku empty = bytes.new_buffer();
+chant(bytes.buffer_len(empty)); chant(bytes.buffer_capacity(empty));
+kaku buffer = bytes.buffer_with_capacity(2);
+kaku alias = buffer;
+kaku holder = Holder { buffer: buffer };
+bytes.write_byte(buffer, uint8(0)); bytes.write_byte(buffer, uint8(255));
+chant(bytes.write(alias, [1, 2, 3]));
+chant(bytes.buffer_len(holder.buffer)); chant(bytes.buffer_capacity(buffer) >= 5);
+kaku returned = relay(buffer);
+kaku cloned = bytes.buffer_clone(buffer);
+kaku exported = bytes.buffer_bytes(buffer);
+bytes.write_byte(cloned, uint8(9));
+bytes.write_byte(buffer, uint8(8));
+chant(bytes.buffer_len(cloned)); chant(bytes.buffer_len(returned)); chant(len(exported));
+kaku clear = resetter(alias); clear();
+chant(bytes.buffer_len(buffer)); chant(bytes.buffer_capacity(buffer) >= 5);
+bytes.write_byte(holder.buffer, uint8(255));
+chant(bytes.buffer_len(alias)); chant(bytes.buffer_bytes(alias)[0]);
+chant(bytes.buffer_len(cloned)); chant(exported[0]); chant(exported[1]);
+`)
+	if exit != 0 || stderr != "" {
+		t.Fatalf("exit=%d stderr=%s", exit, stderr)
+	}
+	want := "0\n0\n3\n5\nhai\n6\n6\n5\n0\nhai\n1\n255\n6\n0\n255\n"
+	if stdout != want {
+		t.Fatalf("output=%q, want %q", stdout, want)
+	}
+}
+
+// 测试 ByteBuffer 多次扩容和大量批量写入
+func TestCLIKisoByteBufferGrowth(t *testing.T) {
+	const size = 4096
+	items := make([]string, size)
+	for index := range items {
+		items[index] = fmt.Sprintf("%d", index&255)
+	}
+	literal := "[" + strings.Join(items, ",") + "]"
+	stdout, stderr, exit := runBytesSource(t, fmt.Sprintf(`
+yobu "kiso/bytes";
+kaku buffer = bytes.new_buffer();
+kaku index = 0;
+aida (index < 2048) { bytes.write_byte(buffer, uint8(7)); index = index + 1; }
+chant(bytes.write(buffer, %s));
+chant(bytes.buffer_len(buffer)); chant(bytes.buffer_capacity(buffer) >= 6144);
+`, literal))
+	if exit != 0 || stderr != "" || stdout != "4096\n6144\nhai\n" {
+		t.Fatalf("exit=%d output=%q stderr=%s", exit, stdout, stderr)
+	}
+}
+
 // 测试 bytes API 拒绝错误数组和元素类型
 func TestCLIKisoBytesStaticTypes(t *testing.T) {
 	tests := []struct {
@@ -253,5 +326,59 @@ func BenchmarkKisoBytesVMCreation(b *testing.B) {
 	b.ResetTimer()
 	for iteration := 0; iteration < b.N; iteration++ {
 		benchmarkBytesVM = vm.NewWithOutput(bytecode, io.Discard)
+	}
+}
+
+// BenchmarkKisoByteBufferExecute 测量端到端缓冲区写入开销
+func BenchmarkKisoByteBufferExecute(b *testing.B) {
+	for _, size := range []int{1 << 10, 64 << 10, 1 << 20} {
+		for _, mode := range []string{"byte", "batch", "reserved", "reset"} {
+			b.Run(fmt.Sprintf("%s-%d", mode, size), func(b *testing.B) {
+				if mode == "byte" && size == 1<<20 {
+					b.Skip("逐字节端到端写入超过当前 VM 指令上限")
+				}
+				capacity := 0
+				operation := fmt.Sprintf(`
+kaku index = 0;
+aida (index < %d) { bytes.write_byte(buffer, uint8(1)); index = index + 1; }
+`, size)
+				if mode == "batch" || mode == "reserved" || mode == "reset" {
+					operation = "bytes.write(buffer, source);"
+				}
+				if mode == "reserved" || mode == "reset" {
+					capacity = size
+				}
+				if mode == "reset" {
+					operation = "bytes.write(buffer, source); bytes.reset(buffer); bytes.write(buffer, source);"
+				}
+				path := filepath.Join(b.TempDir(), "main.mio")
+				writeInfrastructureSource(b, path, fmt.Sprintf(`
+yobu "kiso/array";
+yobu "kiso/bytes";
+kaku source = array.make[uint8](%d, uint8(1));
+kaku buffer = bytes.buffer_with_capacity(%d);
+%s
+`, size, capacity, operation))
+				b.Setenv("MIO_BUNKO", mathBunkoRoot(b))
+				program, resolver, err := parseAndCheckFile(path)
+				if err != nil {
+					b.Fatal(err)
+				}
+				bytecode, err := compileProgram(program, resolver)
+				if err != nil {
+					b.Fatal(err)
+				}
+				machine := vm.NewWithOutput(bytecode, io.Discard)
+				b.ReportAllocs()
+				b.SetBytes(int64(size))
+				b.ReportMetric(float64(instructionBytes(bytecode)), "bytecode-B")
+				b.ResetTimer()
+				for iteration := 0; iteration < b.N; iteration++ {
+					if err := machine.Run(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }
