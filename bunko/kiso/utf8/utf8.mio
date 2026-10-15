@@ -1,0 +1,171 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+
+koukai kata DecodeResult {
+    value: rune;
+    width: int64;
+    valid: bool;
+}
+
+waza invalid_decode() -> DecodeResult {
+    kaesu DecodeResult { value: '\uFFFD', width: 1, valid: iie };
+}
+
+waza decode_packed(data: []uint8, offset: int64) -> int64 {
+    moshi (offset == len(data)) { kaesu -2; }
+    moshi (offset < 0 || offset > len(data)) {
+        data[offset];
+    }
+
+    kaku first = int64(data[offset]);
+    moshi (first <= 127) {
+        kaesu first + 1114112;
+    }
+    moshi (first >= 194 && first <= 223) {
+        moshi (offset + 2 > len(data)) { kaesu -1; }
+        kaku second = int64(data[offset + 1]);
+        moshi (second < 128 || second > 191) { kaesu -1; }
+        kaesu (first - 192) * 64 + second - 128 + 2228224;
+    }
+    moshi (first >= 224 && first <= 239) {
+        moshi (offset + 3 > len(data)) { kaesu -1; }
+        kaku second = int64(data[offset + 1]);
+        kaku third = int64(data[offset + 2]);
+        moshi (second < 128 || second > 191 || third < 128 || third > 191) {
+            kaesu -1;
+        }
+        moshi (first == 224 && second < 160) { kaesu -1; }
+        moshi (first == 237 && second > 159) { kaesu -1; }
+        kaesu (first - 224) * 4096 + (second - 128) * 64 + third - 128 + 3342336;
+    }
+    moshi (first >= 240 && first <= 244) {
+        moshi (offset + 4 > len(data)) { kaesu -1; }
+        kaku second = int64(data[offset + 1]);
+        kaku third = int64(data[offset + 2]);
+        kaku fourth = int64(data[offset + 3]);
+        moshi (second < 128 || second > 191 || third < 128 || third > 191 || fourth < 128 || fourth > 191) {
+            kaesu -1;
+        }
+        moshi (first == 240 && second < 144) { kaesu -1; }
+        moshi (first == 244 && second > 143) { kaesu -1; }
+        kaesu (first - 240) * 262144 + (second - 128) * 4096 + (third - 128) * 64 + fourth - 128 + 4456448;
+    }
+    kaesu -1;
+}
+
+waza append_valid(destination: []uint8, code: int64) -> unit {
+    moshi (code <= 127) {
+        array.push(destination, uint8(code));
+        kaesu;
+    }
+    moshi (code <= 2047) {
+        array.push(destination, uint8(192 + code / 64));
+        array.push(destination, uint8(128 + code - (code / 64) * 64));
+        kaesu;
+    }
+    moshi (code <= 65535) {
+        array.push(destination, uint8(224 + code / 4096));
+        array.push(destination, uint8(128 + (code / 64) - (code / 4096) * 64));
+        array.push(destination, uint8(128 + code - (code / 64) * 64));
+        kaesu;
+    }
+    array.push(destination, uint8(240 + code / 262144));
+    array.push(destination, uint8(128 + (code / 4096) - (code / 262144) * 64));
+    array.push(destination, uint8(128 + (code / 64) - (code / 4096) * 64));
+    array.push(destination, uint8(128 + code - (code / 64) * 64));
+}
+
+koukai waza is_valid_rune(value: rune) -> bool {
+    kaku code = int64(value);
+    kaesu code >= 0 && code <= 1114111 && (code < 55296 || code > 57343);
+}
+
+koukai waza rune_width(value: rune) -> int64 {
+    moshi (!is_valid_rune(value)) {
+        __math_error("kiso/utf8.rune_width: invalid Unicode scalar value");
+        kaesu 0;
+    }
+    kaku code = int64(value);
+    moshi (code <= 127) { kaesu 1; }
+    moshi (code <= 2047) { kaesu 2; }
+    moshi (code <= 65535) { kaesu 3; }
+    kaesu 4;
+}
+
+koukai waza decode_one(data: []uint8, offset: int64) -> DecodeResult {
+    kaku packed = decode_packed(data, offset);
+    moshi (packed == -2) {
+        kaesu DecodeResult { value: '\uFFFD', width: 0, valid: iie };
+    }
+    moshi (packed == -1) { kaesu invalid_decode(); }
+    kaku width = 1;
+    moshi (packed >= 2228224) {
+        width = 2;
+        moshi (packed >= 3342336) {
+            width = 3;
+            moshi (packed >= 4456448) { width = 4; }
+        }
+    }
+    kaesu DecodeResult { value: rune(packed - width * 1114112), width: width, valid: hai };
+}
+
+koukai waza encode_rune(value: rune) -> []uint8 {
+    kaku width = rune_width(value);
+    kaku buffer = bytes.buffer_with_capacity(width);
+    append_valid(buffer.data, int64(value));
+    kaesu buffer.data;
+}
+
+koukai waza append_rune(destination: []uint8, value: rune) -> unit {
+    moshi (!is_valid_rune(value)) {
+        __math_error("kiso/utf8.append_rune: invalid Unicode scalar value");
+        kaesu;
+    }
+    append_valid(destination, int64(value));
+}
+
+koukai waza valid(data: []uint8) -> bool {
+    kaku offset = 0;
+    aida (offset < len(data)) {
+        kaku packed = decode_packed(data, offset);
+        moshi (packed < 0) { kaesu iie; }
+        moshi (packed < 2228224) {
+            offset = offset + 1;
+        } sore {
+            moshi (packed < 3342336) {
+                offset = offset + 2;
+            } sore {
+                moshi (packed < 4456448) {
+                    offset = offset + 3;
+                } sore {
+                    offset = offset + 4;
+                }
+            }
+        }
+    }
+    kaesu hai;
+}
+
+koukai waza rune_count(data: []uint8) -> int64? {
+    kaku offset = 0;
+    kaku count = 0;
+    aida (offset < len(data)) {
+        kaku packed = decode_packed(data, offset);
+        moshi (packed < 0) { kaesu mu; }
+        moshi (packed < 2228224) {
+            offset = offset + 1;
+        } sore {
+            moshi (packed < 3342336) {
+                offset = offset + 2;
+            } sore {
+                moshi (packed < 4456448) {
+                    offset = offset + 3;
+                } sore {
+                    offset = offset + 4;
+                }
+            }
+        }
+        count = count + 1;
+    }
+    kaesu count;
+}
