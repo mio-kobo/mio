@@ -15,10 +15,12 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.module.Module
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.DirectoryProjectGeneratorBase
 import com.intellij.platform.ProjectGeneratorPeer
+import com.intellij.util.ui.FormBuilder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -26,6 +28,7 @@ import java.util.UUID
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JPanel
 
 data class MioProjectSettings(val sdkId: String, val createSample: Boolean)
@@ -85,15 +88,10 @@ class MioDirectoryProjectGenerator : DirectoryProjectGeneratorBase<MioProjectSet
 class MioProjectGeneratorPeer : ProjectGeneratorPeer<MioProjectSettings> {
     private val sdkCombo = JComboBox<SdkChoice>()
     private val createSample = JCheckBox("创建示例 main.mio", true)
-
-    init {
-        refreshSdks()
-    }
-
-    override fun buildUI(settingsStep: SettingsStep) {
-        settingsStep.addSettingsField("Mio SDK：", sdkCombo)
-        settingsStep.addSettingsComponent(createSample)
-        settingsStep.addSettingsComponent(JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0)).apply {
+    private val component = FormBuilder.createFormBuilder()
+        .addLabeledComponent("Mio SDK：", sdkCombo)
+        .addComponent(createSample)
+        .addComponent(JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 0)).apply {
             add(JButton("添加本地 SDK").apply {
                 addActionListener { MioSdkUi.addLocal(null) { refreshSdks(it.id) } }
             })
@@ -101,7 +99,17 @@ class MioProjectGeneratorPeer : ProjectGeneratorPeer<MioProjectSettings> {
                 addActionListener { MioSdkUi.download(null) { refreshSdks(it.id) } }
             })
         })
+        .panel
+
+    init {
+        refreshSdks()
     }
+
+    override fun buildUI(settingsStep: SettingsStep) {
+        // DirectoryProjectGenerator 在 2025.3 通过 getComponent 挂载设置界面。
+    }
+
+    override fun getComponent(locationField: TextFieldWithBrowseButton, checkValid: Runnable): JComponent = component
 
     override fun getSettings(): MioProjectSettings =
         MioProjectSettings((sdkCombo.selectedItem as? SdkChoice)?.id.orEmpty(), createSample.isSelected)
