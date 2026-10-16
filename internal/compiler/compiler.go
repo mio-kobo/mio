@@ -771,7 +771,7 @@ func isNilExpression(expression ast.Expression) bool {
 
 func supportsNilCheck(expression ast.Expression) bool {
 	switch n := expression.(type) {
-	case *ast.Identifier, *ast.CallExpression, *ast.IndexExpression:
+	case *ast.Identifier, *ast.CallExpression, *ast.IndexExpression, *ast.FieldExpression:
 		return true
 	case *ast.GroupedExpression:
 		return supportsNilCheck(n.Expr)

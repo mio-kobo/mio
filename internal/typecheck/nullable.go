@@ -21,14 +21,19 @@ func isAssignable(expected, actual Kind) bool {
 }
 
 // checkExpressionExpected 在明确类型上下文中检查表达式
-func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (Kind, error) {
+func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (result Kind, err error) {
+	defer func() {
+		if err == nil && expr != nil {
+			c.nodeTypes[expr] = result
+		}
+	}()
 	if expected.IsNullable() {
 		if _, nilLiteral := expr.(*ast.NilLiteral); !nilLiteral {
 			return c.checkExpressionExpected(expr, expected.NonNullable())
 		}
 	}
 	if literal, ok := expr.(*ast.IntegerLiteral); ok && expected.IsInteger() {
-		if err := checkIntegerLiteralRange(literal.Value, expected, false); err != nil {
+		if err := checkIntegerLiteral(literal, expected, false); err != nil {
 			return KindInvalid, err
 		}
 		literal.Type = expected.String()
@@ -54,8 +59,8 @@ func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (K
 		return c.checkExpressionExpected(grouped.Expr, expected)
 	}
 	if prefix, ok := expr.(*ast.PrefixExpression); ok && (expected.IsInteger() || expected == KindFloat32 || expected == KindFloat) {
-		if literal, direct := prefix.Right.(*ast.IntegerLiteral); direct && prefix.Operator == token.Minus && expected.IsInteger() {
-			if err := checkIntegerLiteralRange(literal.Value, expected, true); err != nil {
+		if literal := groupedIntegerLiteral(prefix.Right); literal != nil && prefix.Operator == token.Minus && expected.IsInteger() {
+			if err := checkIntegerLiteral(literal, expected, true); err != nil {
 				return KindInvalid, err
 			}
 			literal.Type = expected.String()
@@ -111,6 +116,19 @@ func (c *Checker) checkExpressionExpected(expr ast.Expression, expected Kind) (K
 	return c.checkExpression(expr)
 }
 
+func groupedIntegerLiteral(expr ast.Expression) *ast.IntegerLiteral {
+	for {
+		switch value := expr.(type) {
+		case *ast.IntegerLiteral:
+			return value
+		case *ast.GroupedExpression:
+			expr = value.Expr
+		default:
+			return nil
+		}
+	}
+}
+
 func contextualIntegerExpression(expr ast.Expression) bool {
 	switch n := expr.(type) {
 	case *ast.IntegerLiteral:
@@ -127,25 +145,48 @@ func contextualIntegerExpression(expr ast.Expression) bool {
 }
 
 func checkIntegerLiteralRange(value int64, kind Kind, negative bool) error {
+	magnitude := uint64(value)
+	if value < 0 {
+		magnitude = uint64(-(value + 1)) + 1
+	}
+	return checkIntegerMagnitude(magnitude, kind, negative)
+}
+
+func literalMagnitude(literal *ast.IntegerLiteral) uint64 {
+	if literal.Raw != "" {
+		return literal.Magnitude
+	}
+	value := literal.Value
+	if value < 0 {
+		return uint64(-(value + 1)) + 1
+	}
+	return uint64(value)
+}
+
+func checkIntegerLiteral(literal *ast.IntegerLiteral, kind Kind, negative bool) error {
+	if literal.Overflow {
+		return fmt.Errorf("integer literal %s is outside %s range", literal.Raw, kind)
+	}
+	return checkIntegerMagnitude(literalMagnitude(literal), kind, negative)
+}
+
+func checkIntegerMagnitude(value uint64, kind Kind, negative bool) error {
 	if negative {
 		if !kind.IsSignedInteger() {
 			return fmt.Errorf("negative integer literal is outside %s range", kind)
 		}
-		limits := map[Kind]int64{KindInt8: 128, KindInt16: 32768, KindInt32: 2147483648, KindInt: -1 << 63}
+		limits := map[Kind]uint64{KindInt8: 128, KindInt16: 32768, KindInt32: 2147483648, KindInt: 1 << 63}
 		limit := limits[kind]
-		if kind == KindInt {
-			return nil
-		}
 		if value > limit {
 			return fmt.Errorf("integer literal -%d is outside %s range", value, kind)
 		}
 		return nil
 	}
-	maxima := map[Kind]int64{
+	maxima := map[Kind]uint64{
 		KindInt8: 127, KindInt16: 32767, KindInt32: 2147483647, KindInt: 1<<63 - 1,
 		KindUint8: 255, KindUint16: 65535, KindUint32: 4294967295,
 	}
-	if value < 0 || value > maxima[kind] {
+	if value > maxima[kind] {
 		return fmt.Errorf("integer literal %d is outside %s range", value, kind)
 	}
 	return nil

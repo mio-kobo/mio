@@ -41,10 +41,19 @@ type evaluator struct {
 	visiting     map[string]bool
 }
 
-// Fold 求值所有常量并移除运行时声明
-func Fold(program *ast.Program) error {
+// Value 保存可观察的常量求值结果
+type Value struct {
+	Type        string
+	Integer     int64
+	Float32Bits uint32
+	Float64Bits uint64
+	Boolean     bool
+	String      string
+}
+
+func newEvaluator(program *ast.Program) (*evaluator, error) {
 	if program == nil {
-		return fmt.Errorf("cannot fold constants in a nil program")
+		return nil, fmt.Errorf("cannot evaluate constants in a nil program")
 	}
 	e := &evaluator{declarations: make(map[string]*ast.ConstStatement), values: make(map[string]result), visiting: make(map[string]bool)}
 	for _, statement := range program.Statements {
@@ -53,9 +62,42 @@ func Fold(program *ast.Program) error {
 			continue
 		}
 		if _, exists := e.declarations[declaration.Name.Name]; exists {
-			return fmt.Errorf("constant %q is declared more than once", declaration.Name.Name)
+			return nil, fmt.Errorf("constant %q is declared more than once", declaration.Name.Name)
 		}
 		e.declarations[declaration.Name.Name] = declaration
+	}
+	return e, nil
+}
+
+// Evaluate 求值常量且不改写 AST
+func Evaluate(program *ast.Program) (map[string]Value, error) {
+	e, err := newEvaluator(program)
+	if err != nil {
+		return nil, err
+	}
+	values := make(map[string]Value, len(e.declarations))
+	for name := range e.declarations {
+		value, evaluateErr := e.constant(name)
+		if evaluateErr != nil {
+			return nil, evaluateErr
+		}
+		values[name] = Value{
+			Type: kindName(value.kind), Integer: value.i,
+			Float32Bits: math.Float32bits(float32(value.f)), Float64Bits: math.Float64bits(value.f),
+			Boolean: value.b, String: value.s,
+		}
+	}
+	return values, nil
+}
+
+// Fold 求值所有常量并移除运行时声明
+func Fold(program *ast.Program) error {
+	if program == nil {
+		return fmt.Errorf("cannot fold constants in a nil program")
+	}
+	e, err := newEvaluator(program)
+	if err != nil {
+		return err
 	}
 	for _, statement := range program.Statements {
 		var name string
@@ -186,6 +228,10 @@ func kindName(value kind) string {
 func (e *evaluator) expression(expression ast.Expression, expected kind) (result, error) {
 	switch n := expression.(type) {
 	case *ast.IntegerLiteral:
+		magnitude := constantLiteralMagnitude(n)
+		if n.Overflow || magnitude > math.MaxInt64 {
+			return result{}, fmt.Errorf("integer literal %s is outside int64 range", n.Raw)
+		}
 		integerKind := kindInt
 		if isIntegerKind(expected) {
 			integerKind = expected
@@ -221,11 +267,20 @@ func (e *evaluator) expression(expression ast.Expression, expected kind) (result
 	case *ast.GroupedExpression:
 		return e.expression(n.Expr, expected)
 	case *ast.PrefixExpression:
-		if literal, ok := n.Right.(*ast.IntegerLiteral); ok && n.Operator == token.Minus && isIntegerKind(expected) {
-			if err := checkConstantIntegerRange(literal.Value, expected, true); err != nil {
+		if literal := constantGroupedInteger(n.Right); literal != nil && n.Operator == token.Minus && (isIntegerKind(expected) || expected == kindInvalid) {
+			target := expected
+			if target == kindInvalid {
+				target = kindInt
+			}
+			magnitude := constantLiteralMagnitude(literal)
+			if literal.Overflow || magnitude > uint64(math.MaxInt64)+1 {
+				return result{}, fmt.Errorf("integer literal -%s is outside %s range", literal.Raw, kindName(target))
+			}
+			if err := checkConstantIntegerMagnitude(magnitude, target, true); err != nil {
 				return result{}, err
 			}
-			return result{kind: expected, i: wrapConstantInteger(-literal.Value, expected)}, nil
+			value := -int64(magnitude)
+			return result{kind: target, i: wrapConstantInteger(value, target)}, nil
 		}
 		value, err := e.expression(n.Right, expected)
 		if err != nil {
@@ -452,16 +507,44 @@ func constantMaximum(value kind) int64 {
 }
 
 func checkConstantIntegerRange(value int64, target kind, negative bool) error {
-	if negative {
-		if target == kindInt {
+	return checkConstantIntegerMagnitude(uint64(value), target, negative)
+}
+
+func constantLiteralMagnitude(literal *ast.IntegerLiteral) uint64 {
+	if literal.Raw != "" {
+		return literal.Magnitude
+	}
+	if literal.Value < 0 {
+		return uint64(-(literal.Value + 1)) + 1
+	}
+	return uint64(literal.Value)
+}
+
+func constantGroupedInteger(expression ast.Expression) *ast.IntegerLiteral {
+	for {
+		switch value := expression.(type) {
+		case *ast.IntegerLiteral:
+			return value
+		case *ast.GroupedExpression:
+			expression = value.Expr
+		default:
 			return nil
 		}
-		if !isSignedConstantInteger(target) || value > -constantMinimum(target) {
+	}
+}
+
+func checkConstantIntegerMagnitude(value uint64, target kind, negative bool) error {
+	if negative {
+		limit := uint64(0)
+		if isSignedConstantInteger(target) {
+			limit = uint64(-(constantMinimum(target) + 1)) + 1
+		}
+		if !isSignedConstantInteger(target) || value > limit {
 			return fmt.Errorf("integer literal -%d is outside %s range", value, kindName(target))
 		}
 		return nil
 	}
-	if value < 0 || value > constantMaximum(target) {
+	if value > uint64(constantMaximum(target)) {
 		return fmt.Errorf("integer literal %d is outside %s range", value, kindName(target))
 	}
 	return nil

@@ -45,12 +45,12 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve Bunko root %q: %w", l.root, err)
 	}
-	directory, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(importPath)))
+	directory, packageRoot, err := resolvePackageDirectory(root, importPath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Bunko package %q: %w", importPath, err)
+		return nil, err
 	}
-	if err := requireWithinRoot(root, directory); err != nil {
-		return nil, fmt.Errorf("resolve Bunko package %q: %w", importPath, err)
+	if err := requireWithinRoot(packageRoot, directory); err != nil {
+		return nil, fmt.Errorf("resolve package %q: %w", importPath, err)
 	}
 
 	entries, err := os.ReadDir(directory)
@@ -80,6 +80,27 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 	}
 
 	return &Package{ImportPath: importPath, Directory: directory, Sources: sources}, nil
+}
+
+// resolvePackageDirectory 依次查找 Bunko 与同级工作区包
+func resolvePackageDirectory(bunkoRoot, importPath string) (string, string, error) {
+	relative := filepath.FromSlash(importPath)
+	roots := []string{bunkoRoot}
+	if filepath.Base(bunkoRoot) == "bunko" {
+		roots = append(roots, filepath.Dir(bunkoRoot))
+	}
+	var lastErr error
+	for _, root := range roots {
+		directory, err := filepath.EvalSymlinks(filepath.Join(root, relative))
+		if err == nil {
+			if withinErr := requireWithinRoot(root, directory); withinErr != nil {
+				return "", "", fmt.Errorf("resolve package %q: %w", importPath, withinErr)
+			}
+			return directory, root, nil
+		}
+		lastErr = err
+	}
+	return "", "", fmt.Errorf("resolve package %q: %w", importPath, lastErr)
 }
 
 func isTestSource(name string) bool {

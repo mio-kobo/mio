@@ -50,6 +50,29 @@ func TestLoaderMapsPublicImportPath(t *testing.T) {
 	}
 }
 
+// 测试加载 Bunko 同级的工作区包
+func TestLoaderLoadsWorkspacePackage(t *testing.T) {
+	root := t.TempDir()
+	bunkoRoot := filepath.Join(root, "bunko")
+	packageDirectory := filepath.Join(root, "selfhost", "sample")
+	if err := os.MkdirAll(bunkoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(packageDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDirectory, "sample.mio"), []byte("koukai teisu value = 1;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := New(bunkoRoot).Load("selfhost/sample")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Directory != packageDirectory || len(loaded.Sources) != 1 {
+		t.Fatalf("package=%#v", loaded)
+	}
+}
+
 // 测试物理根目录不会成为公开导入路径
 func TestLoaderRejectsPhysicalRootAndInvalidPaths(t *testing.T) {
 	loader := New(t.TempDir())

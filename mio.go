@@ -2,6 +2,7 @@
 package mio
 
 import (
+	"context"
 	"fmt"
 	"io"
 
@@ -26,6 +27,18 @@ type Environment struct {
 type Program struct {
 	bytecode *compiler.Bytecode
 }
+
+// ExecutionOptions 配置单次程序执行
+type ExecutionOptions struct {
+	Context          context.Context
+	InstructionLimit uint64
+	InstructionCount *uint64
+	ProgressInterval uint64
+	Progress         func(ExecutionProgress)
+}
+
+// ExecutionProgress 保存 VM 的执行进度
+type ExecutionProgress = vm.ExecutionProgress
 
 // NewEnvironment 创建独立的 Mio 宿主环境
 func NewEnvironment(registry *mma.ModuleRegistry) *Environment {
@@ -90,13 +103,21 @@ func (p *Program) Encode(writer io.Writer) error {
 
 // Run 在当前环境中同步执行程序
 func (e *Environment) Run(program *Program, output io.Writer) error {
+	return e.RunWithOptions(program, output, ExecutionOptions{})
+}
+
+// RunWithOptions 使用指定资源限制执行程序
+func (e *Environment) RunWithOptions(program *Program, output io.Writer, options ExecutionOptions) error {
 	if e == nil {
 		return fmt.Errorf("mio: nil environment")
 	}
 	if program == nil || program.bytecode == nil {
 		return fmt.Errorf("mio: nil program")
 	}
-	return vm.NewWithRuntime(program.bytecode, e.registry, output, e.resources).Run()
+	return vm.NewWithRuntime(program.bytecode, e.registry, output, e.resources).RunWithOptions(vm.ExecutionOptions{
+		Context: options.Context, InstructionLimit: options.InstructionLimit, InstructionCount: options.InstructionCount,
+		ProgressInterval: options.ProgressInterval, Progress: options.Progress,
+	})
 }
 
 // Close 关闭 Environment 中尚未释放的资源

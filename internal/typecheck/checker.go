@@ -36,6 +36,7 @@ type Checker struct {
 	globals      map[resolver.Symbol]struct{}
 	structs      map[string]StructDefinition
 	enums        map[string]EnumDefinition
+	nodeTypes    map[ast.Expression]Kind
 
 	returnTypes         []Kind
 	loopDepth           int
@@ -93,6 +94,7 @@ func New() *Checker {
 		globals:      make(map[resolver.Symbol]struct{}),
 		structs:      make(map[string]StructDefinition),
 		enums:        make(map[string]EnumDefinition),
+		nodeTypes:    make(map[ast.Expression]Kind),
 	}
 }
 
@@ -104,13 +106,21 @@ func NewWithResolver(r *resolver.Resolver) *Checker {
 }
 
 // checkExpression 推断并检查表达式的类型
-func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
+func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) {
+	defer func() {
+		if err == nil && expr != nil {
+			c.nodeTypes[expr] = result
+		}
+	}()
 	switch n := expr.(type) {
 
 	// 基础字面量
 	case *ast.IntegerLiteral:
 		if kind := integerKind(n.Type); kind != KindInvalid {
 			return kind, nil
+		}
+		if err := checkIntegerLiteral(n, KindInt, false); err != nil {
+			return KindInvalid, err
 		}
 		return KindInt, nil
 
@@ -240,6 +250,12 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 
 	// 一元表达式
 	case *ast.PrefixExpression:
+		if literal := groupedIntegerLiteral(n.Right); literal != nil && n.Operator == token.Minus {
+			if err := checkIntegerLiteral(literal, KindInt, true); err == nil {
+				literal.Type = KindInt.String()
+				return KindInt, nil
+			}
+		}
 		right, err := c.checkExpression(n.Right)
 		if err != nil {
 			return KindInvalid, err
@@ -493,6 +509,25 @@ func (c *Checker) checkExpression(expr ast.Expression) (Kind, error) {
 			expr,
 		)
 	}
+}
+
+// TypeOf 查询已检查表达式的静态类型
+func (c *Checker) TypeOf(expr ast.Expression) (Kind, bool) {
+	kind, ok := c.nodeTypes[expr]
+	return kind, ok
+}
+
+// TypeOfIdentifier 查询已绑定标识符的声明类型
+func (c *Checker) TypeOfIdentifier(identifier *ast.Identifier) (Kind, bool) {
+	if c.resolver == nil || identifier == nil {
+		return KindInvalid, false
+	}
+	symbol, ok := c.resolver.BindingOf(identifier)
+	if !ok {
+		return KindInvalid, false
+	}
+	kind, ok := c.types[symbol]
+	return kind, ok
 }
 
 func integerKind(name string) Kind {

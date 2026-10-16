@@ -381,13 +381,13 @@ func (p *Parser) parseIntegerLiteral() (ast.Expression, error) {
 		return nil, fmt.Errorf("expected INTEGER, got %s", p.curToken.Type)
 	}
 
-	value, err := strconv.ParseInt(p.curToken.Literal, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid integer %q: %w", p.curToken.Literal, err)
-	}
+	magnitude, err := strconv.ParseUint(p.curToken.Literal, 10, 64)
 
 	return &ast.IntegerLiteral{
-		Value: value,
+		Value:     int64(magnitude),
+		Magnitude: magnitude,
+		Overflow:  err != nil,
+		Raw:       p.curToken.Literal,
 		Range: ast.Span{
 			Start: p.curToken.Start,
 			End:   p.curToken.End,

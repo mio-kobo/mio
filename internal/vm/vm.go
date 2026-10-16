@@ -29,6 +29,19 @@ type ExecutionOptions struct {
 	Context context.Context
 	// InstructionLimit 限制指令数量；0 使用默认值
 	InstructionLimit uint64
+	// InstructionCount 接收本次实际执行的指令数
+	InstructionCount *uint64
+	// ProgressInterval 设置进度回调间隔；0 表示不回调
+	ProgressInterval uint64
+	// Progress 接收达到进度间隔时的执行位置
+	Progress func(ExecutionProgress)
+}
+
+// ExecutionProgress 保存 VM 的执行进度
+type ExecutionProgress struct {
+	Instructions uint64
+	Function     string
+	Offset       int
 }
 
 type frame struct {
@@ -160,6 +173,9 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 		limit = DefaultInstructionLimit
 	}
 	var executed uint64
+	if options.InstructionCount != nil {
+		defer func() { *options.InstructionCount = executed }()
+	}
 	var operands [2]int
 
 	for len(v.frames) > 0 {
@@ -187,8 +203,14 @@ func (v *VM) RunWithOptions(options ExecutionOptions) (runErr error) {
 			return fmt.Errorf("instruction limit %d exceeded", limit)
 		}
 		executed++
-
 		ip := current.ip
+		if options.Progress != nil && options.ProgressInterval != 0 && executed%options.ProgressInterval == 0 {
+			function := "<main>"
+			if current.functionID >= 0 {
+				function = v.bytecode.Functions[current.functionID].Name
+			}
+			options.Progress(ExecutionProgress{Instructions: executed, Function: function, Offset: ip})
+		}
 		op := code.Opcode(current.instructions[ip])
 		def, err := code.Lookup(op)
 		if err != nil {

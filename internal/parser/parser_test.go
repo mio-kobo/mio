@@ -95,6 +95,23 @@ func TestParseIntegerProgram(t *testing.T) {
 	}
 }
 
+// 测试整数字面量保留 MinInt64 的正幅值
+func TestParseIntegerMagnitudeBoundary(t *testing.T) {
+	input, err := lexer.NewChecked("9223372036854775808;", token.V05)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := New(input).ParseProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := program.Statements[0].(*ast.ExpressionStatement)
+	literal := statement.Expr.(*ast.IntegerLiteral)
+	if literal.Raw != "9223372036854775808" || literal.Magnitude != uint64(1)<<63 || literal.Overflow {
+		t.Fatalf("unexpected integer literal: %+v", literal)
+	}
+}
+
 // 测试运算符优先级与前瞻查询
 func TestPeekPrecedence(t *testing.T) {
 	l := lexer.New("1 + 2 * 3;", token.V01)

@@ -62,9 +62,24 @@ func TestVMIntegerOverflowSemantics(t *testing.T) {
 func TestVMExecutionCanBeStopped(t *testing.T) {
 	loop := &compiler.Bytecode{Instructions: code.Instructions{byte(code.OpJump), 0, 0}}
 	machine := New(loop)
-	err := machine.RunWithOptions(ExecutionOptions{InstructionLimit: 3})
+	var executed uint64
+	var reports []uint64
+	err := machine.RunWithOptions(ExecutionOptions{
+		InstructionLimit: 3,
+		InstructionCount: &executed,
+		ProgressInterval: 1,
+		Progress: func(progress ExecutionProgress) {
+			reports = append(reports, progress.Instructions)
+		},
+	})
 	if err == nil || !strings.Contains(err.Error(), "instruction limit 3 exceeded") {
 		t.Fatalf("RunWithOptions() error = %v", err)
+	}
+	if executed != 3 {
+		t.Fatalf("executed = %d, want 3", executed)
+	}
+	if len(reports) != 3 || reports[0] != 1 || reports[2] != 3 {
+		t.Fatalf("reports = %v, want [1 2 3]", reports)
 	}
 	if len(machine.stack) != 0 || len(machine.frames) != 0 || len(machine.globals) != 0 {
 		t.Fatal("instruction limit error left runtime state")

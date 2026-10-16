@@ -29,9 +29,12 @@ type Statement interface {
 
 // 整数字面量
 type IntegerLiteral struct {
-	Value int64
-	Type  string
-	Range Span
+	Value     int64
+	Magnitude uint64
+	Overflow  bool
+	Raw       string
+	Type      string
+	Range     Span
 }
 
 // RuneLiteral 表示 Unicode 标量字面量
