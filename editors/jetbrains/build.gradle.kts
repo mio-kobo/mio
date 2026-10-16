@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.exmikupro.mio"
-version = "0.6.1-dev"
+version = "0.6.1"
 
 repositories {
     mavenCentral()
@@ -44,6 +44,7 @@ intellijPlatform {
         """.trimIndent()
 
         changeNotes = """
+            <p>0.6.1: Added the Mio plugin logo and refreshed the README artwork.</p>
             <p>0.6.0: Added the Mio new-project wizard, shared SDK registry, per-project SDK and Bunko selection, and verified GitHub Releases installation.</p>
             <p>0.5.0: Added verified Mio CLI discovery, native run configurations, editor run actions, package execution, and package-safe unsaved diagnostics.</p>
             <p>0.4.0: Added asynchronous Mio compiler diagnostics, UTF-8-aware error highlighting, diagnostic details, executable settings, and safe syntax quick fixes.</p>

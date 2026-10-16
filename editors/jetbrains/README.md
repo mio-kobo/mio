@@ -1,6 +1,22 @@
-# Mio Language Support
+<p align="center">
+  <a href="assets/mio-language-support.png">
+    <img src="assets/mio-language-support.webp" alt="Mio 与 Mochi 展示 Mio Language Support JetBrains 插件" width="650" />
+  </a>
+</p>
 
-Mio Language Support 是 Mio 编程语言的 JetBrains IDE 插件。0.6.0 面向 IntelliJ IDEA 2025.3 和 GoLand 2025.3，使用通用 IntelliJ Platform API，不依赖 GoLand 私有 API、Go 插件或 Java 插件。
+<h1 align="center">Mio Language Support</h1>
+
+<p align="center"><strong>为 Mio 编程语言打造的 JetBrains IDE 插件</strong></p>
+
+<p align="center">
+  <a href="https://github.com/ExMikuPro/Mio">Mio 项目</a> ·
+  <a href="https://github.com/ExMikuPro/Mio/releases">Releases</a> ·
+  <a href="../../docs/LANGUAGE.md">语言文档</a>
+</p>
+
+Mio Language Support 提供 IntelliJ IDEA 和 GoLand 的 `.mio` 文件编辑、语言分析与运行支持。当前插件版本为 **`0.6.1`**，目标平台为 **IntelliJ IDEA 2025.3 / GoLand 2025.3**；基于通用 IntelliJ Platform API，不依赖 GoLand 私有 API、Go 插件或 Java 插件。
+
+> 上图为 Mio 与 Mochi 的插件宣传插画。点击图片可查看原始 PNG。它是项目角色美术素材，使用与再分发授权应与代码许可分别确认。
 
 ## 功能
 
@@ -36,7 +52,7 @@ Mio Language Support 是 Mio 编程语言的 JetBrains IDE 插件。0.6.0 面向
 
 GitHub 安装只会在用户明确点击后执行。插件使用 IDE 代理和可取消进度任务，从 `/releases` 读取 Alpha 和稳定版本，按 Windows x64、Linux x64/ARM64、macOS Intel/Apple Silicon 选择资产，验证 GitHub 提供的 SHA-256，拒绝路径穿越、链接和异常解压体积，再实际运行 `mio version`、JSON 诊断与 `run` 探测。安装先写入所选目录内的临时位置，通过后原子转移；不会覆盖已有版本，也不会要求管理员权限。
 
-当前官方 Release 只包含 CLI 和 README，不包含 Bunko。未配置 Bunko 时 SDK 会明确显示为部分可用；可以为 SDK 或当前项目选择包含真实 `kiso/math` 源码的 Bunko 根目录。插件不会混用 `main` 分支源码。有效路径会统一通过 `MIO_BUNKO` 供诊断和运行使用，并作为补全与自动导入的索引根。
+早期 Alpha Release 仅包含 CLI 和 README，不包含 Bunko；后续 Release 是否附带 Bunko，以对应版本的实际发布资产为准。未配置 Bunko 时 SDK 会明确显示为部分可用；可以为 SDK 或当前项目选择包含真实 `kiso/math` 源码的 Bunko 根目录。插件不会自动混用与所选 SDK 版本不匹配的仓库分支源码。有效路径会统一通过 `MIO_BUNKO` 供诊断和运行使用，并作为补全与自动导入的索引根。
 
 检查使用编辑器内存中的最新文本，不要求先保存文件。插件会把当前文件所在目录的普通 `.mio` 文件复制到单次检查专用临时目录，只用内存文本替换当前文件，原始源码不会被写入；如果项目或当前源码的祖先目录中存在 `bunko/`，会通过 `MIO_BUNKO` 传给 CLI。检查完成、取消或项目关闭时会终止对应进程并删除临时目录。
 
@@ -84,7 +100,7 @@ Gradle Wrapper 默认把依赖缓存放在本目录的 `.gradle-user-home/`，�
 1. 打开 GoLand 2025.3。
 2. 进入 **Settings | Plugins**。
 3. 点击齿轮按钮，选择 **Install Plugin from Disk...**。
-4. 选择 `build/distributions/mio-language-support-0.6.0.zip`。
+4. 选择 `build/distributions/` 中与 `build.gradle.kts` 当前版本对应的 `mio-language-support-*.zip`。
 5. 按提示重启 IDE。
 
 ## 验证高亮
@@ -107,4 +123,4 @@ IDE 应将文件识别为 Mio，并分别高亮关键字、类型、字符串、
 
 ## 当前不支持
 
-0.6.0 尚未提供持久化 StubIndex、安全重命名、完整表达式类型推断、LSP 或 Debugger。字段跳转依赖显式类型或可直接识别的结构体字面量；解析结果不唯一时不会提供猜测式跳转。当前 Mio CLI 每次只返回第一条诊断，且目录输入和导入包错误的 JSON 尚未携带具体成员源文件路径；插件会保留多文件包语义完成检查，但不会把无法确认来源的范围猜测映射到当前编辑器。当前语义模型按 PSI 与 VFS 修改增量失效，Bunko 目录结构和源文件模型分别缓存。官方 Release 尚不包含 Bunko，插件不会自动下载未经 Release 校验信息覆盖的标准库源码。
+当前开发版尚未提供持久化 StubIndex、安全重命名、完整表达式类型推断、LSP 或 Debugger。字段跳转依赖显式类型或可直接识别的结构体字面量；解析结果不唯一时不会提供猜测式跳转。当前 Mio CLI 每次只返回第一条诊断，且目录输入和导入包错误的 JSON 尚未携带具体成员源文件路径；插件会保留多文件包语义完成检查，但不会把无法确认来源的范围猜测映射到当前编辑器。当前语义模型按 PSI 与 VFS 修改增量失效，Bunko 目录结构和源文件模型分别缓存。早期 Alpha Release 尚不包含 Bunko；插件不会自动下载未经 Release 校验信息覆盖的标准库源码。
