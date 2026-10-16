@@ -17,14 +17,16 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml"><img alt="CI (main)" src="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml/badge.svg?branch=main" /></a>
+  <a href="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml?query=branch%3AMio-1.0.0"><img alt="CI (Mio-1.0.0)" src="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml/badge.svg?branch=Mio-1.0.0" /></a>
   <a href="https://github.com/ExMikuPro/Mio/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ExMikuPro/Mio?include_prereleases&label=release" /></a>
-  <img alt="Project status: experimental" src="https://img.shields.io/badge/status-experimental-blue" />
+  <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-orange" />
 </p>
 
 **Mio** 是一门正在开发的**静态强类型编程语言**，采用日语罗马音关键字，重视数学数值语义、清晰的类型规则和模块化标准库。Mio 的设计方向是用尽可能精简的语言 Core，组合按需导入的 **Bunko** 模块，支持从普通应用到数值计算的开发需求。
 
-第一代工具链以 **Mochi 字节码**为执行目标。项目已拥有使用 Mio 自身编写的编译器前端和 Codegen，并在本地隔离验收中完成真正的连续自编译；现阶段仍通过 **Go 实现的 Mochi VM** 运行编译产物。
+第一代工具链以 **Mochi 字节码**为执行目标。纯 Mio 编译器已经完成 Lexer、Parser、Resolver、TypeChecker、Constant Evaluator 与 Codegen，并成功走通 A → B → C → D 连续自编译；Compiler B、C、D 字节完全一致。Mio v1 仍通过 **Go 实现的 Mochi VM** 运行编译产物。
+
+当前 `1.0.0-beta.1` 面向测试、兼容性验证与反馈收集，**不建议用于生产环境**。
 
 ## Mio 与 Mochi
 
@@ -47,7 +49,11 @@ go build -o mio ./cmd/mio
 ./mio version
 ```
 
-> 开发分支中的 CLI 版本显示可能仍沿用既有 Alpha 版本号；自举通过不代表发布版本号已经更新。
+版本命令应输出：
+
+```text
+Mio 1.0.0-beta.1
+```
 
 新建 `hello.mio`：
 
@@ -74,7 +80,7 @@ kaku value: float64 = 144.0;
 chant(math.sqrt(value));
 ```
 
-`bunko/` 是标准库的物理目录，Mio 源码中使用 `yobu "kiso/math";`，**不是** `yobu "bunko/kiso/math";`。从源码运行时应保留正确的 Bunko 根目录；必要时可通过 `MIO_BUNKO` 配置。当前 Alpha Release 安装包尚未包含完整 Bunko 源码。
+`bunko/` 是标准库的物理目录，Mio 源码中使用 `yobu "kiso/math";`，**不是** `yobu "bunko/kiso/math";`。从源码运行时应保留正确的 Bunko 根目录；必要时可通过 `MIO_BUNKO` 配置。Release 安装包包含 CLI、Bunko 源码与许可证。
 
 ## 语言能力
 
@@ -92,7 +98,7 @@ chant(math.sqrt(value));
 
 Mio 不允许普通数值类型之间隐式转换；固定宽度整数有明确的回绕语义，`float32` 与 `float64` 遵循各自精度规则。数组采用共享引用语义，结构体采用不可变值语义，`Map` 的索引读取返回 `V?`。
 
-更多规则参见 [语言文档](docs/LANGUAGE.md)。该文档当前仍以 v0.4 命名，部分历史描述尚未同步最新开发版；涉及新功能时以实际源码及测试为准。
+更多规则参见 [语言文档](docs/LANGUAGE.md)。
 
 ## Bunko 标准库
 
@@ -162,7 +168,7 @@ b44a55bf3f9020e6b0ff83ad137b25774814a32dfe8acaf070abcd167bfd1465
 
 单次测试记录中，A → B、B → C、C → D 各耗时约 **6 分 52 秒至 6 分 56 秒**，完整引导约 **20 分 44 秒**。这是一份未专项优化的 **Mochi VM 性能基线**，并非未来 Native AOT 的性能预测。
 
-**自举成功 ≠ 原生独立执行。** v1 的自编译器本身仍是 Mochi 字节码，运行时仍需要 Go 实现的 Mochi VM。最终提交与正式发布之前，还需要在干净、可复现的版本快照上完成发布验收。
+**自举成功 ≠ 原生独立执行。** v1 的自编译器本身仍是 Mochi 字节码，运行时仍需要 Go 实现的 Mochi VM。Beta 候选仍需通过干净、可复现版本快照上的发布验收。
 
 ## Mochi 字节码与 MMA
 
@@ -188,8 +194,8 @@ Mio 使用 `_test.mio` 作为测试文件后缀，测试函数以 `test_` 开头
 go test -short ./... -count=1
 go test -race -short ./... -count=1
 
-# 完整测试（包含耗时较长的自举与差分用例）
-go test ./... -count=1 -timeout=60m
+# 完整确定性回归（自举单独验收）
+go test -skip='^TestBootstrapSelfCompilation$' ./... -count=1 -timeout=35m
 
 # 静态分析
 go vet ./...
@@ -202,7 +208,7 @@ MIO_STRESS_TEST=1 go test ./... -count=1 -timeout=60m
 单独进行连续自编译验证：
 
 ```bash
-go test ./selfhost/bootstrap -run '^TestBootstrapSelfCompilation$' -count=1 -v -timeout=60m
+go test ./selfhost/bootstrap -run '^TestBootstrapSelfCompilation$' -count=1 -v -timeout=80m
 ```
 
 Bootstrap 测试采用隔离的 VM 指令预算，**不改变普通 CLI 的默认安全限制**。测试使用较多时间和内存，请合理安排执行环境。更多信息参见 [测试文档](docs/TESTING.md) 与 [国际化文档](docs/I18N.md)。
@@ -217,8 +223,8 @@ Bootstrap 测试采用隔离的 VM 指令预算，**不改变普通 CLI 的默�
 
 | 阶段 | 状态与目标 |
 | --- | --- |
-| Mio v1 自举核心 | **本地隔离验收已通过**：A → B → C → D，B / C / D 字节一致 |
-| Mio v1.0.0 发布准备 | 整理最终工作区、完整回归、更新文档、添加正式代码许可证、发布版本 |
+| Mio v1 自举核心 | **已完成**：A → B → C → D，B / C / D 字节一致 |
+| Mio v1.0.0 发布准备 | **Beta 阶段**：回归验证、兼容性测试与反馈收集 |
 | Mio v2 Native AOT | **规划中**：原生机器码编译、独立 Runtime / GC、逐步移除 Mochi VM 执行依赖 |
 | 后续能力 | 在原生基础稳定后探索并行、异步、数学性能优化等能力 |
 
@@ -238,6 +244,6 @@ Bootstrap 测试采用隔离的 VM 指令预算，**不改变普通 CLI 的默�
 
 ## 许可证与角色美术
 
-**代码许可计划：MIT License。**
+项目代码已经采用 [MIT License](LICENSE)。
 
-Mio 与 Mochi 的角色图像位于 [`assets/mascot/`](assets/mascot/)。**角色插画的版权与使用许可需要单独明确**，不能因为项目代码计划采用 MIT，就默认将美术素材也纳入 MIT 授权。
+Mio 与 Mochi 的角色图像位于 [`assets/mascot/`](assets/mascot/)。**角色插画不随项目代码纳入 MIT License，其版权与使用许可需单独取得。**

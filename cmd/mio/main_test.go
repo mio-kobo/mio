@@ -135,6 +135,7 @@ age;
 
 // 测试版本命令
 func TestCLIVersion(t *testing.T) {
+	const want = "Mio 1.0.0-beta.1\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -148,10 +149,10 @@ func TestCLIVersion(t *testing.T) {
 		t.Fatalf("unexpected exit code %d", code)
 	}
 
-	if stdout.String() != "Mio "+version+"\n" {
+	if stdout.String() != want {
 		t.Fatalf(
 			"expected version output %q, got %q",
-			"Mio "+version+"\\n",
+			want,
 			stdout.String(),
 		)
 	}

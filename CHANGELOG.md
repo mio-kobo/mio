@@ -2,6 +2,45 @@
 
 本文件记录 Mio 的公开版本变化。
 
+## 1.0.0-beta.1 - 2026-10-17
+
+首个 v1 Beta 预发布版本，面向测试、兼容性验证与反馈收集，不建议用于生产环境。
+
+### 编译器与自举
+
+- 提供以纯 Mio 编写的编译器，实现 Lexer、Parser、Resolver、TypeChecker、Constant Evaluator 与 Mochi Codegen。
+- 完成 Go 引导的 Compiler A → B → C → D 连续自编译；Compiler B、C、D 字节完全一致，并通过解码、结构验证与执行测试。
+- 保留 Go 引导编译器用于首次构建与交叉验证；v1 编译产物仍由 Go 实现的 Mochi VM 执行。
+
+### 语言与字节码
+
+- 支持固定宽度整数、`float32` / `float64`、`rune`、可空类型、动态数组、Map、结构体、枚举和函数值。
+- 支持泛型函数与数据类型、数值约束、词法闭包与共享捕获 Cell、目录包、显式导入、公开成员和编译期常量。
+- Mochi 更新至 v14，解码器保持 v1–v14 兼容，并继续执行正式的栈、调用深度与指令预算安全限制。
+
+### Bunko、MMA 与测试
+
+- 提供 11 个 Bunko 包：`array`、`bytes`、`convert`、`encoding/binary`、`fs`、`io`、`math`、`path`、`string`、`testing` 与 `utf8`。
+- MMA 提供稳定符号绑定、签名指纹、受控字节数组访问和带代次校验的不透明 Resource 生命周期。
+- 建立 Fast、Full、Stress、Race 与 A → B → C → D Bootstrap 分级测试体系，覆盖 MinInt64、`float32` 正确舍入、泛型与闭包、Bunko、MMA 及 Mochi v1–v14。
+
+### 工具与发布
+
+- CLI 提供 `check`、`run`、`build`、`exec`、`disasm` 与 `test`，支持结构化诊断和三语言 i18n。
+- JetBrains IDE 插件 0.6.0 提供语法高亮、补全、导航、诊断、运行配置、新项目创建与 SDK 管理。
+- Release 工作流打包 CLI、Bunko、MIT License 与 JetBrains 插件，并对预发布 Tag 创建 GitHub Pre-release。
+
+### 已知限制
+
+- 当前不是 Native AOT 工具链，运行 Mochi 字节码仍依赖 Go 实现的 VM；独立 Runtime 与 GC 尚未实现。
+- trait、HKT、型变、反射、异常、JIT、多维数组、切片和字符串修改尚未实现。
+- LSP 与 VS Code 扩展仍在规划中。
+- Mochi 文件没有校验和或数字签名；CLI 尚未提供指令预算的命令行配置。
+
+### 许可
+
+- 项目代码采用根目录中的 MIT License；Mio / Mochi 角色插画不随代码纳入 MIT License，须单独取得使用许可。
+
 ## 0.1.0-alpha.1 - 2026-10-15
 
 首次公开实验版本。
