@@ -8,6 +8,7 @@ import (
 
 	"Mio/internal/ast"
 	"Mio/internal/code"
+	"Mio/internal/token"
 	"Mio/internal/value"
 )
 
@@ -106,5 +107,30 @@ func TestTypedBytecodeSnapshot(t *testing.T) {
 	got := c.Bytecode()
 	if got.Constants[0] != value.NewString("Mio") || got.Instructions[0] != byte(code.OpConstant) {
 		t.Fatal("bytecode snapshot shares mutable storage with compiler")
+	}
+}
+
+// 测试可空结构字段与 mu 比较使用专用空值检查指令。
+func TestCompileNullableFieldNilComparison(t *testing.T) {
+	for _, operator := range []token.Type{token.Equal, token.NotEqual} {
+		compiler := New()
+		expression := &ast.InfixExpression{
+			Left: &ast.FieldExpression{
+				Left: &ast.StructLiteral{Fields: []ast.FieldValue{{Name: "value", Value: &ast.NilLiteral{}}}},
+				Name: "value", Index: 0,
+			},
+			Operator: operator,
+			Right:    &ast.NilLiteral{},
+		}
+		if err := compiler.Compile(expression); err != nil {
+			t.Fatal(err)
+		}
+		disassembly := compiler.Bytecode().Instructions.String()
+		if strings.Count(disassembly, "OpIsNil") != 1 {
+			t.Fatalf("nullable field comparison %s must use OpIsNil:\n%s", operator, disassembly)
+		}
+		if strings.Contains(disassembly, "OpEqual") || strings.Contains(disassembly, "OpNotEqual") {
+			t.Fatalf("nullable field comparison %s used ordinary equality:\n%s", operator, disassembly)
+		}
 	}
 }

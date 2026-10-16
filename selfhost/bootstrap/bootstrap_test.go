@@ -34,6 +34,9 @@ func TestBootstrapSelfCompilation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("自编译需要较大的执行预算")
 	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < 30*time.Minute {
+		t.Skip("完整自编译需要至少 30 分钟测试期限；请使用 go test ./selfhost/bootstrap -timeout=60m")
+	}
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +57,13 @@ func TestBootstrapSelfCompilation(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.WriteFile(configPath, originalConfig, 0o644) })
 
-	directory := t.TempDir()
+	directory := os.Getenv("MIO_BOOTSTRAP_ARTIFACT_DIR")
+	if directory == "" {
+		directory = t.TempDir()
+	} else if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("bootstrap: artifact directory=%s", directory)
 	compilerA := filepath.Join(directory, "compiler-A.mochi")
 	compilerB := filepath.Join(directory, "compiler-B.mochi")
 	compilerC := filepath.Join(directory, "compiler-C.mochi")

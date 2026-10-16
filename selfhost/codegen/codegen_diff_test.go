@@ -141,6 +141,7 @@ func runPureAndGo(t *testing.T, source string) (string, string) {
 func TestCodegenExecutionDifferential(t *testing.T) {
 	cases := []string{
 		`kaku x: int64 = 1; moshi (x < 2) { chant(x + 2); } sore { chant(0); }`,
+		`moshi (hai) { kaku scoped: int64 = 41; chant(scoped + 1); }`,
 		`waza sum(n: int64) -> int64 { kaku total: int64 = 0; kaku i: int64 = 0; aida (i < n) { total = total + i; i = i + 1; } kaesu total; } chant(sum(6));`,
 		`kaku value: int64 = -9223372036854775808; chant(value); chant(iie && hai); chant(hai || iie);`,
 		`teisu base: int64 = 40 + 2; waza answer() -> int64 { kaesu base; } chant(answer());`,

@@ -330,6 +330,21 @@ waza emit_call(state: CompilerState, context: CompileContext, file_id: int64, no
     moshi (symbol_id >= 0 && resolver.symbol_kind_code(state.resolved.symbols[symbol_id].kind) == 12 && state.resolved.symbols[symbol_id].name == "Map") {
         emit0(context.emitter, OP_MAP); kaesu hai;
     }
+    moshi (symbol_id >= 0 && state.resolved.symbols[symbol_id].package_path == "kiso/array") {
+        kaku name = state.resolved.symbols[symbol_id].name;
+        moshi (name == "make" || name == "with_capacity") {
+            kaku argument = 1;
+            aida (argument < len(node.children)) {
+                moshi (!emit_expression(state, context, file_id, node.children[argument])) { kaesu iie; }
+                argument = argument + 1;
+            }
+            kaku result_type = node_type(state, file_id, node_id);
+            kaku descriptor = array_descriptor(state, state.checked.types[result_type].element);
+            moshi (name == "make") { emit_u8(context.emitter, OP_ARRAY_MAKE, descriptor); }
+            sore { emit_u8(context.emitter, OP_ARRAY_WITH_CAPACITY, descriptor); }
+            kaesu hai;
+        }
+    }
     kaku direct = function_id(state, symbol_id);
     moshi (direct >= 0) {
         kaku direct_argument = 1; aida (direct_argument < len(node.children)) { moshi (!emit_expression(state, context, file_id, node.children[direct_argument])) { kaesu iie; } direct_argument = direct_argument + 1; }
@@ -538,7 +553,16 @@ waza emit_statement(state: CompilerState, context: CompileContext, file_id: int6
         moshi (context.in_function) {
             kaku slot = existing_slot; moshi (slot < 0) { slot = len(context.local_symbols); array.push(context.local_symbols, symbol_id); array.push(context.local_slots, slot); }
             moshi (len(context.loops) > 0) { emit_u16(context.emitter, OP_DEFINE_LOCAL, slot); } sore { emit_u16(context.emitter, OP_SET_LOCAL, slot); }
-        } sore { emit_u16(context.emitter, OP_SET_GLOBAL, slot_of(state.global_symbols, state.global_slots, symbol_id)); }
+        } sore {
+            kaku slot = slot_of(state.global_symbols, state.global_slots, symbol_id);
+            moshi (slot < 0) {
+                slot = state.next_global[0];
+                state.next_global[0] = slot + 1;
+                array.push(state.global_symbols, symbol_id);
+                array.push(state.global_slots, slot);
+            }
+            emit_u16(context.emitter, OP_SET_GLOBAL, slot);
+        }
         kaesu hai;
     }
     moshi (kind == 15) {

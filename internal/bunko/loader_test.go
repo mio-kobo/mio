@@ -33,7 +33,11 @@ func TestLoaderMapsPublicImportPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.ImportPath != "kiso/math" || loaded.Directory != directory {
+	resolvedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ImportPath != "kiso/math" || loaded.Directory != resolvedDirectory {
 		t.Fatalf("unexpected package: %#v", loaded)
 	}
 	names := make([]string, len(loaded.Sources))
@@ -68,7 +72,11 @@ func TestLoaderLoadsWorkspacePackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Directory != packageDirectory || len(loaded.Sources) != 1 {
+	resolvedPackageDirectory, err := filepath.EvalSymlinks(packageDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Directory != resolvedPackageDirectory || len(loaded.Sources) != 1 {
 		t.Fatalf("package=%#v", loaded)
 	}
 }

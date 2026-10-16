@@ -64,6 +64,7 @@ waza native_layouts() -> []codegen.NativeFunctionLayout {
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_name", binding_key: "$mma::mio/fs/runtime::dir_name::ca5c10cb23a1dc4f8d7120a05626b664f700151ff09870e6a2a9204b890efa7c", parameter_count: 1, returns_value: hai });
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_next", binding_key: "$mma::mio/fs/runtime::dir_next::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_status", binding_key: "$mma::mio/fs/runtime::dir_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "file_status", binding_key: "$mma::mio/fs/runtime::file_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "mkdir", binding_key: "$mma::mio/fs/runtime::mkdir::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946", parameter_count: 2, returns_value: hai });
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "open", binding_key: "$mma::mio/fs/runtime::open::1192df94a5bdf48f4df10a0aa4b61147cfc2e6f2c2f8ea1248826e517f716633", parameter_count: 2, returns_value: hai });
     array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "open_dir", binding_key: "$mma::mio/fs/runtime::open_dir::7128dadd824bee38c385b052b0d86ff37b801ae61b35c36db664b2d310b6dbdf", parameter_count: 1, returns_value: hai });
@@ -140,7 +141,20 @@ waza compile(root: string, output: string) -> bool {
     load_package(state, root, "selfhost/bootstrap");
     moshi (state.failed[0]) { chant(string.concat("bootstrap: ", state.diagnostic[0])); kaesu iie; }
     kaku result = codegen.compile_modules_with_natives(state.resolved, state.checked, native_layouts());
-    moshi (!result.success) { chant("bootstrap: codegen failed"); kaesu iie; }
+    moshi (!result.success) {
+        chant("bootstrap: codegen failed");
+        kaku error_index = 0;
+        aida (error_index < len(result.errors)) {
+            kaku current = result.errors[error_index];
+            chant(current.detail);
+            chant(current.node.file_id);
+            chant(current.node.node_id);
+            chant(current.span.start.line);
+            chant(current.span.start.column);
+            error_index = error_index + 1;
+        }
+        kaesu iie;
+    }
     kaku written = fs.write_all(output, result.bytes);
     moshi (written.error != mu) { chant("bootstrap: write failed"); kaesu iie; }
     chant("bootstrap: ok"); chant(len(result.bytes)); chant(len(result.layout.functions)); chant(len(result.layout.constants));
