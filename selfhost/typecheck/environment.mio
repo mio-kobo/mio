@@ -1,0 +1,254 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+kata FlowFact {
+    symbol_id: int64;
+    type_id: int64;
+    version: int64;
+}
+
+kata TypeEnvironment {
+    resolved: resolver.ResolvedPackage;
+    result: TypeCheckResult;
+    current_file: []int64;
+    return_types: []int64;
+    constraints: []TypeParameter;
+    facts: []FlowFact;
+    versions: []int64;
+    loop_depth: []int64;
+    function_depth: []int64;
+    constant_states: []int64;
+}
+
+waza empty_result(path: string) -> TypeCheckResult {
+    kaesu TypeCheckResult {
+        package_path: path,
+        types: array.with_capacity[TypeInfo](64),
+        node_types: array.with_capacity[NodeType](256),
+        symbol_types: array.with_capacity[SymbolType](128),
+        signatures: array.with_capacity[FunctionSignature](32),
+        substitutions: array.with_capacity[TypeSubstitution](32),
+        structs: array.with_capacity[StructDefinition](16),
+        enums: array.with_capacity[EnumDefinition](16),
+        constants: array.with_capacity[ConstantBinding](32),
+        errors: array.with_capacity[TypeError](16)
+    };
+}
+
+waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {
+    kaku result = empty_result(resolved.package_path);
+    scalar_type(result, TypeKind.Invalid(), "invalid");
+    scalar_type(result, TypeKind.Int8(), "int8");
+    scalar_type(result, TypeKind.Int16(), "int16");
+    scalar_type(result, TypeKind.Int32(), "int32");
+    scalar_type(result, TypeKind.Int64(), "int64");
+    scalar_type(result, TypeKind.Uint8(), "uint8");
+    scalar_type(result, TypeKind.Uint16(), "uint16");
+    scalar_type(result, TypeKind.Uint32(), "uint32");
+    scalar_type(result, TypeKind.Float32(), "float32");
+    scalar_type(result, TypeKind.Float64(), "float64");
+    scalar_type(result, TypeKind.Bool(), "bool");
+    scalar_type(result, TypeKind.String(), "string");
+    scalar_type(result, TypeKind.Nil(), "mu");
+    scalar_type(result, TypeKind.Unit(), "unit");
+    scalar_type(result, TypeKind.Resource(), "resource");
+    kaku versions = array.make[int64](len(resolved.symbols), 0);
+    kaesu TypeEnvironment {
+        resolved: resolved,
+        result: result,
+        current_file: [0],
+        return_types: array.with_capacity[int64](8),
+        constraints: array.with_capacity[TypeParameter](8),
+        facts: array.with_capacity[FlowFact](16),
+        versions: versions,
+        loop_depth: [0],
+        function_depth: [0],
+        constant_states: array.make[int64](len(resolved.symbols), 0)
+    };
+}
+
+waza builtin_type(env: TypeEnvironment, name: string) -> int64 {
+    kaku wanted = name;
+    moshi (wanted == "rune") { wanted = "int32"; }
+    kaku index = 0;
+    aida (index < len(env.result.types)) {
+        kaku info = env.result.types[index];
+        moshi (info.name == wanted && type_kind_code(info.kind) <= 14) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu 0;
+}
+
+waza node_at(env: TypeEnvironment, file_id: int64, node_id: int64) -> parser.Node {
+    kaesu env.resolved.files[file_id].ast.nodes[node_id];
+}
+
+waza binding_of(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.resolved.bindings)) {
+        kaku binding = env.resolved.bindings[index];
+        moshi (binding.reference.file_id == file_id && binding.reference.node_id == node_id) { kaesu binding.symbol_id; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza symbol_type(env: TypeEnvironment, symbol_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.facts)) {
+        moshi (env.facts[index].symbol_id == symbol_id && env.facts[index].version == env.versions[symbol_id]) { kaesu env.facts[index].type_id; }
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(env.result.symbol_types)) {
+        moshi (env.result.symbol_types[index].symbol_id == symbol_id) { kaesu env.result.symbol_types[index].type_id; }
+        index = index + 1;
+    }
+    kaesu 0;
+}
+
+waza declared_symbol_type(env: TypeEnvironment, symbol_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.symbol_types)) {
+        moshi (env.result.symbol_types[index].symbol_id == symbol_id) { kaesu env.result.symbol_types[index].type_id; }
+        index = index + 1;
+    }
+    kaesu 0;
+}
+
+waza set_symbol_type(env: TypeEnvironment, symbol_id: int64, type_id: int64) -> unit {
+    kaku index = 0;
+    aida (index < len(env.result.symbol_types)) {
+        moshi (env.result.symbol_types[index].symbol_id == symbol_id) {
+            kaku old = env.result.symbol_types[index];
+            env.result.symbol_types[index] = SymbolType { symbol_id: symbol_id, name: old.name, package_path: old.package_path, symbol_kind: old.symbol_kind, type_id: type_id };
+            kaesu;
+        }
+        index = index + 1;
+    }
+    kaku name = ""; kaku package_path = ""; kaku symbol_kind = -1;
+    moshi (symbol_id >= 0 && symbol_id < len(env.resolved.symbols)) {
+        kaku symbol = env.resolved.symbols[symbol_id]; name = symbol.name; package_path = symbol.package_path; symbol_kind = resolver.symbol_kind_code(symbol.kind);
+    }
+    array.push(env.result.symbol_types, SymbolType { symbol_id: symbol_id, name: name, package_path: package_path, symbol_kind: symbol_kind, type_id: type_id });
+}
+
+waza set_node_type(env: TypeEnvironment, file_id: int64, node_id: int64, type_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.node_types)) {
+        kaku item = env.result.node_types[index];
+        moshi (item.node.file_id == file_id && item.node.node_id == node_id) { env.result.node_types[index] = NodeType { node: item.node, type_id: type_id }; kaesu type_id; }
+        index = index + 1;
+    }
+    array.push(env.result.node_types, NodeType { node: resolver.NodeRef { file_id: file_id, node_id: node_id }, type_id: type_id });
+    kaesu type_id;
+}
+
+waza signature_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.signatures)) {
+        moshi (env.result.signatures[index].symbol_id == symbol_id) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza struct_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.structs)) {
+        moshi (env.result.structs[index].symbol_id == symbol_id) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza struct_named(env: TypeEnvironment, name: string) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.structs)) {
+        moshi (env.result.structs[index].name == name || string.concat(string.concat(env.result.structs[index].package_path, "."), env.result.structs[index].name) == name) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza enum_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.enums)) {
+        moshi (env.result.enums[index].symbol_id == symbol_id) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza enum_named(env: TypeEnvironment, name: string) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.enums)) {
+        moshi (env.result.enums[index].name == name || string.concat(string.concat(env.result.enums[index].package_path, "."), env.result.enums[index].name) == name) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza add_type_error(env: TypeEnvironment, kind: TypeErrorKind, code: string, file_id: int64, node_id: int64, expected: int64, actual: int64, detail: string) -> unit {
+    kaku span = node_at(env, file_id, node_id).span;
+    array.push(env.result.errors, TypeError { kind: kind, code: code, node: resolver.NodeRef { file_id: file_id, node_id: node_id }, span: span, expected: expected, actual: actual, detail: detail });
+}
+
+waza add_fact(env: TypeEnvironment, symbol_id: int64, type_id: int64) -> unit {
+    array.push(env.facts, FlowFact { symbol_id: symbol_id, type_id: type_id, version: env.versions[symbol_id] });
+}
+
+waza invalidate_fact(env: TypeEnvironment, symbol_id: int64) -> unit {
+    env.versions[symbol_id] = env.versions[symbol_id] + 1;
+}
+
+waza invalidate_global_facts(env: TypeEnvironment) -> unit {
+    kaku index = 0;
+    aida (index < len(env.facts)) {
+        kaku symbol_id = env.facts[index].symbol_id;
+        moshi (resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 2) { invalidate_fact(env, symbol_id); }
+        index = index + 1;
+    }
+}
+
+waza invalidate_all_facts(env: TypeEnvironment) -> unit {
+    kaku index = 0;
+    aida (index < len(env.facts)) { invalidate_fact(env, env.facts[index].symbol_id); index = index + 1; }
+}
+
+waza constraint_for(env: TypeEnvironment, name: string) -> string {
+    kaku index = len(env.constraints) - 1;
+    aida (index >= 0) {
+        moshi (env.constraints[index].name == name) { kaesu env.constraints[index].constraint; }
+        index = index - 1;
+    }
+    kaesu "";
+}
+
+waza numeric_type(env: TypeEnvironment, id: int64) -> bool {
+    moshi (is_numeric(env.result, id)) {
+        kaku info = env.result.types[id];
+        moshi (type_kind_code(info.kind) != 19) { kaesu hai; }
+        kaku constraint = constraint_for(env, info.name);
+        kaesu constraint == "Number" || constraint == "Integer" || constraint == "Signed" || constraint == "Float";
+    }
+    kaesu iie;
+}
+
+waza signed_type(env: TypeEnvironment, id: int64) -> bool {
+    moshi (is_signed(env.result, id)) { kaesu hai; }
+    moshi (id >= 0 && type_kind_code(env.result.types[id].kind) == 19) {
+        kaku constraint = constraint_for(env, env.result.types[id].name);
+        kaesu constraint == "Signed" || constraint == "Float";
+    }
+    kaesu iie;
+}
+
+waza floating_type(env: TypeEnvironment, id: int64) -> bool {
+    moshi (id < 0) { kaesu iie; }
+    kaku code = type_kind_code(env.result.types[id].kind);
+    moshi (code == 8 || code == 9) { kaesu hai; }
+    kaesu code == 19 && constraint_for(env, env.result.types[id].name) == "Float";
+}

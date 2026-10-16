@@ -1,0 +1,391 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/parser";
+
+waza add_builtin(state: ResolverState, name: string, kind: SymbolKind) -> unit {
+    kaku id = len(state.result.symbols);
+    kaku root = state.result.files[0].root;
+    array.push(state.result.symbols, Symbol {
+        id: id,
+        kind: kind,
+        name: name,
+        package_path: "",
+        scope_id: state.current_scope[0],
+        declaration: invalid_ref(),
+        span: state.result.files[0].ast.nodes[root].span,
+        public: hai,
+        owner_function: -1
+    });
+    moshi ((len(state.result.scopes[state.current_scope[0]].symbols) + 1) * 2 >= len(state.result.scopes[state.current_scope[0]].keys)) {
+        grow_scope_table(state, state.current_scope[0]);
+    }
+    scope_insert_table(state.result.scopes[state.current_scope[0]], name, id);
+    array.push(state.result.scopes[state.current_scope[0]].symbols, id);
+}
+
+waza install_builtins(state: ResolverState) -> unit {
+    kaku types = ["int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "resource", "Number", "Integer", "Signed", "Float"];
+    kaku index = 0;
+    aida (index < len(types)) { add_builtin(state, types[index], SymbolKind.BuiltinType()); index = index + 1; }
+    kaku functions = ["chant", "len", "Map", "$math.sqrt", "$math.floor", "$math.ceil", "$math.round_even", "$math.trunc", "$math.is_nan", "$math.is_inf", "$math.is_finite", "$math.is_negative_zero", "$math.add_overflows", "$math.is_negative", "$math.neg_overflows", "$math.error", "$array.make", "$array.with_capacity", "$array.push", "$array.capacity", "$array.reserve", "$array.clone", "$array.truncate", "$array.append_all", "$data.string_to_bytes", "$data.bytes_to_string", "$data.string_byte_len"];
+    index = 0;
+    aida (index < len(functions)) { add_builtin(state, functions[index], SymbolKind.BuiltinFunction()); index = index + 1; }
+    kaku source_functions = ["__array_make", "__array_with_capacity", "__array_push", "__array_capacity", "__array_reserve", "__array_clone", "__array_truncate", "__array_append_all", "__string_to_bytes", "__string_from_utf8", "__string_byte_len", "__sqrt", "__floor", "__ceil", "__round_even", "__trunc", "__is_nan", "__is_inf", "__is_finite", "__is_negative", "__neg_overflows", "__math_error"];
+    index = 0;
+    aida (index < len(source_functions)) { add_builtin(state, source_functions[index], SymbolKind.BuiltinFunction()); index = index + 1; }
+}
+
+waza node_at(state: ResolverState, file_id: int64, node_id: int64) -> parser.Node {
+    kaesu state.result.files[file_id].ast.nodes[node_id];
+}
+
+waza find_alias(state: ResolverState, file_id: int64, name: string) -> int64 {
+    kaku index = 0;
+    aida (index < len(state.result.aliases)) {
+        kaku alias = state.result.aliases[index];
+        moshi (alias.name == name) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza find_member(state: ResolverState, package_path: string, name: string, public_only: bool) -> int64 {
+    kaku index = 0;
+    aida (index < len(state.result.members)) {
+        kaku member = state.result.members[index];
+        moshi (member.package_path == package_path && member.name == name && (!public_only || member.public)) { kaesu member.symbol_id; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza native_package(path: string) -> bool {
+    kaku data = string.to_bytes(path);
+    kaesu len(data) >= 4 && data[0] == uint8(109) && data[1] == uint8(105) && data[2] == uint8(111) && data[3] == uint8(47);
+}
+
+waza add_external_builtin(state: ResolverState, package_path: string, name: string, file_id: int64, node_id: int64) -> int64 {
+    kaku id = len(state.result.symbols);
+    array.push(state.result.symbols, Symbol {
+        id: id,
+        kind: SymbolKind.BuiltinFunction(),
+        name: name,
+        package_path: package_path,
+        scope_id: 0,
+        declaration: NodeRef { file_id: file_id, node_id: node_id },
+        span: node_at(state, file_id, node_id).span,
+        public: hai,
+        owner_function: -1
+    });
+    array.push(state.result.members, PackageMember { package_path: package_path, name: name, symbol_id: id, public: hai });
+    kaesu id;
+}
+
+waza resolver_string(data: []uint8) -> string {
+    kaku value = string.from_utf8(data);
+    moshi (value != mu) { kaesu value; }
+    kaesu "";
+}
+
+waza resolve_qualified(state: ResolverState, file_id: int64, node_id: int64, name: string) -> int64 {
+    kaku data = string.to_bytes(name);
+    kaku dot = -1;
+    kaku index = 0;
+    aida (index < len(data)) {
+        moshi (data[index] == uint8(46)) { dot = index; nukeru; }
+        index = index + 1;
+    }
+    moshi (dot < 0) { kaesu -1; }
+    kaku left = array.with_capacity[uint8](dot);
+    index = 0;
+    aida (index < dot) { array.push(left, data[index]); index = index + 1; }
+    kaku right = array.with_capacity[uint8](len(data) - dot - 1);
+    index = dot + 1;
+    aida (index < len(data)) { array.push(right, data[index]); index = index + 1; }
+    kaku alias_name = resolver_string(left);
+    kaku member_name = resolver_string(right);
+    moshi (alias_name == "" || member_name == "") { kaesu -1; }
+    kaku alias_index = find_alias(state, file_id, alias_name);
+    moshi (alias_index < 0) { kaesu -1; }
+    kaku package_path = state.result.aliases[alias_index].package_path;
+    kaku member = find_member(state, package_path, member_name, hai);
+    moshi (member < 0 && native_package(package_path)) { member = add_external_builtin(state, package_path, member_name, file_id, node_id); }
+    moshi (member < 0) {
+        kaku hidden = find_member(state, package_path, member_name, iie);
+        moshi (hidden >= 0) { add_error(state, ResolveErrorKind.PrivatePackageMember(), file_id, node_id, name, symbol_at(state, hidden).declaration); }
+        sore { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, name, invalid_ref()); }
+        kaesu -1;
+    }
+    bind_symbol(state, file_id, node_id, member);
+    kaesu member;
+}
+
+waza resolve_type(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    moshi (node_id < 0) { kaesu; }
+    kaku node = node_at(state, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 39) {
+        kaku before_errors = len(state.result.errors);
+        kaku symbol = resolve_name(state, state.current_scope[0], node.text);
+        moshi (symbol < 0) { symbol = resolve_qualified(state, file_id, node_id, node.text); }
+        sore { bind_symbol(state, file_id, node_id, symbol); }
+        moshi (symbol < 0 && len(state.result.errors) == before_errors) { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, node.text, invalid_ref()); }
+    }
+    kaku index = 0;
+    aida (index < len(node.children)) { resolve_type(state, file_id, node.children[index]); index = index + 1; }
+}
+
+waza predeclare_node(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    kaku node = node_at(state, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    kaku symbol_kind = SymbolKind.Function();
+    kaku declaration = iie;
+    moshi (kind == 2) { declaration = hai; symbol_kind = SymbolKind.Constant(); }
+    moshi (kind == 32) { declaration = hai; moshi (node.integer > 0) { symbol_kind = SymbolKind.GenericFunction(); } }
+    moshi (kind == 34) { declaration = hai; symbol_kind = SymbolKind.StructType(); }
+    moshi (kind == 36) { declaration = hai; symbol_kind = SymbolKind.EnumType(); }
+    moshi (declaration) {
+        kaku symbol = define_symbol(state, file_id, node_id, node.text, symbol_kind, node.flag);
+        bind_symbol(state, file_id, node_id, symbol);
+    }
+}
+
+waza resolve_type_parameters(state: ResolverState, file_id: int64, node: parser.Node) -> unit {
+    kaku index = 0;
+    aida (index < node.integer) {
+        kaku child_id = node.children[index];
+        kaku parameter = node_at(state, file_id, child_id);
+        kaku symbol = define_symbol(state, file_id, child_id, parameter.text, SymbolKind.TypeParameter(), iie);
+        bind_symbol(state, file_id, child_id, symbol);
+        moshi (parameter.extra != "" && parameter.extra != "Number" && parameter.extra != "Integer" && parameter.extra != "Signed" && parameter.extra != "Float") {
+            add_error(state, ResolveErrorKind.InvalidTypeParameter(), file_id, child_id, parameter.extra, invalid_ref());
+        }
+        index = index + 1;
+    }
+}
+
+waza resolve_function(state: ResolverState, file_id: int64, node_id: int64, literal: bool) -> unit {
+    kaku node = node_at(state, file_id, node_id);
+    kaku previous_function = state.current_function[0];
+    kaku previous_depth = state.function_depth[0];
+    kaku function_symbol = -1;
+    moshi (!literal) { function_symbol = resolve_local(state, state.current_scope[0], node.text); }
+    sore {
+        function_symbol = len(state.result.symbols);
+        array.push(state.result.symbols, Symbol {
+            id: function_symbol,
+            kind: SymbolKind.Function(),
+            name: "$closure",
+            package_path: state.result.package_path,
+            scope_id: state.current_scope[0],
+            declaration: NodeRef { file_id: file_id, node_id: node_id },
+            span: node.span,
+            public: iie,
+            owner_function: previous_function
+        });
+    }
+    kaku scope_kind = ScopeKind.Function();
+    moshi (literal) { scope_kind = ScopeKind.Closure(); }
+    kaku parent = enter_scope(state, scope_kind);
+    state.current_function[0] = function_symbol;
+    state.function_depth[0] = previous_depth + 1;
+    kaku type_count = 0;
+    kaku parameter_count = node.integer;
+    moshi (!literal) { type_count = node.integer; parameter_count = node.operator; }
+    moshi (!literal) { resolve_type_parameters(state, file_id, node); }
+    kaku index = type_count;
+    kaku end_parameters = type_count + parameter_count;
+    aida (index < end_parameters) {
+        kaku parameter_id = node.children[index];
+        kaku parameter = node_at(state, file_id, parameter_id);
+        moshi (len(parameter.children) > 0) { resolve_type(state, file_id, parameter.children[0]); }
+        kaku symbol = define_symbol(state, file_id, parameter_id, parameter.text, SymbolKind.Parameter(), iie);
+        bind_symbol(state, file_id, parameter_id, symbol);
+        index = index + 1;
+    }
+    moshi (index < len(node.children) - 1) { resolve_type(state, file_id, node.children[index]); }
+    kaku body_id = node.children[len(node.children) - 1];
+    resolve_statements(state, file_id, node_at(state, file_id, body_id).children, iie);
+    state.current_function[0] = previous_function;
+    state.function_depth[0] = previous_depth;
+    leave_scope(state, parent);
+}
+
+waza resolve_expression(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    moshi (node_id < 0) { kaesu; }
+    kaku node = node_at(state, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 4) {
+        kaku symbol = resolve_name(state, state.current_scope[0], node.text);
+        moshi (symbol < 0) { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, node.text, invalid_ref()); }
+        sore { bind_symbol(state, file_id, node_id, symbol); }
+        kaesu;
+    }
+    moshi (kind == 27 && len(node.children) == 1) {
+        kaku left = node_at(state, file_id, node.children[0]);
+        moshi (parser.node_kind_code(left.kind) == 4) {
+            kaku alias_index = find_alias(state, file_id, left.text);
+            moshi (alias_index >= 0) {
+                kaku member = find_member(state, state.result.aliases[alias_index].package_path, node.text, hai);
+                moshi (member < 0 && native_package(state.result.aliases[alias_index].package_path)) {
+                    member = add_external_builtin(state, state.result.aliases[alias_index].package_path, node.text, file_id, node_id);
+                }
+                moshi (member >= 0) { bind_symbol(state, file_id, node_id, member); bind_symbol(state, file_id, node.children[0], state.result.aliases[alias_index].symbol_id); kaesu; }
+                kaku hidden = find_member(state, state.result.aliases[alias_index].package_path, node.text, iie);
+                moshi (hidden >= 0) { add_error(state, ResolveErrorKind.PrivatePackageMember(), file_id, node_id, node.text, symbol_at(state, hidden).declaration); }
+                sore { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, node.text, invalid_ref()); }
+                kaesu;
+            }
+        }
+        resolve_expression(state, file_id, node.children[0]);
+        kaesu;
+    }
+    moshi (kind == 33) { resolve_function(state, file_id, node_id, hai); kaesu; }
+    moshi (kind == 39 || kind == 40 || kind == 41 || kind == 42) { resolve_type(state, file_id, node_id); kaesu; }
+    kaku index = 0;
+    moshi (kind == 24) { index = 1; }
+    moshi (kind == 28) {
+        kaku before_errors = len(state.result.errors);
+        kaku target = resolve_name(state, state.current_scope[0], node.text);
+        moshi (target < 0) { target = resolve_qualified(state, file_id, node_id, node.text); }
+        sore { bind_symbol(state, file_id, node_id, target); }
+        moshi (target < 0 && len(state.result.errors) == before_errors) { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, node.text, invalid_ref()); }
+        aida (index < node.integer) { resolve_type(state, file_id, node.children[index]); index = index + 1; }
+    }
+    aida (index < len(node.children)) {
+        kaku child = node_at(state, file_id, node.children[index]);
+        kaku child_kind = parser.node_kind_code(child.kind);
+        moshi (child_kind == 39 || child_kind == 40 || child_kind == 41 || child_kind == 42) { resolve_type(state, file_id, node.children[index]); }
+        sore { resolve_expression(state, file_id, node.children[index]); }
+        index = index + 1;
+    }
+}
+
+waza resolve_block(state: ResolverState, file_id: int64, node_id: int64, kind: ScopeKind) -> unit {
+    kaku parent = enter_scope(state, kind);
+    resolve_statements(state, file_id, node_at(state, file_id, node_id).children, iie);
+    leave_scope(state, parent);
+}
+
+waza resolve_statement(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    kaku node = node_at(state, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 1) {
+        kaku symbol = resolve_local(state, state.current_scope[0], node.extra);
+        moshi (symbol >= 0) {
+            kaku old_alias = find_alias(state, file_id, node.extra);
+            moshi (old_alias < 0 || state.result.aliases[old_alias].package_path != node.text) {
+                add_error(state, ResolveErrorKind.DuplicateDeclaration(), file_id, node_id, node.extra, symbol_at(state, symbol).declaration);
+            }
+        }
+        sore { symbol = define_symbol(state, file_id, node_id, node.extra, SymbolKind.PackageImport(), iie); }
+        array.push(state.result.aliases, PackageAlias { file_id: file_id, name: node.extra, package_path: node.text, symbol_id: symbol });
+        array.push(state.result.dependencies, PackageDependency { source: state.result.package_path, target: node.text });
+        bind_symbol(state, file_id, node_id, symbol);
+        kaesu;
+    }
+    moshi (kind == 2 || kind == 14) {
+        kaku value_index = len(node.children) - 1;
+        moshi (len(node.children) > 1) { resolve_type(state, file_id, node.children[0]); }
+        kaku symbol_kind = SymbolKind.LocalVariable();
+        moshi (kind == 2) { symbol_kind = SymbolKind.Constant(); }
+        moshi (scope_kind_code(state.result.scopes[state.current_scope[0]].kind) == 1 && kind == 14) { symbol_kind = SymbolKind.GlobalVariable(); }
+        kaku recursive = kind == 14 && node.integer > 0 && parser.node_kind_code(node_at(state, file_id, node.children[value_index]).kind) == 33;
+        kaku symbol = -1;
+        moshi (kind == 2 && scope_kind_code(state.result.scopes[state.current_scope[0]].kind) == 1) { symbol = resolve_local(state, state.current_scope[0], node.text); }
+        moshi (recursive) { symbol = define_symbol(state, file_id, node_id, node.text, symbol_kind, node.flag); bind_symbol(state, file_id, node_id, symbol); }
+        resolve_expression(state, file_id, node.children[value_index]);
+        moshi (!recursive && symbol < 0) { symbol = define_symbol(state, file_id, node_id, node.text, symbol_kind, node.flag); bind_symbol(state, file_id, node_id, symbol); }
+        kaesu;
+    }
+    moshi (kind == 15) {
+        kaku symbol = resolve_name(state, state.current_scope[0], node.text);
+        moshi (symbol < 0) { add_error(state, ResolveErrorKind.UndefinedIdentifier(), file_id, node_id, node.text, invalid_ref()); }
+        sore { bind_symbol(state, file_id, node_id, symbol); }
+        resolve_expression(state, file_id, node.children[0]);
+        kaesu;
+    }
+    moshi (kind == 16) { resolve_expression(state, file_id, node.children[0]); resolve_expression(state, file_id, node.children[1]); kaesu; }
+    moshi (kind == 18) {
+        resolve_expression(state, file_id, node.children[0]);
+        resolve_block(state, file_id, node.children[1], ScopeKind.Branch());
+        moshi (len(node.children) > 2) { resolve_block(state, file_id, node.children[2], ScopeKind.Branch()); }
+        kaesu;
+    }
+    moshi (kind == 19) {
+        resolve_expression(state, file_id, node.children[0]);
+        state.loop_depth[0] = state.loop_depth[0] + 1;
+        resolve_block(state, file_id, node.children[1], ScopeKind.Loop());
+        state.loop_depth[0] = state.loop_depth[0] - 1;
+        kaesu;
+    }
+    moshi (kind == 20 || kind == 21) {
+        moshi (state.loop_depth[0] == 0) { add_error(state, ResolveErrorKind.InvalidControlFlow(), file_id, node_id, node.text, invalid_ref()); }
+        kaesu;
+    }
+    moshi (kind == 31) {
+        moshi (state.function_depth[0] == 0) { add_error(state, ResolveErrorKind.InvalidControlFlow(), file_id, node_id, node.text, invalid_ref()); }
+        moshi (len(node.children) > 0) { resolve_expression(state, file_id, node.children[0]); }
+        kaesu;
+    }
+    moshi (kind == 32) {
+        moshi (scope_kind_code(state.result.scopes[state.current_scope[0]].kind) != 1) {
+            add_error(state, ResolveErrorKind.InvalidSymbolAccess(), file_id, node_id, node.text, invalid_ref());
+            kaesu;
+        }
+        resolve_function(state, file_id, node_id, iie);
+        kaesu;
+    }
+    moshi (kind == 34 || kind == 36) {
+        moshi (scope_kind_code(state.result.scopes[state.current_scope[0]].kind) != 1) {
+            add_error(state, ResolveErrorKind.InvalidSymbolAccess(), file_id, node_id, node.text, invalid_ref());
+            kaesu;
+        }
+        kaku parent = enter_scope(state, ScopeKind.Generic());
+        resolve_type_parameters(state, file_id, node);
+        kaku index = node.integer;
+        aida (index < len(node.children)) {
+            kaku child_id = node.children[index];
+            kaku child = node_at(state, file_id, child_id);
+            moshi (kind == 36) {
+                kaku variant = define_symbol(state, file_id, child_id, child.text, SymbolKind.EnumVariant(), node.flag);
+                bind_symbol(state, file_id, child_id, variant);
+            }
+            kaku type_index = 0;
+            aida (type_index < len(child.children)) { resolve_type(state, file_id, child.children[type_index]); type_index = type_index + 1; }
+            index = index + 1;
+        }
+        leave_scope(state, parent);
+        kaesu;
+    }
+    moshi (kind == 38) {
+        resolve_expression(state, file_id, node.children[0]);
+        kaku arm_index = 1;
+        aida (arm_index < len(node.children)) {
+            kaku arm = node_at(state, file_id, node.children[arm_index]);
+            kaku parent = enter_scope(state, ScopeKind.MatchArm());
+            kaku binding_index = 0;
+            aida (binding_index < arm.integer) {
+                kaku binding_id = arm.children[binding_index];
+                kaku binding = node_at(state, file_id, binding_id);
+                kaku symbol = define_symbol(state, file_id, binding_id, binding.text, SymbolKind.LocalVariable(), iie);
+                bind_symbol(state, file_id, binding_id, symbol);
+                binding_index = binding_index + 1;
+            }
+            resolve_statements(state, file_id, node_at(state, file_id, arm.children[len(arm.children) - 1]).children, iie);
+            leave_scope(state, parent);
+            arm_index = arm_index + 1;
+        }
+        kaesu;
+    }
+    moshi (kind == 3) { resolve_expression(state, file_id, node.children[0]); kaesu; }
+}
+
+waza resolve_statements(state: ResolverState, file_id: int64, statements: []int64, predeclare: bool) -> unit {
+    kaku index = 0;
+    moshi (predeclare) {
+        aida (index < len(statements)) { predeclare_node(state, file_id, statements[index]); index = index + 1; }
+    }
+    index = 0;
+    aida (index < len(statements)) { resolve_statement(state, file_id, statements[index]); index = index + 1; }
+}

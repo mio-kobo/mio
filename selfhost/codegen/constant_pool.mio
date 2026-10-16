@@ -1,0 +1,47 @@
+yobu "kiso/array";
+
+waza same_constant(left: Constant, right: Constant) -> bool {
+    moshi (left.kind != right.kind) { kaesu iie; }
+    moshi (left.kind == 1 || (left.kind >= 5 && left.kind <= 10)) { kaesu left.integer == right.integer; }
+    moshi (left.kind == 2) { kaesu left.string_value == right.string_value; }
+    moshi (left.kind == 3) {
+        moshi (left.float64_value != left.float64_value && right.float64_value != right.float64_value) { kaesu hai; }
+        moshi (left.float64_value != right.float64_value) { kaesu iie; }
+        moshi (left.float64_value != 0.0) { kaesu hai; }
+        kaesu 1.0 / left.float64_value == 1.0 / right.float64_value;
+    }
+    moshi (left.kind == 4) {
+        moshi (left.float32_value != left.float32_value && right.float32_value != right.float32_value) { kaesu hai; }
+        moshi (left.float32_value != right.float32_value) { kaesu iie; }
+        moshi (left.float32_value != float32(0.0)) { kaesu hai; }
+        kaesu float32(1.0) / left.float32_value == float32(1.0) / right.float32_value;
+    }
+    kaesu iie;
+}
+
+waza add_constant(layout: BytecodeLayout, value: Constant) -> int64 {
+    kaku index = 0;
+    aida (index < len(layout.constants)) {
+        moshi (same_constant(layout.constants[index], value)) { kaesu index; }
+        index = index + 1;
+    }
+    moshi (len(layout.constants) >= 65536) { kaesu -1; }
+    array.push(layout.constants, value);
+    kaesu len(layout.constants) - 1;
+}
+
+waza integer_constant(kind: int64, value: int64) -> Constant {
+    kaesu Constant { kind: kind, integer: value, float32_value: float32(0.0), float64_value: 0.0, string_value: "" };
+}
+
+waza string_constant(value: string) -> Constant {
+    kaesu Constant { kind: 2, integer: 0, float32_value: float32(0.0), float64_value: 0.0, string_value: value };
+}
+
+waza float32_constant(value: float32) -> Constant {
+    kaesu Constant { kind: 4, integer: 0, float32_value: value, float64_value: 0.0, string_value: "" };
+}
+
+waza float64_constant(value: float64) -> Constant {
+    kaesu Constant { kind: 3, integer: 0, float32_value: float32(0.0), float64_value: value, string_value: "" };
+}

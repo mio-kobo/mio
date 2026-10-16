@@ -1,0 +1,167 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+kata FloatBits {
+    high: uint32;
+    low: uint32;
+}
+
+waza append_u8(output: []uint8, value: int64) -> unit { array.push(output, uint8(value)); }
+
+waza append_u16(output: []uint8, value: int64) -> unit {
+    append_u8(output, value / 256);
+    append_u8(output, value - (value / 256) * 256);
+}
+
+waza append_u32(output: []uint8, value: uint32) -> unit {
+    kaku remaining = int64(value);
+    kaku divisor = 16777216;
+    kaku index = 0;
+    aida (index < 4) {
+        kaku byte_value = remaining / divisor;
+        append_u8(output, byte_value);
+        remaining = remaining - byte_value * divisor;
+        divisor = divisor / 256;
+        index = index + 1;
+    }
+}
+
+waza append_i64(output: []uint8, value: int64) -> unit {
+    kaku bytes = array.make[uint8](8, uint8(0));
+    kaku remaining = value;
+    kaku index = 7;
+    aida (index >= 0) {
+        kaku quotient = remaining / 256;
+        kaku remainder = remaining - quotient * 256;
+        moshi (remainder < 0) { remainder = remainder + 256; quotient = quotient - 1; }
+        bytes[index] = uint8(remainder);
+        remaining = quotient;
+        index = index - 1;
+    }
+    array.append_all(output, bytes);
+}
+
+waza float64_bits(value: float64) -> FloatBits {
+    kaku negative = value < 0.0 || (value == 0.0 && 1.0 / value < 0.0);
+    moshi (value != value) { kaesu FloatBits { high: uint32(2146959360), low: uint32(0) }; }
+    kaku positive = value;
+    moshi (negative) { positive = -value; }
+    moshi (positive == 1.0 / 0.0) {
+        kaku high = 2146435072;
+        moshi (negative) { high = high + 2147483648; }
+        kaesu FloatBits { high: uint32(high), low: uint32(0) };
+    }
+    moshi (positive == 0.0) {
+        kaku high = 0;
+        moshi (negative) { high = 2147483648; }
+        kaesu FloatBits { high: uint32(high), low: uint32(0) };
+    }
+    kaku normalized = positive;
+    kaku exponent = 0;
+    aida (normalized >= 2.0) { normalized = normalized / 2.0; exponent = exponent + 1; }
+    aida (normalized < 1.0 && exponent > -1075) { normalized = normalized * 2.0; exponent = exponent - 1; }
+    kaku mantissa: int64 = 0;
+    kaku exponent_field = 0;
+    moshi (exponent >= -1022) {
+        exponent_field = exponent + 1023;
+        kaku fraction = normalized - 1.0;
+        kaku index = 0;
+        aida (index < 52) { fraction = fraction * 2.0; index = index + 1; }
+        mantissa = int64(fraction);
+    } sore {
+        kaku scaled = positive;
+        kaku index = 0;
+        aida (index < 1074) { scaled = scaled * 2.0; index = index + 1; }
+        mantissa = int64(scaled);
+    }
+    kaku high_value = exponent_field * 1048576 + mantissa / 4294967296;
+    moshi (negative) { high_value = high_value + 2147483648; }
+    kaku low_value = mantissa - (mantissa / 4294967296) * 4294967296;
+    kaesu FloatBits { high: uint32(high_value), low: uint32(low_value) };
+}
+
+waza float32_bits(value: float32) -> uint32 {
+    kaku negative = value < float32(0.0) || (value == float32(0.0) && float32(1.0) / value < float32(0.0));
+    moshi (value != value) { kaesu uint32(2143289344); }
+    kaku positive = value;
+    moshi (negative) { positive = -value; }
+    moshi (positive == float32(1.0) / float32(0.0)) {
+        kaku bits = 2139095040; moshi (negative) { bits = bits + 2147483648; } kaesu uint32(bits);
+    }
+    moshi (positive == float32(0.0)) { moshi (negative) { kaesu uint32(2147483648); } kaesu uint32(0); }
+    kaku normalized = positive;
+    kaku exponent = 0;
+    aida (normalized >= float32(2.0)) { normalized = normalized / float32(2.0); exponent = exponent + 1; }
+    aida (normalized < float32(1.0) && exponent > -150) { normalized = normalized * float32(2.0); exponent = exponent - 1; }
+    kaku mantissa: int64 = 0;
+    kaku exponent_field = 0;
+    moshi (exponent >= -126) {
+        exponent_field = exponent + 127;
+        kaku fraction = normalized - float32(1.0);
+        kaku index = 0; aida (index < 23) { fraction = fraction * float32(2.0); index = index + 1; }
+        mantissa = int64(fraction);
+    } sore {
+        kaku scaled = positive;
+        kaku index = 0; aida (index < 149) { scaled = scaled * float32(2.0); index = index + 1; }
+        mantissa = int64(scaled);
+    }
+    kaku bits = exponent_field * 8388608 + mantissa;
+    moshi (negative) { bits = bits + 2147483648; }
+    kaesu uint32(bits);
+}
+
+waza append_constant(output: []uint8, constant: Constant) -> unit {
+    append_u8(output, constant.kind);
+    moshi (constant.kind == 1) { append_i64(output, constant.integer); kaesu; }
+    moshi (constant.kind == 2) {
+        kaku data = string.to_bytes(constant.string_value);
+        append_u32(output, uint32(len(data)));
+        array.append_all(output, data);
+        kaesu;
+    }
+    moshi (constant.kind == 3) {
+        kaku bits = float64_bits(constant.float64_value);
+        append_u32(output, bits.high); append_u32(output, bits.low); kaesu;
+    }
+    moshi (constant.kind == 4) { append_u32(output, float32_bits(constant.float32_value)); kaesu; }
+    moshi (constant.kind == 5 || constant.kind == 8) { append_u8(output, constant.integer - (constant.integer / 256) * 256); kaesu; }
+    moshi (constant.kind == 6 || constant.kind == 9) {
+        kaku value = constant.integer; moshi (value < 0) { value = value + 65536; } append_u16(output, value); kaesu;
+    }
+    kaku value = constant.integer; moshi (value < 0) { value = value + 4294967296; } append_u32(output, uint32(value));
+}
+
+waza append_function(output: []uint8, function: FunctionLayout) -> unit {
+    append_u16(output, function.id);
+    kaku name = string.to_bytes(function.name);
+    append_u16(output, len(name));
+    array.append_all(output, name);
+    append_u32(output, uint32(function.parameter_count));
+    append_u32(output, uint32(function.local_count));
+    moshi (function.returns_value) { append_u8(output, 1); } sore { append_u8(output, 0); }
+    append_u32(output, uint32(len(function.captures)));
+    kaku index = 0;
+    aida (index < len(function.captures)) {
+        moshi (function.captures[index].local) { append_u8(output, 1); } sore { append_u8(output, 0); }
+        append_u32(output, uint32(function.captures[index].index));
+        index = index + 1;
+    }
+    append_u32(output, uint32(len(function.instructions)));
+    array.append_all(output, function.instructions);
+}
+
+koukai waza encode_layout(layout: BytecodeLayout) -> []uint8 {
+    kaku output = array.with_capacity[uint8](64 + len(layout.instructions));
+    array.append_all(output, [uint8(77), uint8(79), uint8(67), uint8(72), uint8(73)]);
+    append_u16(output, 14);
+    append_u32(output, uint32(len(layout.constants)));
+    kaku index = 0;
+    aida (index < len(layout.constants)) { append_constant(output, layout.constants[index]); index = index + 1; }
+    append_u32(output, uint32(layout.global_count));
+    append_u32(output, uint32(len(layout.instructions)));
+    array.append_all(output, layout.instructions);
+    append_u32(output, uint32(len(layout.functions)));
+    index = 0;
+    aida (index < len(layout.functions)) { append_function(output, layout.functions[index]); index = index + 1; }
+    kaesu output;
+}

@@ -1,0 +1,393 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/lexer";
+
+waza import_alias(path: string) -> string {
+    kaku data = string.to_bytes(path);
+    kaku start = 0;
+    kaku index = 0;
+    aida (index < len(data)) {
+        moshi (data[index] == uint8(47)) { start = index + 1; }
+        index = index + 1;
+    }
+    kaku alias = array.with_capacity[uint8](len(data) - start);
+    index = start;
+    aida (index < len(data)) { array.push(alias, data[index]); index = index + 1; }
+    kaku result = string.from_utf8(alias);
+    moshi (result != mu) { kaesu result; }
+    kaesu "";
+}
+
+waza parse_statement(state: ParserState) -> int64 {
+    kaku kind = current_kind(state);
+    moshi (kind == 46) { kaesu parse_import_statement(state); }
+    moshi (kind == 47) { kaesu parse_export_statement(state); }
+    moshi (kind == 48) { kaesu parse_const_statement(state, iie, current_token(state).start); }
+    moshi (kind == 31) { kaesu parse_let_statement(state); }
+    moshi (kind == 32) { kaesu parse_function_statement(state, iie, current_token(state).start); }
+    moshi (kind == 35) { kaesu parse_return_statement(state); }
+    moshi (kind == 33) { kaesu parse_if_statement(state); }
+    moshi (kind == 39) { kaesu parse_while_statement(state); }
+    moshi (kind == 40) { kaesu parse_simple_statement(state, NodeKind.BreakStatement()); }
+    moshi (kind == 41) { kaesu parse_simple_statement(state, NodeKind.ContinueStatement()); }
+    moshi (kind == 42) { kaesu parse_struct_statement(state, iie, current_token(state).start); }
+    moshi (kind == 43) { kaesu parse_enum_statement(state, iie, current_token(state).start); }
+    moshi (kind == 44) { kaesu parse_match_statement(state); }
+    moshi (kind == 2 && peek_kind(state) == 7) { kaesu parse_assign_statement(state); }
+    kaesu parse_expression_statement(state);
+}
+
+waza parse_import_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (current_kind(state) != 5) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 5); kaesu -1; }
+    kaku path = current_token(state).literal;
+    advance(state);
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaesu add_node(state.arena, NodeKind.ImportStatement(), path, import_alias(path), 0, iie, 0, empty_children(0), SourceSpan { start: start, end: end });
+}
+
+waza parse_export_statement(state: ParserState) -> int64 {
+    advance(state);
+    kaku start = current_token(state).start;
+    kaku kind = current_kind(state);
+    moshi (kind == 48) { kaesu parse_const_statement(state, hai, start); }
+    moshi (kind == 32) { kaesu parse_function_statement(state, hai, start); }
+    moshi (kind == 42) { kaesu parse_struct_statement(state, hai, start); }
+    moshi (kind == 43) { kaesu parse_enum_statement(state, hai, start); }
+    add_parse_error(state, ParseErrorKind.ExpectedToken(), 32);
+    kaesu -1;
+}
+
+waza parse_const_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {
+    advance(state);
+    moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+    kaku name = current_token(state).literal;
+    advance(state);
+    kaku children = empty_children(2);
+    kaku has_type = 0;
+    moshi (current_kind(state) == 49) {
+        advance(state);
+        kaku declared = parse_type(state);
+        moshi (declared < 0) { kaesu -1; }
+        array.push(children, declared);
+        has_type = 1;
+    }
+    moshi (!expect(state, 7)) { kaesu -1; }
+    kaku value = parse_expression(state, 0);
+    moshi (value < 0) { kaesu -1; }
+    array.push(children, value);
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaesu add_node(state.arena, NodeKind.ConstStatement(), name, "", has_type, exported, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_let_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+    kaku name = current_token(state).literal;
+    advance(state);
+    kaku children = empty_children(2);
+    kaku has_type = 0;
+    moshi (current_kind(state) == 49) {
+        advance(state);
+        kaku declared = parse_type(state);
+        moshi (declared < 0) { kaesu -1; }
+        array.push(children, declared);
+        has_type = 1;
+    }
+    moshi (!expect(state, 7)) { kaesu -1; }
+    kaku value = parse_expression(state, 0);
+    moshi (value < 0) { kaesu -1; }
+    array.push(children, value);
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaesu add_node(state.arena, NodeKind.LetStatement(), name, "", has_type, iie, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_assign_statement(state: ParserState) -> int64 {
+    kaku name = current_token(state);
+    advance(state);
+    advance(state);
+    kaku value = parse_expression(state, 0);
+    moshi (value < 0) { kaesu -1; }
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaku children = empty_children(1);
+    array.push(children, value);
+    kaesu add_node(state.arena, NodeKind.AssignStatement(), name.literal, "", 0, iie, 0, children, SourceSpan { start: name.start, end: end });
+}
+
+waza parse_expression_statement(state: ParserState) -> int64 {
+    kaku expression = parse_expression(state, 0);
+    moshi (expression < 0) { kaesu -1; }
+    moshi (current_kind(state) == 7) {
+        moshi (node_kind_code(state.arena.nodes[expression].kind) != 26) {
+            add_parse_error(state, ParseErrorKind.ExpectedToken(), 23);
+            kaesu -1;
+        }
+        advance(state);
+        kaku value = parse_expression(state, 0);
+        moshi (value < 0) { kaesu -1; }
+        moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+        kaku end = current_token(state).end;
+        advance(state);
+        kaku children = empty_children(2);
+        array.push(children, expression);
+        array.push(children, value);
+        kaesu add_node(state.arena, NodeKind.IndexAssignStatement(), "", "", 0, iie, 0, children, SourceSpan { start: node_span(state, expression).start, end: end });
+    }
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaku children = empty_children(1);
+    array.push(children, expression);
+    kaesu add_node(state.arena, NodeKind.ExpressionStatement(), "", "", 0, iie, 0, children, SourceSpan { start: node_span(state, expression).start, end: end });
+}
+
+waza parse_simple_statement(state: ParserState, kind: NodeKind) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaesu add_node(state.arena, kind, "", "", 0, iie, 0, empty_children(0), SourceSpan { start: start, end: end });
+}
+
+waza parse_return_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    kaku children = empty_children(1);
+    moshi (current_kind(state) != 23) {
+        kaku value = parse_expression(state, 0);
+        moshi (value < 0) { kaesu -1; }
+        array.push(children, value);
+    }
+    moshi (current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaesu add_node(state.arena, NodeKind.ReturnStatement(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_block(state: ParserState) -> int64 {
+    kaku open = current_token(state);
+    advance(state);
+    kaku statements = empty_children(8);
+    aida (current_kind(state) != 27 && current_kind(state) != 1 && len(state.errors) == 0) {
+        kaku before = state.index[0];
+        kaku statement = parse_statement(state);
+        moshi (statement < 0) { kaesu -1; }
+        array.push(statements, statement);
+        moshi (state.index[0] == before) { add_parse_error(state, ParseErrorKind.UnexpectedToken(), -1); kaesu -1; }
+    }
+    moshi (current_kind(state) != 27) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 27); kaesu -1; }
+    kaku close = current_token(state);
+    advance(state);
+    kaesu add_node(state.arena, NodeKind.BlockStatement(), "", "", 0, iie, 0, statements, SourceSpan { start: open.start, end: close.end });
+}
+
+waza parse_if_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (!expect(state, 24)) { kaesu -1; }
+    kaku condition = parse_expression(state, 0);
+    moshi (condition < 0 || !expect(state, 25)) { kaesu -1; }
+    moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+    kaku consequence = parse_block(state);
+    moshi (consequence < 0) { kaesu -1; }
+    kaku children = empty_children(3);
+    array.push(children, condition);
+    array.push(children, consequence);
+    kaku end = node_span(state, consequence).end;
+    moshi (current_kind(state) == 34) {
+        advance(state);
+        moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+        kaku alternative = parse_block(state);
+        moshi (alternative < 0) { kaesu -1; }
+        array.push(children, alternative);
+        end = node_span(state, alternative).end;
+    }
+    kaesu add_node(state.arena, NodeKind.IfStatement(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_while_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (!expect(state, 24)) { kaesu -1; }
+    kaku condition = parse_expression(state, 0);
+    moshi (condition < 0 || !expect(state, 25)) { kaesu -1; }
+    moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+    kaku body = parse_block(state);
+    moshi (body < 0) { kaesu -1; }
+    kaku children = empty_children(2);
+    array.push(children, condition);
+    array.push(children, body);
+    kaesu add_node(state.arena, NodeKind.WhileStatement(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: node_span(state, body).end });
+}
+
+waza parse_parameters(state: ParserState) -> []int64 {
+    kaku parameters = empty_children(4);
+    advance(state);
+    moshi (current_kind(state) == 25) { advance(state); kaesu parameters; }
+    aida (len(state.errors) == 0) {
+        moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu parameters; }
+        kaku name = current_token(state);
+        advance(state);
+        kaku children = empty_children(1);
+        moshi (current_kind(state) == 49) {
+            advance(state);
+            kaku declared = parse_type(state);
+            moshi (declared < 0) { kaesu parameters; }
+            array.push(children, declared);
+        }
+        array.push(parameters, add_node(state.arena, NodeKind.Parameter(), name.literal, "", len(children), iie, 0, children, token_span(name)));
+        moshi (current_kind(state) != 22) { nukeru; }
+        advance(state);
+    }
+    expect(state, 25);
+    kaesu parameters;
+}
+
+waza parse_function_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {
+    advance(state);
+    moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+    kaku name = current_token(state).literal;
+    advance(state);
+    kaku type_parameters = parse_type_parameters(state);
+    moshi (current_kind(state) != 24) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 24); kaesu -1; }
+    kaku parameters = parse_parameters(state);
+    moshi (len(state.errors) != 0) { kaesu -1; }
+    kaku return_type: int64 = -1;
+    moshi (current_kind(state) == 50) {
+        advance(state);
+        return_type = parse_type(state);
+        moshi (return_type < 0) { kaesu -1; }
+    }
+    moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+    kaku body = parse_block(state);
+    moshi (body < 0) { kaesu -1; }
+    kaku children = empty_children(len(type_parameters) + len(parameters) + 2);
+    array.append_all(children, type_parameters);
+    array.append_all(children, parameters);
+    append_child(children, return_type);
+    array.push(children, body);
+    kaesu add_node(state.arena, NodeKind.FunctionStatement(), name, "", len(type_parameters), exported, len(parameters), children, SourceSpan { start: start, end: node_span(state, body).end });
+}
+
+waza parse_struct_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {
+    advance(state);
+    moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+    kaku name = current_token(state).literal;
+    advance(state);
+    kaku type_parameters = parse_type_parameters(state);
+    moshi (!expect(state, 26)) { kaesu -1; }
+    kaku fields = empty_children(4);
+    aida (current_kind(state) != 27 && current_kind(state) != 1 && len(state.errors) == 0) {
+        moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+        kaku field = current_token(state);
+        advance(state);
+        moshi (!expect(state, 49)) { kaesu -1; }
+        kaku field_type = parse_type(state);
+        moshi (field_type < 0) { kaesu -1; }
+        kaku children = empty_children(1);
+        array.push(children, field_type);
+        array.push(fields, add_node(state.arena, NodeKind.StructField(), field.literal, "", 0, iie, 0, children, token_span(field)));
+        moshi (current_kind(state) != 22 && current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+        advance(state);
+    }
+    moshi (current_kind(state) != 27) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 27); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaku children = empty_children(len(type_parameters) + len(fields));
+    array.append_all(children, type_parameters);
+    array.append_all(children, fields);
+    kaesu add_node(state.arena, NodeKind.StructStatement(), name, "", len(type_parameters), exported, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_enum_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {
+    advance(state);
+    moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+    kaku name = current_token(state).literal;
+    advance(state);
+    kaku type_parameters = parse_type_parameters(state);
+    moshi (!expect(state, 26)) { kaesu -1; }
+    kaku variants = empty_children(4);
+    aida (current_kind(state) != 27 && current_kind(state) != 1 && len(state.errors) == 0) {
+        moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+        kaku variant = current_token(state);
+        advance(state);
+        kaku fields = empty_children(2);
+        kaku end = variant.end;
+        moshi (current_kind(state) == 24) {
+            advance(state);
+            aida (current_kind(state) != 25 && len(state.errors) == 0) {
+                kaku field_type = parse_type(state);
+                moshi (field_type < 0) { kaesu -1; }
+                array.push(fields, field_type);
+                moshi (current_kind(state) != 22) { nukeru; }
+                advance(state);
+            }
+            moshi (current_kind(state) != 25) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 25); kaesu -1; }
+            end = current_token(state).end;
+            advance(state);
+        }
+        array.push(variants, add_node(state.arena, NodeKind.EnumVariant(), variant.literal, "", 0, iie, 0, fields, SourceSpan { start: variant.start, end: end }));
+        moshi (current_kind(state) != 22 && current_kind(state) != 23) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 23); kaesu -1; }
+        advance(state);
+    }
+    moshi (current_kind(state) != 27) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 27); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaku children = empty_children(len(type_parameters) + len(variants));
+    array.append_all(children, type_parameters);
+    array.append_all(children, variants);
+    kaesu add_node(state.arena, NodeKind.EnumStatement(), name, "", len(type_parameters), exported, 0, children, SourceSpan { start: start, end: end });
+}
+
+waza parse_match_statement(state: ParserState) -> int64 {
+    kaku start = current_token(state).start;
+    advance(state);
+    moshi (!expect(state, 24)) { kaesu -1; }
+    kaku value = parse_expression(state, 0);
+    moshi (value < 0 || !expect(state, 25) || !expect(state, 26)) { kaesu -1; }
+    kaku arms = empty_children(4);
+    aida (current_kind(state) != 27 && current_kind(state) != 1 && len(state.errors) == 0) {
+        moshi (!expect(state, 45)) { kaesu -1; }
+        moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+        kaku variant = current_token(state);
+        advance(state);
+        kaku bindings = empty_children(2);
+        moshi (current_kind(state) == 24) {
+            advance(state);
+            aida (current_kind(state) != 25 && len(state.errors) == 0) {
+                moshi (current_kind(state) != 2) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 2); kaesu -1; }
+                kaku binding = current_token(state);
+                array.push(bindings, make_leaf(state, NodeKind.Identifier(), binding.literal, 0, iie, 0, token_span(binding)));
+                advance(state);
+                moshi (current_kind(state) != 22) { nukeru; }
+                advance(state);
+            }
+            moshi (!expect(state, 25)) { kaesu -1; }
+        }
+        moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+        kaku body = parse_block(state);
+        moshi (body < 0) { kaesu -1; }
+        kaku children = empty_children(len(bindings) + 1);
+        array.append_all(children, bindings);
+        array.push(children, body);
+        array.push(arms, add_node(state.arena, NodeKind.MatchArm(), variant.literal, "", len(bindings), iie, 0, children, SourceSpan { start: variant.start, end: node_span(state, body).end }));
+    }
+    moshi (current_kind(state) != 27) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 27); kaesu -1; }
+    kaku end = current_token(state).end;
+    advance(state);
+    kaku children = empty_children(len(arms) + 1);
+    array.push(children, value);
+    array.append_all(children, arms);
+    kaesu add_node(state.arena, NodeKind.MatchStatement(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: end });
+}

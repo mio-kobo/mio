@@ -1,0 +1,101 @@
+yobu "kiso/array";
+
+kata Fixup {
+    position: int64;
+    label: int64;
+}
+
+kata Emitter {
+    bytes: []uint8;
+    labels: []int64;
+    fixups: []Fixup;
+    failed: []bool;
+    detail: []string;
+}
+
+waza new_emitter() -> Emitter {
+    kaesu Emitter {
+        bytes: array.with_capacity[uint8](128),
+        labels: array.with_capacity[int64](16),
+        fixups: array.with_capacity[Fixup](16),
+        failed: [iie],
+        detail: [""]
+    };
+}
+
+waza emit_byte(emitter: Emitter, value: int64) -> unit {
+    moshi (value < 0 || value > 255) { emitter.failed[0] = hai; emitter.detail[0] = "byte operand is outside uint8 range"; kaesu; }
+    array.push(emitter.bytes, uint8(value));
+}
+
+waza emit_u16_value(emitter: Emitter, value: int64) -> unit {
+    moshi (value < 0 || value > 65535) { emitter.failed[0] = hai; emitter.detail[0] = "operand is outside uint16 range"; kaesu; }
+    emit_byte(emitter, value / 256);
+    emit_byte(emitter, value - (value / 256) * 256);
+}
+
+waza emit0(emitter: Emitter, opcode: int64) -> unit { emit_byte(emitter, opcode); }
+
+waza emit_u8(emitter: Emitter, opcode: int64, operand: int64) -> unit {
+    emit_byte(emitter, opcode);
+    emit_byte(emitter, operand);
+}
+
+waza emit_u16(emitter: Emitter, opcode: int64, operand: int64) -> unit {
+    emit_byte(emitter, opcode);
+    emit_u16_value(emitter, operand);
+}
+
+waza emit_u16_u16(emitter: Emitter, opcode: int64, first: int64, second: int64) -> unit {
+    emit_byte(emitter, opcode);
+    emit_u16_value(emitter, first);
+    emit_u16_value(emitter, second);
+}
+
+waza emit_u16_u8(emitter: Emitter, opcode: int64, first: int64, second: int64) -> unit {
+    emit_byte(emitter, opcode);
+    emit_u16_value(emitter, first);
+    emit_byte(emitter, second);
+}
+
+waza emit_u8_u8(emitter: Emitter, opcode: int64, first: int64, second: int64) -> unit {
+    emit_byte(emitter, opcode);
+    emit_byte(emitter, first);
+    emit_byte(emitter, second);
+}
+
+waza new_label(emitter: Emitter) -> int64 {
+    kaku label = len(emitter.labels);
+    array.push(emitter.labels, -1);
+    kaesu label;
+}
+
+waza mark_label(emitter: Emitter, label: int64) -> unit {
+    moshi (label < 0 || label >= len(emitter.labels) || emitter.labels[label] >= 0) {
+        emitter.failed[0] = hai; emitter.detail[0] = "label is invalid or already defined"; kaesu;
+    }
+    emitter.labels[label] = len(emitter.bytes);
+}
+
+waza emit_jump(emitter: Emitter, opcode: int64, label: int64) -> unit {
+    emit_byte(emitter, opcode);
+    kaku position = len(emitter.bytes);
+    emit_u16_value(emitter, 0);
+    array.push(emitter.fixups, Fixup { position: position, label: label });
+}
+
+waza patch_labels(emitter: Emitter) -> bool {
+    kaku index = 0;
+    aida (index < len(emitter.fixups)) {
+        kaku fixup = emitter.fixups[index];
+        moshi (fixup.label < 0 || fixup.label >= len(emitter.labels) || emitter.labels[fixup.label] < 0) {
+            emitter.failed[0] = hai; emitter.detail[0] = "jump references an undefined label"; kaesu iie;
+        }
+        kaku target = emitter.labels[fixup.label];
+        moshi (target > 65535) { emitter.failed[0] = hai; emitter.detail[0] = "jump target exceeds uint16 range"; kaesu iie; }
+        emitter.bytes[fixup.position] = uint8(target / 256);
+        emitter.bytes[fixup.position + 1] = uint8(target - (target / 256) * 256);
+        index = index + 1;
+    }
+    kaesu !emitter.failed[0];
+}

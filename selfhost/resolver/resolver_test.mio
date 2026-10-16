@@ -1,0 +1,132 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/testing";
+yobu "selfhost/parser";
+
+waza parse_source(source: string) -> parser.ParseResult {
+    kaku parsed = parser.parse(string.to_bytes(source));
+    testing.expect(len(parsed.errors) == 0, "source parses");
+    kaesu parsed;
+}
+
+waza symbol_named(result: ResolvedPackage, name: string, kind: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(result.symbols)) {
+        kaku symbol = result.symbols[index];
+        moshi (symbol.name == name && symbol_kind_code(symbol.kind) == kind) { kaesu symbol.id; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza test_scope_and_shadowing() -> unit {
+    kaku parsed = parse_source("kaku value = 10; waza example() -> int64 { kaku value = 20; kaesu value; }");
+    kaku result = resolve_program("main", parsed);
+    testing.expect(len(result.errors) == 0, "shadowing errors");
+    kaku global = symbol_named(result, "value", 2);
+    kaku local = symbol_named(result, "value", 0);
+    testing.expect(global >= 0 && local >= 0 && global != local, "distinct shadow symbols");
+    kaku bound_local = iie;
+    kaku index = 0;
+    aida (index < len(result.bindings)) {
+        moshi (result.bindings[index].symbol_id == local) { bound_local = hai; }
+        index = index + 1;
+    }
+    testing.expect(bound_local, "local return binding");
+}
+
+waza test_forward_functions_and_errors() -> unit {
+    kaku valid = resolve_program("main", parse_source("waza left() -> int64 { kaesu right(); } waza right() -> int64 { kaesu left(); }"));
+    testing.expect(len(valid.errors) == 0, "mutual recursion");
+    kaku invalid = resolve_program("main", parse_source("kaku first = later; kaku later = 1;"));
+    testing.expect(len(invalid.errors) == 1, "forward variable error count");
+    testing.expect(resolve_error_kind_code(invalid.errors[0].kind) == 0, "forward variable error kind");
+}
+
+waza test_forward_constants() -> unit {
+    kaku result = resolve_program("main", parse_source("teisu first: int64 = second + 1; teisu second: int64 = 2;"));
+    testing.expect(len(result.errors) == 0, "forward constant resolves");
+    testing.expect(symbol_named(result, "first", 3) >= 0 && symbol_named(result, "second", 3) >= 0, "constant symbols predeclared");
+}
+
+waza test_closure_capture() -> unit {
+    kaku source = "waza outer(value: int64) -> (int64) -> int64 { kaku local = value; kaesu waza (next: int64) -> int64 { kaesu local + next + value; }; }";
+    kaku result = resolve_program("main", parse_source(source));
+    testing.expect(len(result.errors) == 0, "closure errors");
+    testing.expect(len(result.captures) == 2, "closure captures");
+    testing.expect(result.captures[0].function_symbol == result.captures[1].function_symbol, "capture owner");
+
+    kaku nested_source = "waza outer(value: int64) -> () -> () -> int64 { kaesu waza () -> () -> int64 { kaesu waza () -> int64 { kaesu value; }; }; }";
+    kaku nested = resolve_program("main", parse_source(nested_source));
+    testing.expect(len(nested.errors) == 0, "nested closure errors");
+    testing.expect(len(nested.captures) == 2, "transitive captures");
+    testing.expect(nested.captures[0].function_symbol != nested.captures[1].function_symbol, "transitive capture owners");
+}
+
+waza test_generics_and_type_bindings() -> unit {
+    kaku source = "kata Box<T> { value: T; } sentaku Result<T, E> { Ok(T); Err(E); } waza identity<T: Number>(value: T) -> T { kaesu value; }";
+    kaku result = resolve_program("types", parse_source(source));
+    testing.expect(len(result.errors) == 0, "generic errors");
+    testing.expect(symbol_named(result, "Box", 6) >= 0, "struct symbol");
+    testing.expect(symbol_named(result, "Result", 7) >= 0, "enum symbol");
+    testing.expect(symbol_named(result, "identity", 5) >= 0, "generic function symbol");
+    testing.expect(symbol_named(result, "T", 9) >= 0, "type parameter symbol");
+}
+
+waza test_multi_file_identity() -> unit {
+    kaku first = parse_source("waza call() -> int64 { kaesu shared(); }");
+    kaku second = parse_source("waza shared() -> int64 { kaesu 42; }");
+    kaku files = array.with_capacity[SourceFile](2);
+    array.push(files, SourceFile { file_id: 8, path: "z.mio", ast: second.ast, root: second.root });
+    array.push(files, SourceFile { file_id: 4, path: "a.mio", ast: first.ast, root: first.root });
+    kaku result = resolve_package("sample", files, array.with_capacity[ResolvedPackage](0));
+    testing.expect(len(result.errors) == 0, "multi-file errors");
+    testing.expect(result.files[0].path == "a.mio" && result.files[0].file_id == 0, "stable first file");
+    testing.expect(result.files[1].path == "z.mio" && result.files[1].file_id == 1, "stable second file");
+    kaku shared = symbol_named(result, "shared", 4);
+    testing.expect(shared >= 0 && result.symbols[shared].declaration.file_id == 1, "cross-file declaration identity");
+}
+
+waza test_package_exports() -> unit {
+    kaku dependency = resolve_program("library", parse_source("koukai waza visible() -> int64 { kaesu 1; } waza hidden() -> int64 { kaesu 2; }"));
+    kaku dependencies = array.with_capacity[ResolvedPackage](1);
+    array.push(dependencies, dependency);
+    kaku app = parse_source("yobu \"library\"; waza main() -> int64 { kaesu library.visible(); }");
+    kaku files = array.with_capacity[SourceFile](1);
+    array.push(files, SourceFile { file_id: 0, path: "main.mio", ast: app.ast, root: app.root });
+    kaku result = resolve_package("app", files, dependencies);
+    testing.expect(len(result.errors) == 0, "public package member");
+    kaku bad = parse_source("yobu \"library\"; waza main() -> int64 { kaesu library.hidden(); }");
+    files = array.with_capacity[SourceFile](1);
+    array.push(files, SourceFile { file_id: 0, path: "bad.mio", ast: bad.ast, root: bad.root });
+    result = resolve_package("app", files, dependencies);
+    testing.expect(len(result.errors) == 1, "private package member count");
+    testing.expect(resolve_error_kind_code(result.errors[0].kind) == 4, "private package member kind");
+}
+
+waza test_duplicate_and_match_scope() -> unit {
+    kaku duplicate = resolve_program("main", parse_source("waza bad(value: int64, value: int64) -> int64 { kaesu value; }"));
+    testing.expect(len(duplicate.errors) == 1, "duplicate parameter");
+    testing.expect(resolve_error_kind_code(duplicate.errors[0].kind) == 1, "duplicate kind");
+    kaku matched = resolve_program("main", parse_source("sentaku Maybe { Some(int64); None; } waza read(value: Maybe) -> int64 { awase (value) { baai Some(item) { kaesu item; } baai None { kaesu 0; } } }"));
+    testing.expect(len(matched.errors) == 0, "match binding scope");
+}
+
+waza test_package_diagnostics() -> unit {
+    kaku imported = parse_source("yobu \"missing/package\"; waza main() -> int64 { kaesu 0; }");
+    kaku files = array.with_capacity[SourceFile](1);
+    array.push(files, SourceFile { file_id: 0, path: "main.mio", ast: imported.ast, root: imported.root });
+    kaku missing = resolve_package("app", files, array.with_capacity[ResolvedPackage](0));
+    testing.expect(len(missing.errors) == 1, "missing package count");
+    testing.expect(resolve_error_kind_code(missing.errors[0].kind) == 3, "missing package kind");
+
+    kaku left_source = parse_source("yobu \"right\"; koukai waza left() -> int64 { kaesu 1; }");
+    files = array.with_capacity[SourceFile](1);
+    array.push(files, SourceFile { file_id: 0, path: "left.mio", ast: left_source.ast, root: left_source.root });
+    kaku right_stub = resolve_program("right", parse_source("yobu \"left\"; koukai waza right() -> int64 { kaesu 2; }"));
+    kaku dependencies = array.with_capacity[ResolvedPackage](1);
+    array.push(dependencies, right_stub);
+    kaku cycle = resolve_package("left", files, dependencies);
+    testing.expect(len(cycle.errors) == 1, "import cycle count");
+    testing.expect(resolve_error_kind_code(cycle.errors[0].kind) == 5, "import cycle kind");
+}

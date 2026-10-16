@@ -1,0 +1,150 @@
+yobu "kiso/array";
+yobu "selfhost/lexer";
+
+teisu max_parser_depth: int64 = 192;
+
+kata ParserState {
+    tokens: []lexer.Token;
+    index: []int64;
+    depth: []int64;
+    arena: AstArena;
+    errors: []ParseError;
+}
+
+waza token_span(token: lexer.Token) -> SourceSpan {
+    kaesu SourceSpan { start: token.start, end: token.end };
+}
+
+waza node_span(state: ParserState, id: int64) -> SourceSpan {
+    kaesu state.arena.nodes[id].span;
+}
+
+waza current_token(state: ParserState) -> lexer.Token {
+    kaku index = state.index[0];
+    moshi (index >= len(state.tokens)) { kaesu state.tokens[len(state.tokens) - 1]; }
+    kaesu state.tokens[index];
+}
+
+waza token_at(state: ParserState, offset: int64) -> lexer.Token {
+    kaku index = state.index[0] + offset;
+    moshi (index >= len(state.tokens)) { kaesu state.tokens[len(state.tokens) - 1]; }
+    kaesu state.tokens[index];
+}
+
+waza current_kind(state: ParserState) -> int64 {
+    kaesu lexer.token_kind_code(current_token(state).kind);
+}
+
+waza peek_kind(state: ParserState) -> int64 {
+    kaesu lexer.token_kind_code(token_at(state, 1).kind);
+}
+
+waza advance(state: ParserState) -> unit {
+    moshi (state.index[0] + 1 < len(state.tokens)) {
+        state.index[0] = state.index[0] + 1;
+    }
+}
+
+waza add_parse_error(state: ParserState, kind: ParseErrorKind, expected: int64) -> unit {
+    moshi (len(state.errors) == 0) {
+        kaku token = current_token(state);
+        array.push(state.errors, ParseError {
+            kind: kind,
+            position: token.start,
+            expected: expected,
+            actual: current_kind(state)
+        });
+    }
+}
+
+waza expect(state: ParserState, kind: int64) -> bool {
+    moshi (current_kind(state) != kind) {
+        add_parse_error(state, ParseErrorKind.ExpectedToken(), kind);
+        kaesu iie;
+    }
+    advance(state);
+    kaesu hai;
+}
+
+waza enter_parser(state: ParserState) -> bool {
+    moshi (state.depth[0] >= max_parser_depth) {
+        add_parse_error(state, ParseErrorKind.NestingLimit(), -1);
+        kaesu iie;
+    }
+    state.depth[0] = state.depth[0] + 1;
+    kaesu hai;
+}
+
+waza leave_parser(state: ParserState) -> unit {
+    state.depth[0] = state.depth[0] - 1;
+}
+
+waza empty_children(capacity: int64) -> []int64 {
+    kaesu array.with_capacity[int64](capacity);
+}
+
+waza append_child(children: []int64, id: int64) -> unit {
+    moshi (id >= 0) { array.push(children, id); }
+}
+
+waza make_leaf(state: ParserState, kind: NodeKind, text: string, integer: int64, flag: bool, operator: int64, span: SourceSpan) -> int64 {
+    kaesu add_node(state.arena, kind, text, "", integer, flag, operator, empty_children(0), span);
+}
+
+waza parse_program(state: ParserState) -> int64 {
+    kaku children = empty_children(32);
+    kaku start = current_token(state).start;
+    kaku end = current_token(state).end;
+    aida (current_kind(state) != 1 && len(state.errors) == 0) {
+        kaku before = state.index[0];
+        kaku statement = parse_statement(state);
+        moshi (statement < 0) { nukeru; }
+        array.push(children, statement);
+        moshi (len(children) == 1) { start = node_span(state, statement).start; }
+        end = node_span(state, statement).end;
+        moshi (state.index[0] == before) {
+            add_parse_error(state, ParseErrorKind.UnexpectedToken(), -1);
+            nukeru;
+        }
+    }
+    moshi (len(children) == 0) {
+        start = current_token(state).start;
+        end = current_token(state).end;
+    }
+    kaesu add_node(state.arena, NodeKind.Program(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: end });
+}
+
+koukai waza parse_tokens(tokens: []lexer.Token) -> ParseResult {
+    kaku arena = new_arena();
+    kaku errors = array.with_capacity[ParseError](1);
+    moshi (len(tokens) == 0) {
+        kaku position = lexer.Position { offset: 0, line: 1, column: 1 };
+        array.push(errors, ParseError { kind: ParseErrorKind.ExpectedToken(), position: position, expected: 1, actual: -1 });
+        kaesu ParseResult { ast: arena, root: -1, tokens: tokens, errors: errors };
+    }
+    kaku state = ParserState {
+        tokens: tokens,
+        index: [0],
+        depth: [0],
+        arena: arena,
+        errors: errors
+    };
+    kaku root = parse_program(state);
+    kaesu ParseResult { ast: arena, root: root, tokens: tokens, errors: errors };
+}
+
+koukai waza parse(source: []uint8) -> ParseResult {
+    kaku lexical = lexer.lex(source);
+    moshi (len(lexical.errors) != 0) {
+        kaku arena = new_arena();
+        kaku errors = array.with_capacity[ParseError](1);
+        array.push(errors, ParseError {
+            kind: ParseErrorKind.LexicalError(),
+            position: lexical.errors[0].position,
+            expected: -1,
+            actual: lexer.error_kind_code(lexical.errors[0].kind)
+        });
+        kaesu ParseResult { ast: arena, root: -1, tokens: lexical.tokens, errors: errors };
+    }
+    kaesu parse_tokens(lexical.tokens);
+}

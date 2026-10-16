@@ -1,0 +1,104 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/testing";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+yobu "selfhost/typecheck";
+
+waza compile_source(source: string) -> CompileResult {
+    kaku parsed = parser.parse(string.to_bytes(source));
+    kaku resolved = resolver.resolve_program("test", parsed);
+    kaku checked = typecheck.check_program(resolved);
+    kaesu compile_program(resolved, checked);
+}
+
+waza test_opcode_table() -> unit {
+    testing.expect(OP_CONSTANT == 1, "constant opcode");
+    testing.expect(OP_CLOSURE == 46, "closure opcode");
+    testing.expect(OP_DATA_CONVERT == 65, "data convert opcode");
+    testing.expect(operand_count(OP_MATH) == 2, "math operands");
+}
+
+waza test_emitter_fixups() -> unit {
+    kaku emitter = new_emitter();
+    kaku end = new_label(emitter);
+    emit_jump(emitter, OP_JUMP, end);
+    emit0(emitter, OP_TRUE);
+    mark_label(emitter, end);
+    emit0(emitter, OP_POP);
+    testing.expect(patch_labels(emitter), "patch labels");
+    testing.expect(len(emitter.bytes) == 5, "emitter length");
+    testing.expect(emitter.bytes[0] == uint8(17) && emitter.bytes[1] == uint8(0) && emitter.bytes[2] == uint8(4), "jump target");
+}
+
+waza test_constant_pool() -> unit {
+    kaku layout = empty_layout();
+    kaku first = add_constant(layout, integer_constant(1, 42));
+    kaku duplicate = add_constant(layout, integer_constant(1, 42));
+    kaku negative_zero = add_constant(layout, float64_constant(-0.0));
+    kaku positive_zero = add_constant(layout, float64_constant(0.0));
+    testing.expect(first == duplicate && len(layout.constants) == 3, "constant deduplication and signed zero");
+    testing.expect(negative_zero != positive_zero, "signed zero constants differ");
+}
+
+waza test_encoder_header_and_float_bits() -> unit {
+    kaku layout = empty_layout();
+    add_constant(layout, integer_constant(1, -1));
+    add_constant(layout, float32_constant(float32(1.0)));
+    add_constant(layout, float64_constant(-0.0));
+    array.push(layout.instructions, uint8(OP_TRUE));
+    array.push(layout.instructions, uint8(OP_POP));
+    kaku encoded = encode_layout(layout);
+    testing.expect(len(encoded) == 48, "encoded size");
+    testing.expect(encoded[0] == uint8(77) && encoded[4] == uint8(73), "mochi signature");
+    testing.expect(encoded[5] == uint8(0) && encoded[6] == uint8(14), "mochi version");
+    testing.expect(encoded[7] == uint8(0) && encoded[10] == uint8(3), "constant count");
+    testing.expect(encoded[21] == uint8(63) && encoded[22] == uint8(128), "float32 bits");
+    testing.expect(encoded[26] == uint8(128) && encoded[27] == uint8(0), "float64 negative zero bits");
+}
+
+waza test_compile_basic_program() -> unit {
+    kaku result = compile_source("kaku x: int64 = 1; moshi (x < 2) { chant(x + 2); } sore { chant(0); }");
+    testing.expect(result.success, "basic program compiles");
+    testing.expect(result.layout.global_count == 1, "global slot count");
+    testing.expect(len(result.layout.constants) == 3, "basic constants");
+    testing.expect(len(result.layout.instructions) > 20, "basic instructions");
+    testing.expect(len(result.bytes) > len(result.layout.instructions), "mochi envelope");
+}
+
+waza test_compile_function_and_loop() -> unit {
+    kaku source = "waza sum(n: int64) -> int64 { kaku total: int64 = 0; kaku i: int64 = 0; aida (i < n) { total = total + i; i = i + 1; } kaesu total; } chant(sum(5));";
+    kaku result = compile_source(source);
+    testing.expect(result.success, "function program compiles");
+    testing.expect(len(result.layout.functions) == 1, "function table");
+    testing.expect(result.layout.functions[0].parameter_count == 1, "parameter count");
+    testing.expect(result.layout.functions[0].local_count == 3, "local slot count");
+    testing.expect(len(result.layout.functions[0].instructions) > 20, "function instructions");
+}
+
+waza test_compile_short_circuit_and_minimum() -> unit {
+    kaku source = "kaku called: bool = iie; waza side() -> bool { called = hai; kaesu hai; } kaku value: int64 = -9223372036854775808; chant(iie && side()); chant(hai || side()); chant(value);";
+    kaku result = compile_source(source);
+    testing.expect(result.success, "short circuit and minimum compile");
+    kaku found_minimum = iie;
+    kaku index = 0;
+    aida (index < len(result.layout.constants)) { moshi (result.layout.constants[index].kind == 1 && result.layout.constants[index].integer == -9223372036854775807 - 1) { found_minimum = hai; } index = index + 1; }
+    testing.expect(found_minimum, "minimum int64 constant");
+}
+
+waza test_compile_modules() -> unit {
+    kaku library_parsed = parser.parse(string.to_bytes("koukai waza twice(value: int64) -> int64 { kaesu value * 2; }"));
+    kaku library = resolver.resolve_program("sample/lib", library_parsed);
+    kaku library_types = typecheck.check_program(library);
+    kaku app_parsed = parser.parse(string.to_bytes("yobu \"sample/lib\"; chant(lib.twice(6));"));
+    kaku app_files: []resolver.SourceFile = [resolver.SourceFile { file_id: 0, path: "app", ast: app_parsed.ast, root: app_parsed.root }];
+    kaku resolved_dependencies: []resolver.ResolvedPackage = [library];
+    kaku app = resolver.resolve_package("sample/app", app_files, resolved_dependencies);
+    kaku type_dependencies: []typecheck.TypeCheckResult = [library_types];
+    kaku app_types = typecheck.check_package(app, type_dependencies);
+    kaku packages: []resolver.ResolvedPackage = [library, app];
+    kaku checks: []typecheck.TypeCheckResult = [library_types, app_types];
+    kaku result = compile_modules(packages, checks);
+    testing.expect(result.success, "multi-package program compiles");
+    testing.expect(len(result.layout.functions) == 1, "dependency function linked once");
+}

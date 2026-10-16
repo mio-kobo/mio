@@ -1,0 +1,53 @@
+yobu "kiso/string";
+yobu "kiso/testing";
+
+waza expect_token(token: Token, kind: int64, literal: string, start: int64, end: int64) -> unit {
+    testing.expect(token_kind_code(token.kind) == kind, "token kind");
+    testing.expect(token.literal == literal, "token literal");
+    testing.expect(token.start.offset == start, "token start");
+    testing.expect(token.end.offset == end, "token end");
+}
+
+waza test_basic_tokens() -> unit {
+    kaku result = lex(string.to_bytes("kaku value = 1.5e-2;"));
+    testing.expect(len(result.errors) == 0, "basic errors");
+    testing.expect(len(result.tokens) == 6, "basic count");
+    expect_token(result.tokens[0], 31, "kaku", 0, 4);
+    expect_token(result.tokens[1], 2, "value", 5, 10);
+    expect_token(result.tokens[2], 7, "=", 11, 12);
+    expect_token(result.tokens[3], 4, "1.5e-2", 13, 19);
+    expect_token(result.tokens[4], 23, ";", 19, 20);
+    testing.expect(token_kind_code(result.tokens[5].kind) == 1, "basic eof");
+}
+
+waza test_unicode_positions() -> unit {
+    kaku result = lex(string.to_bytes("\"你🍡\"\r\n\t+"));
+    testing.expect(len(result.errors) == 0, "unicode errors");
+    testing.expect(result.tokens[0].literal == "你🍡", "unicode literal");
+    testing.expect(result.tokens[0].start.column == 1, "unicode start column");
+    testing.expect(result.tokens[0].end.column == 5, "unicode end column");
+    testing.expect(result.tokens[1].start.line == 2, "unicode line");
+    testing.expect(result.tokens[1].start.column == 2, "tab column");
+}
+
+waza test_comments_and_error() -> unit {
+    kaku result = lex(string.to_bytes("// 注释\n/* block */hai"));
+    testing.expect(len(result.errors) == 0, "comment errors");
+    testing.expect(token_kind_code(result.tokens[0].kind) == 36, "comment token");
+    kaku broken = lex(string.to_bytes("/* open"));
+    testing.expect(len(broken.errors) == 1, "comment error count");
+    testing.expect(error_kind_code(broken.errors[0].kind) == 6, "comment error kind");
+}
+
+waza test_runes_and_invalid_utf8() -> unit {
+    kaku result = lex(string.to_bytes("'你' '\\u65E5' '\\x41'"));
+    testing.expect(len(result.errors) == 0, "rune errors");
+    testing.expect(result.tokens[0].literal == "你", "rune unicode");
+    testing.expect(result.tokens[1].literal == "日", "rune escape");
+    testing.expect(result.tokens[2].literal == "A", "rune hex");
+    kaku invalid: []uint8 = [uint8(65), uint8(255)];
+    kaku broken = lex(invalid);
+    testing.expect(len(broken.tokens) == 0, "invalid UTF-8 tokens");
+    testing.expect(error_kind_code(broken.errors[0].kind) == 0, "invalid UTF-8 kind");
+    testing.expect(broken.errors[0].position.offset == 1, "invalid UTF-8 offset");
+}

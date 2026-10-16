@@ -1,0 +1,61 @@
+yobu "kiso/string";
+yobu "kiso/testing";
+
+waza test_expression_precedence() -> unit {
+    kaku result = parse(string.to_bytes("1 + 2 * 3;"));
+    testing.expect(len(result.errors) == 0, "expression errors");
+    kaku program = result.ast.nodes[result.root];
+    testing.expect(node_kind_code(program.kind) == 0, "program kind");
+    testing.expect(len(program.children) == 1, "statement count");
+    kaku statement = result.ast.nodes[program.children[0]];
+    kaku addition = result.ast.nodes[statement.children[0]];
+    testing.expect(node_kind_code(addition.kind) == 11, "addition kind");
+    testing.expect(addition.operator == 8, "addition operator");
+    kaku multiplication = result.ast.nodes[addition.children[1]];
+    testing.expect(multiplication.operator == 10, "multiplication operator");
+}
+
+waza test_declarations_and_types() -> unit {
+    kaku source = "kata Box<T> { value: T; } sentaku Result<T, E> { Ok(T); Err(E); } waza apply<T, U>(value: T, f: (T) -> U) -> U { kaesu f(value); }";
+    kaku result = parse(string.to_bytes(source));
+    testing.expect(len(result.errors) == 0, "declaration errors");
+    kaku program = result.ast.nodes[result.root];
+    testing.expect(len(program.children) == 3, "declaration count");
+    testing.expect(node_kind_code(result.ast.nodes[program.children[0]].kind) == 34, "struct kind");
+    testing.expect(node_kind_code(result.ast.nodes[program.children[1]].kind) == 36, "enum kind");
+    testing.expect(node_kind_code(result.ast.nodes[program.children[2]].kind) == 32, "function kind");
+}
+
+waza test_control_flow_and_literals() -> unit {
+    kaku source = "kaku values: []int64? = [1, mu]; aida (hai) { moshi (values[0] != mu) { values[0] = 2; } sore { nukeru; } }";
+    kaku result = parse(string.to_bytes(source));
+    testing.expect(len(result.errors) == 0, "control flow errors");
+    kaku program = result.ast.nodes[result.root];
+    testing.expect(len(program.children) == 2, "control flow count");
+    testing.expect(node_kind_code(result.ast.nodes[program.children[1]].kind) == 19, "while kind");
+}
+
+waza test_struct_enum_and_closure() -> unit {
+    kaku source = "kaku box = Box[int64] { value: 42 }; kaku make = waza (x: int64) -> int64 { kaesu x; }; kaku item = Result[int64, string].Ok(box.value);";
+    kaku result = parse(string.to_bytes(source));
+    testing.expect(len(result.errors) == 0, "advanced expression errors");
+    testing.expect(len(result.ast.nodes[result.root].children) == 3, "advanced statement count");
+}
+
+waza test_structured_error() -> unit {
+    kaku result = parse(string.to_bytes("kaku value = (1 + 2;"));
+    testing.expect(len(result.errors) == 1, "parse error count");
+    testing.expect(parse_error_kind_code(result.errors[0].kind) == 1, "parse error kind");
+    testing.expect(result.errors[0].expected == 25, "expected right parenthesis");
+}
+
+waza test_integer_literal_preserves_exact_text() -> unit {
+    kaku result = parse(string.to_bytes("-9223372036854775808; 9223372036854775809;"));
+    testing.expect(len(result.errors) == 0, "integer boundary parses");
+    kaku program = result.ast.nodes[result.root];
+    kaku negative = result.ast.nodes[result.ast.nodes[program.children[0]].children[0]];
+    kaku magnitude = result.ast.nodes[negative.children[0]];
+    kaku overflow = result.ast.nodes[result.ast.nodes[program.children[1]].children[0]];
+    testing.expect(magnitude.text == "9223372036854775808", "minimum magnitude text preserved");
+    testing.expect(overflow.text == "9223372036854775809", "overflow text preserved");
+}

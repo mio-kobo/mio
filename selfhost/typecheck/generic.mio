@@ -1,0 +1,107 @@
+yobu "kiso/array";
+yobu "selfhost/resolver";
+
+waza substitution_index(names: []string, name: string) -> int64 {
+    kaku index = 0;
+    aida (index < len(names)) { moshi (names[index] == name) { kaesu index; } index = index + 1; }
+    kaesu -1;
+}
+
+waza infer_type_argument(env: TypeEnvironment, template: int64, actual: int64, names: []string, types: []int64) -> bool {
+    kaku info = env.result.types[template];
+    kaku code = type_kind_code(info.kind);
+    moshi (code == 19) {
+        kaku index = substitution_index(names, info.name);
+        moshi (index < 0) { array.push(names, info.name); array.push(types, actual); kaesu hai; }
+        kaesu types[index] == actual;
+    }
+    moshi (template == actual) { kaesu hai; }
+    moshi (actual < 0) { kaesu iie; }
+    kaku actual_info = env.result.types[actual];
+    moshi (code != type_kind_code(actual_info.kind)) { kaesu iie; }
+    moshi (code == 15 || code == 16) { kaesu infer_type_argument(env, info.element, actual_info.element, names, types); }
+    moshi (code == 17) {
+        moshi (info.name != actual_info.name || len(info.arguments) != len(actual_info.arguments)) { kaesu iie; }
+        kaku index = 0;
+        aida (index < len(info.arguments)) {
+            moshi (!infer_type_argument(env, info.arguments[index], actual_info.arguments[index], names, types)) { kaesu iie; }
+            index = index + 1;
+        }
+        kaesu hai;
+    }
+    moshi (code == 18) {
+        moshi (len(info.parameters) != len(actual_info.parameters)) { kaesu iie; }
+        kaku index = 0;
+        aida (index < len(info.parameters)) {
+            moshi (!infer_type_argument(env, info.parameters[index], actual_info.parameters[index], names, types)) { kaesu iie; }
+            index = index + 1;
+        }
+        kaesu infer_type_argument(env, info.result, actual_info.result, names, types);
+    }
+    kaesu iie;
+}
+
+waza substitute_type(env: TypeEnvironment, type_id: int64, names: []string, types: []int64) -> int64 {
+    kaku info = env.result.types[type_id];
+    kaku code = type_kind_code(info.kind);
+    moshi (code == 19) {
+        kaku index = substitution_index(names, info.name);
+        moshi (index >= 0) { kaesu types[index]; }
+        kaesu type_id;
+    }
+    moshi (code == 15) { kaesu array_type(env.result, substitute_type(env, info.element, names, types)); }
+    moshi (code == 16) { kaesu nullable_type(env.result, substitute_type(env, info.element, names, types)); }
+    moshi (code == 17) {
+        kaku arguments = array.with_capacity[int64](len(info.arguments)); kaku index = 0;
+        aida (index < len(info.arguments)) { array.push(arguments, substitute_type(env, info.arguments[index], names, types)); index = index + 1; }
+        kaesu named_type(env.result, info.name, arguments);
+    }
+    moshi (code == 18) {
+        kaku parameters = array.with_capacity[int64](len(info.parameters)); kaku index = 0;
+        aida (index < len(info.parameters)) { array.push(parameters, substitute_type(env, info.parameters[index], names, types)); index = index + 1; }
+        kaesu function_type(env.result, parameters, substitute_type(env, info.result, names, types));
+    }
+    kaesu type_id;
+}
+
+waza satisfies_constraint(env: TypeEnvironment, type_id: int64, constraint: string) -> bool {
+    moshi (constraint == "") { kaesu hai; }
+    moshi (type_kind_code(env.result.types[type_id].kind) == 19) {
+        kaku actual = constraint_for(env, env.result.types[type_id].name);
+        moshi (actual == constraint) { kaesu hai; }
+        moshi (constraint == "Number") { kaesu actual == "Integer" || actual == "Signed" || actual == "Float"; }
+        moshi (constraint == "Signed") { kaesu actual == "Float"; }
+        kaesu iie;
+    }
+    moshi (constraint == "Number") { kaesu is_numeric(env.result, type_id); }
+    moshi (constraint == "Integer") { kaesu is_integer(env.result, type_id); }
+    moshi (constraint == "Signed") { kaesu is_signed(env.result, type_id); }
+    moshi (constraint == "Float") {
+        kaku code = type_kind_code(env.result.types[type_id].kind);
+        kaesu code == 8 || code == 9;
+    }
+    kaesu iie;
+}
+
+waza validate_substitution(env: TypeEnvironment, file_id: int64, node_id: int64, signature: FunctionSignature, names: []string, types: []int64) -> bool {
+    kaku valid = hai;
+    kaku index = 0;
+    aida (index < len(signature.type_parameters)) {
+        kaku substitution = substitution_index(names, signature.type_parameters[index].name);
+        moshi (substitution < 0) {
+            add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer type argument");
+            valid = iie;
+        } sore {
+            moshi (!satisfies_constraint(env, types[substitution], signature.type_parameters[index].constraint)) {
+                add_type_error(env, TypeErrorKind.ConstraintViolation(), "E0307", file_id, node_id, 0, types[substitution], signature.type_parameters[index].constraint);
+                valid = iie;
+            }
+        }
+        index = index + 1;
+    }
+    kaesu valid;
+}
+
+waza record_substitution(env: TypeEnvironment, file_id: int64, node_id: int64, names: []string, types: []int64) -> unit {
+    array.push(env.result.substitutions, TypeSubstitution { node: resolver.NodeRef { file_id: file_id, node_id: node_id }, parameters: array.clone(names), types: array.clone(types) });
+}

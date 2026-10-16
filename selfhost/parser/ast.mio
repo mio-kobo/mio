@@ -1,0 +1,194 @@
+yobu "kiso/array";
+yobu "selfhost/lexer";
+
+koukai kata SourceSpan {
+    start: lexer.Position;
+    end: lexer.Position;
+}
+
+koukai sentaku NodeKind {
+    Program;
+    ImportStatement;
+    ConstStatement;
+    ExpressionStatement;
+    Identifier;
+    IntegerLiteral;
+    FloatLiteral;
+    RuneLiteral;
+    StringLiteral;
+    BooleanLiteral;
+    NilLiteral;
+    InfixExpression;
+    PrefixExpression;
+    GroupedExpression;
+    LetStatement;
+    AssignStatement;
+    IndexAssignStatement;
+    BlockStatement;
+    IfStatement;
+    WhileStatement;
+    BreakStatement;
+    ContinueStatement;
+    CallExpression;
+    TypeApplyExpression;
+    ConversionExpression;
+    ArrayLiteral;
+    IndexExpression;
+    FieldExpression;
+    StructLiteral;
+    FieldValue;
+    EnumLiteral;
+    ReturnStatement;
+    FunctionStatement;
+    FunctionLiteral;
+    StructStatement;
+    EnumVariant;
+    EnumStatement;
+    MatchArm;
+    MatchStatement;
+    TypeName;
+    ArrayType;
+    NullableType;
+    FunctionType;
+    Parameter;
+    TypeParameter;
+    StructField;
+}
+
+koukai kata Node {
+    kind: NodeKind;
+    text: string;
+    extra: string;
+    integer: int64;
+    flag: bool;
+    operator: int64;
+    children: []int64;
+    span: SourceSpan;
+}
+
+koukai kata AstArena {
+    nodes: []Node;
+}
+
+koukai sentaku ParseErrorKind {
+    LexicalError;
+    ExpectedToken;
+    ExpectedExpression;
+    InvalidLiteral;
+    InvalidType;
+    NestingLimit;
+    UnexpectedToken;
+}
+
+koukai kata ParseError {
+    kind: ParseErrorKind;
+    position: lexer.Position;
+    expected: int64;
+    actual: int64;
+}
+
+koukai kata ParseResult {
+    ast: AstArena;
+    root: int64;
+    tokens: []lexer.Token;
+    errors: []ParseError;
+}
+
+koukai waza node_kind_code(kind: NodeKind) -> int64 {
+    awase (kind) {
+        baai Program { kaesu 0; }
+        baai ImportStatement { kaesu 1; }
+        baai ConstStatement { kaesu 2; }
+        baai ExpressionStatement { kaesu 3; }
+        baai Identifier { kaesu 4; }
+        baai IntegerLiteral { kaesu 5; }
+        baai FloatLiteral { kaesu 6; }
+        baai RuneLiteral { kaesu 7; }
+        baai StringLiteral { kaesu 8; }
+        baai BooleanLiteral { kaesu 9; }
+        baai NilLiteral { kaesu 10; }
+        baai InfixExpression { kaesu 11; }
+        baai PrefixExpression { kaesu 12; }
+        baai GroupedExpression { kaesu 13; }
+        baai LetStatement { kaesu 14; }
+        baai AssignStatement { kaesu 15; }
+        baai IndexAssignStatement { kaesu 16; }
+        baai BlockStatement { kaesu 17; }
+        baai IfStatement { kaesu 18; }
+        baai WhileStatement { kaesu 19; }
+        baai BreakStatement { kaesu 20; }
+        baai ContinueStatement { kaesu 21; }
+        baai CallExpression { kaesu 22; }
+        baai TypeApplyExpression { kaesu 23; }
+        baai ConversionExpression { kaesu 24; }
+        baai ArrayLiteral { kaesu 25; }
+        baai IndexExpression { kaesu 26; }
+        baai FieldExpression { kaesu 27; }
+        baai StructLiteral { kaesu 28; }
+        baai FieldValue { kaesu 29; }
+        baai EnumLiteral { kaesu 30; }
+        baai ReturnStatement { kaesu 31; }
+        baai FunctionStatement { kaesu 32; }
+        baai FunctionLiteral { kaesu 33; }
+        baai StructStatement { kaesu 34; }
+        baai EnumVariant { kaesu 35; }
+        baai EnumStatement { kaesu 36; }
+        baai MatchArm { kaesu 37; }
+        baai MatchStatement { kaesu 38; }
+        baai TypeName { kaesu 39; }
+        baai ArrayType { kaesu 40; }
+        baai NullableType { kaesu 41; }
+        baai FunctionType { kaesu 42; }
+        baai Parameter { kaesu 43; }
+        baai TypeParameter { kaesu 44; }
+        baai StructField { kaesu 45; }
+    }
+    kaesu -1;
+}
+
+koukai waza parse_error_kind_code(kind: ParseErrorKind) -> int64 {
+    awase (kind) {
+        baai LexicalError { kaesu 0; }
+        baai ExpectedToken { kaesu 1; }
+        baai ExpectedExpression { kaesu 2; }
+        baai InvalidLiteral { kaesu 3; }
+        baai InvalidType { kaesu 4; }
+        baai NestingLimit { kaesu 5; }
+        baai UnexpectedToken { kaesu 6; }
+    }
+    kaesu -1;
+}
+
+waza empty_span() -> SourceSpan {
+    kaku position = lexer.Position { offset: 0, line: 1, column: 1 };
+    kaesu SourceSpan { start: position, end: position };
+}
+
+waza new_arena() -> AstArena {
+    kaesu AstArena { nodes: array.with_capacity[Node](128) };
+}
+
+waza add_node(
+    arena: AstArena,
+    kind: NodeKind,
+    text: string,
+    extra: string,
+    integer: int64,
+    flag: bool,
+    operator: int64,
+    children: []int64,
+    span: SourceSpan
+) -> int64 {
+    kaku id = len(arena.nodes);
+    array.push(arena.nodes, Node {
+        kind: kind,
+        text: text,
+        extra: extra,
+        integer: integer,
+        flag: flag,
+        operator: operator,
+        children: children,
+        span: span
+    });
+    kaesu id;
+}

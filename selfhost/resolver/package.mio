@@ -1,0 +1,174 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/parser";
+
+waza copy_dependency(result: ResolvedPackage, dependency: ResolvedPackage) -> unit {
+    kaku symbol_offset = len(result.symbols);
+    kaku index = 0;
+    aida (index < len(dependency.symbols)) {
+        kaku source = dependency.symbols[index];
+        array.push(result.symbols, Symbol {
+            id: symbol_offset + index,
+            kind: source.kind,
+            name: source.name,
+            package_path: source.package_path,
+            scope_id: source.scope_id,
+            declaration: source.declaration,
+            span: source.span,
+            public: source.public,
+            owner_function: source.owner_function
+        });
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(dependency.members)) {
+        kaku member = dependency.members[index];
+        array.push(result.members, PackageMember {
+            package_path: member.package_path,
+            name: member.name,
+            symbol_id: symbol_offset + member.symbol_id,
+            public: member.public
+        });
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(dependency.dependencies)) {
+        array.push(result.dependencies, dependency.dependencies[index]);
+        index = index + 1;
+    }
+}
+
+waza path_less(left: string, right: string) -> bool {
+    kaku a = string.to_bytes(left);
+    kaku b = string.to_bytes(right);
+    kaku count = len(a);
+    moshi (len(b) < count) { count = len(b); }
+    kaku index = 0;
+    aida (index < count) {
+        moshi (a[index] < b[index]) { kaesu hai; }
+        moshi (a[index] > b[index]) { kaesu iie; }
+        index = index + 1;
+    }
+    kaesu len(a) < len(b);
+}
+
+waza has_prefix(value: string, prefix: string) -> bool {
+    kaku data = string.to_bytes(value);
+    kaku expected = string.to_bytes(prefix);
+    moshi (len(expected) > len(data)) { kaesu iie; }
+    kaku index = 0;
+    aida (index < len(expected)) {
+        moshi (data[index] != expected[index]) { kaesu iie; }
+        index = index + 1;
+    }
+    kaesu hai;
+}
+
+waza dependency_index(dependencies: []ResolvedPackage, path: string) -> int64 {
+    kaku index = 0;
+    aida (index < len(dependencies)) {
+        moshi (dependencies[index].package_path == path) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza contains_path(paths: []string, path: string) -> bool {
+    kaku index = 0;
+    aida (index < len(paths)) {
+        moshi (paths[index] == path) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+waza package_reaches(edges: []PackageDependency, start: string, target: string) -> bool {
+    kaku pending = array.with_capacity[string](8);
+    kaku visited = array.with_capacity[string](8);
+    array.push(pending, start);
+    kaku next = 0;
+    aida (next < len(pending)) {
+        kaku current = pending[next];
+        next = next + 1;
+        moshi (current == target) { kaesu hai; }
+        moshi (contains_path(visited, current)) { tsuzuku; }
+        array.push(visited, current);
+        kaku edge_index = 0;
+        aida (edge_index < len(edges)) {
+            moshi (edges[edge_index].source == current && !contains_path(visited, edges[edge_index].target)) {
+                array.push(pending, edges[edge_index].target);
+            }
+            edge_index = edge_index + 1;
+        }
+    }
+    kaesu iie;
+}
+
+waza sorted_files(files: []SourceFile) -> []SourceFile {
+    kaku result = array.with_capacity[SourceFile](len(files));
+    kaku used = array.with_capacity[bool](len(files));
+    kaku index = 0;
+    aida (index < len(files)) { array.push(used, iie); index = index + 1; }
+    kaku next_id = 0;
+    aida (next_id < len(files)) {
+        kaku best = -1;
+        index = 0;
+        aida (index < len(files)) {
+            moshi (!used[index] && (best < 0 || path_less(files[index].path, files[best].path))) { best = index; }
+            index = index + 1;
+        }
+        used[best] = hai;
+        kaku source = files[best];
+        array.push(result, SourceFile { file_id: next_id, path: source.path, ast: source.ast, root: source.root });
+        next_id = next_id + 1;
+    }
+    kaesu result;
+}
+
+koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []ResolvedPackage) -> ResolvedPackage {
+    kaku ordered = sorted_files(files);
+    kaku result = empty_resolved_package(path, ordered);
+    kaku state = ResolverState { result: result, current_scope: [-1], current_function: [-1], function_depth: [0], loop_depth: [0] };
+    state.current_scope[0] = add_scope(state, ScopeKind.Builtin(), -1, -1);
+    install_builtins(state);
+    kaku builtin_scope = state.current_scope[0];
+    state.current_scope[0] = add_scope(state, ScopeKind.Package(), builtin_scope, -1);
+    kaku package_scope = state.current_scope[0];
+    kaku index = 0;
+    aida (index < len(dependencies)) { copy_dependency(result, dependencies[index]); index = index + 1; }
+    index = 0;
+    aida (index < len(ordered)) {
+        kaku root = ordered[index].ast.nodes[ordered[index].root];
+        kaku child = 0;
+        aida (child < len(root.children)) { predeclare_node(state, index, root.children[child]); child = child + 1; }
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(ordered)) {
+        state.current_scope[0] = package_scope;
+        kaku root = ordered[index].ast.nodes[ordered[index].root];
+        resolve_statements(state, index, root.children, iie);
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(result.aliases)) {
+        kaku alias = result.aliases[index];
+        kaku dependency = dependency_index(dependencies, alias.package_path);
+        moshi (dependency < 0 && !has_prefix(alias.package_path, "mio/")) {
+            add_error(state, ResolveErrorKind.PackageNotFound(), alias.file_id, result.symbols[alias.symbol_id].declaration.node_id, alias.package_path, invalid_ref());
+        }
+        moshi (dependency >= 0) {
+            moshi (package_reaches(result.dependencies, alias.package_path, path)) {
+                add_error(state, ResolveErrorKind.ImportCycle(), alias.file_id, result.symbols[alias.symbol_id].declaration.node_id, alias.package_path, invalid_ref());
+            }
+        }
+        index = index + 1;
+    }
+    kaesu result;
+}
+
+koukai waza resolve_program(path: string, parsed: parser.ParseResult) -> ResolvedPackage {
+    kaku files = array.with_capacity[SourceFile](1);
+    array.push(files, SourceFile { file_id: 0, path: path, ast: parsed.ast, root: parsed.root });
+    kaesu resolve_package(path, files, array.with_capacity[ResolvedPackage](0));
+}

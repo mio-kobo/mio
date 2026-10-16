@@ -1,0 +1,169 @@
+yobu "kiso/array";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+waza check_function_literal(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
+    kaku node = node_at(env, file_id, node_id);
+    kaku parameters = array.with_capacity[int64](node.integer);
+    kaku index = 0;
+    aida (index < node.integer) {
+        kaku parameter_id = node.children[index];
+        kaku parameter = node_at(env, file_id, parameter_id);
+        kaku type_id = 0;
+        moshi (len(parameter.children) == 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, parameter_id, 0, 0, "parameter requires type annotation"); }
+        sore { type_id = resolve_type_node(env, file_id, parameter.children[0], env.constraints); }
+        array.push(parameters, type_id);
+        kaku symbol_id = binding_of(env, file_id, parameter_id);
+        moshi (symbol_id >= 0) { set_symbol_type(env, symbol_id, type_id); }
+        index = index + 1;
+    }
+    kaku return_type = resolve_type_node(env, file_id, node.children[node.integer], env.constraints);
+    array.push(env.return_types, return_type);
+    env.function_depth[0] = env.function_depth[0] + 1;
+    kaku saved_loop = env.loop_depth[0]; env.loop_depth[0] = 0;
+    check_block(env, file_id, node.children[node.integer + 1]);
+    moshi (return_type != builtin_type(env, "unit") && !block_always_returns(env, file_id, node.children[node.integer + 1])) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, return_type, builtin_type(env, "unit"), "function may exit without returning"); }
+    env.loop_depth[0] = saved_loop; env.function_depth[0] = env.function_depth[0] - 1;
+    array.truncate(env.return_types, len(env.return_types) - 1);
+    kaesu set_node_type(env, file_id, node_id, function_type(env.result, parameters, return_type));
+}
+
+waza check_function_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
+    kaku node = node_at(env, file_id, node_id);
+    kaku symbol_id = binding_of(env, file_id, node_id);
+    kaku signature_index = signature_of(env, symbol_id);
+    moshi (signature_index < 0) { kaesu; }
+    kaku signature = env.result.signatures[signature_index];
+    kaku old_constraints = len(env.constraints);
+    kaku index = 0; aida (index < len(signature.type_parameters)) { array.push(env.constraints, signature.type_parameters[index]); index = index + 1; }
+    array.push(env.return_types, signature.result);
+    env.function_depth[0] = env.function_depth[0] + 1;
+    kaku saved_loop = env.loop_depth[0]; env.loop_depth[0] = 0;
+    kaku body_id = node.children[len(node.children) - 1];
+    check_block(env, file_id, body_id);
+    moshi (signature.result != builtin_type(env, "unit") && !block_always_returns(env, file_id, body_id)) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, signature.result, builtin_type(env, "unit"), "function may exit without returning"); }
+    env.loop_depth[0] = saved_loop; env.function_depth[0] = env.function_depth[0] - 1;
+    array.truncate(env.return_types, len(env.return_types) - 1);
+    array.truncate(env.constraints, old_constraints);
+}
+
+waza check_match(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
+    kaku node = node_at(env, file_id, node_id);
+    kaku value = check_expression(env, file_id, node.children[0]);
+    moshi (value == 0 || type_kind_code(env.result.types[value].kind) != 17) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], 0, value, "match requires an enum"); kaesu; }
+    kaku info = env.result.types[value];
+    kaku definition_index = enum_named(env, info.name);
+    moshi (definition_index < 0) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], 0, value, "match requires an enum"); kaesu; }
+    kaku definition = env.result.enums[definition_index];
+    kaku covered = array.make[bool](len(definition.variants), iie);
+    kaku names = array.with_capacity[string](len(definition.parameters));
+    kaku index = 0; aida (index < len(definition.parameters)) { array.push(names, definition.parameters[index].name); index = index + 1; }
+    kaku arm_index = 1;
+    aida (arm_index < len(node.children)) {
+        kaku arm_id = node.children[arm_index]; kaku arm = node_at(env, file_id, arm_id); kaku variant_index = -1;
+        index = 0; aida (index < len(definition.variants)) { moshi (definition.variants[index].name == arm.text) { variant_index = index; nukeru; } index = index + 1; }
+        moshi (variant_index < 0) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, arm_id, value, 0, arm.text); }
+        sore {
+            moshi (covered[variant_index]) { add_type_error(env, TypeErrorKind.NonExhaustiveMatch(), "E0311", file_id, arm_id, value, value, "duplicate enum variant"); }
+            covered[variant_index] = hai;
+            kaku variant = definition.variants[variant_index];
+            moshi (arm.integer != len(variant.fields)) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, arm_id, 0, 0, "wrong match binding count"); }
+            kaku binding_index = 0;
+            aida (binding_index < arm.integer && binding_index < len(variant.fields)) {
+                kaku binding_id = arm.children[binding_index]; kaku symbol_id = binding_of(env, file_id, binding_id);
+                moshi (symbol_id >= 0) { set_symbol_type(env, symbol_id, substitute_type(env, variant.fields[binding_index], names, info.arguments)); }
+                binding_index = binding_index + 1;
+            }
+            check_block(env, file_id, arm.children[len(arm.children) - 1]);
+        }
+        arm_index = arm_index + 1;
+    }
+    index = 0; aida (index < len(covered)) { moshi (!covered[index]) { add_type_error(env, TypeErrorKind.NonExhaustiveMatch(), "E0311", file_id, node_id, value, value, definition.variants[index].name); nukeru; } index = index + 1; }
+}
+
+waza check_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
+    kaku node = node_at(env, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 1 || kind == 34 || kind == 36) { kaesu; }
+    moshi (kind == 2 || kind == 14) {
+        moshi (kind == 2) { evaluate_constant_symbol(env, binding_of(env, file_id, node_id), file_id, node_id); kaesu; }
+        kaku value_id = node.children[len(node.children) - 1];
+        kaku declared = 0;
+        moshi (len(node.children) > 1) { declared = resolve_type_node(env, file_id, node.children[0], env.constraints); }
+        kaku actual = 0;
+        moshi (declared != 0) { actual = expected_expression(env, file_id, value_id, declared); }
+        sore { actual = check_expression(env, file_id, value_id); }
+        moshi (declared == 0) { declared = actual; }
+        moshi (!is_assignable(env.result, declared, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, value_id, declared, actual, node.text); }
+        kaku symbol_id = binding_of(env, file_id, node_id);
+        moshi (symbol_id >= 0) { set_symbol_type(env, symbol_id, declared); }
+        kaesu;
+    }
+    moshi (kind == 15) {
+        kaku symbol_id = binding_of(env, file_id, node_id);
+        kaku expected = declared_symbol_type(env, symbol_id);
+        kaku actual = expected_expression(env, file_id, node.children[0], expected);
+        moshi (resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 3) { add_type_error(env, TypeErrorKind.InvalidAssignment(), "E0304", file_id, node_id, expected, actual, "constant cannot be assigned"); }
+        sore { moshi (!is_assignable(env.result, expected, actual)) { add_type_error(env, TypeErrorKind.InvalidAssignment(), "E0304", file_id, node.children[0], expected, actual, node.text); } }
+        invalidate_fact(env, symbol_id);
+        moshi (type_kind_code(env.result.types[expected].kind) == 16 && actual == env.result.types[expected].element) { add_fact(env, symbol_id, actual); }
+        kaesu;
+    }
+    moshi (kind == 16) {
+        kaku target = check_expression(env, file_id, node.children[0]);
+        kaku target_node = node_at(env, file_id, node.children[0]);
+        moshi (parser.node_kind_code(target_node.kind) == 26) {
+            kaku container = check_expression(env, file_id, target_node.children[0]); kaku info = env.result.types[container];
+            moshi (type_kind_code(info.kind) == 15) { target = info.element; }
+            moshi (type_kind_code(info.kind) == 17 && info.name == "Map") { target = info.arguments[1]; }
+        }
+        kaku actual = expected_expression(env, file_id, node.children[1], target);
+        moshi (!is_assignable(env.result, target, actual)) { add_type_error(env, TypeErrorKind.InvalidAssignment(), "E0304", file_id, node.children[1], target, actual, "index assignment type mismatch"); }
+        kaesu;
+    }
+    moshi (kind == 17) { check_block(env, file_id, node_id); kaesu; }
+    moshi (kind == 18) {
+        kaku condition_type = check_expression(env, file_id, node.children[0]);
+        moshi (condition_type != builtin_type(env, "bool")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], builtin_type(env, "bool"), condition_type, "if condition must be bool"); }
+        kaku narrowing = condition_narrowing(env, file_id, node.children[0]);
+        check_block_with_fact(env, file_id, node.children[1], narrowing, narrowing.true_non_nil);
+        moshi (len(node.children) > 2) { check_block_with_fact(env, file_id, node.children[2], narrowing, !narrowing.true_non_nil); }
+        moshi (narrowing.valid && len(node.children) == 2 && !narrowing.true_non_nil && block_always_returns(env, file_id, node.children[1])) {
+            kaku declared = symbol_type(env, narrowing.symbol_id);
+            moshi (type_kind_code(env.result.types[declared].kind) == 16) { add_fact(env, narrowing.symbol_id, env.result.types[declared].element); }
+        }
+        kaesu;
+    }
+    moshi (kind == 19) {
+        kaku condition_type = check_expression(env, file_id, node.children[0]);
+        moshi (condition_type != builtin_type(env, "bool")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], builtin_type(env, "bool"), condition_type, "while condition must be bool"); }
+        env.loop_depth[0] = env.loop_depth[0] + 1; check_block(env, file_id, node.children[1]); env.loop_depth[0] = env.loop_depth[0] - 1; kaesu;
+    }
+    moshi (kind == 20 || kind == 21) { moshi (env.loop_depth[0] == 0) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, 0, 0, "loop control outside loop"); } kaesu; }
+    moshi (kind == 31) {
+        kaku expected = builtin_type(env, "unit"); moshi (len(env.return_types) > 0) { expected = env.return_types[len(env.return_types) - 1]; }
+        kaku actual = builtin_type(env, "unit"); moshi (len(node.children) > 0) { actual = expected_expression(env, file_id, node.children[0], expected); }
+        moshi (!is_assignable(env.result, expected, actual)) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, expected, actual, "return type mismatch"); }
+        kaesu;
+    }
+    moshi (kind == 32) { check_function_statement(env, file_id, node_id); kaesu; }
+    moshi (kind == 38) { check_match(env, file_id, node_id); kaesu; }
+    moshi (kind == 3) { check_expression(env, file_id, node.children[0]); kaesu; }
+}
+
+waza check_block(env: TypeEnvironment, file_id: int64, block_id: int64) -> unit {
+    kaku block = node_at(env, file_id, block_id);
+    kaku index = 0;
+    aida (index < len(block.children)) { check_statement(env, file_id, block.children[index]); index = index + 1; }
+}
+
+waza check_all_files(env: TypeEnvironment) -> unit {
+    kaku file_id = 0;
+    aida (file_id < len(env.resolved.files)) {
+        env.current_file[0] = file_id;
+        kaku root = node_at(env, file_id, env.resolved.files[file_id].root);
+        kaku index = 0;
+        aida (index < len(root.children)) { check_statement(env, file_id, root.children[index]); index = index + 1; }
+        file_id = file_id + 1;
+    }
+}

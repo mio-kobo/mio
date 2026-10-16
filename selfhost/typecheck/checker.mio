@@ -1,0 +1,315 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+waza type_parameters(env: TypeEnvironment, file_id: int64, node: parser.Node) -> []TypeParameter {
+    kaku result = array.with_capacity[TypeParameter](node.integer);
+    kaku index = 0;
+    aida (index < node.integer) {
+        kaku parameter = node_at(env, file_id, node.children[index]);
+        array.push(result, TypeParameter { name: parameter.text, constraint: parameter.extra });
+        index = index + 1;
+    }
+    kaesu result;
+}
+
+waza qualified_type_name(symbol: resolver.Symbol) -> string {
+    moshi (symbol.package_path == "") { kaesu symbol.name; }
+    kaesu string.concat(string.concat(symbol.package_path, "."), symbol.name);
+}
+
+waza resolve_type_node(env: TypeEnvironment, file_id: int64, node_id: int64, parameters: []TypeParameter) -> int64 {
+    moshi (node_id < 0) { kaesu builtin_type(env, "unit"); }
+    kaku node = node_at(env, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 40) {
+        kaku element = resolve_type_node(env, file_id, node.children[0], parameters);
+        moshi (element == 0 || element == builtin_type(env, "unit") || element == builtin_type(env, "mu")) {
+            add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, element, "invalid array element type");
+            kaesu 0;
+        }
+        kaesu array_type(env.result, element);
+    }
+    moshi (kind == 41) {
+        kaku element = resolve_type_node(env, file_id, node.children[0], parameters);
+        kaku element_kind = type_kind_code(env.result.types[element].kind);
+        moshi (element == 0 || element_kind == 12 || element_kind == 13 || element_kind == 16) {
+            add_type_error(env, TypeErrorKind.InvalidNil(), "E0305", file_id, node_id, 0, element, "type cannot be nullable");
+            kaesu 0;
+        }
+        kaesu nullable_type(env.result, element);
+    }
+    moshi (kind == 42) {
+        kaku types = array.with_capacity[int64](node.integer);
+        kaku index = 0;
+        aida (index < node.integer) {
+            kaku value = resolve_type_node(env, file_id, node.children[index], parameters);
+            moshi (value == builtin_type(env, "unit")) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node.children[index], 0, value, "function parameter cannot be unit"); }
+            array.push(types, value);
+            index = index + 1;
+        }
+        kaku result = resolve_type_node(env, file_id, node.children[node.integer], parameters);
+        kaesu function_type(env.result, types, result);
+    }
+    moshi (kind != 39) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, "invalid type node"); kaesu 0; }
+    kaku index = 0;
+    aida (index < len(parameters)) {
+        moshi (parameters[index].name == node.text) {
+            moshi (len(node.children) != 0) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "type parameter cannot have arguments"); kaesu 0; }
+            kaesu parameter_type(env.result, node.text);
+        }
+        index = index + 1;
+    }
+    kaku builtin = builtin_type(env, node.text);
+    moshi (builtin != 0) {
+        moshi (len(node.children) != 0) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "builtin type cannot have arguments"); kaesu 0; }
+        kaesu builtin;
+    }
+    kaku arguments = array.with_capacity[int64](len(node.children));
+    index = 0;
+    aida (index < len(node.children)) { array.push(arguments, resolve_type_node(env, file_id, node.children[index], parameters)); index = index + 1; }
+    moshi (node.text == "Map") {
+        moshi (len(arguments) != 2) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "Map requires two type arguments"); kaesu 0; }
+        moshi (!is_hashable(env.result, arguments[0])) { add_type_error(env, TypeErrorKind.InvalidMapKey(), "E0312", file_id, node.children[0], 0, arguments[0], "Map key is not hashable"); kaesu 0; }
+        kaesu map_type(env.result, arguments[0], arguments[1]);
+    }
+    kaku symbol_id = binding_of(env, file_id, node_id);
+    moshi (symbol_id < 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text); kaesu 0; }
+    kaku symbol = env.resolved.symbols[symbol_id];
+    kaku definition = struct_of(env, symbol_id);
+    kaku expected = -1;
+    moshi (definition >= 0) { expected = len(env.result.structs[definition].parameters); }
+    kaku enum_index = enum_of(env, symbol_id);
+    moshi (enum_index >= 0) { expected = len(env.result.enums[enum_index].parameters); }
+    moshi (expected < 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text); kaesu 0; }
+    moshi (expected != len(arguments)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "wrong type argument count"); kaesu 0; }
+    kaesu named_type(env.result, qualified_type_name(symbol), arguments);
+}
+
+waza register_type_declarations(env: TypeEnvironment) -> unit {
+    kaku file_id = 0;
+    aida (file_id < len(env.resolved.files)) {
+        kaku root = node_at(env, file_id, env.resolved.files[file_id].root);
+        kaku index = 0;
+        aida (index < len(root.children)) {
+            kaku node_id = root.children[index];
+            kaku node = node_at(env, file_id, node_id);
+            kaku kind = parser.node_kind_code(node.kind);
+            moshi (kind == 34 || kind == 36) {
+                kaku symbol_id = binding_of(env, file_id, node_id);
+                kaku parameters = type_parameters(env, file_id, node);
+                moshi (kind == 34) {
+                    array.push(env.result.structs, StructDefinition { symbol_id: symbol_id, name: node.text, package_path: env.resolved.package_path, parameters: parameters, fields: array.with_capacity[StructField](len(node.children) - node.integer) });
+                } sore {
+                    array.push(env.result.enums, EnumDefinition { symbol_id: symbol_id, name: node.text, package_path: env.resolved.package_path, parameters: parameters, variants: array.with_capacity[EnumVariant](len(node.children) - node.integer) });
+                }
+            }
+            index = index + 1;
+        }
+        file_id = file_id + 1;
+    }
+}
+
+waza fill_type_declarations(env: TypeEnvironment) -> unit {
+    kaku file_id = 0;
+    aida (file_id < len(env.resolved.files)) {
+        kaku root = node_at(env, file_id, env.resolved.files[file_id].root);
+        kaku index = 0;
+        aida (index < len(root.children)) {
+            kaku node_id = root.children[index];
+            kaku node = node_at(env, file_id, node_id);
+            kaku kind = parser.node_kind_code(node.kind);
+            moshi (kind == 34) {
+                kaku definition_index = struct_of(env, binding_of(env, file_id, node_id));
+                kaku parameters = env.result.structs[definition_index].parameters;
+                kaku child = node.integer;
+                aida (child < len(node.children)) {
+                    kaku field = node_at(env, file_id, node.children[child]);
+                    kaku duplicate = iie;
+                    kaku old = 0;
+                    aida (old < len(env.result.structs[definition_index].fields)) { moshi (env.result.structs[definition_index].fields[old].name == field.text) { duplicate = hai; } old = old + 1; }
+                    moshi (duplicate) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node.children[child], 0, 0, "duplicate struct field"); }
+                    sore { array.push(env.result.structs[definition_index].fields, StructField { name: field.text, type_id: resolve_type_node(env, file_id, field.children[0], parameters) }); }
+                    child = child + 1;
+                }
+            }
+            moshi (kind == 36) {
+                kaku definition_index = enum_of(env, binding_of(env, file_id, node_id));
+                kaku parameters = env.result.enums[definition_index].parameters;
+                kaku child = node.integer;
+                aida (child < len(node.children)) {
+                    kaku variant_node_id = node.children[child];
+                    kaku variant = node_at(env, file_id, variant_node_id);
+                    kaku fields = array.with_capacity[int64](len(variant.children));
+                    kaku field = 0;
+                    aida (field < len(variant.children)) { array.push(fields, resolve_type_node(env, file_id, variant.children[field], parameters)); field = field + 1; }
+                    array.push(env.result.enums[definition_index].variants, EnumVariant { symbol_id: binding_of(env, file_id, variant_node_id), name: variant.text, fields: fields });
+                    child = child + 1;
+                }
+            }
+            index = index + 1;
+        }
+        file_id = file_id + 1;
+    }
+}
+
+waza register_function_signatures(env: TypeEnvironment) -> unit {
+    kaku file_id = 0;
+    aida (file_id < len(env.resolved.files)) {
+        kaku root = node_at(env, file_id, env.resolved.files[file_id].root);
+        kaku index = 0;
+        aida (index < len(root.children)) {
+            kaku node_id = root.children[index];
+            kaku node = node_at(env, file_id, node_id);
+            moshi (parser.node_kind_code(node.kind) == 32) {
+                kaku type_params = type_parameters(env, file_id, node);
+                kaku parameter_types = array.with_capacity[int64](node.operator);
+                kaku child = node.integer;
+                aida (child < node.integer + node.operator) {
+                    kaku parameter = node_at(env, file_id, node.children[child]);
+                    kaku parameter_type_id = 0;
+                    moshi (len(parameter.children) == 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node.children[child], 0, 0, "parameter requires type annotation"); }
+                    sore { parameter_type_id = resolve_type_node(env, file_id, parameter.children[0], type_params); }
+                    array.push(parameter_types, parameter_type_id);
+                    kaku parameter_symbol = binding_of(env, file_id, node.children[child]);
+                    moshi (parameter_symbol >= 0) { set_symbol_type(env, parameter_symbol, parameter_type_id); }
+                    child = child + 1;
+                }
+                kaku return_type = builtin_type(env, "unit");
+                moshi (child < len(node.children) - 1) { return_type = resolve_type_node(env, file_id, node.children[child], type_params); }
+                kaku symbol_id = binding_of(env, file_id, node_id);
+                array.push(env.result.signatures, FunctionSignature { symbol_id: symbol_id, name: node.text, package_path: env.resolved.package_path, type_parameters: type_params, parameters: parameter_types, result: return_type });
+                moshi (len(type_params) == 0) { set_symbol_type(env, symbol_id, function_type(env.result, parameter_types, return_type)); }
+            }
+            index = index + 1;
+        }
+        file_id = file_id + 1;
+    }
+}
+
+waza copy_type_from(env: TypeEnvironment, source: TypeCheckResult, id: int64) -> int64 {
+    kaku info = source.types[id];
+    kaku code = type_kind_code(info.kind);
+    moshi (code <= 14) { kaesu builtin_type(env, info.name); }
+    moshi (code == 15) { kaesu array_type(env.result, copy_type_from(env, source, info.element)); }
+    moshi (code == 16) { kaesu nullable_type(env.result, copy_type_from(env, source, info.element)); }
+    moshi (code == 17) {
+        kaku arguments = array.with_capacity[int64](len(info.arguments)); kaku index = 0;
+        aida (index < len(info.arguments)) { array.push(arguments, copy_type_from(env, source, info.arguments[index])); index = index + 1; }
+        kaesu named_type(env.result, info.name, arguments);
+    }
+    moshi (code == 18) {
+        kaku parameters = array.with_capacity[int64](len(info.parameters)); kaku index = 0;
+        aida (index < len(info.parameters)) { array.push(parameters, copy_type_from(env, source, info.parameters[index])); index = index + 1; }
+        kaesu function_type(env.result, parameters, copy_type_from(env, source, info.result));
+    }
+    kaesu parameter_type(env.result, info.name);
+}
+
+waza find_current_symbol(env: TypeEnvironment, package_path: string, name: string, kind: int64) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.resolved.symbols)) {
+        kaku symbol = env.resolved.symbols[index];
+        moshi (symbol.package_path == package_path && symbol.name == name && resolver.symbol_kind_code(symbol.kind) == kind) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza copied_constant(env: TypeEnvironment, dependency: TypeCheckResult, value: ConstantValue) -> ConstantValue {
+    kaesu ConstantValue {
+        kind: value.kind, state: value.state, type_id: copy_type_from(env, dependency, value.type_id),
+        integer: value.integer, float32_value: value.float32_value, float64_value: value.float64_value,
+        boolean: value.boolean, string_value: value.string_value
+    };
+}
+
+waza import_dependency_types(env: TypeEnvironment, dependencies: []TypeCheckResult) -> unit {
+    kaku dependency_index = 0;
+    aida (dependency_index < len(dependencies)) {
+        kaku dependency = dependencies[dependency_index];
+        kaku symbol_index = 0;
+        aida (symbol_index < len(dependency.symbol_types)) {
+            kaku item = dependency.symbol_types[symbol_index];
+            kaku source_symbol = find_current_symbol(env, item.package_path, item.name, item.symbol_kind);
+            moshi (source_symbol >= 0) { set_symbol_type(env, source_symbol, copy_type_from(env, dependency, item.type_id)); }
+            symbol_index = symbol_index + 1;
+        }
+        kaku constant_index = 0;
+        aida (constant_index < len(dependency.constants)) {
+            kaku source_constant = dependency.constants[constant_index];
+            moshi (source_constant.declaration && constant_state_code(source_constant.value.state) == 2) {
+                kaku source_type_index = 0;
+                aida (source_type_index < len(dependency.symbol_types) && dependency.symbol_types[source_type_index].symbol_id != source_constant.symbol_id) { source_type_index = source_type_index + 1; }
+                moshi (source_type_index < len(dependency.symbol_types)) {
+                    kaku source_type = dependency.symbol_types[source_type_index];
+                    kaku current_symbol = find_current_symbol(env, source_type.package_path, source_type.name, 3);
+                    moshi (current_symbol >= 0) {
+                        kaku value = copied_constant(env, dependency, source_constant.value);
+                        array.push(env.result.constants, ConstantBinding { node: resolver.NodeRef { file_id: -1, node_id: -1 }, symbol_id: current_symbol, declaration: hai, value: value });
+                        env.constant_states[current_symbol] = 2;
+                    }
+                }
+            }
+            constant_index = constant_index + 1;
+        }
+        kaku struct_index = 0;
+        aida (struct_index < len(dependency.structs)) {
+            kaku source = dependency.structs[struct_index];
+            kaku current_symbol = find_current_symbol(env, source.package_path, source.name, 6);
+            moshi (current_symbol >= 0) {
+                kaku fields = array.with_capacity[StructField](len(source.fields)); kaku field = 0;
+                aida (field < len(source.fields)) { array.push(fields, StructField { name: source.fields[field].name, type_id: copy_type_from(env, dependency, source.fields[field].type_id) }); field = field + 1; }
+                array.push(env.result.structs, StructDefinition { symbol_id: current_symbol, name: source.name, package_path: source.package_path, parameters: source.parameters, fields: fields });
+            }
+            struct_index = struct_index + 1;
+        }
+        kaku enum_index = 0;
+        aida (enum_index < len(dependency.enums)) {
+            kaku source = dependency.enums[enum_index];
+            kaku current_symbol = find_current_symbol(env, source.package_path, source.name, 7);
+            moshi (current_symbol >= 0) {
+                kaku variants = array.with_capacity[EnumVariant](len(source.variants)); kaku variant_index = 0;
+                aida (variant_index < len(source.variants)) {
+                    kaku source_variant = source.variants[variant_index];
+                    kaku current_variant = find_current_symbol(env, source.package_path, source_variant.name, 8);
+                    kaku fields = array.with_capacity[int64](len(source_variant.fields)); kaku field = 0;
+                    aida (field < len(source_variant.fields)) { array.push(fields, copy_type_from(env, dependency, source_variant.fields[field])); field = field + 1; }
+                    array.push(variants, EnumVariant { symbol_id: current_variant, name: source_variant.name, fields: fields });
+                    variant_index = variant_index + 1;
+                }
+                array.push(env.result.enums, EnumDefinition { symbol_id: current_symbol, name: source.name, package_path: source.package_path, parameters: source.parameters, variants: variants });
+            }
+            enum_index = enum_index + 1;
+        }
+        kaku signature_index = 0;
+        aida (signature_index < len(dependency.signatures)) {
+            kaku source = dependency.signatures[signature_index];
+            kaku current_symbol = find_current_symbol(env, source.package_path, source.name, 4);
+            moshi (current_symbol < 0) { current_symbol = find_current_symbol(env, source.package_path, source.name, 5); }
+            moshi (current_symbol >= 0) {
+                kaku parameters = array.with_capacity[int64](len(source.parameters)); kaku parameter = 0;
+                aida (parameter < len(source.parameters)) { array.push(parameters, copy_type_from(env, dependency, source.parameters[parameter])); parameter = parameter + 1; }
+                array.push(env.result.signatures, FunctionSignature { symbol_id: current_symbol, name: source.name, package_path: source.package_path, type_parameters: source.type_parameters, parameters: parameters, result: copy_type_from(env, dependency, source.result) });
+            }
+            signature_index = signature_index + 1;
+        }
+        dependency_index = dependency_index + 1;
+    }
+}
+
+koukai waza check_package(resolved: resolver.ResolvedPackage, dependencies: []TypeCheckResult) -> TypeCheckResult {
+    kaku env = new_environment(resolved);
+    import_dependency_types(env, dependencies);
+    register_type_declarations(env);
+    fill_type_declarations(env);
+    register_function_signatures(env);
+    evaluate_all_constants(env);
+    check_all_files(env);
+    kaesu env.result;
+}
+
+koukai waza check_program(resolved: resolver.ResolvedPackage) -> TypeCheckResult {
+    kaesu check_package(resolved, array.with_capacity[TypeCheckResult](0));
+}

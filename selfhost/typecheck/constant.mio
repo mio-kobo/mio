@@ -1,0 +1,204 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+waza invalid_constant(state: ConstantState) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.Invalid(), state: state, type_id: 0, integer: 0, float32_value: float32(0.0), float64_value: 0.0, boolean: iie, string_value: "" };
+}
+
+waza integer_constant(type_id: int64, value: int64) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.Integer(), state: ConstantState.Complete(), type_id: type_id, integer: value, float32_value: float32(0.0), float64_value: 0.0, boolean: iie, string_value: "" };
+}
+
+waza float32_constant(type_id: int64, value: float32) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.Float32(), state: ConstantState.Complete(), type_id: type_id, integer: 0, float32_value: value, float64_value: 0.0, boolean: iie, string_value: "" };
+}
+
+waza float64_constant(type_id: int64, value: float64) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.Float64(), state: ConstantState.Complete(), type_id: type_id, integer: 0, float32_value: float32(0.0), float64_value: value, boolean: iie, string_value: "" };
+}
+
+waza bool_constant(type_id: int64, value: bool) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.Boolean(), state: ConstantState.Complete(), type_id: type_id, integer: 0, float32_value: float32(0.0), float64_value: 0.0, boolean: value, string_value: "" };
+}
+
+waza string_constant(type_id: int64, value: string) -> ConstantValue {
+    kaesu ConstantValue { kind: ConstantKind.String(), state: ConstantState.Complete(), type_id: type_id, integer: 0, float32_value: float32(0.0), float64_value: 0.0, boolean: iie, string_value: value };
+}
+
+waza constant_binding_index(env: TypeEnvironment, symbol_id: int64, declaration: bool) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.result.constants)) {
+        kaku item = env.result.constants[index];
+        moshi (item.symbol_id == symbol_id && (!declaration || item.declaration)) { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza record_constant(env: TypeEnvironment, file_id: int64, node_id: int64, symbol_id: int64, declaration: bool, value: ConstantValue) -> unit {
+    kaku index = 0;
+    aida (index < len(env.result.constants)) {
+        kaku item = env.result.constants[index];
+        moshi (item.node.file_id == file_id && item.node.node_id == node_id) { env.result.constants[index] = ConstantBinding { node: item.node, symbol_id: symbol_id, declaration: declaration, value: value }; kaesu; }
+        index = index + 1;
+    }
+    array.push(env.result.constants, ConstantBinding { node: resolver.NodeRef { file_id: file_id, node_id: node_id }, symbol_id: symbol_id, declaration: declaration, value: value });
+}
+
+waza constant_failure(env: TypeEnvironment, file_id: int64, node_id: int64, detail: string) -> ConstantValue {
+    add_type_error(env, TypeErrorKind.ConstantError(), "E0313", file_id, node_id, 0, 0, detail);
+    kaesu invalid_constant(ConstantState.Failed());
+}
+
+waza integer_width(env: TypeEnvironment, type_id: int64) -> int64 {
+    kaku code = type_kind_code(env.result.types[type_id].kind);
+    moshi (code == 1 || code == 5) { kaesu 8; }
+    moshi (code == 2 || code == 6) { kaesu 16; }
+    moshi (code == 3 || code == 7) { kaesu 32; }
+    kaesu 64;
+}
+
+waza wrap_integer(env: TypeEnvironment, value: int64, type_id: int64) -> int64 {
+    kaku width = integer_width(env, type_id); moshi (width == 64) { kaesu value; }
+    kaku modulus: int64 = 256; moshi (width == 16) { modulus = 65536; } moshi (width == 32) { modulus = 4294967296; }
+    kaku result = value - (value / modulus) * modulus; moshi (result < 0) { result = result + modulus; }
+    kaku code = type_kind_code(env.result.types[type_id].kind); moshi (code >= 1 && code <= 4 && result >= modulus / 2) { result = result - modulus; }
+    kaesu result;
+}
+
+waza integer_value_from_literal(env: TypeEnvironment, file_id: int64, node_id: int64, type_id: int64, negative: bool) -> ConstantValue {
+    kaku node = node_at(env, file_id, node_id);
+    moshi (!check_integer_range(env, file_id, node_id, type_id, negative)) { kaesu invalid_constant(ConstantState.Failed()); }
+    kaku value = node.integer;
+    moshi (negative) { moshi (node.text == "9223372036854775808") { value = -9223372036854775807 - 1; } sore { value = -value; } }
+    kaesu integer_constant(type_id, wrap_integer(env, value, type_id));
+}
+
+waza constant_equal(left: ConstantValue, right: ConstantValue) -> bool {
+    kaku kind = constant_kind_code(left.kind); moshi (kind != constant_kind_code(right.kind)) { kaesu iie; }
+    moshi (kind == 1) { kaesu left.integer == right.integer; } moshi (kind == 2) { kaesu left.float32_value == right.float32_value; }
+    moshi (kind == 3) { kaesu left.float64_value == right.float64_value; } moshi (kind == 4) { kaesu left.boolean == right.boolean; }
+    moshi (kind == 5) { kaesu left.string_value == right.string_value; } kaesu iie;
+}
+
+waza compare_integer(operator: int64, left: int64, right: int64) -> bool {
+    moshi (operator == 16) { kaesu left < right; } moshi (operator == 17) { kaesu left <= right; } moshi (operator == 18) { kaesu left > right; } kaesu left >= right;
+}
+
+waza compare_float32(operator: int64, left: float32, right: float32) -> bool {
+    moshi (operator == 16) { kaesu left < right; } moshi (operator == 17) { kaesu left <= right; } moshi (operator == 18) { kaesu left > right; } kaesu left >= right;
+}
+
+waza compare_float64(operator: int64, left: float64, right: float64) -> bool {
+    moshi (operator == 16) { kaesu left < right; } moshi (operator == 17) { kaesu left <= right; } moshi (operator == 18) { kaesu left > right; } kaesu left >= right;
+}
+
+waza evaluate_binary(env: TypeEnvironment, file_id: int64, node_id: int64, operator: int64, left: ConstantValue, right: ConstantValue) -> ConstantValue {
+    moshi (left.type_id != right.type_id) { kaesu constant_failure(env, file_id, node_id, "constant operands require matching types"); }
+    moshi (operator == 14 || operator == 15) { kaku equal = constant_equal(left, right); moshi (operator == 15) { equal = !equal; } kaesu bool_constant(builtin_type(env, "bool"), equal); }
+    kaku kind = constant_kind_code(left.kind);
+    moshi (kind == 4 && (operator == 20 || operator == 21)) { moshi (operator == 20) { kaesu bool_constant(left.type_id, left.boolean && right.boolean); } kaesu bool_constant(left.type_id, left.boolean || right.boolean); }
+    moshi (kind == 1) {
+        moshi (operator == 8) { kaesu integer_constant(left.type_id, wrap_integer(env, left.integer + right.integer, left.type_id)); }
+        moshi (operator == 9) { kaesu integer_constant(left.type_id, wrap_integer(env, left.integer - right.integer, left.type_id)); }
+        moshi (operator == 10) { kaesu integer_constant(left.type_id, wrap_integer(env, left.integer * right.integer, left.type_id)); }
+        moshi (operator == 11) { moshi (right.integer == 0) { kaesu constant_failure(env, file_id, node_id, "integer division by zero"); } kaesu integer_constant(left.type_id, wrap_integer(env, left.integer / right.integer, left.type_id)); }
+        moshi (operator >= 16 && operator <= 19) { kaesu bool_constant(builtin_type(env, "bool"), compare_integer(operator, left.integer, right.integer)); }
+    }
+    moshi (kind == 2) {
+        moshi (operator == 8) { kaesu float32_constant(left.type_id, left.float32_value + right.float32_value); } moshi (operator == 9) { kaesu float32_constant(left.type_id, left.float32_value - right.float32_value); }
+        moshi (operator == 10) { kaesu float32_constant(left.type_id, left.float32_value * right.float32_value); } moshi (operator == 11) { kaesu float32_constant(left.type_id, left.float32_value / right.float32_value); }
+        moshi (operator >= 16 && operator <= 19) { kaesu bool_constant(builtin_type(env, "bool"), compare_float32(operator, left.float32_value, right.float32_value)); }
+    }
+    moshi (kind == 3) {
+        moshi (operator == 8) { kaesu float64_constant(left.type_id, left.float64_value + right.float64_value); } moshi (operator == 9) { kaesu float64_constant(left.type_id, left.float64_value - right.float64_value); }
+        moshi (operator == 10) { kaesu float64_constant(left.type_id, left.float64_value * right.float64_value); } moshi (operator == 11) { kaesu float64_constant(left.type_id, left.float64_value / right.float64_value); }
+        moshi (operator >= 16 && operator <= 19) { kaesu bool_constant(builtin_type(env, "bool"), compare_float64(operator, left.float64_value, right.float64_value)); }
+    }
+    kaesu constant_failure(env, file_id, node_id, "unsupported constant operator");
+}
+
+waza integer_conversion_fits(env: TypeEnvironment, value: int64, source: int64, target: int64) -> bool {
+    kaku code = type_kind_code(env.result.types[target].kind);
+    moshi (code == 1) { kaesu value >= -128 && value <= 127; } moshi (code == 2) { kaesu value >= -32768 && value <= 32767; }
+    moshi (code == 3) { kaesu value >= -2147483648 && value <= 2147483647; } moshi (code == 4) { kaesu type_kind_code(env.result.types[source].kind) <= 4 || value >= 0; }
+    moshi (value < 0) { kaesu iie; } moshi (code == 5) { kaesu value <= 255; } moshi (code == 6) { kaesu value <= 65535; } moshi (code == 7) { kaesu value <= 4294967295; } kaesu iie;
+}
+
+waza convert_constant(env: TypeEnvironment, file_id: int64, node_id: int64, target: int64, value: ConstantValue) -> ConstantValue {
+    kaku target_code = type_kind_code(env.result.types[target].kind); kaku source_code = type_kind_code(env.result.types[value.type_id].kind);
+    moshi (target == value.type_id || target_code < 1 || target_code > 9 || source_code < 1 || source_code > 9) { kaesu constant_failure(env, file_id, node_id, "invalid constant conversion"); }
+    moshi (target_code <= 7) {
+        kaku integer: int64 = 0;
+        moshi (constant_kind_code(value.kind) == 1) { moshi (!integer_conversion_fits(env, value.integer, value.type_id, target)) { kaesu constant_failure(env, file_id, node_id, "integer value is outside conversion range"); } integer = value.integer; }
+        sore {
+            kaku number = value.float64_value; moshi (constant_kind_code(value.kind) == 2) { number = float64(value.float32_value); }
+            kaku lower = -9223372036854775808.0; kaku upper = 9223372036854775808.0;
+            moshi (target_code != 4) { lower = 0.0; moshi (target_code == 1) { lower = -128.0; upper = 128.0; } moshi (target_code == 2) { lower = -32768.0; upper = 32768.0; } moshi (target_code == 3) { lower = -2147483648.0; upper = 2147483648.0; } moshi (target_code == 5) { upper = 256.0; } moshi (target_code == 6) { upper = 65536.0; } moshi (target_code == 7) { upper = 4294967296.0; } }
+            moshi (number != number || number < lower || number >= upper) { kaesu constant_failure(env, file_id, node_id, "floating value is outside conversion range"); } integer = int64(number);
+        }
+        kaesu integer_constant(target, integer);
+    }
+    moshi (target_code == 8) { moshi (constant_kind_code(value.kind) == 1) { kaesu float32_constant(target, float32(value.integer)); } moshi (constant_kind_code(value.kind) == 3) { kaesu float32_constant(target, float32(value.float64_value)); } }
+    moshi (target_code == 9) { moshi (constant_kind_code(value.kind) == 1) { kaesu float64_constant(target, float64(value.integer)); } moshi (constant_kind_code(value.kind) == 2) { kaesu float64_constant(target, float64(value.float32_value)); } }
+    kaesu constant_failure(env, file_id, node_id, "invalid constant conversion");
+}
+
+waza evaluate_constant_expression(env: TypeEnvironment, file_id: int64, node_id: int64, expected: int64) -> ConstantValue {
+    kaku node = node_at(env, file_id, node_id); kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 5 || kind == 7) { kaku target = expected; moshi (target == 0 || !is_integer(env.result, target)) { target = builtin_type(env, "int64"); } kaku value = integer_value_from_literal(env, file_id, node_id, target, iie); set_node_type(env, file_id, node_id, target); kaesu value; }
+    moshi (kind == 6) {
+        kaku target = expected; moshi (target != builtin_type(env, "float32") && target != builtin_type(env, "float64")) { target = builtin_type(env, "float64"); }
+        moshi (target == builtin_type(env, "float32")) { kaku parsed = convert.parse_float32(node.text); moshi (parsed == mu) { kaesu constant_failure(env, file_id, node_id, "invalid float32 constant"); } set_node_type(env, file_id, node_id, target); kaesu float32_constant(target, parsed); }
+        kaku parsed64 = convert.parse_float64(node.text); moshi (parsed64 == mu) { kaesu constant_failure(env, file_id, node_id, "invalid float64 constant"); } set_node_type(env, file_id, node_id, target); kaesu float64_constant(target, parsed64);
+    }
+    moshi (kind == 8) { kaku target = builtin_type(env, "string"); set_node_type(env, file_id, node_id, target); kaesu string_constant(target, node.text); }
+    moshi (kind == 9) { kaku target = builtin_type(env, "bool"); set_node_type(env, file_id, node_id, target); kaesu bool_constant(target, node.flag); }
+    moshi (kind == 4 || kind == 27) {
+        kaku symbol_id = binding_of(env, file_id, node_id); moshi (symbol_id < 0 || resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) != 3) { kaesu constant_failure(env, file_id, node_id, "constant reference is unresolved"); }
+        kaku value = evaluate_constant_symbol(env, symbol_id, file_id, node_id); moshi (constant_state_code(value.state) == 2) { set_node_type(env, file_id, node_id, value.type_id); record_constant(env, file_id, node_id, symbol_id, iie, value); } kaesu value;
+    }
+    moshi (kind == 13) { kaku value = evaluate_constant_expression(env, file_id, node.children[0], expected); set_node_type(env, file_id, node_id, value.type_id); kaesu value; }
+    moshi (kind == 12) {
+        moshi (node.operator == 9) { kaku literal_id = grouped_integer_literal(env, file_id, node.children[0]); moshi (literal_id >= 0) { kaku target = expected; moshi (target == 0) { target = builtin_type(env, "int64"); } kaku direct = integer_value_from_literal(env, file_id, literal_id, target, hai); set_grouped_integer_type(env, file_id, node.children[0], target); set_node_type(env, file_id, node_id, target); kaesu direct; } }
+        kaku value = evaluate_constant_expression(env, file_id, node.children[0], expected);
+        moshi (node.operator == 9) { kaku value_kind = constant_kind_code(value.kind); moshi (value_kind == 1) { value = integer_constant(value.type_id, wrap_integer(env, -value.integer, value.type_id)); } sore { moshi (value_kind == 2) { value = float32_constant(value.type_id, -value.float32_value); } sore { moshi (value_kind == 3) { value = float64_constant(value.type_id, -value.float64_value); } sore { kaesu constant_failure(env, file_id, node_id, "unary minus requires a number"); } } } }
+        sore { moshi (node.operator != 12 || constant_kind_code(value.kind) != 4) { kaesu constant_failure(env, file_id, node_id, "logical not requires bool"); } value = bool_constant(value.type_id, !value.boolean); }
+        set_node_type(env, file_id, node_id, value.type_id); kaesu value;
+    }
+    moshi (kind == 11) {
+        kaku left = evaluate_constant_expression(env, file_id, node.children[0], expected); moshi (constant_state_code(left.state) != 2) { kaesu left; }
+        moshi (node.operator == 20 && constant_kind_code(left.kind) == 4 && !left.boolean) { kaku value = bool_constant(left.type_id, iie); set_node_type(env, file_id, node_id, value.type_id); kaesu value; }
+        moshi (node.operator == 21 && constant_kind_code(left.kind) == 4 && left.boolean) { kaku value = bool_constant(left.type_id, hai); set_node_type(env, file_id, node_id, value.type_id); kaesu value; }
+        kaku right = evaluate_constant_expression(env, file_id, node.children[1], left.type_id); moshi (constant_state_code(right.state) != 2) { kaesu right; }
+        kaku value = evaluate_binary(env, file_id, node_id, node.operator, left, right); set_node_type(env, file_id, node_id, value.type_id); kaesu value;
+    }
+    moshi (kind == 24) { moshi (len(node.children) != 2) { kaesu constant_failure(env, file_id, node_id, "constant conversion expects one argument"); } kaku value = evaluate_constant_expression(env, file_id, node.children[1], 0); moshi (constant_state_code(value.state) != 2) { kaesu value; } kaku converted = convert_constant(env, file_id, node_id, builtin_type(env, node.text), value); set_node_type(env, file_id, node_id, converted.type_id); kaesu converted; }
+    kaesu constant_failure(env, file_id, node_id, "initializer is not a constant expression");
+}
+
+waza evaluate_constant_symbol(env: TypeEnvironment, symbol_id: int64, reference_file: int64, reference_node: int64) -> ConstantValue {
+    kaku cached = constant_binding_index(env, symbol_id, hai); moshi (cached >= 0) { kaesu env.result.constants[cached].value; }
+    moshi (symbol_id < 0 || symbol_id >= len(env.resolved.symbols)) { kaesu constant_failure(env, reference_file, reference_node, "constant symbol is invalid"); }
+    moshi (env.constant_states[symbol_id] == 1) { kaesu constant_failure(env, reference_file, reference_node, "constant dependency cycle"); }
+    moshi (env.constant_states[symbol_id] == 3) { kaesu invalid_constant(ConstantState.Failed()); }
+    kaku symbol = env.resolved.symbols[symbol_id]; moshi (symbol.declaration.file_id < 0 || symbol.declaration.file_id >= len(env.resolved.files)) { kaesu constant_failure(env, reference_file, reference_node, "constant value is unavailable"); }
+    env.constant_states[symbol_id] = 1;
+    kaku file_id = symbol.declaration.file_id; kaku node_id = symbol.declaration.node_id; kaku declaration = node_at(env, file_id, node_id); kaku expected = 0;
+    moshi (declaration.integer > 0) { expected = resolve_type_node(env, file_id, declaration.children[0], env.constraints); }
+    kaku value = evaluate_constant_expression(env, file_id, declaration.children[len(declaration.children) - 1], expected);
+    moshi (constant_state_code(value.state) != 2) { env.constant_states[symbol_id] = 3; record_constant(env, file_id, node_id, symbol_id, hai, value); kaesu value; }
+    moshi (expected != 0 && value.type_id != expected) { value = constant_failure(env, file_id, declaration.children[len(declaration.children) - 1], "constant type does not match its declaration"); env.constant_states[symbol_id] = 3; record_constant(env, file_id, node_id, symbol_id, hai, value); kaesu value; }
+    set_symbol_type(env, symbol_id, value.type_id); set_node_type(env, file_id, node_id, value.type_id); env.constant_states[symbol_id] = 2; record_constant(env, file_id, node_id, symbol_id, hai, value); kaesu value;
+}
+
+waza evaluate_all_constants(env: TypeEnvironment) -> unit {
+    kaku symbol_id = 0;
+    aida (symbol_id < len(env.resolved.symbols)) { kaku symbol = env.resolved.symbols[symbol_id]; moshi (resolver.symbol_kind_code(symbol.kind) == 3 && symbol.package_path == env.resolved.package_path) { evaluate_constant_symbol(env, symbol_id, symbol.declaration.file_id, symbol.declaration.node_id); } symbol_id = symbol_id + 1; }
+}
+
+koukai waza constant_at(result: TypeCheckResult, file_id: int64, node_id: int64) -> ConstantValue {
+    kaku index = 0; aida (index < len(result.constants)) { kaku item = result.constants[index]; moshi (item.node.file_id == file_id && item.node.node_id == node_id) { kaesu item.value; } index = index + 1; } kaesu invalid_constant(ConstantState.Failed());
+}

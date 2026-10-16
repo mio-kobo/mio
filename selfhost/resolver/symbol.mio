@@ -1,0 +1,197 @@
+yobu "kiso/array";
+yobu "selfhost/parser";
+
+koukai kata NodeRef {
+    file_id: int64;
+    node_id: int64;
+}
+
+koukai sentaku SymbolKind {
+    LocalVariable;
+    Parameter;
+    GlobalVariable;
+    Constant;
+    Function;
+    GenericFunction;
+    StructType;
+    EnumType;
+    EnumVariant;
+    TypeParameter;
+    PackageImport;
+    BuiltinType;
+    BuiltinFunction;
+}
+
+koukai sentaku ScopeKind {
+    Builtin;
+    Package;
+    Function;
+    Block;
+    Loop;
+    Branch;
+    Closure;
+    Generic;
+    MatchArm;
+}
+
+koukai kata Symbol {
+    id: int64;
+    kind: SymbolKind;
+    name: string;
+    package_path: string;
+    scope_id: int64;
+    declaration: NodeRef;
+    span: parser.SourceSpan;
+    public: bool;
+    owner_function: int64;
+}
+
+koukai kata Scope {
+    id: int64;
+    kind: ScopeKind;
+    parent: int64;
+    owner_function: int64;
+    symbols: []int64;
+    keys: []string;
+    values: []int64;
+}
+
+koukai kata Binding {
+    reference: NodeRef;
+    symbol_id: int64;
+    capture: bool;
+}
+
+koukai kata Capture {
+    function_symbol: int64;
+    symbol_id: int64;
+    depth: int64;
+}
+
+koukai sentaku ResolveErrorKind {
+    UndefinedIdentifier;
+    DuplicateDeclaration;
+    InvalidSymbolAccess;
+    PackageNotFound;
+    PrivatePackageMember;
+    ImportCycle;
+    InvalidTypeParameter;
+    InvalidShadowing;
+    InvalidControlFlow;
+}
+
+koukai kata ResolveError {
+    kind: ResolveErrorKind;
+    file_id: int64;
+    node_id: int64;
+    span: parser.SourceSpan;
+    name: string;
+    related: NodeRef;
+}
+
+koukai kata SourceFile {
+    file_id: int64;
+    path: string;
+    ast: parser.AstArena;
+    root: int64;
+}
+
+koukai kata PackageMember {
+    package_path: string;
+    name: string;
+    symbol_id: int64;
+    public: bool;
+}
+
+koukai kata PackageAlias {
+    file_id: int64;
+    name: string;
+    package_path: string;
+    symbol_id: int64;
+}
+
+koukai kata PackageDependency {
+    source: string;
+    target: string;
+}
+
+koukai kata ResolvedPackage {
+    package_path: string;
+    files: []SourceFile;
+    symbols: []Symbol;
+    scopes: []Scope;
+    bindings: []Binding;
+    captures: []Capture;
+    members: []PackageMember;
+    aliases: []PackageAlias;
+    dependencies: []PackageDependency;
+    errors: []ResolveError;
+}
+
+koukai waza symbol_kind_code(kind: SymbolKind) -> int64 {
+    awase (kind) {
+        baai LocalVariable { kaesu 0; }
+        baai Parameter { kaesu 1; }
+        baai GlobalVariable { kaesu 2; }
+        baai Constant { kaesu 3; }
+        baai Function { kaesu 4; }
+        baai GenericFunction { kaesu 5; }
+        baai StructType { kaesu 6; }
+        baai EnumType { kaesu 7; }
+        baai EnumVariant { kaesu 8; }
+        baai TypeParameter { kaesu 9; }
+        baai PackageImport { kaesu 10; }
+        baai BuiltinType { kaesu 11; }
+        baai BuiltinFunction { kaesu 12; }
+    }
+    kaesu -1;
+}
+
+koukai waza scope_kind_code(kind: ScopeKind) -> int64 {
+    awase (kind) {
+        baai Builtin { kaesu 0; }
+        baai Package { kaesu 1; }
+        baai Function { kaesu 2; }
+        baai Block { kaesu 3; }
+        baai Loop { kaesu 4; }
+        baai Branch { kaesu 5; }
+        baai Closure { kaesu 6; }
+        baai Generic { kaesu 7; }
+        baai MatchArm { kaesu 8; }
+    }
+    kaesu -1;
+}
+
+koukai waza resolve_error_kind_code(kind: ResolveErrorKind) -> int64 {
+    awase (kind) {
+        baai UndefinedIdentifier { kaesu 0; }
+        baai DuplicateDeclaration { kaesu 1; }
+        baai InvalidSymbolAccess { kaesu 2; }
+        baai PackageNotFound { kaesu 3; }
+        baai PrivatePackageMember { kaesu 4; }
+        baai ImportCycle { kaesu 5; }
+        baai InvalidTypeParameter { kaesu 6; }
+        baai InvalidShadowing { kaesu 7; }
+        baai InvalidControlFlow { kaesu 8; }
+    }
+    kaesu -1;
+}
+
+waza invalid_ref() -> NodeRef {
+    kaesu NodeRef { file_id: -1, node_id: -1 };
+}
+
+waza empty_resolved_package(path: string, files: []SourceFile) -> ResolvedPackage {
+    kaesu ResolvedPackage {
+        package_path: path,
+        files: files,
+        symbols: array.with_capacity[Symbol](128),
+        scopes: array.with_capacity[Scope](32),
+        bindings: array.with_capacity[Binding](256),
+        captures: array.with_capacity[Capture](32),
+        members: array.with_capacity[PackageMember](64),
+        aliases: array.with_capacity[PackageAlias](16),
+        dependencies: array.with_capacity[PackageDependency](16),
+        errors: array.with_capacity[ResolveError](16)
+    };
+}

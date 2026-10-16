@@ -1,0 +1,470 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/utf8";
+
+teisu max_source_bytes: int64 = 16777216;
+
+kata Scanner {
+    source: []uint8;
+    offset: []int64;
+    line: []int64;
+    column: []int64;
+    errors: []LexError;
+    error_start: []Position;
+}
+
+waza position(scanner: Scanner) -> Position {
+    kaesu Position {
+        offset: scanner.offset[0],
+        line: scanner.line[0],
+        column: scanner.column[0]
+    };
+}
+
+waza byte_at(scanner: Scanner, offset: int64) -> uint8 {
+    moshi (offset < 0 || offset >= len(scanner.source)) { kaesu uint8(0); }
+    kaesu scanner.source[offset];
+}
+
+waza current(scanner: Scanner) -> uint8 {
+    kaesu byte_at(scanner, scanner.offset[0]);
+}
+
+waza peek(scanner: Scanner) -> uint8 {
+    kaesu byte_at(scanner, scanner.offset[0] + 1);
+}
+
+waza at_eof(scanner: Scanner) -> bool {
+    kaesu scanner.offset[0] >= len(scanner.source);
+}
+
+waza advance(scanner: Scanner) -> unit {
+    moshi (at_eof(scanner)) { kaesu; }
+    kaku value = current(scanner);
+    scanner.offset[0] = scanner.offset[0] + 1;
+    moshi (value == uint8(10) || (value == uint8(13) && current(scanner) != uint8(10))) {
+        scanner.line[0] = scanner.line[0] + 1;
+        scanner.column[0] = 1;
+        kaesu;
+    }
+    scanner.column[0] = scanner.column[0] + 1;
+    moshi (!at_eof(scanner)) {
+        kaku next = current(scanner);
+        moshi (next >= uint8(128) && next <= uint8(191)) {
+            scanner.column[0] = scanner.column[0] - 1;
+        }
+    }
+}
+
+waza copy_bytes(source: []uint8, start: int64, end: int64) -> []uint8 {
+    kaku result = array.with_capacity[uint8](end - start);
+    kaku index = start;
+    aida (index < end) {
+        array.push(result, source[index]);
+        index = index + 1;
+    }
+    kaesu result;
+}
+
+waza source_text(source: []uint8, start: int64, end: int64) -> string {
+    kaku result = string.from_utf8(copy_bytes(source, start, end));
+    moshi (result != mu) { kaesu result; }
+    kaesu "";
+}
+
+waza add_error(scanner: Scanner, kind: ErrorKind, at: Position, start: int64, end: int64) -> unit {
+    moshi (len(scanner.errors) == 0) {
+        array.push(scanner.errors, LexError {
+            kind: kind,
+            position: at,
+            raw: copy_bytes(scanner.source, start, end)
+        });
+    }
+}
+
+waza is_letter(value: uint8) -> bool {
+    kaesu (value >= uint8(97) && value <= uint8(122)) ||
+        (value >= uint8(65) && value <= uint8(90)) || value == uint8(95);
+}
+
+waza is_digit(value: uint8) -> bool {
+    kaesu value >= uint8(48) && value <= uint8(57);
+}
+
+waza is_hex(value: uint8) -> bool {
+    kaesu is_digit(value) || (value >= uint8(97) && value <= uint8(102)) ||
+        (value >= uint8(65) && value <= uint8(70));
+}
+
+waza hex_value(value: uint8) -> int64 {
+    moshi (is_digit(value)) { kaesu int64(value - uint8(48)); }
+    moshi (value >= uint8(97)) { kaesu int64(value - uint8(97)) + 10; }
+    kaesu int64(value - uint8(65)) + 10;
+}
+
+waza keyword_kind(literal: string, version: int64) -> TokenKind {
+    moshi (literal == "kaku") { kaesu TokenKind.Let(); }
+    moshi (literal == "waza") { kaesu TokenKind.Function(); }
+    moshi (literal == "moshi") { kaesu TokenKind.If(); }
+    moshi (literal == "sore") { kaesu TokenKind.Else(); }
+    moshi (literal == "kaesu") { kaesu TokenKind.Return(); }
+    moshi (literal == "hai") { kaesu TokenKind.True(); }
+    moshi (literal == "iie") { kaesu TokenKind.False(); }
+    moshi (literal == "mu") { kaesu TokenKind.Nil(); }
+    moshi (version >= 2 && literal == "aida") { kaesu TokenKind.While(); }
+    moshi (version >= 2 && literal == "nukeru") { kaesu TokenKind.Break(); }
+    moshi (version >= 2 && literal == "tsuzuku") { kaesu TokenKind.Continue(); }
+    moshi (version >= 3 && literal == "yobu") { kaesu TokenKind.Import(); }
+    moshi (version >= 4 && literal == "kata") { kaesu TokenKind.Struct(); }
+    moshi (version >= 4 && literal == "sentaku") { kaesu TokenKind.Enum(); }
+    moshi (version >= 4 && literal == "awase") { kaesu TokenKind.Match(); }
+    moshi (version >= 4 && literal == "baai") { kaesu TokenKind.Case(); }
+    moshi (version >= 5 && literal == "koukai") { kaesu TokenKind.Export(); }
+    moshi (version >= 5 && literal == "teisu") { kaesu TokenKind.Const(); }
+    kaesu TokenKind.Ident();
+}
+
+waza skip_space_and_comments(scanner: Scanner) -> bool {
+    aida (hai) {
+        aida (current(scanner) == uint8(32) || current(scanner) == uint8(9) ||
+            current(scanner) == uint8(10) || current(scanner) == uint8(13)) {
+            advance(scanner);
+        }
+        moshi (current(scanner) == uint8(47) && peek(scanner) == uint8(47)) {
+            aida (!at_eof(scanner) && current(scanner) != uint8(10) && current(scanner) != uint8(13)) {
+                advance(scanner);
+            }
+            tsuzuku;
+        }
+        moshi (current(scanner) == uint8(47) && peek(scanner) == uint8(42)) {
+            kaku start = position(scanner);
+            advance(scanner);
+            advance(scanner);
+            aida (!at_eof(scanner) && !(current(scanner) == uint8(42) && peek(scanner) == uint8(47))) {
+                advance(scanner);
+            }
+            moshi (at_eof(scanner)) {
+                add_error(scanner, ErrorKind.UnterminatedBlockComment(), start, start.offset, scanner.offset[0]);
+                scanner.error_start[0] = start;
+                kaesu iie;
+            }
+            advance(scanner);
+            advance(scanner);
+            tsuzuku;
+        }
+        kaesu hai;
+    }
+    kaesu hai;
+}
+
+waza read_identifier(scanner: Scanner, start: Position, version: int64) -> Token {
+    aida (is_letter(current(scanner)) || is_digit(current(scanner))) { advance(scanner); }
+    kaku literal = source_text(scanner.source, start.offset, scanner.offset[0]);
+    kaesu Token { kind: keyword_kind(literal, version), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+}
+
+waza read_number(scanner: Scanner, start: Position) -> Token {
+    kaku valid = hai;
+    kaku floating = iie;
+    aida (is_digit(current(scanner))) { advance(scanner); }
+    moshi (current(scanner) == uint8(46)) {
+        floating = hai;
+        advance(scanner);
+        moshi (!is_digit(current(scanner))) { valid = iie; }
+        aida (is_digit(current(scanner))) { advance(scanner); }
+    }
+    moshi (current(scanner) == uint8(101) || current(scanner) == uint8(69)) {
+        floating = hai;
+        advance(scanner);
+        moshi (current(scanner) == uint8(43) || current(scanner) == uint8(45)) { advance(scanner); }
+        moshi (!is_digit(current(scanner))) { valid = iie; }
+        aida (is_digit(current(scanner))) { advance(scanner); }
+    }
+    moshi (is_letter(current(scanner)) || is_digit(current(scanner)) || current(scanner) == uint8(46)) {
+        valid = iie;
+        aida (is_letter(current(scanner)) || is_digit(current(scanner)) || current(scanner) == uint8(46)) {
+            advance(scanner);
+        }
+    }
+    kaku literal = source_text(scanner.source, start.offset, scanner.offset[0]);
+    kaku data = string.to_bytes(literal);
+    kaku integer_length = len(data);
+    kaku index = 0;
+    aida (index < len(data)) {
+        moshi (data[index] == uint8(46) || data[index] == uint8(101) || data[index] == uint8(69)) {
+            integer_length = index;
+            nukeru;
+        }
+        index = index + 1;
+    }
+    moshi (integer_length > 1 && data[0] == uint8(48)) { valid = iie; }
+    kaku kind = TokenKind.Integer();
+    moshi (floating) { kind = TokenKind.Float(); }
+    moshi (!valid) {
+        kind = TokenKind.Illegal();
+        add_error(scanner, ErrorKind.InvalidNumber(), start, start.offset, scanner.offset[0]);
+    }
+    kaesu Token { kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+}
+
+waza read_string(scanner: Scanner, start: Position) -> Token {
+    advance(scanner);
+    kaku output = array.with_capacity[uint8](16);
+    kaku valid = hai;
+    aida (!at_eof(scanner)) {
+        kaku value = current(scanner);
+        moshi (value == uint8(34)) { nukeru; }
+        moshi (value == uint8(10) || value == uint8(13)) {
+            add_error(scanner, ErrorKind.UnterminatedString(), start, start.offset, scanner.offset[0]);
+            valid = iie;
+            nukeru;
+        }
+        moshi (value == uint8(92)) {
+            kaku escape = position(scanner);
+            advance(scanner);
+            moshi (at_eof(scanner)) {
+                add_error(scanner, ErrorKind.UnterminatedString(), start, start.offset, scanner.offset[0]);
+                valid = iie;
+                nukeru;
+            }
+            value = current(scanner);
+            moshi (value == uint8(110)) { array.push(output, uint8(10)); } sore {
+                moshi (value == uint8(114)) { array.push(output, uint8(13)); } sore {
+                    moshi (value == uint8(116)) { array.push(output, uint8(9)); } sore {
+                        moshi (value == uint8(34)) { array.push(output, uint8(34)); } sore {
+                            moshi (value == uint8(92)) { array.push(output, uint8(92)); } sore {
+                                add_error(scanner, ErrorKind.InvalidEscape(), escape, escape.offset, scanner.offset[0] + 1);
+                                valid = iie;
+                                nukeru;
+                            }
+                        }
+                    }
+                }
+            }
+        } sore {
+            array.push(output, value);
+        }
+        advance(scanner);
+    }
+    moshi (at_eof(scanner) && valid) {
+        add_error(scanner, ErrorKind.UnterminatedString(), start, start.offset, scanner.offset[0]);
+        valid = iie;
+    }
+    kaku literal = string.from_utf8(output);
+    kaku text = "";
+    moshi (literal != mu) { text = literal; }
+    kaku kind = TokenKind.String();
+    moshi (!valid) { kind = TokenKind.Illegal(); }
+    moshi (!at_eof(scanner)) { advance(scanner); }
+    kaesu Token { kind: kind, literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+}
+
+waza parse_escape(scanner: Scanner, content_start: int64, content_end: int64) -> int64? {
+    kaku length = content_end - content_start;
+    moshi (length < 2 || scanner.source[content_start] != uint8(92)) { kaesu mu; }
+    kaku marker = scanner.source[content_start + 1];
+    moshi (length == 2) {
+        moshi (marker == uint8(97)) { kaesu 7; }
+        moshi (marker == uint8(98)) { kaesu 8; }
+        moshi (marker == uint8(102)) { kaesu 12; }
+        moshi (marker == uint8(110)) { kaesu 10; }
+        moshi (marker == uint8(114)) { kaesu 13; }
+        moshi (marker == uint8(116)) { kaesu 9; }
+        moshi (marker == uint8(118)) { kaesu 11; }
+        moshi (marker == uint8(92)) { kaesu 92; }
+        moshi (marker == uint8(39)) { kaesu 39; }
+    }
+    kaku digits = 0;
+    kaku base = 16;
+    kaku digit_start = content_start + 2;
+    moshi (marker == uint8(120)) { digits = 2; } sore {
+        moshi (marker == uint8(117)) { digits = 4; } sore {
+            moshi (marker == uint8(85)) { digits = 8; } sore {
+                moshi (marker >= uint8(48) && marker <= uint8(55)) {
+                    digits = 3;
+                    base = 8;
+                    digit_start = content_start + 1;
+                }
+            }
+        }
+    }
+    moshi (digits == 0 || content_end - digit_start != digits) { kaesu mu; }
+    kaku result = 0;
+    kaku index = 0;
+    aida (index < digits) {
+        kaku value = scanner.source[digit_start + index];
+        moshi (base == 8) {
+            moshi (value < uint8(48) || value > uint8(55)) { kaesu mu; }
+            result = result * 8 + int64(value - uint8(48));
+        } sore {
+            moshi (!is_hex(value)) { kaesu mu; }
+            result = result * 16 + hex_value(value);
+        }
+        index = index + 1;
+    }
+    kaesu result;
+}
+
+waza read_rune(scanner: Scanner, start: Position) -> Token {
+    advance(scanner);
+    kaku content_start = scanner.offset[0];
+    kaku escaped = iie;
+    kaku escape_position = start;
+    aida (!at_eof(scanner)) {
+        moshi (current(scanner) == uint8(10) || current(scanner) == uint8(13)) {
+            add_error(scanner, ErrorKind.UnterminatedRune(), start, start.offset, scanner.offset[0]);
+            kaku raw_end = scanner.offset[0];
+            kaku literal = source_text(scanner.source, start.offset, raw_end);
+            advance(scanner);
+            kaesu Token { kind: TokenKind.Illegal(), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+        }
+        moshi (!escaped && current(scanner) == uint8(39)) { nukeru; }
+        moshi (!escaped && current(scanner) == uint8(92)) {
+            escaped = hai;
+            escape_position = position(scanner);
+        } sore {
+            moshi (escaped) { escaped = iie; }
+        }
+        advance(scanner);
+    }
+    moshi (at_eof(scanner)) {
+        add_error(scanner, ErrorKind.UnterminatedRune(), start, start.offset, scanner.offset[0]);
+        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    }
+    kaku content_end = scanner.offset[0];
+    kaku code: int64? = mu;
+    kaku first = utf8.decode_one(scanner.source, content_start);
+    moshi (content_start < content_end && scanner.source[content_start] == uint8(92)) {
+        code = parse_escape(scanner, content_start, content_end);
+        moshi (code != mu) {
+            moshi (code > 127) {
+                kaku marker = scanner.source[content_start + 1];
+                moshi (marker == uint8(120) || (marker >= uint8(48) && marker <= uint8(55))) {
+                    code = 65533;
+                }
+            }
+        }
+    } sore {
+        moshi (first.valid && content_start + first.width == content_end) {
+            code = int64(first.value);
+        }
+    }
+    kaku raw_end = scanner.offset[0] + 1;
+    kaku valid = code != mu;
+    kaku scalar: int64 = 0;
+    moshi (code != mu) {
+        scalar = code;
+        valid = scalar >= 0 && scalar <= 1114111 && (scalar < 55296 || scalar > 57343);
+    }
+    moshi (!valid) {
+        kaku kind = ErrorKind.InvalidRune();
+        kaku where = start;
+        moshi (content_start < content_end && scanner.source[content_start] == uint8(92)) {
+            kind = ErrorKind.InvalidEscape();
+            where = escape_position;
+            moshi (code != mu && (scalar < 0 || scalar > 1114111 || (scalar >= 55296 && scalar <= 57343))) {
+                kind = ErrorKind.InvalidRune();
+            }
+        }
+        add_error(scanner, kind, where, start.offset, raw_end);
+        advance(scanner);
+        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, raw_end), raw: copy_bytes(scanner.source, start.offset, raw_end), start: start, end: position(scanner) };
+    }
+    kaku encoded = utf8.encode_rune(rune(scalar));
+    kaku literal = string.from_utf8(encoded);
+    kaku text = "";
+    moshi (literal != mu) { text = literal; }
+    advance(scanner);
+    kaesu Token { kind: TokenKind.Rune(), literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+}
+
+waza simple_token(scanner: Scanner, kind: TokenKind, literal: string, start: Position, width: int64) -> Token {
+    kaku count = 0;
+    aida (count < width) { advance(scanner); count = count + 1; }
+    kaesu Token { kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+}
+
+waza next_token(scanner: Scanner, version: int64) -> Token {
+    kaku comments_ok = skip_space_and_comments(scanner);
+    kaku start = position(scanner);
+    moshi (!comments_ok) {
+        start = scanner.error_start[0];
+        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    }
+    moshi (at_eof(scanner)) { kaesu simple_token(scanner, TokenKind.EOF(), "", start, 0); }
+    kaku value = current(scanner);
+    moshi (is_letter(value)) { kaesu read_identifier(scanner, start, version); }
+    moshi (is_digit(value)) { kaesu read_number(scanner, start); }
+    moshi (value == uint8(34)) { kaesu read_string(scanner, start); }
+    moshi (value == uint8(39)) { kaesu read_rune(scanner, start); }
+    moshi (value == uint8(43)) { kaesu simple_token(scanner, TokenKind.Plus(), "+", start, 1); }
+    moshi (value == uint8(45) && peek(scanner) == uint8(62)) { kaesu simple_token(scanner, TokenKind.Arrow(), "->", start, 2); }
+    moshi (value == uint8(45)) { kaesu simple_token(scanner, TokenKind.Minus(), "-", start, 1); }
+    moshi (value == uint8(42)) { kaesu simple_token(scanner, TokenKind.Asterisk(), "*", start, 1); }
+    moshi (value == uint8(47)) { kaesu simple_token(scanner, TokenKind.Slash(), "/", start, 1); }
+    moshi (value == uint8(61) && peek(scanner) == uint8(61)) { kaesu simple_token(scanner, TokenKind.Equal(), "==", start, 2); }
+    moshi (value == uint8(61)) { kaesu simple_token(scanner, TokenKind.Assign(), "=", start, 1); }
+    moshi (value == uint8(33) && peek(scanner) == uint8(61)) { kaesu simple_token(scanner, TokenKind.NotEqual(), "!=", start, 2); }
+    moshi (value == uint8(33)) { kaesu simple_token(scanner, TokenKind.Bang(), "!", start, 1); }
+    moshi (value == uint8(63)) { kaesu simple_token(scanner, TokenKind.Question(), "?", start, 1); }
+    moshi (value == uint8(60) && peek(scanner) == uint8(61)) { kaesu simple_token(scanner, TokenKind.LessEqual(), "<=", start, 2); }
+    moshi (value == uint8(60)) { kaesu simple_token(scanner, TokenKind.Less(), "<", start, 1); }
+    moshi (value == uint8(62) && peek(scanner) == uint8(61)) { kaesu simple_token(scanner, TokenKind.GreaterEqual(), ">=", start, 2); }
+    moshi (value == uint8(62)) { kaesu simple_token(scanner, TokenKind.Greater(), ">", start, 1); }
+    moshi (value == uint8(38) && peek(scanner) == uint8(38)) { kaesu simple_token(scanner, TokenKind.And(), "&&", start, 2); }
+    moshi (value == uint8(124) && peek(scanner) == uint8(124)) { kaesu simple_token(scanner, TokenKind.Or(), "||", start, 2); }
+    moshi (value == uint8(44)) { kaesu simple_token(scanner, TokenKind.Comma(), ",", start, 1); }
+    moshi (value == uint8(59)) { kaesu simple_token(scanner, TokenKind.Semicolon(), ";", start, 1); }
+    moshi (value == uint8(40)) { kaesu simple_token(scanner, TokenKind.LParen(), "(", start, 1); }
+    moshi (value == uint8(41)) { kaesu simple_token(scanner, TokenKind.RParen(), ")", start, 1); }
+    moshi (value == uint8(123)) { kaesu simple_token(scanner, TokenKind.LBrace(), "{", start, 1); }
+    moshi (value == uint8(125)) { kaesu simple_token(scanner, TokenKind.RBrace(), "}", start, 1); }
+    moshi (value == uint8(91)) { kaesu simple_token(scanner, TokenKind.LBracket(), "[", start, 1); }
+    moshi (value == uint8(93)) { kaesu simple_token(scanner, TokenKind.RBracket(), "]", start, 1); }
+    moshi (value == uint8(46)) { kaesu simple_token(scanner, TokenKind.Dot(), ".", start, 1); }
+    moshi (value == uint8(58)) { kaesu simple_token(scanner, TokenKind.Colon(), ":", start, 1); }
+    kaku end = scanner.offset[0] + 1;
+    add_error(scanner, ErrorKind.UnexpectedCharacter(), start, start.offset, end);
+    kaesu simple_token(scanner, TokenKind.Illegal(), source_text(scanner.source, start.offset, end), start, 1);
+}
+
+koukai waza lex_version(source: []uint8, version: int64) -> LexResult {
+    kaku tokens = array.with_capacity[Token](64);
+    kaku errors = array.with_capacity[LexError](1);
+    kaku scanner = Scanner {
+        source: source,
+        offset: [0],
+        line: [1],
+        column: [1],
+        errors: errors,
+        error_start: [Position { offset: 0, line: 1, column: 1 }]
+    };
+    moshi (len(source) > max_source_bytes) {
+        array.push(errors, LexError { kind: ErrorKind.SourceTooLarge(), position: position(scanner), raw: [] });
+        kaesu LexResult { tokens: tokens, errors: errors };
+    }
+    kaku invalid = 0;
+    aida (invalid < len(source)) {
+        kaku decoded = utf8.decode_one(source, invalid);
+        moshi (!decoded.valid) {
+            aida (scanner.offset[0] < invalid) { advance(scanner); }
+            array.push(errors, LexError {
+                kind: ErrorKind.InvalidUTF8(),
+                position: position(scanner),
+                raw: copy_bytes(source, invalid, invalid + 1)
+            });
+            kaesu LexResult { tokens: tokens, errors: errors };
+        }
+        invalid = invalid + decoded.width;
+    }
+    aida (hai) {
+        kaku token = next_token(scanner, version);
+        array.push(tokens, token);
+        moshi (token_kind_code(token.kind) == 1) { nukeru; }
+    }
+    kaesu LexResult { tokens: tokens, errors: errors };
+}
+
+koukai waza lex(source: []uint8) -> LexResult {
+    kaesu lex_version(source, 5);
+}

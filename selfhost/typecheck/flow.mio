@@ -1,0 +1,60 @@
+yobu "selfhost/parser";
+
+kata NarrowingCondition {
+    symbol_id: int64;
+    true_non_nil: bool;
+    valid: bool;
+}
+
+waza unwrap_group(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
+    kaku current = node_id;
+    aida (parser.node_kind_code(node_at(env, file_id, current).kind) == 13) { current = node_at(env, file_id, current).children[0]; }
+    kaesu current;
+}
+
+waza condition_narrowing(env: TypeEnvironment, file_id: int64, node_id: int64) -> NarrowingCondition {
+    kaku invalid = NarrowingCondition { symbol_id: -1, true_non_nil: iie, valid: iie };
+    kaku condition_id = unwrap_group(env, file_id, node_id);
+    kaku condition = node_at(env, file_id, condition_id);
+    moshi (parser.node_kind_code(condition.kind) != 11 || (condition.operator != 14 && condition.operator != 15)) { kaesu invalid; }
+    kaku left_id = unwrap_group(env, file_id, condition.children[0]);
+    kaku right_id = unwrap_group(env, file_id, condition.children[1]);
+    kaku left = node_at(env, file_id, left_id);
+    kaku right = node_at(env, file_id, right_id);
+    kaku identifier_id = -1;
+    moshi (parser.node_kind_code(left.kind) == 4 && parser.node_kind_code(right.kind) == 10) { identifier_id = left_id; }
+    moshi (parser.node_kind_code(right.kind) == 4 && parser.node_kind_code(left.kind) == 10) { identifier_id = right_id; }
+    moshi (identifier_id < 0) { kaesu invalid; }
+    kaku symbol_id = binding_of(env, file_id, identifier_id);
+    kaku declared = symbol_type(env, symbol_id);
+    moshi (declared == 0 || type_kind_code(env.result.types[declared].kind) != 16) { kaesu invalid; }
+    kaesu NarrowingCondition { symbol_id: symbol_id, true_non_nil: condition.operator == 15, valid: hai };
+}
+
+waza check_block_with_fact(env: TypeEnvironment, file_id: int64, block_id: int64, condition: NarrowingCondition, apply: bool) -> unit {
+    kaku saved = len(env.facts);
+    moshi (condition.valid && apply) {
+        kaku declared = symbol_type(env, condition.symbol_id);
+        moshi (type_kind_code(env.result.types[declared].kind) == 16) { add_fact(env, condition.symbol_id, env.result.types[declared].element); }
+    }
+    check_block(env, file_id, block_id);
+    array.truncate(env.facts, saved);
+}
+
+waza block_always_returns(env: TypeEnvironment, file_id: int64, block_id: int64) -> bool {
+    kaku block = node_at(env, file_id, block_id);
+    kaku index = 0;
+    aida (index < len(block.children)) {
+        kaku statement = node_at(env, file_id, block.children[index]);
+        kaku kind = parser.node_kind_code(statement.kind);
+        moshi (kind == 31) { kaesu hai; }
+        moshi (kind == 18 && len(statement.children) > 2 && block_always_returns(env, file_id, statement.children[1]) && block_always_returns(env, file_id, statement.children[2])) { kaesu hai; }
+        moshi (kind == 38 && len(statement.children) > 1) {
+            kaku all = hai; kaku arm = 1;
+            aida (arm < len(statement.children)) { kaku arm_node = node_at(env, file_id, statement.children[arm]); moshi (!block_always_returns(env, file_id, arm_node.children[len(arm_node.children) - 1])) { all = iie; } arm = arm + 1; }
+            moshi (all) { kaesu hai; }
+        }
+        index = index + 1;
+    }
+    kaesu iie;
+}

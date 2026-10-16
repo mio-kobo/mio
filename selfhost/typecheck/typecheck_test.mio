@@ -1,0 +1,122 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/testing";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+waza check_source(source: string) -> TypeCheckResult {
+    kaku parsed = parser.parse(string.to_bytes(source));
+    testing.expect(len(parsed.errors) == 0, "source parses");
+    kaku resolved = resolver.resolve_program("test", parsed);
+    testing.expect(len(resolved.errors) == 0, "source resolves");
+    kaesu check_program(resolved);
+}
+
+waza test_basic_types_and_functions() -> unit {
+    kaku result = check_source("waza add(a: int32, b: int32) -> int32 { kaesu a + b; } kaku value: int32 = add(1, 2);");
+    testing.expect(len(result.errors) == 0, "basic program type checks");
+    testing.expect(len(result.signatures) == 1, "function signature recorded");
+    testing.expect(type_name(result, result.signatures[0].result) == "int32", "return type recorded");
+}
+
+waza test_numeric_mismatch_and_range() -> unit {
+    kaku mismatch = check_source("kaku a: int32 = 1; kaku b: int64 = 2; chant(a < b);");
+    testing.expect(len(mismatch.errors) > 0, "mixed numeric comparison rejected");
+    moshi (len(mismatch.errors) > 0) { testing.expect(type_error_kind_code(mismatch.errors[0].kind) == 0, "mismatch error kind"); }
+    kaku range = check_source("kaku value: uint8 = 256;");
+    testing.expect(len(range.errors) > 0, "integer range checked");
+}
+
+waza test_generics_and_structs() -> unit {
+    kaku result = check_source("kata Box<T> { value: T; } waza identity<T: Number>(value: T) -> T { kaesu value; } kaku box = Box[int64] { value: identity(1) };");
+    testing.expect(len(result.errors) == 0, "generic function and struct type check");
+    testing.expect(len(result.substitutions) == 1, "generic substitution recorded");
+}
+
+waza test_nullable_narrowing() -> unit {
+    kaku result = check_source("waza use(value: int64?) -> int64 { moshi (value != mu) { kaesu value + 1; } kaesu 0; }");
+    testing.expect(len(result.errors) == 0, "nullable value narrows in true branch");
+    kaku invalid = check_source("waza use(value: int64?) -> int64 { kaesu value + 1; }");
+    testing.expect(len(invalid.errors) > 0, "nullable value requires narrowing");
+}
+
+waza test_enum_match_exhaustiveness() -> unit {
+    kaku valid = check_source("sentaku Option<T> { Some(T); None; } waza read(value: Option<int64>) -> int64 { awase (value) { baai Some(item) { kaesu item; } baai None { kaesu 0; } } }");
+    testing.expect(len(valid.errors) == 0, "exhaustive enum match checks");
+    kaku invalid = check_source("sentaku Flag { On; Off; } waza read(value: Flag) -> int64 { awase (value) { baai On { kaesu 1; } } }");
+    testing.expect(len(invalid.errors) > 0, "non-exhaustive enum match rejected");
+}
+
+waza test_constant_side_effect() -> unit {
+    kaku result = check_source("waza make() -> int64 { kaesu 1; } teisu value = make();");
+    testing.expect(len(result.errors) > 0, "constant call rejected");
+    testing.expect(type_error_kind_code(result.errors[len(result.errors) - 1].kind) == 13, "constant error kind");
+}
+
+waza has_integer_constant(result: TypeCheckResult, value: int64) -> bool {
+    kaku index = 0;
+    aida (index < len(result.constants)) {
+        kaku item = result.constants[index];
+        moshi (item.declaration && constant_state_code(item.value.state) == 2 && constant_kind_code(item.value.kind) == 1 && item.value.integer == value) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+waza test_constant_evaluator_dependencies() -> unit {
+    kaku result = check_source("teisu first: int64 = second + 1; teisu second: int64 = third + 1; teisu third: int64 = 40;");
+    testing.expect(len(result.errors) == 0, "constant dependency chain evaluates");
+    testing.expect(has_integer_constant(result, 42), "constant final value recorded");
+}
+
+waza test_constant_evaluator_cycles() -> unit {
+    kaku indirect = check_source("teisu first: int64 = second; teisu second: int64 = first;");
+    testing.expect(len(indirect.errors) > 0, "indirect constant cycle rejected");
+    kaku direct = check_source("teisu value: int64 = value;");
+    testing.expect(len(direct.errors) > 0, "direct constant cycle rejected");
+}
+
+waza test_constant_integer_boundaries() -> unit {
+    kaku minimum = check_source("teisu value: int64 = -9223372036854775808;");
+    testing.expect(len(minimum.errors) == 0, "MinInt64 constant accepted");
+    testing.expect(has_integer_constant(minimum, -9223372036854775807 - 1), "MinInt64 value recorded");
+    kaku positive = check_source("teisu value: int64 = 9223372036854775808;");
+    testing.expect(len(positive.errors) > 0, "positive overflow rejected");
+    kaku below = check_source("teisu value: int64 = -9223372036854775809;");
+    testing.expect(len(below.errors) > 0, "negative overflow rejected");
+}
+
+waza test_constant_conversion_and_division_errors() -> unit {
+    kaku converted = check_source("teisu value: uint8 = uint8(int32(255));");
+    testing.expect(len(converted.errors) == 0 && has_integer_constant(converted, 255), "constant conversion evaluates");
+    kaku narrow = check_source("teisu value: uint8 = uint8(int32(256));");
+    testing.expect(len(narrow.errors) > 0, "invalid narrowing rejected");
+    kaku division = check_source("teisu value: int64 = 1 / 0;");
+    testing.expect(len(division.errors) > 0, "constant division by zero rejected");
+}
+
+waza test_cross_file_and_package_constants() -> unit {
+    kaku first = parser.parse(string.to_bytes("teisu answer: int64 = base + 2;"));
+    kaku second = parser.parse(string.to_bytes("teisu base: int64 = 40;"));
+    kaku files: []resolver.SourceFile = [];
+    array.push(files, resolver.SourceFile { file_id: 0, path: "a.mio", ast: first.ast, root: first.root });
+    array.push(files, resolver.SourceFile { file_id: 1, path: "b.mio", ast: second.ast, root: second.root });
+    kaku no_resolved_dependencies: []resolver.ResolvedPackage = [];
+    kaku no_checked_dependencies: []TypeCheckResult = [];
+    kaku resolved = resolver.resolve_package("library", files, no_resolved_dependencies);
+    kaku library = check_package(resolved, no_checked_dependencies);
+    testing.expect(len(library.errors) == 0 && has_integer_constant(library, 42), "cross-file constant evaluates");
+
+    kaku exported = parser.parse(string.to_bytes("koukai teisu value: int64 = 42;"));
+    kaku library_files: []resolver.SourceFile = [];
+    array.push(library_files, resolver.SourceFile { file_id: 0, path: "library.mio", ast: exported.ast, root: exported.root });
+    kaku resolved_library = resolver.resolve_package("library", library_files, no_resolved_dependencies);
+    library = check_package(resolved_library, no_checked_dependencies);
+    kaku app_source = parser.parse(string.to_bytes("yobu \"library\"; teisu answer: int64 = library.value;"));
+    kaku app_files: []resolver.SourceFile = [];
+    array.push(app_files, resolver.SourceFile { file_id: 0, path: "app.mio", ast: app_source.ast, root: app_source.root });
+    kaku resolved_dependencies: []resolver.ResolvedPackage = []; array.push(resolved_dependencies, resolved_library);
+    kaku checked_dependencies: []TypeCheckResult = []; array.push(checked_dependencies, library);
+    kaku app = check_package(resolver.resolve_package("app", app_files, resolved_dependencies), checked_dependencies);
+    testing.expect(len(app.errors) == 0 && has_integer_constant(app, 42), "cross-package constant evaluates");
+}

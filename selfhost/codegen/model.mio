@@ -1,0 +1,93 @@
+yobu "kiso/array";
+yobu "selfhost/lexer";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+koukai sentaku CompileErrorKind {
+    InvalidInput;
+    LimitExceeded;
+    UnresolvedSymbol;
+    InvalidLayout;
+    UnsupportedNode;
+    InternalError;
+}
+
+koukai kata CompileError {
+    kind: CompileErrorKind;
+    node: resolver.NodeRef;
+    span: parser.SourceSpan;
+    detail: string;
+}
+
+koukai kata Constant {
+    kind: int64;
+    integer: int64;
+    float32_value: float32;
+    float64_value: float64;
+    string_value: string;
+}
+
+koukai kata CaptureLayout {
+    local: bool;
+    index: int64;
+}
+
+koukai kata FunctionLayout {
+    id: int64;
+    name: string;
+    parameter_count: int64;
+    local_count: int64;
+    returns_value: bool;
+    captures: []CaptureLayout;
+    instructions: []uint8;
+}
+
+koukai kata NativeFunctionLayout {
+    package_path: string;
+    name: string;
+    binding_key: string;
+    parameter_count: int64;
+    returns_value: bool;
+}
+
+koukai kata BytecodeLayout {
+    constants: []Constant;
+    global_count: int64;
+    instructions: []uint8;
+    functions: []FunctionLayout;
+}
+
+koukai kata CompileResult {
+    success: bool;
+    bytes: []uint8;
+    layout: BytecodeLayout;
+    errors: []CompileError;
+}
+
+waza empty_layout() -> BytecodeLayout {
+    kaesu BytecodeLayout {
+        constants: array.with_capacity[Constant](16),
+        global_count: 0,
+        instructions: array.with_capacity[uint8](64),
+        functions: array.with_capacity[FunctionLayout](8)
+    };
+}
+
+waza empty_span() -> parser.SourceSpan {
+    kaku position = selfhost_empty_position();
+    kaesu parser.SourceSpan { start: position, end: position };
+}
+
+waza selfhost_empty_position() -> lexer.Position {
+    kaesu lexer.Position { offset: 0, line: 1, column: 1 };
+}
+
+waza empty_errors() -> []CompileError { kaesu array.with_capacity[CompileError](1); }
+
+waza empty_bytes() -> []uint8 { kaesu array.with_capacity[uint8](0); }
+
+waza compile_failure(kind: CompileErrorKind, node: resolver.NodeRef, span: parser.SourceSpan, detail: string) -> CompileResult {
+    kaku errors = empty_errors();
+    array.push(errors, CompileError { kind: kind, node: node, span: span, detail: detail });
+    kaesu CompileResult { success: iie, bytes: empty_bytes(), layout: empty_layout(), errors: errors };
+}

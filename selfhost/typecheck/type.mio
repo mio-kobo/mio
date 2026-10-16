@@ -1,0 +1,372 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+koukai sentaku TypeKind {
+    Invalid;
+    Int8;
+    Int16;
+    Int32;
+    Int64;
+    Uint8;
+    Uint16;
+    Uint32;
+    Float32;
+    Float64;
+    Bool;
+    String;
+    Nil;
+    Unit;
+    Resource;
+    Array;
+    Nullable;
+    Named;
+    Function;
+    TypeParameter;
+}
+
+koukai kata TypeInfo {
+    kind: TypeKind;
+    name: string;
+    element: int64;
+    key: int64;
+    value: int64;
+    parameters: []int64;
+    result: int64;
+    arguments: []int64;
+    identity: string;
+}
+
+koukai kata TypeParameter {
+    name: string;
+    constraint: string;
+}
+
+koukai kata FunctionSignature {
+    symbol_id: int64;
+    name: string;
+    package_path: string;
+    type_parameters: []TypeParameter;
+    parameters: []int64;
+    result: int64;
+}
+
+koukai kata TypeSubstitution {
+    node: resolver.NodeRef;
+    parameters: []string;
+    types: []int64;
+}
+
+koukai sentaku TypeErrorKind {
+    TypeMismatch;
+    UnknownType;
+    InvalidConversion;
+    InvalidAssignment;
+    InvalidCall;
+    ArgumentCount;
+    InvalidReturn;
+    InvalidTypeArgument;
+    ConstraintViolation;
+    InvalidNil;
+    InvalidField;
+    NonExhaustiveMatch;
+    InvalidMapKey;
+    ConstantError;
+}
+
+koukai kata TypeError {
+    kind: TypeErrorKind;
+    code: string;
+    node: resolver.NodeRef;
+    span: parser.SourceSpan;
+    expected: int64;
+    actual: int64;
+    detail: string;
+}
+
+koukai kata NodeType {
+    node: resolver.NodeRef;
+    type_id: int64;
+}
+
+koukai kata SymbolType {
+    symbol_id: int64;
+    name: string;
+    package_path: string;
+    symbol_kind: int64;
+    type_id: int64;
+}
+
+koukai kata StructField {
+    name: string;
+    type_id: int64;
+}
+
+koukai kata StructDefinition {
+    symbol_id: int64;
+    name: string;
+    package_path: string;
+    parameters: []TypeParameter;
+    fields: []StructField;
+}
+
+koukai kata EnumVariant {
+    symbol_id: int64;
+    name: string;
+    fields: []int64;
+}
+
+koukai kata EnumDefinition {
+    symbol_id: int64;
+    name: string;
+    package_path: string;
+    parameters: []TypeParameter;
+    variants: []EnumVariant;
+}
+
+koukai sentaku ConstantKind {
+    Invalid;
+    Integer;
+    Float32;
+    Float64;
+    Boolean;
+    String;
+}
+
+koukai sentaku ConstantState {
+    Unevaluated;
+    Evaluating;
+    Complete;
+    Failed;
+}
+
+koukai kata ConstantValue {
+    kind: ConstantKind;
+    state: ConstantState;
+    type_id: int64;
+    integer: int64;
+    float32_value: float32;
+    float64_value: float64;
+    boolean: bool;
+    string_value: string;
+}
+
+koukai kata ConstantBinding {
+    node: resolver.NodeRef;
+    symbol_id: int64;
+    declaration: bool;
+    value: ConstantValue;
+}
+
+koukai kata TypeCheckResult {
+    package_path: string;
+    types: []TypeInfo;
+    node_types: []NodeType;
+    symbol_types: []SymbolType;
+    signatures: []FunctionSignature;
+    substitutions: []TypeSubstitution;
+    structs: []StructDefinition;
+    enums: []EnumDefinition;
+    constants: []ConstantBinding;
+    errors: []TypeError;
+}
+
+koukai waza constant_kind_code(kind: ConstantKind) -> int64 {
+    awase (kind) {
+        baai Invalid { kaesu 0; }
+        baai Integer { kaesu 1; }
+        baai Float32 { kaesu 2; }
+        baai Float64 { kaesu 3; }
+        baai Boolean { kaesu 4; }
+        baai String { kaesu 5; }
+    }
+    kaesu 0;
+}
+
+koukai waza constant_state_code(state: ConstantState) -> int64 {
+    awase (state) {
+        baai Unevaluated { kaesu 0; }
+        baai Evaluating { kaesu 1; }
+        baai Complete { kaesu 2; }
+        baai Failed { kaesu 3; }
+    }
+    kaesu 3;
+}
+
+koukai waza type_kind_code(kind: TypeKind) -> int64 {
+    awase (kind) {
+        baai Invalid { kaesu 0; }
+        baai Int8 { kaesu 1; }
+        baai Int16 { kaesu 2; }
+        baai Int32 { kaesu 3; }
+        baai Int64 { kaesu 4; }
+        baai Uint8 { kaesu 5; }
+        baai Uint16 { kaesu 6; }
+        baai Uint32 { kaesu 7; }
+        baai Float32 { kaesu 8; }
+        baai Float64 { kaesu 9; }
+        baai Bool { kaesu 10; }
+        baai String { kaesu 11; }
+        baai Nil { kaesu 12; }
+        baai Unit { kaesu 13; }
+        baai Resource { kaesu 14; }
+        baai Array { kaesu 15; }
+        baai Nullable { kaesu 16; }
+        baai Named { kaesu 17; }
+        baai Function { kaesu 18; }
+        baai TypeParameter { kaesu 19; }
+    }
+    kaesu 0;
+}
+
+koukai waza type_error_kind_code(kind: TypeErrorKind) -> int64 {
+    awase (kind) {
+        baai TypeMismatch { kaesu 0; }
+        baai UnknownType { kaesu 1; }
+        baai InvalidConversion { kaesu 2; }
+        baai InvalidAssignment { kaesu 3; }
+        baai InvalidCall { kaesu 4; }
+        baai ArgumentCount { kaesu 5; }
+        baai InvalidReturn { kaesu 6; }
+        baai InvalidTypeArgument { kaesu 7; }
+        baai ConstraintViolation { kaesu 8; }
+        baai InvalidNil { kaesu 9; }
+        baai InvalidField { kaesu 10; }
+        baai NonExhaustiveMatch { kaesu 11; }
+        baai InvalidMapKey { kaesu 12; }
+        baai ConstantError { kaesu 13; }
+    }
+    kaesu 0;
+}
+
+waza type_key(kind: TypeKind, name: string, element: int64, key: int64, value: int64, parameters: []int64, result: int64, arguments: []int64) -> string {
+    kaku builder = string.new_builder();
+    string.write_string(builder, convert.format_int(type_kind_code(kind)));
+    string.write_string(builder, ":");
+    string.write_string(builder, name);
+    string.write_string(builder, ":");
+    string.write_string(builder, convert.format_int(element));
+    string.write_string(builder, ":");
+    string.write_string(builder, convert.format_int(key));
+    string.write_string(builder, ":");
+    string.write_string(builder, convert.format_int(value));
+    kaku index = 0;
+    aida (index < len(parameters)) { string.write_string(builder, ":p"); string.write_string(builder, convert.format_int(parameters[index])); index = index + 1; }
+    string.write_string(builder, ":r");
+    string.write_string(builder, convert.format_int(result));
+    index = 0;
+    aida (index < len(arguments)) { string.write_string(builder, ":a"); string.write_string(builder, convert.format_int(arguments[index])); index = index + 1; }
+    kaesu string.builder_string(builder);
+}
+
+waza intern_type(result: TypeCheckResult, kind: TypeKind, name: string, element: int64, key: int64, value: int64, parameters: []int64, return_type: int64, arguments: []int64) -> int64 {
+    kaku identity = type_key(kind, name, element, key, value, parameters, return_type, arguments);
+    kaku index = 0;
+    aida (index < len(result.types)) {
+        moshi (result.types[index].identity == identity) { kaesu index; }
+        index = index + 1;
+    }
+    kaku id = len(result.types);
+    array.push(result.types, TypeInfo { kind: kind, name: name, element: element, key: key, value: value, parameters: array.clone(parameters), result: return_type, arguments: array.clone(arguments), identity: identity });
+    kaesu id;
+}
+
+waza empty_ids() -> []int64 { kaesu array.with_capacity[int64](0); }
+
+waza scalar_type(result: TypeCheckResult, kind: TypeKind, name: string) -> int64 {
+    kaesu intern_type(result, kind, name, -1, -1, -1, empty_ids(), -1, empty_ids());
+}
+
+waza array_type(result: TypeCheckResult, element: int64) -> int64 {
+    kaesu intern_type(result, TypeKind.Array(), "", element, -1, -1, empty_ids(), -1, empty_ids());
+}
+
+waza nullable_type(result: TypeCheckResult, element: int64) -> int64 {
+    kaesu intern_type(result, TypeKind.Nullable(), "", element, -1, -1, empty_ids(), -1, empty_ids());
+}
+
+waza named_type(result: TypeCheckResult, name: string, arguments: []int64) -> int64 {
+    kaesu intern_type(result, TypeKind.Named(), name, -1, -1, -1, empty_ids(), -1, arguments);
+}
+
+waza function_type(result: TypeCheckResult, parameters: []int64, return_type: int64) -> int64 {
+    kaesu intern_type(result, TypeKind.Function(), "", -1, -1, -1, parameters, return_type, empty_ids());
+}
+
+waza parameter_type(result: TypeCheckResult, name: string) -> int64 {
+    kaesu intern_type(result, TypeKind.TypeParameter(), name, -1, -1, -1, empty_ids(), -1, empty_ids());
+}
+
+waza map_type(result: TypeCheckResult, key: int64, value: int64) -> int64 {
+    kaku arguments = array.with_capacity[int64](2);
+    array.push(arguments, key);
+    array.push(arguments, value);
+    kaesu named_type(result, "Map", arguments);
+}
+
+waza is_integer(result: TypeCheckResult, id: int64) -> bool {
+    moshi (id < 0) { kaesu iie; }
+    kaku code = type_kind_code(result.types[id].kind);
+    kaesu code >= 1 && code <= 7;
+}
+
+waza is_signed(result: TypeCheckResult, id: int64) -> bool {
+    moshi (id < 0) { kaesu iie; }
+    kaku code = type_kind_code(result.types[id].kind);
+    kaesu (code >= 1 && code <= 4) || code == 8 || code == 9;
+}
+
+waza is_numeric(result: TypeCheckResult, id: int64) -> bool {
+    moshi (id < 0) { kaesu iie; }
+    kaku code = type_kind_code(result.types[id].kind);
+    kaesu (code >= 1 && code <= 9) || code == 19;
+}
+
+waza is_hashable(result: TypeCheckResult, id: int64) -> bool {
+    moshi (id < 0) { kaesu iie; }
+    kaku code = type_kind_code(result.types[id].kind);
+    kaesu (code >= 1 && code <= 11) || code == 17 || code == 19;
+}
+
+waza is_assignable(result: TypeCheckResult, expected: int64, actual: int64) -> bool {
+    moshi (expected == actual) { kaesu hai; }
+    moshi (expected < 0 || actual < 0) { kaesu iie; }
+    kaku info = result.types[expected];
+    moshi (type_kind_code(info.kind) == 16) { kaesu type_kind_code(result.types[actual].kind) == 12 || info.element == actual; }
+    kaesu iie;
+}
+
+koukai waza type_name(result: TypeCheckResult, id: int64) -> string {
+    moshi (id < 0 || id >= len(result.types)) { kaesu "invalid"; }
+    kaku info = result.types[id];
+    kaku code = type_kind_code(info.kind);
+    moshi (code <= 14 || code == 19) { kaesu info.name; }
+    moshi (code == 15) { kaesu string.concat("[]", type_name(result, info.element)); }
+    moshi (code == 16) { kaesu string.concat(type_name(result, info.element), "?"); }
+    moshi (code == 17) {
+        moshi (len(info.arguments) == 0) { kaesu info.name; }
+        kaku builder = string.new_builder();
+        string.write_string(builder, info.name); string.write_string(builder, "<");
+        kaku index = 0;
+        aida (index < len(info.arguments)) {
+            moshi (index > 0) { string.write_string(builder, ", "); }
+            string.write_string(builder, type_name(result, info.arguments[index]));
+            index = index + 1;
+        }
+        string.write_string(builder, ">");
+        kaesu string.builder_string(builder);
+    }
+    moshi (code == 18) {
+        kaku builder = string.new_builder(); string.write_string(builder, "(");
+        kaku index = 0;
+        aida (index < len(info.parameters)) {
+            moshi (index > 0) { string.write_string(builder, ", "); }
+            string.write_string(builder, type_name(result, info.parameters[index])); index = index + 1;
+        }
+        string.write_string(builder, ") -> "); string.write_string(builder, type_name(result, info.result));
+        kaesu string.builder_string(builder);
+    }
+    kaesu "invalid";
+}

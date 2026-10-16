@@ -1,0 +1,175 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+kata ResolverState {
+    result: ResolvedPackage;
+    current_scope: []int64;
+    current_function: []int64;
+    function_depth: []int64;
+    loop_depth: []int64;
+}
+
+waza add_scope(state: ResolverState, kind: ScopeKind, parent: int64, owner_function: int64) -> int64 {
+    kaku id = len(state.result.scopes);
+    array.push(state.result.scopes, Scope {
+        id: id,
+        kind: kind,
+        parent: parent,
+        owner_function: owner_function,
+        symbols: array.with_capacity[int64](8),
+        keys: array.make[string](16, ""),
+        values: array.make[int64](16, -1)
+    });
+    kaesu id;
+}
+
+waza symbol_at(state: ResolverState, id: int64) -> Symbol {
+    kaesu state.result.symbols[id];
+}
+
+waza name_hash(name: string) -> int64 {
+    kaku data = string.to_bytes(name);
+    kaku hash: int64 = 0;
+    kaku index = 0;
+    aida (index < len(data)) {
+        kaku value = hash * 131 + int64(data[index]);
+        hash = value - (value / 2147483647) * 2147483647;
+        index = index + 1;
+    }
+    kaesu hash;
+}
+
+waza table_index(value: int64, capacity: int64) -> int64 {
+    kaesu value - (value / capacity) * capacity;
+}
+
+waza scope_insert_table(scope: Scope, name: string, symbol_id: int64) -> unit {
+    kaku index = table_index(name_hash(name), len(scope.keys));
+    aida (scope.keys[index] != "") { index = table_index(index + 1, len(scope.keys)); }
+    scope.keys[index] = name;
+    scope.values[index] = symbol_id;
+}
+
+waza grow_scope_table(state: ResolverState, scope_id: int64) -> unit {
+    kaku scope = state.result.scopes[scope_id];
+    kaku old_keys = array.clone(scope.keys);
+    kaku old_values = array.clone(scope.values);
+    kaku capacity = len(scope.keys) * 2;
+    array.truncate(scope.keys, 0);
+    array.truncate(scope.values, 0);
+    kaku index = 0;
+    aida (index < capacity) { array.push(scope.keys, ""); array.push(scope.values, -1); index = index + 1; }
+    index = 0;
+    aida (index < len(old_keys)) {
+        moshi (old_keys[index] != "") { scope_insert_table(scope, old_keys[index], old_values[index]); }
+        index = index + 1;
+    }
+}
+
+waza resolve_local(state: ResolverState, scope_id: int64, name: string) -> int64 {
+    kaku scope = state.result.scopes[scope_id];
+    kaku index = table_index(name_hash(name), len(scope.keys));
+    kaku checked = 0;
+    aida (checked < len(scope.keys) && scope.keys[index] != "") {
+        moshi (scope.keys[index] == name) { kaesu scope.values[index]; }
+        index = table_index(index + 1, len(scope.keys));
+        checked = checked + 1;
+    }
+    kaesu -1;
+}
+
+waza resolve_name(state: ResolverState, scope_id: int64, name: string) -> int64 {
+    kaku current = scope_id;
+    aida (current >= 0) {
+        kaku found = resolve_local(state, current, name);
+        moshi (found >= 0) { kaesu found; }
+        current = state.result.scopes[current].parent;
+    }
+    kaesu -1;
+}
+
+waza add_error(state: ResolverState, kind: ResolveErrorKind, file_id: int64, node_id: int64, name: string, related: NodeRef) -> unit {
+    kaku span = state.result.files[file_id].ast.nodes[node_id].span;
+    array.push(state.result.errors, ResolveError {
+        kind: kind,
+        file_id: file_id,
+        node_id: node_id,
+        span: span,
+        name: name,
+        related: related
+    });
+}
+
+waza define_symbol(state: ResolverState, file_id: int64, node_id: int64, name: string, kind: SymbolKind, public: bool) -> int64 {
+    kaku previous = resolve_local(state, state.current_scope[0], name);
+    moshi (previous >= 0) {
+        kaku old = symbol_at(state, previous);
+        add_error(state, ResolveErrorKind.DuplicateDeclaration(), file_id, node_id, name, old.declaration);
+        kaesu previous;
+    }
+    kaku id = len(state.result.symbols);
+    kaku declaration = NodeRef { file_id: file_id, node_id: node_id };
+    kaku symbol = Symbol {
+        id: id,
+        kind: kind,
+        name: name,
+        package_path: state.result.package_path,
+        scope_id: state.current_scope[0],
+        declaration: declaration,
+        span: state.result.files[file_id].ast.nodes[node_id].span,
+        public: public,
+        owner_function: state.current_function[0]
+    };
+    array.push(state.result.symbols, symbol);
+    moshi ((len(state.result.scopes[state.current_scope[0]].symbols) + 1) * 2 >= len(state.result.scopes[state.current_scope[0]].keys)) {
+        grow_scope_table(state, state.current_scope[0]);
+    }
+    scope_insert_table(state.result.scopes[state.current_scope[0]], name, id);
+    array.push(state.result.scopes[state.current_scope[0]].symbols, id);
+    moshi (scope_kind_code(state.result.scopes[state.current_scope[0]].kind) == 1) {
+        array.push(state.result.members, PackageMember {
+            package_path: state.result.package_path,
+            name: name,
+            symbol_id: id,
+            public: public
+        });
+    }
+    kaesu id;
+}
+
+waza bind_symbol(state: ResolverState, file_id: int64, node_id: int64, symbol_id: int64) -> unit {
+    kaku captured = iie;
+    kaku symbol = symbol_at(state, symbol_id);
+    moshi (state.current_function[0] >= 0 && symbol.owner_function >= 0 && symbol.owner_function != state.current_function[0]) {
+        captured = hai;
+        kaku owner = state.current_function[0];
+        kaku depth = 1;
+        aida (owner >= 0 && owner != symbol.owner_function) {
+            kaku exists = iie;
+            kaku index = 0;
+            aida (index < len(state.result.captures)) {
+                kaku capture = state.result.captures[index];
+                moshi (capture.function_symbol == owner && capture.symbol_id == symbol_id) { exists = hai; }
+                index = index + 1;
+            }
+            moshi (!exists) { array.push(state.result.captures, Capture { function_symbol: owner, symbol_id: symbol_id, depth: depth }); }
+            owner = symbol_at(state, owner).owner_function;
+            depth = depth + 1;
+        }
+    }
+    array.push(state.result.bindings, Binding {
+        reference: NodeRef { file_id: file_id, node_id: node_id },
+        symbol_id: symbol_id,
+        capture: captured
+    });
+}
+
+waza enter_scope(state: ResolverState, kind: ScopeKind) -> int64 {
+    kaku parent = state.current_scope[0];
+    state.current_scope[0] = add_scope(state, kind, parent, state.current_function[0]);
+    kaesu parent;
+}
+
+waza leave_scope(state: ResolverState, parent: int64) -> unit {
+    state.current_scope[0] = parent;
+}
