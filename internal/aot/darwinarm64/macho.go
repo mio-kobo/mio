@@ -1,5 +1,5 @@
-// Package darwinarm64 负责生成 macOS ARM64 的最小 Mach-O 可执行文件。
-// M0 直接编码机器指令，不依赖汇编器、链接器或目标程序运行时。
+// Package darwinarm64 负责 ARM64 机器码编码与 macOS Mach-O 可执行文件封装。
+// 延续已在 M4 Pro 上验证的 M0 装载结构，不依赖目标程序的 Go Runtime 或 Mochi VM。
 package darwinarm64
 
 import (
@@ -36,20 +36,23 @@ const (
 	sAttrSomeInstructions uint32 = 0x00000400
 )
 
-// ExitProgram 生成只包含三条 ARM64 指令的最小 Mach-O 程序：
-//
-//	movz x0, #status  // 退出状态码
-//	movz x16, #1       // Darwin SYS_exit
-//	svc #0x80          // 进入内核
-//
-// Apple Silicon 上运行前需要临时签名：
-//
-//	codesign --force --sign - ./exit0
-//
-// 产物直接执行机器码，不需要 Go Runtime 或 Mochi VM。
+// ExitProgram 保留 M0 的最小退出程序入口，供回归测试使用。
 func ExitProgram(status uint8) ([]byte, error) {
-	const instructionCount = 3
-	codeSize := uint64(instructionCount * 4)
+	return ExecutableWords([]uint32{
+		movzX(0, uint16(status)),
+		movzX(16, 1),
+		svc(0x80),
+	})
+}
+
+// ExecutableWords 将 ARM64 指令字封装成可签名的 Mach-O 可执行文件。
+// 这里仅负责文件布局，不解释 Mochi 字节码，也不插入任何运行时。
+func ExecutableWords(words []uint32) ([]byte, error) {
+	if len(words) == 0 {
+		return nil, fmt.Errorf("empty ARM64 instruction stream")
+	}
+	codeSize := uint64(len(words)) * 4
+
 	commands := make([]byte, 0, 512)
 	ncmds := uint32(0)
 
@@ -90,7 +93,7 @@ func ExitProgram(status uint8) ([]byte, error) {
 
 	// 没有 LC_DYLD_INFO / LC_DYLD_CHAINED_FIXUPS 时，dyld 会回退到旧式重定位扫描。
 	// 即使没有重定位，也必须提供 LC_DYSYMTAB，避免 dyld 在空指针 +0x48 处崩溃。
-	// M0 不含动态符号或重定位，因此 LC_SYMTAB 和 LC_DYSYMTAB 均使用空表。
+	// 当前 M1 仍不含动态符号或重定位，因此两个命令均使用空表。
 	commands = appendEmptySymtab(commands)
 	ncmds++
 	commands = appendEmptyDysymtab(commands)
@@ -122,14 +125,9 @@ func ExitProgram(status uint8) ([]byte, error) {
 	binary.LittleEndian.PutUint32(file[28:32], 0) // 头部保留字段
 	copy(file[headerSize:], commands)
 
-	code := [...]uint32{
-		movzX(0, uint16(status)),
-		movzX(16, 1),
-		svc(0x80),
-	}
-	for i, insn := range code {
+	for i, instruction := range words {
 		off := int(entryOffset) + i*4
-		binary.LittleEndian.PutUint32(file[off:off+4], insn)
+		binary.LittleEndian.PutUint32(file[off:off+4], instruction)
 	}
 	return file, nil
 }

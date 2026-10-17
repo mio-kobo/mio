@@ -1,4 +1,4 @@
-// mochi-aot M0 命令行入口：将空 Mochi 程序编译为 macOS ARM64 可执行文件。
+// mochi-aot M1 命令行入口：将受支持的 Mochi 字节码编译为 macOS ARM64 可执行文件。
 package main
 
 import (
@@ -20,7 +20,7 @@ func main() {
 
 func run() error {
 	out := flag.String("o", "", "native executable output file")
-	target := flag.String("target", "darwin-arm64", "target architecture (M0: darwin-arm64 only)")
+	target := flag.String("target", "darwin-arm64", "target architecture (M1: darwin-arm64 only)")
 	flag.Parse()
 	if flag.NArg() != 1 || *out == "" || *target != "darwin-arm64" {
 		return fmt.Errorf("usage: go run ./cmd/mochi-aot -o <output> [-target darwin-arm64] <input.mochi>")
