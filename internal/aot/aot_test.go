@@ -125,12 +125,12 @@ func TestM2GlobalLimitRejected(t *testing.T) {
 	}
 }
 
-func TestM2UnsupportedFunctionsRejected(t *testing.T) {
+func TestM4MalformedFunctionRejected(t *testing.T) {
 	_, err := CompileDarwinARM64(&compiler.Bytecode{
 		Functions: []compiler.CompiledFunction{{ID: 0, Name: "f"}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "does not support functions") {
-		t.Fatalf("expected function limitation, got %v", err)
+	if err == nil {
+		t.Fatal("expected malformed function rejection")
 	}
 }
 

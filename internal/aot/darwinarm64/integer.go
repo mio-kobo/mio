@@ -3,17 +3,22 @@ package darwinarm64
 import "fmt"
 
 // IntegerEmitter 将少量 int64 栈指令直接翻译为 AArch64 机器码。
-// M2 仍用 x9..x15 保存操作数栈，最多同时容纳 7 个 int64 值。
-// x8 作为全局槽位寻址临时寄存器；x19 保存最后的顶层表达式结果。
+// 主程序与函数都使用 x9..x15 作为表达式寄存器栈（深度最多为 7）。
+// M4 函数调用保存操作数寄存器，并使用 x29 管理局部 Stack Frame。
 type IntegerEmitter struct {
-	words      []uint32
-	depth      int
-	lastPopped bool
-	printCalls []int
-	boolCalls  []int
-	fixups     []branchFixup
-	branching  bool
-	globals    int
+	words         []uint32
+	depth         int
+	lastPopped    bool
+	printCalls    []int
+	boolCalls     []int
+	fixups        []branchFixup
+	branching     bool
+	globals       int
+	functionMode  bool
+	frameBytes    int
+	functionCalls []functionCallFixup
+	overflowSites []int
+	returnSites   []int
 }
 
 func NewIntegerEmitter() *IntegerEmitter { return &IntegerEmitter{} }
@@ -325,6 +330,12 @@ func (e *IntegerEmitter) Pop() error {
 
 // Finish 拼接程序、退出系统调用及按需生成的 int64 打印例程。
 func (e *IntegerEmitter) Finish() ([]byte, error) {
+	return e.FinishWithFunctions(nil)
+}
+
+// FinishWithFunctions 先写主程序退出，再按 FunctionID 顺序拼接原生函数，
+// 最后统一回填 BL、栈深度保护和两个输出例程的 PC 相对偏移。
+func (e *IntegerEmitter) FinishWithFunctions(functions []*IntegerEmitter) ([]byte, error) {
 	if e.depth != 0 {
 		return nil, fmt.Errorf("AOT M3 unbalanced operand stack: %d remaining", e.depth)
 	}
@@ -368,6 +379,50 @@ func (e *IntegerEmitter) Finish() ([]byte, error) {
 	}
 	// 正常结束时总是返回 0；程序打印值与退出状态互不混淆。
 	code = append(code, movzX(0, 0), movzX(16, 1), svc(0x80))
+	functionStarts := make([]int, len(functions))
+	allCalls := append([]functionCallFixup(nil), e.functionCalls...)
+	overflowSites := append([]int(nil), e.overflowSites...)
+	for i, fn := range functions {
+		if fn == nil || !fn.functionMode {
+			return nil, fmt.Errorf("AOT M4 invalid function %d", i)
+		}
+		functionStarts[i] = len(code)
+		code = append(code, fn.words...)
+		for _, at := range fn.printCalls {
+			calls = append(calls, functionStarts[i]+at)
+		}
+		for _, at := range fn.boolCalls {
+			boolCalls = append(boolCalls, functionStarts[i]+at)
+		}
+		for _, fx := range fn.functionCalls {
+			fx.word += functionStarts[i]
+			allCalls = append(allCalls, fx)
+		}
+		for _, at := range fn.overflowSites {
+			overflowSites = append(overflowSites, functionStarts[i]+at)
+		}
+	}
+	if len(overflowSites) > 0 {
+		errorExit := len(code)
+		code = append(code, movzX(0, 1), movzX(16, 1), svc(0x80))
+		for _, at := range overflowSites {
+			delta := errorExit - at
+			if delta < -(1<<18) || delta >= 1<<18 {
+				return nil, fmt.Errorf("AOT M4 call-depth guard branch out of range")
+			}
+			code[at] = branchCond(at, errorExit, 8) // HI (unsigned greater)
+		}
+	}
+	for _, fx := range allCalls {
+		if fx.functionID < 0 || fx.functionID >= len(functionStarts) {
+			return nil, fmt.Errorf("AOT M4 unknown function id %d", fx.functionID)
+		}
+		b, err := branch26(0x94000000, fx.word, functionStarts[fx.functionID])
+		if err != nil {
+			return nil, err
+		}
+		code[fx.word] = b
+	}
 	if len(calls) > 0 {
 		start := len(code)
 		code = appendPrintInt64(code)

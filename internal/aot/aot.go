@@ -1,5 +1,5 @@
 // Package aot 将通过验证的 Mochi 字节码编译为原生程序。
-// M3 支持 int64、布尔表达式、全局变量、比较及条件控制流。
+// M4 在 M3 原生控制流的基础上增加用户函数调用、局部变量与递归。
 package aot
 
 import (
@@ -13,13 +13,13 @@ import (
 )
 
 // CompileDarwinARM64 为 Mochi 生成 macOS ARM64 可执行文件。
-// M3 尚未支持的类型、函数及指令必须明确失败，不能回退 VM 执行。
+// M4 尚未实现的类型或指令必须明确失败，不能回退 VM 执行。
 func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
 	}
 	if len(program.Functions) != 0 {
-		return nil, fmt.Errorf("AOT M3 does not support functions (functions=%d)", len(program.Functions))
+		return compileM4(program)
 	}
 	if program.GlobalsCount < 0 || program.GlobalsCount > darwinarm64.MaxGlobalSlots {
 		return nil, fmt.Errorf("AOT M3 global slot count %d exceeds limit %d", program.GlobalsCount, darwinarm64.MaxGlobalSlots)
