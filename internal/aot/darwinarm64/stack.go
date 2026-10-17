@@ -20,6 +20,9 @@ type floatCallFixup struct {
 }
 
 type StackEmitter struct {
+	m11Enabled    bool
+	m11InitCall   int
+	m11InitFail   int
 	floatCalls    []floatCallFixup
 	stringCalls   []int
 	lastPopString bool
@@ -439,6 +442,10 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 
 // FinishWithFunctionsAndStrings 链接程序、字符串输出例程和只读 UTF-8 常量表。
 func (e *StackEmitter) FinishWithFunctionsAndStrings(functions []*StackEmitter, strings []string) ([]byte, error) {
+	return e.finishWithM11(functions, strings)
+}
+
+func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string) ([]byte, error) {
 	if e.functionMode || e.depth != 0 {
 		return nil, fmt.Errorf("AOT M5 main must have empty operand stack")
 	}
@@ -592,8 +599,21 @@ func (e *StackEmitter) FinishWithFunctionsAndStrings(functions []*StackEmitter, 
 	if !e.lastPopString {
 		floatCalls = append([]floatCallFixup(nil), e.floatCalls...)
 	}
+	// M11a 收尾阶段才分配自检对象，避免在没有真实 Stack Map 的 Mio 主程序中触发 GC。
+	var m11 m11LinkState
+	if e.m11Enabled {
+		m11.calls = append(m11.calls, m11CallSite{at: e.m11InitCall, kind: m11Init})
+		code = appendM11Lifecycle(code, &m11)
+	}
 	// 正常退出前也恢复入口 SP；不会把 main 的帧遗留在退出路径上。
 	code = append(code, addImmX(31, 29, 0), 0xA8C17BFD, movzX(0, 0), movzX(16, 1), svc(0x80))
+	if e.m11Enabled {
+		var err error
+		code, err = appendM11Failure(code, &m11, e.m11InitFail)
+		if err != nil {
+			return nil, err
+		}
+	}
 	functionStarts := make([]int, len(functions))
 	allCalls := append([]functionCallFixup(nil), e.functionCalls...)
 	overflows := append([]int(nil), e.overflowSites...)
@@ -690,6 +710,35 @@ func (e *StackEmitter) FinishWithFunctionsAndStrings(functions []*StackEmitter, 
 			code[at.word] = word
 		}
 	}
+	// M10 的机器码全部采用 PC 相对 BL，原封不动链接到主程序后方。
+	if e.m11Enabled {
+		runtimeStart := len(code)
+		words, entries, err := M10RuntimeWords()
+		if err != nil {
+			return nil, err
+		}
+		code = append(code, words...)
+		for _, call := range m11.calls {
+			target := -1
+			switch call.kind {
+			case m11Init:
+				target = entries.Init
+			case m11Alloc:
+				target = entries.Alloc
+			case m11Collect:
+				target = entries.Collect
+			case m11Destroy:
+				target = entries.Destroy
+			default:
+				return nil, fmt.Errorf("AOT M11a unknown runtime function")
+			}
+			ins, err := branch26(0x94000000, call.at, runtimeStart+target)
+			if err != nil {
+				return nil, err
+			}
+			code[call.at] = ins
+		}
+	}
 	if len(stringCalls) != 0 && len(strings) == 0 {
 		return nil, fmt.Errorf("AOT M7 missing static string table")
 	}
@@ -719,6 +768,25 @@ func (e *StackEmitter) FinishWithFunctionsAndStrings(functions []*StackEmitter, 
 				return nil, err
 			}
 			code[at] = word
+		}
+	}
+	if e.m11Enabled {
+		// 元数据按 8 字节对齐追加到 __TEXT,__const，字符串表偏移不变。
+		for len(constants)%8 != 0 {
+			constants = append(constants, 0)
+		}
+		metaPos := len(constants)
+		meta, err := M9EncodeMetadata(
+			[]M9TypeLayout{{TypeID: 1, PayloadBytes: 8}},
+			M9RootMap{FrameBytes: 16, FrameRefs: []uint32{0}},
+		)
+		if err != nil {
+			return nil, err
+		}
+		constants = append(constants, meta...)
+		constOff := (entryOffset + uint64(len(code))*4 + 7) &^ 7
+		if err := m11PatchMetaAddress(code, m11.metadataADRP, constOff+uint64(metaPos)); err != nil {
+			return nil, err
 		}
 	}
 	return ExecutableWordsWithGlobalsAndConst(code, e.globals, constants)

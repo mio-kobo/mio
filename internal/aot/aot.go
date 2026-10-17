@@ -137,3 +137,13 @@ func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	}
 	return emitter.Finish()
 }
+
+// CompileDarwinARM64WithM11Runtime 启用 M11a 可控的 GC Runtime 集成测试模式。
+// 默认编译路径保持不变；Mio 字节码还没有通用堆对象分配和自动 Safepoint。
+// 该模式在主程序执行后完成一次真实的分配/标记/回收/复用自检，再释放 Heap。
+func CompileDarwinARM64WithM11Runtime(program *compiler.Bytecode) ([]byte, error) {
+	if err := mochi.Validate(program); err != nil {
+		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
+	}
+	return compileM6WithM11(program, true)
+}

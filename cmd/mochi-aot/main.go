@@ -20,10 +20,11 @@ func main() {
 
 func run() error {
 	out := flag.String("o", "", "native executable output file")
-	target := flag.String("target", "darwin-arm64", "target architecture (M2: darwin-arm64 only)")
+	target := flag.String("target", "darwin-arm64", "target architecture (darwin-arm64 only)")
+	m11 := flag.Bool("m11-gc", false, "enable M11a integrated native GC lifecycle self-test")
 	flag.Parse()
 	if flag.NArg() != 1 || *out == "" || *target != "darwin-arm64" {
-		return fmt.Errorf("usage: go run ./cmd/mochi-aot -o <output> [-target darwin-arm64] <input.mochi>")
+		return fmt.Errorf("usage: go run ./cmd/mochi-aot -o <output> [-target darwin-arm64] [-m11-gc] <input.mochi>")
 	}
 	input, err := os.Open(flag.Arg(0))
 	if err != nil {
@@ -35,7 +36,12 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("decode Mochi: %w", err)
 	}
-	native, err := aot.CompileDarwinARM64(bytecode)
+	var native []byte
+	if *m11 {
+		native, err = aot.CompileDarwinARM64WithM11Runtime(bytecode)
+	} else {
+		native, err = aot.CompileDarwinARM64(bytecode)
+	}
 	if err != nil {
 		return err
 	}

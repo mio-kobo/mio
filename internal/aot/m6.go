@@ -518,6 +518,10 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 }
 
 func compileM6(p *compiler.Bytecode) ([]byte, error) {
+	return compileM6WithM11(p, false)
+}
+
+func compileM6WithM11(p *compiler.Bytecode, enableM11 bool) ([]byte, error) {
 	if p.GlobalsCount < 0 || p.GlobalsCount > darwinarm64.MaxGlobalSlots {
 		return nil, fmt.Errorf("AOT M6 invalid global count %d", p.GlobalsCount)
 	}
@@ -560,6 +564,11 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 		e, err := darwinarm64.NewStackEmitter(p.GlobalsCount, locals, params, maximum, b.fn != nil)
 		if err != nil {
 			return nil, err
+		}
+		if bi == 0 && enableM11 {
+			if err := e.EnableM11Runtime(); err != nil {
+				return nil, err
+			}
 		}
 		mapping := make(map[int]int, len(b.inst)+1)
 		for i, ins := range b.inst {
