@@ -1,5 +1,5 @@
-// Package aot 将经过验证的 Mochi 字节码编译为原生可执行文件。
-// M2 支持 int64 常量、基础算术、全局变量、输出和顶层表达式。
+// Package aot 将通过验证的 Mochi 字节码编译为原生程序。
+// M3 支持 int64、布尔表达式、全局变量、比较及条件控制流。
 package aot
 
 import (
@@ -12,88 +12,118 @@ import (
 	"Mio/internal/value"
 )
 
-// CompileDarwinARM64 将支持的 Mochi 指令编译为 macOS ARM64 机器码。
-// 未实现的字节码、复合类型和函数必须明确报错，不能降级到 VM 或忽略操作。
+// CompileDarwinARM64 为 Mochi 生成 macOS ARM64 可执行文件。
+// M3 尚未支持的类型、函数及指令必须明确失败，不能回退 VM 执行。
 func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
 	}
 	if len(program.Functions) != 0 {
-		return nil, fmt.Errorf("AOT M2 does not support functions (functions=%d)", len(program.Functions))
+		return nil, fmt.Errorf("AOT M3 does not support functions (functions=%d)", len(program.Functions))
 	}
-	if program.GlobalsCount > darwinarm64.MaxGlobalSlots {
-		return nil, fmt.Errorf("AOT M2 global slot count %d exceeds limit %d",
-			program.GlobalsCount, darwinarm64.MaxGlobalSlots)
+	if program.GlobalsCount < 0 || program.GlobalsCount > darwinarm64.MaxGlobalSlots {
+		return nil, fmt.Errorf("AOT M3 global slot count %d exceeds limit %d", program.GlobalsCount, darwinarm64.MaxGlobalSlots)
 	}
-	for index, constant := range program.Constants {
-		if constant.Kind() != value.KindInt {
-			return nil, fmt.Errorf("AOT M2 constant %d has unsupported type %s (only int64)", index, constant.Kind())
+	for i, v := range program.Constants {
+		if v.Kind() != value.KindInt {
+			return nil, fmt.Errorf("AOT M3 constant %d has unsupported type %s (only int64)", i, v.Kind())
 		}
+	}
+	insts, boundaries, err := decodeM3(program)
+	if err != nil {
+		return nil, err
+	}
+	// 纯空程序仍使用 M0 的三指令退出映像，保持已验证的字节布局。
+	if len(insts) == 0 && program.GlobalsCount == 0 {
+		return darwinarm64.ExitProgram(0)
+	}
+	states, err := analyzeM3(program, insts, boundaries)
+	if err != nil {
+		return nil, err
 	}
 
 	emitter := darwinarm64.NewIntegerEmitter()
 	if err := emitter.SetGlobalCount(program.GlobalsCount); err != nil {
 		return nil, err
 	}
-	// M2 暂不支持分支，因此可以静态检查全局槽位是否先赋值再读取。
-	// 防止将未初始化的 0 错当作有效的 int64，保持 Mochi VM 的错误语义。
-	initialized := make([]bool, program.GlobalsCount)
-	instructions := program.Instructions
-	for offset := 0; offset < len(instructions); {
-		op := code.Opcode(instructions[offset])
-		definition, err := code.Lookup(op)
-		if err != nil {
-			return nil, fmt.Errorf("AOT M2 at byte offset %d: %w", offset, err)
+	if err := emitter.EnableControlFlow(); err != nil {
+		return nil, err
+	}
+	nativeOffsets := make(map[int]int, len(insts)+1)
+	for i, ins := range insts {
+		nativeOffsets[ins.offset] = emitter.CodeOffset()
+		if states[i] == nil {
+			continue
+		} // 跳转不可达的指令不产生机器码。
+		st := states[i]
+		if err := emitter.SetOperandDepth(len(st.stack)); err != nil {
+			return nil, err
 		}
-		operands, width, err := code.ReadOperands(definition, instructions[offset+1:])
-		if err != nil {
-			return nil, fmt.Errorf("AOT M2 at byte offset %d: %w", offset, err)
-		}
-		switch op {
+		var emitErr error
+		switch ins.op {
 		case code.OpConstant:
-			index := operands[0]
-			if index < 0 || index >= len(program.Constants) {
-				return nil, fmt.Errorf("AOT M2 invalid constant index %d at byte offset %d", index, offset)
-			}
-			n, ok := program.Constants[index].Int64()
-			if !ok {
-				return nil, fmt.Errorf("AOT M2 constant %d is not int64", index)
-			}
-			err = emitter.PushInt64(n)
+			n, _ := program.Constants[ins.operands[0]].Int64()
+			emitErr = emitter.PushInt64(n)
 		case code.OpSetGlobal:
-			index := operands[0]
-			err = emitter.SetGlobal(index)
-			if err == nil {
-				initialized[index] = true
-			}
+			emitErr = emitter.SetGlobal(ins.operands[0])
 		case code.OpGetGlobal:
-			index := operands[0]
-			if index < 0 || index >= len(initialized) {
-				return nil, fmt.Errorf("AOT M2 global slot %d out of range at byte offset %d", index, offset)
-			}
-			if !initialized[index] {
-				return nil, fmt.Errorf("AOT M2 global slot %d is uninitialized at byte offset %d", index, offset)
-			}
-			err = emitter.GetGlobal(index)
+			emitErr = emitter.GetGlobal(ins.operands[0])
 		case code.OpAdd:
-			err = emitter.Add()
+			emitErr = emitter.Add()
 		case code.OpSub:
-			err = emitter.Sub()
+			emitErr = emitter.Sub()
 		case code.OpMul:
-			err = emitter.Mul()
+			emitErr = emitter.Mul()
 		case code.OpNeg:
-			err = emitter.Neg()
+			emitErr = emitter.Neg()
+		case code.OpTrue:
+			emitErr = emitter.PushBool(true)
+		case code.OpFalse:
+			emitErr = emitter.PushBool(false)
+		case code.OpNot:
+			emitErr = emitter.NotBool()
+		case code.OpEqual, code.OpNotEqual, code.OpLess, code.OpLessEqual, code.OpGreater, code.OpGreaterEqual:
+			cond := uint32(0)
+			switch ins.op {
+			case code.OpEqual:
+				cond = 0 // EQ
+			case code.OpNotEqual:
+				cond = 1 // NE
+			case code.OpLess:
+				cond = 11 // LT (signed)
+			case code.OpLessEqual:
+				cond = 13 // LE (signed)
+			case code.OpGreater:
+				cond = 12 // GT (signed)
+			case code.OpGreaterEqual:
+				cond = 10 // GE (signed)
+			}
+			emitErr = emitter.Compare(cond)
+		case code.OpJump:
+			emitErr = emitter.Jump(ins.operands[0])
+		case code.OpJumpIfFalse:
+			emitErr = emitter.JumpIfFalse(ins.operands[0])
 		case code.OpChant:
-			err = emitter.Chant()
+			if st.stack[len(st.stack)-1] == m3Bool {
+				emitErr = emitter.ChantBool()
+			} else {
+				emitErr = emitter.Chant()
+			}
 		case code.OpPop:
-			err = emitter.Pop()
+			emitErr = emitter.PopTyped(st.stack[len(st.stack)-1] == m3Bool)
 		default:
-			return nil, fmt.Errorf("AOT M2 unsupported opcode %s at byte offset %d", definition.Name, offset)
+			return nil, fmt.Errorf("AOT M3 unsupported opcode %s at byte offset %d", ins.name, ins.offset)
 		}
-		if err != nil {
-			return nil, fmt.Errorf("AOT M2 at byte offset %d: %w", offset, err)
+		if emitErr != nil {
+			return nil, fmt.Errorf("AOT M3 at byte offset %d: %w", ins.offset, emitErr)
 		}
-		offset += 1 + width
+	}
+	nativeOffsets[len(program.Instructions)] = emitter.CodeOffset()
+	if err := emitter.PatchControlFlow(nativeOffsets); err != nil {
+		return nil, err
+	}
+	if err := emitter.SetOperandDepth(0); err != nil {
+		return nil, err
 	}
 	return emitter.Finish()
 }
