@@ -1,0 +1,44 @@
+// M6a：FP/SIMD 硬件执行浮点运算，结果转为 bool/int64 进行严格差分。
+kaku a = 1.5;
+kaku b = 2.25;
+chant(a + b == 3.75);
+chant(a - b == -0.75);
+chant(a * b == 3.375);
+chant(b / a == 1.5);
+chant(-a == -1.5);
+chant(int64(3.99));
+
+kaku x = float32(1.5);
+kaku y = float32(2.25);
+chant(x + y == float32(3.75));
+chant(float64(x) == a);
+chant(float32(a) == x);
+chant(float64(2) == 2.0);
+chant(float32(2) == float32(2.0));
+chant(int64(x));
+
+kaku z = 0.0;
+kaku nan = z / z;
+chant(nan == nan);
+chant(nan != nan);
+chant(nan < 1.0);
+chant(nan <= 1.0);
+chant(nan > 1.0);
+chant(nan >= 1.0);
+
+kaku inf = 1.0 / z;
+chant(inf > 1.0);
+kaku minus_zero = -z;
+chant(z == minus_zero);
+chant(1.0 / minus_zero < 0.0);
+
+waza accumulate(v: float64) -> float64 {
+    moshi (v <= 0.0) { kaesu 0.0; }
+    kaesu v + accumulate(v - 1.0);
+}
+chant(accumulate(3.0) == 6.0);
+
+waza add32(x: float32, y: float32) -> float32 {
+    kaesu x + y;
+}
+chant(add32(float32(1.5), float32(2.25)) == float32(3.75));

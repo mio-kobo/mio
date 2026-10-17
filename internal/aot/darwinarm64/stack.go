@@ -9,6 +9,11 @@ const MaxM5OperandSlots = 512
 // StackEmitter 将虚拟操作数栈映射到 x29 下方连续的 8 字节槽位。
 // SP 只在函数入口和出口调整；各条 Mochi 指令不会临时改变 SP。
 // x8 是地址暂存寄存器，x9/x10 用于计算；x19..x22 保留 M3/M4 的状态语义。
+type m6TrapSite struct {
+	word int
+	cond uint32
+}
+
 type StackEmitter struct {
 	words         []uint32
 	depth         int
@@ -22,6 +27,7 @@ type StackEmitter struct {
 	fixups        []branchFixup
 	functionCalls []functionCallFixup
 	overflowSites []int
+	trapSites     []m6TrapSite
 	returnSites   []int
 }
 
@@ -420,6 +426,7 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 	functionStarts := make([]int, len(functions))
 	allCalls := append([]functionCallFixup(nil), e.functionCalls...)
 	overflows := append([]int(nil), e.overflowSites...)
+	traps := append([]m6TrapSite(nil), e.trapSites...)
 	for i, fn := range functions {
 		if fn == nil || !fn.functionMode {
 			return nil, fmt.Errorf("AOT M5 invalid native function %d", i)
@@ -439,8 +446,12 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 		for _, at := range fn.overflowSites {
 			overflows = append(overflows, functionStarts[i]+at)
 		}
+		for _, trap := range fn.trapSites {
+			trap.word += functionStarts[i]
+			traps = append(traps, trap)
+		}
 	}
-	if len(overflows) > 0 {
+	if len(overflows) > 0 || len(traps) > 0 {
 		errExit := len(code)
 		code = append(code, movzX(0, 1), movzX(16, 1), svc(0x80))
 		for _, at := range overflows {
@@ -449,6 +460,13 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 				return nil, fmt.Errorf("AOT M5 call-depth guard target out of range")
 			}
 			code[at] = branchCond(at, errExit, 8) // HI
+		}
+		for _, trap := range traps {
+			delta := errExit - trap.word
+			if delta < -(1<<18) || delta >= 1<<18 {
+				return nil, fmt.Errorf("AOT M6 float trap branch target out of range")
+			}
+			code[trap.word] = branchCond(trap.word, errExit, trap.cond)
 		}
 	}
 	for _, fx := range allCalls {

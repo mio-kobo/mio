@@ -1,5 +1,5 @@
 // Package aot 将通过验证的 Mochi 字节码编译为原生程序。
-// M5 在 M4 原生函数调用的基础上，为深层表达式增加帧内操作数槽位。
+// M6a 在 M5 的帧内操作数槽位上增加原生 float32/float64 计算。
 package aot
 
 import (
@@ -13,10 +13,13 @@ import (
 )
 
 // CompileDarwinARM64 为 Mochi 生成 macOS ARM64 可执行文件。
-// M4 尚未实现的类型或指令必须明确失败，不能回退 VM 执行。
+// 尚未支持的类型或指令必须明确失败，不能回退 VM 执行。
 func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
+	}
+	if needsM6(program) {
+		return compileM6(program)
 	}
 	if len(program.Functions) != 0 {
 		return compileM4(program)
