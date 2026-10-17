@@ -151,7 +151,12 @@ func appendM9Mark(b *m8Assembler) {
 	b.label("gc.clear.loop")
 	b.emit(m8Cmp(9, 27))
 	b.bc(2, "gc.frame.begin")
-	b.emit(movzW(10, 0), m9StrW(10, 9, 4), ldrX(10, 9, 1))
+	// M10 已回收的对象保存空闲链表偏移，清标记时必须跳过 FREE flags。
+	b.emit(m9LdrW(10, 9, 4), movzX(11, uint16(M10FreeBit)), m8And(10, 10, 11))
+	b.cbnz(10, "gc.clear.skipfree")
+	b.emit(movzW(10, 0), m9StrW(10, 9, 4))
+	b.label("gc.clear.skipfree")
+	b.emit(ldrX(10, 9, 1))
 	b.emit(addImmX(10, 10, 31), m8Movn(11, 15), m8And(10, 10, 11))
 	b.emit(addX(9, 9, 10), m8Cmp(9, 27))
 	b.bc(8, "gc.fail")
