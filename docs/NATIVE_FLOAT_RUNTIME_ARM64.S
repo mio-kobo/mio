@@ -1,7 +1,7 @@
 .text
 .p2align 2
 .globl _mio_float_chant_runtime
-_mio_float_chant_runtime:
+_mio_float_chant_runtime:bash <<'BASH'
     // x0 = IEEE754 位模式，w1 = 3(float32) 或 4(float64)
     // 帧内保存 x19..x28，不触碰调用者的 FP/LR 和业务寄存器。
     stp x29, x30, [sp, #-16]!
