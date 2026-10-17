@@ -74,10 +74,63 @@ func TestUnsupportedConstantRejected(t *testing.T) {
 	}
 }
 
-func TestUnsupportedGlobalRejected(t *testing.T) {
-	_, err := CompileDarwinARM64(&compiler.Bytecode{GlobalsCount: 1})
-	if err == nil || !strings.Contains(err.Error(), "does not support globals") {
-		t.Fatalf("expected unsupported globals, got %v", err)
+func TestM2GlobalsProduceWritableDataSegment(t *testing.T) {
+	program := &compiler.Bytecode{
+		GlobalsCount: 2,
+		Constants:    []value.Value{value.NewInt(40), value.NewInt(2)},
+		Instructions: code.Instructions{
+			byte(code.OpConstant), 0, 0, byte(code.OpSetGlobal), 0, 0,
+			byte(code.OpConstant), 0, 1, byte(code.OpSetGlobal), 0, 1,
+			byte(code.OpGetGlobal), 0, 0,
+			byte(code.OpGetGlobal), 0, 1,
+			byte(code.OpAdd), byte(code.OpChant),
+		},
+	}
+	image, err := CompileDarwinARM64(program)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(image) != 2*0x4000 {
+		t.Fatalf("M2 image length=%d, want 32768", len(image))
+	}
+	m, err := macho.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	data := m.Segment("__DATA")
+	if data == nil || data.Prot != 3 || data.Maxprot != 3 || data.Filesz != 0x4000 {
+		t.Fatalf("missing or invalid writable __DATA: %+v", data)
+	}
+	section := m.Section("__data")
+	if section == nil || section.Size != 16 || section.Offset != 0x4000 {
+		t.Fatalf("invalid global slot section: %+v", section)
+	}
+}
+
+func TestM2UninitializedGlobalRejected(t *testing.T) {
+	_, err := CompileDarwinARM64(&compiler.Bytecode{
+		GlobalsCount: 1,
+		Instructions: code.Instructions{byte(code.OpGetGlobal), 0, 0, byte(code.OpChant)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "uninitialized") {
+		t.Fatalf("expected uninitialized global error, got %v", err)
+	}
+}
+
+func TestM2GlobalLimitRejected(t *testing.T) {
+	_, err := CompileDarwinARM64(&compiler.Bytecode{GlobalsCount: 2049})
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Fatalf("expected globals limit error, got %v", err)
+	}
+}
+
+func TestM2UnsupportedFunctionsRejected(t *testing.T) {
+	_, err := CompileDarwinARM64(&compiler.Bytecode{
+		Functions: []compiler.CompiledFunction{{ID: 0, Name: "f"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not support functions") {
+		t.Fatalf("expected function limitation, got %v", err)
 	}
 }
 

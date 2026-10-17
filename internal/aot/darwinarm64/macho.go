@@ -14,6 +14,9 @@ const (
 	entryOffset uint64 = 0x300
 	headerSize         = 32
 
+	// M2 固定一页 __DATA，暂时不实现多页全局变量区域。
+	MaxGlobalSlots = int(pageSize / 8)
+
 	mhMagic64     uint32 = 0xfeedfacf
 	cpuTypeArm64  uint32 = 0x0100000c
 	cpuSubtypeAll uint32 = 0
@@ -28,6 +31,7 @@ const (
 	lcMain         uint32 = 0x80000028
 
 	vmProtRead      uint32 = 1
+	vmProtWrite     uint32 = 2
 	vmProtExecute   uint32 = 4
 	platformMacOS   uint32 = 1
 	macOSMinVersion uint32 = 11 << 16
@@ -45,24 +49,34 @@ func ExitProgram(status uint8) ([]byte, error) {
 	})
 }
 
-// ExecutableWords 将 ARM64 指令字封装成可签名的 Mach-O 可执行文件。
-// 这里仅负责文件布局，不解释 Mochi 字节码，也不插入任何运行时。
+// ExecutableWords 保留 M0/M1 原有的单页可执行文件格式。
 func ExecutableWords(words []uint32) ([]byte, error) {
+	return ExecutableWordsWithGlobals(words, 0)
+}
+
+// ExecutableWordsWithGlobals 将机器码封装为 macOS ARM64 Mach-O。
+// 全局变量放在独立的可写 __DATA 段，每个槽位占 8 字节，初始内容为零。
+// 不使用绝对机器地址；访存指令通过 ADRP 按 PC 相对地址定位数据。
+func ExecutableWordsWithGlobals(words []uint32, globalsCount int) ([]byte, error) {
 	if len(words) == 0 {
 		return nil, fmt.Errorf("empty ARM64 instruction stream")
 	}
+	if globalsCount < 0 || globalsCount > MaxGlobalSlots {
+		return nil, fmt.Errorf("AOT M2 global slot count %d exceeds limit %d", globalsCount, MaxGlobalSlots)
+	}
 	codeSize := uint64(len(words)) * 4
+	hasData := globalsCount != 0
 
-	commands := make([]byte, 0, 512)
+	commands := make([]byte, 0, 768)
 	ncmds := uint32(0)
 
-	// 保留低地址空间，防止空指针落入可映射内存。
+	// 低地址保留空洞，避免空指针访问意外映射到合法页。
 	commands = appendSegment(commands, segment{
 		name: "__PAGEZERO", vmaddr: 0, vmsize: textVMAddr,
 	}, false, codeSize)
 	ncmds++
 
-	// __TEXT 存放 Mach-O 头、装载命令和可执行机器码。
+	// __TEXT 包含 Mach-O 头、Load Commands 和原生机器码。
 	commands = appendSegment(commands, segment{
 		name: "__TEXT", vmaddr: textVMAddr, vmsize: pageSize,
 		fileoff: 0, filesize: pageSize,
@@ -71,11 +85,21 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 	}, true, codeSize)
 	ncmds++
 
-	// 为 __LINKEDIT 预留一页只读虚拟内存，供 codesign 写入签名信息。
-	// 不能使用零长度映射，否则 dyld 可能无法正确访问链接信息。
+	// M2 只在确实存在全局槽位时，才创建可写的 __DATA 页。
+	// __data 段为文件映射，保证下游 codesign 可以覆盖全部数据页。
+	linkeditFileOff := pageSize
+	linkeditVMAddr := textVMAddr + pageSize
+	if hasData {
+		commands = appendDataSegment(commands, globalsCount)
+		ncmds++
+		linkeditFileOff += pageSize
+		linkeditVMAddr += pageSize
+	}
+
+	// dyld 会在 __LINKEDIT 后方追加代码签名；保持单独的只读区域。
 	commands = appendSegment(commands, segment{
-		name: "__LINKEDIT", vmaddr: textVMAddr + pageSize,
-		vmsize: pageSize, fileoff: pageSize,
+		name: "__LINKEDIT", vmaddr: linkeditVMAddr,
+		vmsize: pageSize, fileoff: linkeditFileOff,
 		maxprot: vmProtRead, initprot: vmProtRead,
 	}, false, codeSize)
 	ncmds++
@@ -88,12 +112,10 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 	commands = appendU32(commands, platformMacOS)
 	commands = appendU32(commands, macOSMinVersion)
 	commands = appendU32(commands, macOSMinVersion)
-	commands = appendU32(commands, 0) // 无构建工具记录
+	commands = appendU32(commands, 0)
 	ncmds++
 
-	// 没有 LC_DYLD_INFO / LC_DYLD_CHAINED_FIXUPS 时，dyld 会回退到旧式重定位扫描。
-	// 即使没有重定位，也必须提供 LC_DYSYMTAB，避免 dyld 在空指针 +0x48 处崩溃。
-	// 当前 M1 仍不含动态符号或重定位，因此两个命令均使用空表。
+	// 即使没有动态重定位，仍提供空的符号表命令，避免 dyld 回退路径崩溃。
 	commands = appendEmptySymtab(commands)
 	ncmds++
 	commands = appendEmptyDysymtab(commands)
@@ -102,10 +124,10 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 	commands = appendU32(commands, lcMain)
 	commands = appendU32(commands, 24)
 	commands = appendU64(commands, entryOffset)
-	commands = appendU64(commands, 0) // 使用默认栈大小
+	commands = appendU64(commands, 0)
 	ncmds++
 
-	// 为 codesign 添加 LC_CODE_SIGNATURE 预留 16 字节空间。
+	// 为 codesign 后续插入 LC_CODE_SIGNATURE 预留 16 字节。
 	if headerSize+len(commands)+16 > int(entryOffset) {
 		return nil, fmt.Errorf("mach-o load commands encroach on the entrypoint")
 	}
@@ -113,8 +135,12 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 		return nil, fmt.Errorf("arm64 code does not fit in the __TEXT segment")
 	}
 
-	// 输出一整页 16 KiB 的 __TEXT 文件映像，其余部分补零。
-	file := make([]byte, int(pageSize))
+	// M0/M1 仍保持 16 KiB；M2 含全局变量时多一页 __DATA，共 32 KiB。
+	fileSize := pageSize
+	if hasData {
+		fileSize += pageSize
+	}
+	file := make([]byte, int(fileSize))
 	binary.LittleEndian.PutUint32(file[0:4], mhMagic64)
 	binary.LittleEndian.PutUint32(file[4:8], cpuTypeArm64)
 	binary.LittleEndian.PutUint32(file[8:12], cpuSubtypeAll)
@@ -122,7 +148,7 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 	binary.LittleEndian.PutUint32(file[16:20], ncmds)
 	binary.LittleEndian.PutUint32(file[20:24], uint32(len(commands)))
 	binary.LittleEndian.PutUint32(file[24:28], mhFlags)
-	binary.LittleEndian.PutUint32(file[28:32], 0) // 头部保留字段
+	binary.LittleEndian.PutUint32(file[28:32], 0)
 	copy(file[headerSize:], commands)
 
 	for i, instruction := range words {
@@ -130,6 +156,36 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 		binary.LittleEndian.PutUint32(file[off:off+4], instruction)
 	}
 	return file, nil
+}
+
+// appendDataSegment 编码单页可写的 __DATA 与 __data Section。
+// 只记录实际使用的全局槽位尺寸，其余空间保留作为页内填充。
+func appendDataSegment(dst []byte, slots int) []byte {
+	const cmdSize = 72 + 80
+	const dataFileOff = pageSize
+	const dataVMAddr = textVMAddr + pageSize
+	dst = appendU32(dst, lcSegment64)
+	dst = appendU32(dst, cmdSize)
+	dst = appendName16(dst, "__DATA")
+	dst = appendU64(dst, dataVMAddr)
+	dst = appendU64(dst, pageSize)
+	dst = appendU64(dst, dataFileOff)
+	dst = appendU64(dst, pageSize)
+	dst = appendU32(dst, vmProtRead|vmProtWrite)
+	dst = appendU32(dst, vmProtRead|vmProtWrite)
+	dst = appendU32(dst, 1)
+	dst = appendU32(dst, 0)
+
+	dst = appendName16(dst, "__data")
+	dst = appendName16(dst, "__DATA")
+	dst = appendU64(dst, dataVMAddr)
+	dst = appendU64(dst, uint64(slots)*8)
+	dst = appendU32(dst, uint32(dataFileOff))
+	dst = appendU32(dst, 3)  // int64 槽位按 8 字节对齐。
+	for i := 0; i < 6; i++ { // reloff, nreloc, flags, reserved1..3
+		dst = appendU32(dst, 0)
+	}
+	return dst
 }
 
 // movzX 和 svc 直接编码 AArch64 指令，后续以此扩展调用和栈操作。

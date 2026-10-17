@@ -3,16 +3,101 @@ package darwinarm64
 import "fmt"
 
 // IntegerEmitter 将少量 int64 栈指令直接翻译为 AArch64 机器码。
-// M1 用 x9..x15 保存操作数栈，最多同时容纳 7 个 int64 值。
-// x19 保存最后一条顶层表达式的结果；打印辅助例程只使用易失寄存器。
+// M2 仍用 x9..x15 保存操作数栈，最多同时容纳 7 个 int64 值。
+// x8 作为全局槽位寻址临时寄存器；x19 保存最后的顶层表达式结果。
 type IntegerEmitter struct {
 	words      []uint32
 	depth      int
 	lastPopped bool
 	printCalls []int
+	globals    int
 }
 
 func NewIntegerEmitter() *IntegerEmitter { return &IntegerEmitter{} }
+
+// SetGlobalCount 设置静态 int64 全局槽位数量，当前最多占用一页 __DATA。
+func (e *IntegerEmitter) SetGlobalCount(count int) error {
+	if count < 0 || count > MaxGlobalSlots {
+		return fmt.Errorf("AOT M2 global slot count %d exceeds limit %d", count, MaxGlobalSlots)
+	}
+	e.globals = count
+	return nil
+}
+
+// SetGlobal 将操作数栈顶的 int64 写入可写 __DATA，并弹出这个值。
+func (e *IntegerEmitter) SetGlobal(slot int) error {
+	if err := e.checkGlobalSlot(slot); err != nil {
+		return err
+	}
+	if e.depth < 1 {
+		return fmt.Errorf("AOT M2 stack underflow at OpSetGlobal")
+	}
+	reg := uint32(9 + e.depth - 1)
+	if err := e.emitGlobalAccess(reg, slot, true); err != nil {
+		return err
+	}
+	e.depth--
+	return nil
+}
+
+// GetGlobal 将 __DATA 中的 int64 读入操作数栈，而不是重新载入常量。
+func (e *IntegerEmitter) GetGlobal(slot int) error {
+	if err := e.checkGlobalSlot(slot); err != nil {
+		return err
+	}
+	if e.depth == 7 {
+		return fmt.Errorf("AOT M2 operand stack limit exceeded (max 7 int64 values)")
+	}
+	reg := uint32(9 + e.depth)
+	if err := e.emitGlobalAccess(reg, slot, false); err != nil {
+		return err
+	}
+	e.depth++
+	return nil
+}
+
+func (e *IntegerEmitter) checkGlobalSlot(slot int) error {
+	if slot < 0 || slot >= e.globals {
+		return fmt.Errorf("AOT M2 global slot %d out of range (slots=%d)", slot, e.globals)
+	}
+	return nil
+}
+
+// emitGlobalAccess 使用 ADRP 计算 ASLR 下的页基址，再用 LDR/STR 访问槽位。
+// ARM64 ADRP 始终以 4 KiB 为单位计算 PC 相对页，而 __DATA 是 16 KiB 的 macOS 页。
+func (e *IntegerEmitter) emitGlobalAccess(reg uint32, slot int, store bool) error {
+	const scratch = uint32(8)
+	addr := textVMAddr + pageSize + uint64(slot)*8
+	pc := textVMAddr + entryOffset + uint64(len(e.words))*4
+	pageBase, err := adrpX(scratch, pc, addr)
+	if err != nil {
+		return err
+	}
+	imm12 := uint32((addr & 0xfff) / 8) // LDR/STR X 的偏移按 8 字节缩放。
+	access := ldrX(reg, scratch, imm12)
+	if store {
+		access = strX(reg, scratch, imm12)
+	}
+	e.words = append(e.words, pageBase, access)
+	return nil
+}
+
+func adrpX(rd uint32, pc, target uint64) (uint32, error) {
+	const mask = uint64(0xfff)
+	diffPages := (int64(target&^mask) - int64(pc&^mask)) / 4096
+	if diffPages < -(1<<20) || diffPages >= 1<<20 {
+		return 0, fmt.Errorf("AOT M2 ADRP target out of range")
+	}
+	imm := uint32(diffPages) & 0x1fffff
+	return 0x90000000 | (imm&3)<<29 | ((imm>>2)&0x7ffff)<<5 | rd, nil
+}
+
+func ldrX(rt, rn, imm12 uint32) uint32 {
+	return 0xF9400000 | imm12<<10 | rn<<5 | rt
+}
+func strX(rt, rn, imm12 uint32) uint32 {
+	return 0xF9000000 | imm12<<10 | rn<<5 | rt
+}
 
 // PushInt64 使用 MOVZ/MOVK 装载完整的 64 位整数位模式，包括负数。
 func (e *IntegerEmitter) PushInt64(n int64) error {
@@ -102,7 +187,7 @@ func (e *IntegerEmitter) Finish() ([]byte, error) {
 			code[call] = branch
 		}
 	}
-	return ExecutableWords(code)
+	return ExecutableWordsWithGlobals(code, e.globals)
 }
 
 // printInt64 接收 x0 中的 int64，使用栈上 32 字节缓冲区构造十进制文本。
