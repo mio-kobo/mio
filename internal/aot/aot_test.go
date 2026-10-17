@@ -63,15 +63,23 @@ func TestUnsupportedOpcodeRejected(t *testing.T) {
 	}
 }
 
-func TestUnsupportedConstantRejected(t *testing.T) {
-	_, err := CompileDarwinARM64(&compiler.Bytecode{
+func TestM7StringConstantAccepted(t *testing.T) {
+	image, err := CompileDarwinARM64(&compiler.Bytecode{
 		Constants: []value.Value{value.NewString("hello")},
 		Instructions: code.Instructions{
 			byte(code.OpConstant), 0, 0, byte(code.OpChant),
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "only int64") {
-		t.Fatalf("expected unsupported constant, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := macho.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if file.Section("__const") == nil {
+		t.Fatal("expected M7 __TEXT,__const section")
 	}
 }
 

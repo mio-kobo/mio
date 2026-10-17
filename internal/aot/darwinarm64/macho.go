@@ -58,6 +58,12 @@ func ExecutableWords(words []uint32) ([]byte, error) {
 // 全局变量放在独立的可写 __DATA 段，每个槽位占 8 字节，初始内容为零。
 // 不使用绝对机器地址；访存指令通过 ADRP 按 PC 相对地址定位数据。
 func ExecutableWordsWithGlobals(words []uint32, globalsCount int) ([]byte, error) {
+	return ExecutableWordsWithGlobalsAndConst(words, globalsCount, nil)
+}
+
+// ExecutableWordsWithGlobalsAndConst 在 __TEXT 中创建独立的 __const Section。
+// 字符串使用带长度的 UTF-8 原始字节，没有绝对地址重定位。
+func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, constants []byte) ([]byte, error) {
 	if len(words) == 0 {
 		return nil, fmt.Errorf("empty ARM64 instruction stream")
 	}
@@ -66,6 +72,11 @@ func ExecutableWordsWithGlobals(words []uint32, globalsCount int) ([]byte, error
 	}
 	codeSize := uint64(len(words)) * 4
 	hasData := globalsCount != 0
+	hasConst := len(constants) != 0
+	constOffset := (entryOffset + codeSize + 7) &^ 7
+	if hasConst && (constOffset > pageSize || uint64(len(constants)) > pageSize-constOffset) {
+		return nil, fmt.Errorf("AOT M7 __const data does not fit in the __TEXT page")
+	}
 
 	commands := make([]byte, 0, 768)
 	ncmds := uint32(0)
@@ -77,12 +88,19 @@ func ExecutableWordsWithGlobals(words []uint32, globalsCount int) ([]byte, error
 	ncmds++
 
 	// __TEXT 包含 Mach-O 头、Load Commands 和原生机器码。
+	textCmdStart := len(commands)
 	commands = appendSegment(commands, segment{
 		name: "__TEXT", vmaddr: textVMAddr, vmsize: pageSize,
 		fileoff: 0, filesize: pageSize,
 		maxprot:  vmProtRead | vmProtExecute,
 		initprot: vmProtRead | vmProtExecute,
 	}, true, codeSize)
+	if hasConst {
+		// 在已有的 __TEXT 中增加 __const，避免为静态常量新增运行时重定位。
+		binary.LittleEndian.PutUint32(commands[textCmdStart+4:], 72+80+80)
+		binary.LittleEndian.PutUint32(commands[textCmdStart+64:], 2)
+		commands = appendConstSection(commands, constOffset, uint64(len(constants)))
+	}
 	ncmds++
 
 	// M2 只在确实存在全局槽位时，才创建可写的 __DATA 页。
@@ -155,6 +173,9 @@ func ExecutableWordsWithGlobals(words []uint32, globalsCount int) ([]byte, error
 		off := int(entryOffset) + i*4
 		binary.LittleEndian.PutUint32(file[off:off+4], instruction)
 	}
+	if hasConst {
+		copy(file[int(constOffset):], constants)
+	}
 	return file, nil
 }
 
@@ -183,6 +204,21 @@ func appendDataSegment(dst []byte, slots int) []byte {
 	dst = appendU32(dst, uint32(dataFileOff))
 	dst = appendU32(dst, 3)  // int64 槽位按 8 字节对齐。
 	for i := 0; i < 6; i++ { // reloff, nreloc, flags, reserved1..3
+		dst = appendU32(dst, 0)
+	}
+	return dst
+}
+
+// appendConstSection 编码 __TEXT,__const，只读静态字符串索引及 UTF-8 数据。
+// 该段按字节长度访问，内嵌的 NUL 不是终止符。
+func appendConstSection(dst []byte, off, size uint64) []byte {
+	dst = appendName16(dst, "__const")
+	dst = appendName16(dst, "__TEXT")
+	dst = appendU64(dst, textVMAddr+off)
+	dst = appendU64(dst, size)
+	dst = appendU32(dst, uint32(off))
+	dst = appendU32(dst, 3)  // 8 字节对齐，描述符由两个 uint32 组成
+	for i := 0; i < 6; i++ { // 无重定位，无额外 Section 属性
 		dst = appendU32(dst, 0)
 	}
 	return dst

@@ -21,6 +21,8 @@ type floatCallFixup struct {
 
 type StackEmitter struct {
 	floatCalls    []floatCallFixup
+	stringCalls   []int
+	lastPopString bool
 	lastPopFloat  bool
 	words         []uint32
 	depth         int
@@ -432,6 +434,11 @@ func (e *StackEmitter) FinishFunction() error {
 
 // FinishWithFunctions 拼接主程序、函数和原生输出例程，并回填所有 BL / B.HI。
 func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, error) {
+	return e.FinishWithFunctionsAndStrings(functions, nil)
+}
+
+// FinishWithFunctionsAndStrings 链接程序、字符串输出例程和只读 UTF-8 常量表。
+func (e *StackEmitter) FinishWithFunctionsAndStrings(functions []*StackEmitter, strings []string) ([]byte, error) {
 	if e.functionMode || e.depth != 0 {
 		return nil, fmt.Errorf("AOT M5 main must have empty operand stack")
 	}
@@ -439,7 +446,70 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 	calls := append([]int(nil), e.printCalls...)
 	boolCalls := append([]int(nil), e.boolCalls...)
 	floatCalls := append([]floatCallFixup(nil), e.floatCalls...)
-	if e.lastPopped && e.lastPopFloat {
+	stringCalls := append([]int(nil), e.stringCalls...)
+	if e.lastPopped && e.lastPopString {
+		// M7 的表达式结果可能来自不同分支，退出前按最后的实际运行时标签输出。
+		jumpEmpty := len(code)
+		code = append(code, 0)
+		code = append(code, cmpImmX(21, m7StringKind))
+		jumpString := len(code)
+		code = append(code, 0)
+		code = append(code, cmpImmX(21, uint32(fp32Kind)))
+		jumpFloat32 := len(code)
+		code = append(code, 0)
+		code = append(code, cmpImmX(21, uint32(fp64Kind)))
+		jumpFloat64 := len(code)
+		code = append(code, 0)
+		code = append(code, cmpImmX(21, 1))
+		jumpBool := len(code)
+		code = append(code, 0)
+		code = append(code, movX(0, 19))
+		calls = append(calls, len(code))
+		code = append(code, 0)
+		intExit := len(code)
+		code = append(code, 0)
+
+		stringStart := len(code)
+		code = append(code, movX(0, 19))
+		stringCalls = append(stringCalls, len(code))
+		code = append(code, 0)
+		stringExit := len(code)
+		code = append(code, 0)
+
+		boolStart := len(code)
+		code = append(code, movX(0, 19))
+		boolCalls = append(boolCalls, len(code))
+		code = append(code, 0)
+		boolExit := len(code)
+		code = append(code, 0)
+
+		float32Start := len(code)
+		code = append(code, movX(0, 19), movzX(1, uint16(fp32Kind)))
+		floatCalls = append(floatCalls, floatCallFixup{word: len(code), kind: fp32Kind})
+		code = append(code, 0)
+		float32Exit := len(code)
+		code = append(code, 0)
+
+		float64Start := len(code)
+		code = append(code, movX(0, 19), movzX(1, uint16(fp64Kind)))
+		floatCalls = append(floatCalls, floatCallFixup{word: len(code), kind: fp64Kind})
+		code = append(code, 0)
+		exitStart := len(code)
+
+		var err error
+		if code[jumpEmpty], err = checkedCBZ(20, jumpEmpty, exitStart); err != nil {
+			return nil, err
+		}
+		code[jumpString] = branchCond(jumpString, stringStart, 0)
+		code[jumpFloat32] = branchCond(jumpFloat32, float32Start, 0)
+		code[jumpFloat64] = branchCond(jumpFloat64, float64Start, 0)
+		code[jumpBool] = branchCond(jumpBool, boolStart, 0)
+		for _, at := range []int{intExit, stringExit, boolExit, float32Exit} {
+			if code[at], err = branch26(0x14000000, at, exitStart); err != nil {
+				return nil, err
+			}
+		}
+	} else if e.lastPopped && e.lastPopFloat {
 		// 对浮点/整数/布尔 Pop 使用运行时标签分派，保留条件分支语义。
 		jumpEmpty := len(code)
 		code = append(code, 0)
@@ -519,7 +589,9 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 		}
 	}
 	// 最后表达式 Pop 可能在本函数中增添新的 float BL 占位符。
-	floatCalls = append([]floatCallFixup(nil), e.floatCalls...)
+	if !e.lastPopString {
+		floatCalls = append([]floatCallFixup(nil), e.floatCalls...)
+	}
 	// 正常退出前也恢复入口 SP；不会把 main 的帧遗留在退出路径上。
 	code = append(code, addImmX(31, 29, 0), 0xA8C17BFD, movzX(0, 0), movzX(16, 1), svc(0x80))
 	functionStarts := make([]int, len(functions))
@@ -537,6 +609,9 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 		}
 		for _, at := range fn.boolCalls {
 			boolCalls = append(boolCalls, functionStarts[i]+at)
+		}
+		for _, at := range fn.stringCalls {
+			stringCalls = append(stringCalls, functionStarts[i]+at)
 		}
 		for _, fx := range fn.floatCalls {
 			fx.word += functionStarts[i]
@@ -615,5 +690,36 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 			code[at.word] = word
 		}
 	}
-	return ExecutableWordsWithGlobals(code, e.globals)
+	if len(stringCalls) != 0 && len(strings) == 0 {
+		return nil, fmt.Errorf("AOT M7 missing static string table")
+	}
+	var constants []byte
+	if len(strings) != 0 {
+		var err error
+		constants, err = stringImage(strings)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(stringCalls) != 0 {
+		start := len(code)
+		code = appendPrintStaticString(code)
+		// 先确定字符串表的最终文件偏移，避免将静态绝对地址写入机器码。
+		constOff := (entryOffset + uint64(len(code))*4 + 7) &^ 7
+		constVA := textVMAddr + constOff
+		pc := textVMAddr + entryOffset + uint64(start)*4
+		var err error
+		if code[start], err = adrpX(9, pc, constVA); err != nil {
+			return nil, err
+		}
+		code[start+1] = addImmX(9, 9, uint32(constVA&0xfff))
+		for _, at := range stringCalls {
+			word, err := branch26(0x94000000, at, start)
+			if err != nil {
+				return nil, err
+			}
+			code[at] = word
+		}
+	}
+	return ExecutableWordsWithGlobalsAndConst(code, e.globals, constants)
 }

@@ -19,6 +19,7 @@ const (
 	m6Bool
 	m6Float32
 	m6Float64
+	m6String
 )
 
 func (k m6Kind) String() string {
@@ -31,6 +32,8 @@ func (k m6Kind) String() string {
 		return "float32"
 	case m6Float64:
 		return "float64"
+	case m6String:
+		return "string"
 	default:
 		return "unknown"
 	}
@@ -46,6 +49,8 @@ func m6ValueKind(v value.Value) m6Kind {
 		return m6Float32
 	case value.KindFloat:
 		return m6Float64
+	case value.KindString:
+		return m6String
 	default:
 		return m6Unknown
 	}
@@ -53,7 +58,7 @@ func m6ValueKind(v value.Value) m6Kind {
 
 func needsM6(program *compiler.Bytecode) bool {
 	for _, c := range program.Constants {
-		if c.Kind() == value.KindFloat32 || c.Kind() == value.KindFloat {
+		if c.Kind() == value.KindFloat32 || c.Kind() == value.KindFloat || c.Kind() == value.KindString {
 			return true
 		}
 	}
@@ -503,7 +508,7 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 			}
 			if ins.op == code.OpAdd || ins.op == code.OpSub || ins.op == code.OpMul || ins.op == code.OpDiv || ins.op == code.OpNeg || ins.op == code.OpLess || ins.op == code.OpLessEqual || ins.op == code.OpGreater || ins.op == code.OpGreaterEqual {
 				k := b.endKind[i][len(b.endKind[i])-1]
-				if k == m6Bool || ins.op == code.OpDiv && k == m6Int {
+				if k == m6Bool || k == m6String || ins.op == code.OpDiv && k == m6Int {
 					return nil, fmt.Errorf("AOT M6 unsupported arithmetic type %s for %s at %s offset %d", k, ins.name, b.name, ins.offset)
 				}
 			}
@@ -522,6 +527,23 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 	a, err := analyzeM6(p)
 	if err != nil {
 		return nil, err
+	}
+	// 静态字符串按 UTF-8 原始字节去重，保证相同内容共用一个只读 ID。
+	stringIDs := make(map[int]int)
+	stringTable := make([]string, 0)
+	seen := make(map[string]int)
+	for i, constant := range p.Constants {
+		if constant.Kind() != value.KindString {
+			continue
+		}
+		text, _ := constant.Text()
+		id, exists := seen[text]
+		if !exists {
+			id = len(stringTable)
+			seen[text] = id
+			stringTable = append(stringTable, text)
+		}
+		stringIDs[i] = id
 	}
 	all := make([]*darwinarm64.StackEmitter, len(a.blocks))
 	for bi, b := range a.blocks {
@@ -570,6 +592,8 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 				case m6Bool:
 					n, _ := v.Bool()
 					emitErr = e.PushBool(n)
+				case m6String:
+					emitErr = e.PushInt64(int64(stringIDs[ins.operands[0]]))
 				}
 			case code.OpTrue, code.OpFalse:
 				emitErr = e.PushBool(ins.op == code.OpTrue)
@@ -632,13 +656,17 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 			case code.OpJumpIfFalse:
 				emitErr = e.JumpIfFalse(ins.operands[0])
 			case code.OpChant:
-				if k == m6Float32 || k == m6Float64 {
+				if k == m6String {
+					emitErr = e.ChantString()
+				} else if k == m6Float32 || k == m6Float64 {
 					emitErr = e.ChantFloat(uint8(k))
 				} else {
 					emitErr = e.Chant(k == m6Bool)
 				}
 			case code.OpPop:
-				if k == m6Float32 || k == m6Float64 {
+				if k == m6String {
+					emitErr = e.PopString()
+				} else if k == m6Float32 || k == m6Float64 {
 					emitErr = e.PopFloat(uint8(k))
 				} else {
 					emitErr = e.Pop(k == m6Bool)
@@ -675,5 +703,5 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 		}
 		all[bi] = e
 	}
-	return all[0].FinishWithFunctions(all[1:])
+	return all[0].FinishWithFunctionsAndStrings(all[1:], stringTable)
 }

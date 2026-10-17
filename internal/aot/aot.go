@@ -1,5 +1,5 @@
 // Package aot 将通过验证的 Mochi 字节码编译为原生程序。
-// M6b 为 float32/float64 增加不依赖 libc 的原生最短往返十进制输出。
+// M7 增加 UTF-8 静态字符串和 Mach-O 只读常量区，不引入 GC。
 package aot
 
 import (
