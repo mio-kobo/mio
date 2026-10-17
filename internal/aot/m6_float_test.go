@@ -105,13 +105,21 @@ func TestM6RejectMixedPrecision(t *testing.T) {
 		t.Fatalf("expected mixed precision rejection: %v", err)
 	}
 }
-func TestM6FloatPrintingExplicitlyRejected(t *testing.T) {
-	a := newM3TestAsm()
-	a.emit(code.OpConstant, 0)
-	a.emit(code.OpChant)
-	_, err := CompileDarwinARM64(&compiler.Bytecode{Constants: []value.Value{value.NewFloat(1.5)}, Instructions: a.build()})
-	if err == nil || !strings.Contains(err.Error(), "float output") {
-		t.Fatalf("expected floating display diagnostic: %v", err)
+func TestM6FloatPrintGeneratesNativeFormatter(t *testing.T) {
+	for _, val := range []value.Value{value.NewFloat(3.141592653589793), value.NewFloat32(1.25)} {
+		a := newM3TestAsm()
+		a.emit(code.OpConstant, 0)
+		a.emit(code.OpChant)
+		img, err := CompileDarwinARM64(&compiler.Bytecode{Constants: []value.Value{val}, Instructions: a.build()})
+		if err != nil {
+			t.Fatalf("%s: %v", val.Kind(), err)
+		}
+		if _, err := macho.NewFile(bytes.NewReader(img)); err != nil {
+			t.Fatalf("%s invalid Mach-O: %v", val.Kind(), err)
+		}
+		if !bytes.Contains(img, []byte{0xFD, 0x7B, 0xBF, 0xA9}) {
+			t.Fatal("missing native float frame prologue")
+		}
 	}
 }
 func TestM6FloatToIntHasRangeCheck(t *testing.T) {

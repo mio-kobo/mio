@@ -501,12 +501,6 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 			if b.reach[i] == nil {
 				continue
 			}
-			if ins.op == code.OpChant || ins.op == code.OpPop && b.fn == nil {
-				k := b.endKind[i][len(b.endKind[i])-1]
-				if k == m6Float32 || k == m6Float64 {
-					return nil, fmt.Errorf("AOT M6 float output (%s) is not supported yet at %s offset %d; decimal formatting is reserved for M6b", k, b.name, ins.offset)
-				}
-			}
 			if ins.op == code.OpAdd || ins.op == code.OpSub || ins.op == code.OpMul || ins.op == code.OpDiv || ins.op == code.OpNeg || ins.op == code.OpLess || ins.op == code.OpLessEqual || ins.op == code.OpGreater || ins.op == code.OpGreaterEqual {
 				k := b.endKind[i][len(b.endKind[i])-1]
 				if k == m6Bool || ins.op == code.OpDiv && k == m6Int {
@@ -638,9 +632,17 @@ func compileM6(p *compiler.Bytecode) ([]byte, error) {
 			case code.OpJumpIfFalse:
 				emitErr = e.JumpIfFalse(ins.operands[0])
 			case code.OpChant:
-				emitErr = e.Chant(k == m6Bool)
+				if k == m6Float32 || k == m6Float64 {
+					emitErr = e.ChantFloat(uint8(k))
+				} else {
+					emitErr = e.Chant(k == m6Bool)
+				}
 			case code.OpPop:
-				emitErr = e.Pop(k == m6Bool)
+				if k == m6Float32 || k == m6Float64 {
+					emitErr = e.PopFloat(uint8(k))
+				} else {
+					emitErr = e.Pop(k == m6Bool)
+				}
 			case code.OpCall:
 				callee := p.Functions[ins.operands[0]]
 				emitErr = e.CallNative(ins.operands[0], callee.ParameterCount, callee.ReturnsValue)

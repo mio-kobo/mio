@@ -14,7 +14,14 @@ type m6TrapSite struct {
 	cond uint32
 }
 
+type floatCallFixup struct {
+	word int
+	kind uint8
+}
+
 type StackEmitter struct {
+	floatCalls    []floatCallFixup
+	lastPopFloat  bool
 	words         []uint32
 	depth         int
 	maxStack      int
@@ -322,6 +329,45 @@ func (e *StackEmitter) Pop(isBool bool) error {
 	return nil
 }
 
+// ChantFloat 直接调用纯 ARM64 浮点十进制例程，运行时检查 IEEE754 舍入边界。
+func (e *StackEmitter) ChantFloat(kind uint8) error {
+	if kind != fp32Kind && kind != fp64Kind {
+		return fmt.Errorf("AOT M6b invalid float output type %d", kind)
+	}
+	if err := e.ensurePop("OpChant", 1); err != nil {
+		return err
+	}
+	e.loadOperand(e.depth-1, 0)
+	e.words = append(e.words, movzX(1, uint16(kind)))
+	e.floatCalls = append(e.floatCalls, floatCallFixup{word: len(e.words), kind: kind})
+	e.words = append(e.words, 0)
+	e.depth--
+	return nil
+}
+
+// PopFloat 保留顶层最后一个 float，只有真实执行过 Pop 才在结束时输出。
+func (e *StackEmitter) PopFloat(kind uint8) error {
+	if kind != fp32Kind && kind != fp64Kind {
+		return fmt.Errorf("AOT M6b invalid float Pop type %d", kind)
+	}
+	if e.functionMode {
+		if err := e.ensurePop("OpPop", 1); err != nil {
+			return err
+		}
+		e.depth--
+		return nil
+	}
+	if err := e.ensurePop("OpPop", 1); err != nil {
+		return err
+	}
+	e.loadOperand(e.depth-1, 19)
+	e.words = append(e.words, movzX(20, 1), movzX(21, uint16(kind)))
+	e.lastPopped = true
+	e.lastPopFloat = true
+	e.depth--
+	return nil
+}
+
 // CallNative 不依赖 x9..x15 保留调用者操作数；所有临时值已经存进当前帧。
 func (e *StackEmitter) CallNative(functionID, params int, returns bool) error {
 	if params < 0 || params > MaxM4Parameters || e.depth < params {
@@ -392,19 +438,39 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 	code := append([]uint32(nil), e.words...)
 	calls := append([]int(nil), e.printCalls...)
 	boolCalls := append([]int(nil), e.boolCalls...)
-	if e.lastPopped {
+	floatCalls := append([]floatCallFixup(nil), e.floatCalls...)
+	if e.lastPopped && e.lastPopFloat {
+		// 对浮点/整数/布尔 Pop 使用运行时标签分派，保留条件分支语义。
 		jumpEmpty := len(code)
 		code = append(code, 0)
-		jumpInt := len(code)
+		code = append(code, cmpImmX(21, uint32(fp32Kind)))
+		float32Jump := len(code)
 		code = append(code, 0)
+		code = append(code, cmpImmX(21, uint32(fp64Kind)))
+		float64Jump := len(code)
+		code = append(code, 0)
+		boolJump := len(code)
+		code = append(code, 0)
+		code = append(code, movX(0, 19))
+		calls = append(calls, len(code))
+		code = append(code, 0)
+		intExitJump := len(code)
+		code = append(code, 0)
+		boolStart := len(code)
 		code = append(code, movX(0, 19))
 		boolCalls = append(boolCalls, len(code))
 		code = append(code, 0)
-		jumpExit := len(code)
+		boolExitJump := len(code)
 		code = append(code, 0)
-		intStart := len(code)
-		code = append(code, movX(0, 19))
-		calls = append(calls, len(code))
+		float32Start := len(code)
+		code = append(code, movX(0, 19), movzX(1, uint16(fp32Kind)))
+		e.floatCalls = append(e.floatCalls, floatCallFixup{word: len(code), kind: fp32Kind})
+		code = append(code, 0)
+		float32ExitJump := len(code)
+		code = append(code, 0)
+		float64Start := len(code)
+		code = append(code, movX(0, 19), movzX(1, uint16(fp64Kind)))
+		e.floatCalls = append(e.floatCalls, floatCallFixup{word: len(code), kind: fp64Kind})
 		code = append(code, 0)
 		exitStart := len(code)
 		var err error
@@ -412,15 +478,48 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 		if err != nil {
 			return nil, err
 		}
-		code[jumpInt], err = checkedCBZ(21, jumpInt, intStart)
-		if err != nil {
-			return nil, err
+		code[float32Jump] = branchCond(float32Jump, float32Start, 0) // EQ
+		code[float64Jump] = branchCond(float64Jump, float64Start, 0) // EQ
+		code[boolJump] = cbnzX(21, boolJump, boolStart)              // x21=1 时输出布尔值
+		for _, at := range []int{intExitJump, boolExitJump, float32ExitJump} {
+			code[at], err = branch26(0x14000000, at, exitStart)
+			if err != nil {
+				return nil, err
+			}
 		}
-		code[jumpExit], err = branch26(0x14000000, jumpExit, exitStart)
-		if err != nil {
-			return nil, err
+	} else {
+		if e.lastPopped {
+			jumpEmpty := len(code)
+			code = append(code, 0)
+			jumpInt := len(code)
+			code = append(code, 0)
+			code = append(code, movX(0, 19))
+			boolCalls = append(boolCalls, len(code))
+			code = append(code, 0)
+			jumpExit := len(code)
+			code = append(code, 0)
+			intStart := len(code)
+			code = append(code, movX(0, 19))
+			calls = append(calls, len(code))
+			code = append(code, 0)
+			exitStart := len(code)
+			var err error
+			code[jumpEmpty], err = checkedCBZ(20, jumpEmpty, exitStart)
+			if err != nil {
+				return nil, err
+			}
+			code[jumpInt], err = checkedCBZ(21, jumpInt, intStart)
+			if err != nil {
+				return nil, err
+			}
+			code[jumpExit], err = branch26(0x14000000, jumpExit, exitStart)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
+	// 最后表达式 Pop 可能在本函数中增添新的 float BL 占位符。
+	floatCalls = append([]floatCallFixup(nil), e.floatCalls...)
 	// 正常退出前也恢复入口 SP；不会把 main 的帧遗留在退出路径上。
 	code = append(code, addImmX(31, 29, 0), 0xA8C17BFD, movzX(0, 0), movzX(16, 1), svc(0x80))
 	functionStarts := make([]int, len(functions))
@@ -438,6 +537,10 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 		}
 		for _, at := range fn.boolCalls {
 			boolCalls = append(boolCalls, functionStarts[i]+at)
+		}
+		for _, fx := range fn.floatCalls {
+			fx.word += functionStarts[i]
+			floatCalls = append(floatCalls, fx)
 		}
 		for _, fx := range fn.functionCalls {
 			fx.word += functionStarts[i]
@@ -499,6 +602,17 @@ func (e *StackEmitter) FinishWithFunctions(functions []*StackEmitter) ([]byte, e
 				return nil, err
 			}
 			code[at] = word
+		}
+	}
+	if len(floatCalls) != 0 {
+		start := len(code)
+		code = append(code, floatRuntimeWords[:]...)
+		for _, at := range floatCalls {
+			word, err := branch26(0x94000000, at.word, start)
+			if err != nil {
+				return nil, err
+			}
+			code[at.word] = word
 		}
 	}
 	return ExecutableWordsWithGlobals(code, e.globals)

@@ -1,5 +1,5 @@
 // Package aot 将通过验证的 Mochi 字节码编译为原生程序。
-// M6a 在 M5 的帧内操作数槽位上增加原生 float32/float64 计算。
+// M6b 为 float32/float64 增加不依赖 libc 的原生最短往返十进制输出。
 package aot
 
 import (
