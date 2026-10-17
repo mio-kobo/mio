@@ -103,8 +103,8 @@ func analyzeM4Block(program *compiler.Bytecode, function *compiler.CompiledFunct
 			return nil
 		}
 		push := func(kind m3Kind) error {
-			if len(st.stack) == 7 {
-				return atErr("operand stack limit exceeded (max 7)")
+			if len(st.stack) >= darwinarm64.MaxM5OperandSlots {
+				return atErr("operand stack limit exceeded (max %d)", darwinarm64.MaxM5OperandSlots)
 			}
 			st.stack = append(st.stack, kind)
 			return nil
@@ -335,6 +335,14 @@ func compileM4(program *compiler.Bytecode) ([]byte, error) {
 		if len(fn.Captures) != 0 {
 			return nil, fmt.Errorf("AOT M4 function %q captures variables; closures are unsupported", fn.Name)
 		}
+	}
+
+	needsStack, err := needsM5Stack(program)
+	if err != nil {
+		return nil, err
+	}
+	if needsStack {
+		return compileM5(program)
 	}
 
 	main, err := compileM4Block(program, nil, program.Instructions)

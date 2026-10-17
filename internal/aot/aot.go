@@ -1,5 +1,5 @@
 // Package aot 将通过验证的 Mochi 字节码编译为原生程序。
-// M4 在 M3 原生控制流的基础上增加用户函数调用、局部变量与递归。
+// M5 在 M4 原生函数调用的基础上，为深层表达式增加帧内操作数槽位。
 package aot
 
 import (
@@ -40,6 +40,13 @@ func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	states, err := analyzeM3(program, insts, boundaries)
 	if err != nil {
 		return nil, err
+	}
+	// 浅表达式保持 M0–M4 已经在实机验证的机器码布局。
+	// 深度超过 7 后统一切换到 M5 帧内操作数栈。
+	for _, st := range states {
+		if st != nil && len(st.stack) > 7 {
+			return compileM5(program)
+		}
 	}
 
 	emitter := darwinarm64.NewIntegerEmitter()

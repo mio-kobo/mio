@@ -3,6 +3,7 @@ package aot
 import (
 	"fmt"
 
+	"Mio/internal/aot/darwinarm64"
 	"Mio/internal/code"
 	"Mio/internal/compiler"
 	"Mio/internal/value"
@@ -119,8 +120,8 @@ func analyzeM3(program *compiler.Bytecode, insts []m3Instruction, boundaries map
 			return nil
 		}
 		push := func(k m3Kind) error {
-			if len(st.stack) >= 7 {
-				return atErr("operand stack limit exceeded (max 7)")
+			if len(st.stack) >= darwinarm64.MaxM5OperandSlots {
+				return atErr(fmt.Sprintf("operand stack limit exceeded (max %d)", darwinarm64.MaxM5OperandSlots))
 			}
 			st.stack = append(st.stack, k)
 			return nil

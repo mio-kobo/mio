@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"Mio/internal/aot/darwinarm64"
 	"Mio/internal/code"
 	"Mio/internal/compiler"
 	"Mio/internal/value"
@@ -144,8 +145,8 @@ func TestArithmeticStackUnderflowRejected(t *testing.T) {
 }
 
 func TestOperandStackLimitRejected(t *testing.T) {
-	instructions := make(code.Instructions, 0, 8*3)
-	for i := 0; i < 8; i++ {
+	instructions := make(code.Instructions, 0, (darwinarm64.MaxM5OperandSlots+1)*3)
+	for i := 0; i <= darwinarm64.MaxM5OperandSlots; i++ {
 		instructions = append(instructions, byte(code.OpConstant), 0, 0)
 	}
 	_, err := CompileDarwinARM64(&compiler.Bytecode{
