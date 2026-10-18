@@ -56,9 +56,9 @@ func TestInvalidMochiRejected(t *testing.T) {
 
 func TestUnsupportedOpcodeRejected(t *testing.T) {
 	_, err := CompileDarwinARM64(&compiler.Bytecode{
-		Instructions: code.Instructions{byte(code.OpNil)},
+		Instructions: code.Instructions{byte(code.OpMap)},
 	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported opcode OpNil") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported opcode OpMap") {
 		t.Fatalf("expected unsupported opcode, got %v", err)
 	}
 }

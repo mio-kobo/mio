@@ -9,7 +9,7 @@ import (
 )
 
 func TestM10GCProbeMachO(t *testing.T) {
-	modes := []string{"smoke", "cycles", "split", "coalesce", "reset", "badtype", "badsize", "badlink", "oom", "interior", "holes", "zerobyte", "stale", "stress"}
+	modes := []string{"smoke", "cycles", "split", "coalesce", "reset", "badtype", "badsize", "badlink", "oom", "interior", "holes", "zerobyte", "stale", "stress", "largeindex"}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			image, err := M10GCProbe(mode)
@@ -62,7 +62,7 @@ func TestM10GCProbeMachO(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, required := range []uint32{
-				m10Lsl(5, 5, 4), m10Lsr(28, 28, 4),
+				m10Lsl(5, 5, 4), m10Lsr(18, 18, 4),
 				m9LdrW(9, 25, 0), strX(31, 9, 0),
 				movzX(16, m8DarwinSYSMmap), movzX(16, m8DarwinSYSMunmap),
 			} {

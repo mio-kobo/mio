@@ -4,6 +4,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -12,48 +13,62 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "mochi-aot:", err)
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run() error {
-	out := flag.String("o", "", "native executable output file")
-	target := flag.String("target", "darwin-arm64", "target architecture (darwin-arm64 only)")
-	m11 := flag.Bool("m11-gc", false, "enable M11a integrated native GC lifecycle self-test")
-	gcStress := flag.Bool("gc-stress", false, "force precise GC at every safe object allocation")
-	flag.Parse()
-	if flag.NArg() != 1 || *out == "" || *target != "darwin-arm64" || *m11 && *gcStress {
-		return fmt.Errorf("usage: go run ./cmd/mochi-aot -o <output> [-target darwin-arm64] [-m11-gc|-gc-stress] <input.mochi>")
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("mochi-aot", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	out := flags.String("o", "", "native executable output file")
+	target := flags.String("target", "darwin-arm64", "target architecture (darwin-arm64 only)")
+	m11 := flags.Bool("m11-gc", false, "enable M11a integrated native GC lifecycle self-test")
+	gcStress := flags.Bool("gc-stress", false, "force precise GC at every safe object allocation")
+	heapMiB := flags.Uint64("heap-mib", 1, "managed heap capacity in MiB (hard limit 1024)")
+	gcTelemetry := flags.Bool("gc-telemetry", false, "write allocation/GC diagnostics to stderr")
+	if err := flags.Parse(args); err != nil {
+		return 2
 	}
-	input, err := os.Open(flag.Arg(0))
+	if flags.NArg() != 1 || *out == "" || *target != "darwin-arm64" || *m11 && *gcStress {
+		fmt.Fprintln(stderr, "mochi-aot: usage: go run ./cmd/mochi-aot -o <output> [-target darwin-arm64] [-heap-mib 1..1024] [-gc-telemetry] [-m11-gc|-gc-stress] <input.mochi>")
+		return 1
+	}
+	if *heapMiB == 0 || *heapMiB > 1024 {
+		fmt.Fprintln(stderr, "mochi-aot: heap-mib must be between 1 and 1024")
+		return 1
+	}
+	input, err := os.Open(flags.Arg(0))
 	if err != nil {
-		return fmt.Errorf("open input: %w", err)
+		fmt.Fprintln(stderr, "mochi-aot: open input:", err)
+		return 1
 	}
 	defer input.Close()
 
 	bytecode, err := mochi.Decode(input)
 	if err != nil {
-		return fmt.Errorf("decode Mochi: %w", err)
+		fmt.Fprintln(stderr, "mochi-aot: decode Mochi:", err)
+		return 1
 	}
 	var native []byte
-	if *gcStress {
-		native, err = aot.CompileDarwinARM64WithGCStress(bytecode)
-	} else if *m11 {
+	if *m11 {
 		native, err = aot.CompileDarwinARM64WithM11Runtime(bytecode)
 	} else {
-		native, err = aot.CompileDarwinARM64(bytecode)
+		native, err = aot.CompileDarwinARM64WithOptions(bytecode, aot.DarwinARM64Options{
+			HeapCapacity: *heapMiB << 20,
+			GCTelemetry:  *gcTelemetry,
+			GCStress:     *gcStress,
+		})
 	}
 	if err != nil {
-		return err
+		fmt.Fprintln(stderr, "mochi-aot:", err)
+		return 1
 	}
 	if err := writeExecutable(*out, native); err != nil {
-		return err
+		fmt.Fprintln(stderr, "mochi-aot:", err)
+		return 1
 	}
-	fmt.Printf("wrote %s (%d bytes, unsigned Mach-O arm64)\n", *out, len(native))
-	fmt.Println("on macOS, run: codesign --force --sign - " + *out)
-	return nil
+	fmt.Fprintf(stdout, "wrote %s (%d bytes, unsigned Mach-O arm64)\n", *out, len(native))
+	fmt.Fprintln(stdout, "on macOS, run: codesign --force --sign - "+*out)
+	return 0
 }
 
 func writeExecutable(path string, image []byte) error {

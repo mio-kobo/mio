@@ -35,6 +35,47 @@ func runM12NativeStress(t *testing.T, program *compiler.Bytecode) ([]byte, error
 	return runM12NativeCompile(t, program, CompileDarwinARM64WithGCStress)
 }
 
+func TestM12TelemetryUsesStderrAndExplicitHeap(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("requires macOS ARM64")
+	}
+	a := newM3TestAsm()
+	a.emit(code.OpConstant, 0)
+	a.emit(code.OpArray, 1)
+	a.emit(code.OpSetGlobal, 0)
+	program := &compiler.Bytecode{Constants: []value.Value{value.NewInt(7)}, Instructions: a.build(), GlobalsCount: 1}
+	image, err := CompileDarwinARM64WithOptions(program, DarwinARM64Options{HeapCapacity: 2 << 20, GCTelemetry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := t.TempDir() + "/telemetry"
+	if err := os.WriteFile(path, image, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("codesign", "-s", "-", path).CombinedOutput(); err != nil {
+		t.Fatalf("codesign: %v: %s", err, output)
+	}
+	cmd := exec.Command(path)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v stderr=%q", err, stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Fatalf("telemetry contaminated stdout: %q", stdout.String())
+	}
+	for _, field := range []string{
+		"mio-gc heap_capacity=2097152\n", "mio-gc heap_cursor=", "mio-gc heap_live_bytes=",
+		"mio-gc allocated_objects=", "mio-gc gc_count=", "mio-gc free_bytes=",
+		"mio-gc largest_free_block=", "mio-gc bump_remaining=", "mio-gc precise_roots=",
+		"mio-gc gc_total_ticks=", "mio-gc timer_frequency_hz=",
+	} {
+		if !strings.Contains(stderr.String(), field) {
+			t.Fatalf("missing %q in telemetry:\n%s", field, stderr.String())
+		}
+	}
+}
+
 func runM12NativeCompile(t *testing.T, program *compiler.Bytecode, compile func(*compiler.Bytecode) ([]byte, error)) ([]byte, error) {
 	t.Helper()
 	image, err := compile(program)
@@ -372,9 +413,9 @@ func TestM12DynamicArrayRejectsInvalidOperands(t *testing.T) {
 			wantOutput: "type mismatch",
 		},
 		{
-			name:       "nullable-deferred-to-m13",
-			program:    &compiler.Bytecode{Constants: []value.Value{value.NewInt(0)}, Instructions: append(append(mustM12Instruction(t, code.OpConstant, 0), mustM12Instruction(t, code.OpArrayWithCapacity, int(value.KindInt)|0x80)...), byte(code.OpPop))},
-			wantOutput: "require M13",
+			name:       "nullable-map-remains-unsupported",
+			program:    &compiler.Bytecode{Constants: []value.Value{value.NewInt(0)}, Instructions: append(append(mustM12Instruction(t, code.OpConstant, 0), mustM12Instruction(t, code.OpArrayWithCapacity, int(value.KindMap)|0x80)...), byte(code.OpPop))},
+			wantOutput: "unsupported array element descriptor",
 		},
 		{
 			name:       "clone-not-array",

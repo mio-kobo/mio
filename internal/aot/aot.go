@@ -12,14 +12,35 @@ import (
 	"Mio/internal/value"
 )
 
+// DarwinARM64Options controls native-runtime resources without changing Mochi
+// bytecode semantics. HeapCapacity is the managed object area (the runtime's
+// small metadata mapping is additional); zero selects the 1 MiB default.
+type DarwinARM64Options struct {
+	HeapCapacity uint64
+	GCTelemetry  bool
+	GCStress     bool
+}
+
 // CompileDarwinARM64 为 Mochi 生成 macOS ARM64 可执行文件。
 // 尚未支持的类型或指令必须明确失败，不能回退 VM 执行。
 func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
+	return CompileDarwinARM64WithOptions(program, DarwinARM64Options{})
+}
+
+// CompileDarwinARM64WithOptions generates a native image with an explicit,
+// bounded heap policy. The hard limit remains M8MaxHeapCapacity (1 GiB).
+func CompileDarwinARM64WithOptions(program *compiler.Bytecode, options DarwinARM64Options) ([]byte, error) {
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
 	}
+	if options.HeapCapacity == 0 {
+		options.HeapCapacity = darwinarm64.M8DefaultHeapCapacity
+	}
+	if options.HeapCapacity > darwinarm64.M8MaxHeapCapacity {
+		return nil, fmt.Errorf("AOT heap capacity %d exceeds hard limit %d", options.HeapCapacity, darwinarm64.M8MaxHeapCapacity)
+	}
 	if needsM6(program) {
-		return compileM6(program)
+		return compileM6WithOptions(program, false, options.GCStress, options.HeapCapacity, options.GCTelemetry)
 	}
 	if len(program.Functions) != 0 {
 		return compileM4(program)
@@ -154,5 +175,5 @@ func CompileDarwinARM64WithGCStress(program *compiler.Bytecode) ([]byte, error) 
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
 	}
-	return compileM6WithOptions(program, false, true)
+	return compileM6WithOptions(program, false, true, darwinarm64.M8DefaultHeapCapacity, false)
 }

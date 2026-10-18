@@ -7,9 +7,11 @@ const (
 	M12StructTypeID  = 100
 	M12ArrayTypeID   = 101
 	M12StorageTypeID = 102
+	M13EnumTypeID    = 107
 	m12StructKind    = 1
 	m12ArrayKind     = 2
 	m12StorageKind   = 3
+	m13EnumKind      = 8
 	m12PayloadBase   = 32
 )
 
@@ -26,11 +28,51 @@ const (
 	m12ArrayClone
 	m12ArrayTruncate
 	m12ArrayAppendAll
+	m12UTF8Valid
+	m12Telemetry
 )
 
 type m12CallSite struct {
 	at   int
 	kind m12CallKind
+}
+
+// BytesToString validates UTF-8, then clones the compact byte array. The
+// cloned descriptor is the immutable dynamic-string backing object; invalid
+// input yields the nullable nil representation (zero).
+func (e *StackEmitter) BytesToString() error {
+	if err := e.ensurePop("OpDataConvert bytes-to-string", 1); err != nil {
+		return err
+	}
+	e.loadOperand(e.depth-1, 0)
+	e.m12Calls = append(e.m12Calls, m12CallSite{at: len(e.words), kind: m12UTF8Valid})
+	e.words = append(e.words, 0, cmpZeroX(0))
+	invalid := len(e.words)
+	e.words = append(e.words, 0)
+	if err := e.ArrayClone(1, false); err != nil {
+		return err
+	}
+	done := len(e.words)
+	e.words = append(e.words, 0)
+	invalidTarget := len(e.words)
+	e.words = append(e.words, movzX(9, 0))
+	e.storeOperand(e.depth-1, 9)
+	doneTarget := len(e.words)
+	var err error
+	e.words[invalid], err = branchCondChecked(invalid, invalidTarget, 0)
+	if err != nil {
+		return err
+	}
+	e.words[done], err = branch26(0x14000000, done, doneTarget)
+	return err
+}
+
+func branchCondChecked(from, to int, cond uint32) (uint32, error) {
+	distance := to - from
+	if distance < -(1<<18) || distance >= 1<<18 {
+		return 0, fmt.Errorf("conditional branch target out of range")
+	}
+	return branchCond(from, to, cond), nil
 }
 
 // EnableM12Runtime initializes the fixed-capacity heap. Ordinary object
@@ -44,10 +86,11 @@ func (e *StackEmitter) EnableM12Runtime(main bool) error {
 			return fmt.Errorf("AOT M12 runtime must be enabled at main entry")
 		}
 		e.words = append(e.words, movzX(23, 0))
-		e.words = append(e.words, m8MovBits(0, M8MaxHeapCapacity)...)
+		e.words = append(e.words, m8MovBits(0, e.heapCapacity)...)
 		e.m12InitCall = len(e.words)
 		e.m12Calls = append(e.m12Calls, m12CallSite{at: e.m12InitCall, kind: m12Init})
 		e.words = append(e.words, 0)
+		e.words = append(e.words, cbnzX(0, len(e.words), len(e.words)+2))
 		e.m12InitFail = len(e.words)
 		e.words = append(e.words, 0)
 		e.words = append(e.words, movX(23, 0))
@@ -65,6 +108,7 @@ func (e *StackEmitter) m12Alloc(typeID, payload int) error {
 	e.words = append(e.words, m8MovBits(2, uint64(payload))...)
 	e.m12Calls = append(e.m12Calls, m12CallSite{at: len(e.words), kind: m12Alloc})
 	e.words = append(e.words, 0)
+	e.words = append(e.words, cbnzX(0, len(e.words), len(e.words)+2))
 	e.m12ZeroSites = append(e.m12ZeroSites, len(e.words))
 	e.words = append(e.words, 0)
 	return nil
@@ -100,6 +144,78 @@ func (e *StackEmitter) NewStructObject(count int, refWords []uint64) error {
 	}
 	e.storeOperand(base, 12)
 	e.depth = base + 1
+	return nil
+}
+
+// NewEnumObject creates one immutable tagged value. The payload is
+// self-describing so variants of the same source enum may have different
+// arities and exact reference layouts without changing the one-word ABI.
+func (e *StackEmitter) NewEnumObject(tag, count int, refWords []uint64) error {
+	if tag < 0 || tag > 0xffff || count < 0 || count > e.depth || len(refWords) != (count+63)/64 {
+		return fmt.Errorf("AOT M13b invalid enum layout")
+	}
+	if len(refWords) > (M8MaxHeapCapacity-m12PayloadBase-count*8)/8 {
+		return fmt.Errorf("AOT M13b enum payload size overflow")
+	}
+	payload := m12PayloadBase + len(refWords)*8 + count*8
+	if err := e.m12Alloc(M13EnumTypeID, payload); err != nil {
+		return err
+	}
+	e.words = append(e.words, movX(12, 0))
+	e.m12StoreImmediate(12, 0, m13EnumKind)
+	e.m12StoreImmediate(12, 8, uint64(tag))
+	e.m12StoreImmediate(12, 16, uint64(count))
+	e.m12StoreImmediate(12, 24, uint64(len(refWords)))
+	for index, bits := range refWords {
+		e.m12StoreImmediate(12, uint32(m12PayloadBase+index*8), bits)
+	}
+	base := e.depth - count
+	dataOffset := m12PayloadBase + len(refWords)*8
+	for index := 0; index < count; index++ {
+		e.loadOperand(base+index, 9)
+		e.words = append(e.words, strX(9, 12, uint32(dataOffset/8+index)))
+	}
+	e.storeOperand(base, 12)
+	e.depth = base + 1
+	return nil
+}
+
+func (e *StackEmitter) EnumTag(nullable bool) error {
+	if err := e.ensurePop("OpEnumTag", 1); err != nil {
+		return err
+	}
+	e.loadOperand(e.depth-1, 9)
+	if nullable {
+		e.words = append(e.words, cmpZeroX(9))
+		e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, 1)) // NE skips long failure branch
+		e.nullableNilSites = append(e.nullableNilSites, len(e.words))
+		e.words = append(e.words, 0)
+	}
+	e.words = append(e.words, ldrX(9, 9, 1))
+	e.storeOperand(e.depth-1, 9)
+	return nil
+}
+
+func (e *StackEmitter) GetEnumValue(index, count int, nullable bool) error {
+	if err := e.ensurePop("OpGetEnumValue", 1); err != nil {
+		return err
+	}
+	if index < 0 || index >= count {
+		return fmt.Errorf("AOT M13b enum value %d out of range", index)
+	}
+	e.loadOperand(e.depth-1, 9)
+	if nullable {
+		e.words = append(e.words, cmpZeroX(9))
+		e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, 1)) // NE skips long failure branch
+		e.nullableNilSites = append(e.nullableNilSites, len(e.words))
+		e.words = append(e.words, 0)
+	}
+	e.words = append(e.words,
+		ldrX(10, 9, 3), m10Lsl(10, 10, 3),
+		addImmX(9, 9, m12PayloadBase), addX(9, 9, 10),
+		ldrX(9, 9, uint32(index)),
+	)
+	e.storeOperand(e.depth-1, 9)
 	return nil
 }
 
@@ -193,6 +309,7 @@ func (e *StackEmitter) m12ArrayCall(kind m12CallKind, elementBytes int, referenc
 	}
 	e.m12Calls = append(e.m12Calls, m12CallSite{at: len(e.words), kind: kind})
 	e.words = append(e.words, 0)
+	e.words = append(e.words, cbnzX(0, len(e.words), len(e.words)+2))
 	e.m12ArrayFailSites = append(e.m12ArrayFailSites, len(e.words))
 	e.words = append(e.words, 0)
 }
@@ -297,7 +414,8 @@ func (e *StackEmitter) m12ArrayAddress(elementBytes int) error {
 	e.loadOperand(e.depth-2, 9)
 	e.loadOperand(e.depth-1, 10)
 	e.words = append(e.words, ldrX(11, 9, 1), m8Cmp(10, 11))
-	e.m12BoundsSites = append(e.m12BoundsSites, len(e.words)) // HS 同时捕获负数和上界。
+	e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, 3)) // LO skips long branch
+	e.m12BoundsSites = append(e.m12BoundsSites, len(e.words))              // HS 同时捕获负数和上界。
 	e.words = append(e.words, 0, ldrX(9, 9, 5), addImmX(9, 9, m12PayloadBase))
 	if elementBytes == 8 {
 		e.words = append(e.words, addX(10, 10, 10), addX(10, 10, 10), addX(10, 10, 10))
@@ -306,7 +424,7 @@ func (e *StackEmitter) m12ArrayAddress(elementBytes int) error {
 	return nil
 }
 
-func appendM12Failure(code []uint32, message string, calls *[]m12CallSite) []uint32 {
+func appendM12Failure(code []uint32, message string, calls *[]m12CallSite, telemetry bool) []uint32 {
 	frame := (len(message) + 15) &^ 15
 	code = append(code, subImmX(31, 31, uint32(frame)))
 	for index := range message {
@@ -316,6 +434,11 @@ func appendM12Failure(code []uint32, message string, calls *[]m12CallSite) []uin
 	code = append(code,
 		movzX(0, 2), addImmX(1, 31, 0), movzX(2, uint16(len(message))),
 		movzX(16, m8DarwinSYSWrite), svc(0x80))
+	if telemetry {
+		code = append(code, movX(0, 23), movX(1, 24))
+		*calls = append(*calls, m12CallSite{at: len(code), kind: m12Telemetry})
+		code = append(code, 0)
+	}
 	skipDestroy := len(code)
 	code = append(code, 0, movX(0, 23))
 	*calls = append(*calls, m12CallSite{at: len(code), kind: m12Destroy})

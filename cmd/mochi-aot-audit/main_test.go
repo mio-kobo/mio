@@ -47,12 +47,12 @@ func TestRunReportsAndStrictMode(t *testing.T) {
 	if e = json.Unmarshal(content, &report); e != nil {
 		t.Fatal(e)
 	}
-	if report.TotalInstructions != 3 || report.MissingInstructions != 1 || report.SourceSHA256 == "" {
+	if report.TotalInstructions != 3 || report.MissingInstructions != 0 || report.LimitedInstructions != 3 || report.SourceSHA256 == "" {
 		t.Fatalf("report: %+v", report)
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run([]string{"-in", input, "-json", "", "-strict"}, &stdout, &stderr); code != 3 {
+	if code := run([]string{"-in", input, "-json", "", "-strict"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("strict exit=%d", code)
 	}
 }

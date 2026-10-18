@@ -38,7 +38,7 @@ func TestM11RuntimeExplicitOptIn(t *testing.T) {
 }
 
 func TestM11RuntimeRejectsUnsupportedTypes(t *testing.T) {
-	p := &compiler.Bytecode{Constants: []value.Value{value.NewString("ok")}, Instructions: code.Instructions{byte(code.OpConstant), 0, 0, byte(code.OpChant), byte(code.OpNil)}}
+	p := &compiler.Bytecode{Constants: []value.Value{value.NewString("ok")}, Instructions: code.Instructions{byte(code.OpConstant), 0, 0, byte(code.OpChant), byte(code.OpMap)}}
 	_, err := CompileDarwinARM64WithM11Runtime(p)
 	if err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("unsupported instruction must fail: %v", err)

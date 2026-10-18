@@ -59,6 +59,48 @@ func m10Lsr(rd, rn, shift uint32) uint32 {
 }
 func m10Sub(rd, rn, rm uint32) uint32 { return 0xCB000000 | rm<<16 | rn<<5 | rd }
 
+// Free blocks are segregated by physical span. Heap[56] remains the 16-byte
+// bin for the historical ABI; larger bin heads live in telemetry words 32..62.
+// This prevents every small allocation from repeatedly walking millions of
+// undersized holes while retaining exact first-fit behavior within a class.
+func appendM10SizeClass(b *m8Assembler, size, class, scratch uint32, prefix string) {
+	thresholds := make([]uint64, 0, 31)
+	for limit := uint64(16); limit <= 256; limit += 16 {
+		thresholds = append(thresholds, limit)
+	}
+	thresholds = append(thresholds, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1<<20, 4<<20, 16<<20, 64<<20)
+	for i, limit := range thresholds {
+		b.emit(movzX(class, uint16(i)))
+		if limit <= 4095 {
+			b.emit(cmpImmX(size, uint32(limit)))
+		} else {
+			b.emit(m8MovBits(scratch, limit)...)
+			b.emit(m8Cmp(size, scratch))
+		}
+		b.bc(9, prefix+".done")
+	}
+	b.emit(movzX(class, 31))
+	b.label(prefix + ".done")
+}
+
+func appendM10LoadBinHead(b *m8Assembler, dst, heap, class, addr, scratch uint32, prefix string) {
+	b.cbnz(class, prefix+".telemetry")
+	b.emit(ldrX(dst, heap, 7))
+	b.b(prefix + ".done")
+	b.label(prefix + ".telemetry")
+	b.emit(ldrX(addr, heap, 2), subImmX(scratch, class, 1), m10Lsl(scratch, scratch, 3), addX(addr, addr, scratch), ldrX(dst, addr, m8TelFreeBin1))
+	b.label(prefix + ".done")
+}
+
+func appendM10StoreBinHead(b *m8Assembler, value, heap, class, addr, scratch uint32, prefix string) {
+	b.cbnz(class, prefix+".telemetry")
+	b.emit(strX(value, heap, 7))
+	b.b(prefix + ".done")
+	b.label(prefix + ".telemetry")
+	b.emit(ldrX(addr, heap, 2), subImmX(scratch, class, 1), m10Lsl(scratch, scratch, 3), addX(addr, addr, scratch), strX(value, addr, m8TelFreeBin1))
+	b.label(prefix + ".done")
+}
+
 func appendM10Collect(b *m8Assembler) {
 	b.label(m10CollectEntry)
 	// 64 字节栈帧保留 LR 与所有入参，验证后才能开始改写 Mark Flags。
@@ -128,13 +170,13 @@ func appendM10Sweep(b *m8Assembler) {
 
 	// 第一遍：只验证、不改写。回收前必须保证每一个物理块都能被安全遍历。
 	// 同时验证计数、类型与载荷大小，防止用错误的长度跨越 Heap 边界。
-	b.emit(movX(25, 22), movzX(26, 0))
+	b.emit(movX(25, 22), movzX(26, 0), movzX(27, 0))
 	b.label("m10.preflight.loop")
 	b.emit(m8Cmp(25, 23))
 	b.bc(0, "m10.preflight.end")
 	b.bc(8, "m10.sweep.fail")
 	b.emit(ldrX(10, 25, 1))
-	b.emit(movzX(14, 0), movkX(14, 16, 1), m8Cmp(10, 14)) // payloadSize <= 1 MiB
+	b.emit(ldrX(14, 19, 3), m8Cmp(10, 14)) // payloadSize <= configured heap capacity
 	b.bc(8, "m10.sweep.fail")
 	b.emit(addImmX(11, 10, 31), m8Movn(12, 15), m8And(11, 11, 12))
 	b.emit(addX(12, 25, 11), m8Cmp(12, 23))
@@ -161,9 +203,12 @@ func appendM10Sweep(b *m8Assembler) {
 	b.emit(m9LdrW(16, 14, 4), m8Cmp(10, 16))
 	b.bc(1, "m10.sweep.fail")
 	b.emit(addImmX(26, 26, 1))
+	b.emit(addX(27, 27, 11))
 	b.b("m10.preflight.next")
 	b.label("m10.preflight.dynamic")
 	b.emit(cmpImmX(9, M12StructTypeID))
+	b.bc(0, "m10.preflight.dynamic.variable")
+	b.emit(cmpImmX(9, M13EnumTypeID))
 	b.bc(0, "m10.preflight.dynamic.variable")
 	b.emit(cmpImmX(9, M12ArrayTypeID))
 	b.bc(0, "m10.preflight.dynamic.array")
@@ -174,25 +219,32 @@ func appendM10Sweep(b *m8Assembler) {
 	b.emit(cmpImmX(9, M15ClosureTypeID))
 	b.bc(0, "m10.preflight.dynamic.array")
 	b.emit(cmpImmX(9, M15CellTypeID))
+	b.bc(0, "m10.preflight.dynamic.word")
+	b.emit(cmpImmX(9, M13NullableTypeID))
 	b.bc(1, "m10.sweep.fail")
+	b.label("m10.preflight.dynamic.word")
 	b.emit(cmpImmX(10, 16))
 	b.bc(1, "m10.sweep.fail")
 	b.emit(addImmX(26, 26, 1))
+	b.emit(addX(27, 27, 11))
 	b.b("m10.preflight.next")
 	b.label("m10.preflight.dynamic.variable")
 	b.emit(cmpImmX(10, m12PayloadBase))
 	b.bc(3, "m10.sweep.fail")
 	b.emit(addImmX(26, 26, 1))
+	b.emit(addX(27, 27, 11))
 	b.b("m10.preflight.next")
 	b.label("m10.preflight.dynamic.array")
 	b.emit(cmpImmX(10, 48))
 	b.bc(1, "m10.sweep.fail")
 	b.emit(addImmX(26, 26, 1))
+	b.emit(addX(27, 27, 11))
 	b.b("m10.preflight.next")
 	b.label("m10.preflight.dynamic.environment")
 	b.emit(cmpImmX(10, 16))
 	b.bc(3, "m10.sweep.fail")
 	b.emit(addImmX(26, 26, 1))
+	b.emit(addX(27, 27, 11))
 	b.b("m10.preflight.next")
 	b.label("m10.preflight.free")
 	b.emit(movzX(14, 7), m8And(14, 13, 14), cmpImmX(14, M10FreeBit))
@@ -210,7 +262,7 @@ func appendM10Sweep(b *m8Assembler) {
 	b.label("m10.sweep.mutate")
 
 	// 第二遍：已标记对象保留；其余已分配对象转成 Free Block。
-	b.emit(movX(25, 22), movzX(24, 0))
+	b.emit(movX(25, 22), movzX(24, 0), movzX(20, 0))
 	b.label("m10.free.loop")
 	b.emit(m8Cmp(25, 23))
 	b.bc(0, "m10.free.end")
@@ -219,7 +271,7 @@ func appendM10Sweep(b *m8Assembler) {
 	b.emit(m9LdrW(10, 25, 4), cmpImmX(10, M9MarkBit|M9ScannedBit))
 	b.bc(0, "m10.free.keep")
 	b.emit(movzW(11, 0), m9StrW(11, 25, 0), movzW(11, uint16(M10FreeBit)), m9StrW(11, 25, 4))
-	b.emit(addImmX(24, 24, 1))
+	b.emit(ldrX(10, 25, 1), addImmX(10, 10, 31), m8Movn(11, 15), m8And(10, 10, 11), addX(20, 20, 10), addImmX(24, 24, 1))
 	b.b("m10.free.next")
 	b.label("m10.free.keep")
 	b.emit(movzW(11, 0), m9StrW(11, 25, 4))
@@ -228,10 +280,16 @@ func appendM10Sweep(b *m8Assembler) {
 	b.b("m10.free.loop")
 	b.label("m10.free.end")
 	b.emit(ldrX(9, 19, 5), m10Sub(9, 9, 24), strX(9, 19, 5))
+	b.emit(ldrX(9, 19, 2), strX(27, 9, m8TelLastBeforeBytes), m10Sub(10, 27, 20), strX(10, 9, m8TelLastAfterBytes))
+	b.emit(strX(24, 9, m8TelLastReclaimedObjects), strX(20, 9, m8TelLastReclaimedBytes))
 
-	// 第三遍：合并相邻空闲块，并重新建立相对地址链表（头插法）。
+	// 第三遍：合并相邻空闲块，并按物理跨度重建分级链表。
 	// 不借助操作系统额外内存，甚至 0 字节空闲对象也可以合并和复用。
-	b.emit(movzX(28, 0), movX(25, 22))
+	b.emit(movzX(28, 0), strX(28, 19, 7), ldrX(17, 19, 2))
+	for slot := uint32(m8TelFreeBin1); slot < m8TelFreeBin1+31; slot++ {
+		b.emit(strX(28, 17, slot))
+	}
+	b.emit(movX(25, 22))
 	b.label("m10.coalesce.loop")
 	b.emit(m8Cmp(25, 23))
 	b.bc(0, "m10.coalesce.end")
@@ -249,13 +307,16 @@ func appendM10Sweep(b *m8Assembler) {
 	b.b("m10.coalesce.merge")
 	b.label("m10.coalesce.store")
 	b.emit(subImmX(15, 14, 16), strX(15, 27, 1))
-	b.emit(m10Lsl(10, 28, 3), addImmX(10, 10, M10FreeBit), m9StrW(10, 27, 4))
-	b.emit(m10Sub(28, 27, 22), m10Lsr(28, 28, 4), addImmX(28, 28, 1))
+	appendM10SizeClass(b, 14, 16, 10, "m10.coalesce.class")
+	appendM10LoadBinHead(b, 17, 19, 16, 18, 10, "m10.coalesce.loadbin")
+	b.emit(m10Lsl(10, 17, 3), addImmX(10, 10, M10FreeBit), m9StrW(10, 27, 4))
+	b.emit(m10Sub(18, 27, 22), m10Lsr(18, 18, 4), addImmX(18, 18, 1))
+	appendM10StoreBinHead(b, 18, 19, 16, 17, 10, "m10.coalesce.storebin")
 	b.label("m10.coalesce.next")
 	b.emit(movX(25, 13))
 	b.b("m10.coalesce.loop")
 	b.label("m10.coalesce.end")
-	b.emit(strX(28, 19, 7), movX(0, 24))
+	b.emit(movX(0, 24))
 	b.b("m10.sweep.restore")
 	b.label("m10.sweep.fail")
 	b.emit(m8Movn(0, 0))
@@ -276,13 +337,23 @@ func appendM10Alloc(b *m8Assembler) {
 	b.emit(ldrX(9, 0, 3), m8Cmp(2, 9))
 	b.bc(8, "m10.alloc.fail")
 	b.emit(addImmX(3, 2, 31), m8Movn(9, 15), m8And(3, 3, 9)) // 最小占用16字节
-	b.emit(ldrX(4, 0, 7), movzX(6, 0), ldrX(10, 0, 6), ldrX(11, 0, 1))
-	b.emit(movzX(15, 0), movzX(14, 0), movkX(14, 1, 1)) // 最多遍历 65536 个索引
+	b.emit(ldrX(10, 0, 6), ldrX(11, 0, 1))
+	// The relative index is valid across the configured heap, not merely the
+	// historical 1 MiB default. The same derived bound limits corrupt cycles.
+	b.emit(ldrX(14, 0, 3), m10Lsr(14, 14, 4), addImmX(14, 14, 1), movzX(15, 0))
+	appendM10SizeClass(b, 3, 13, 9, "m10.alloc.class")
+	b.label("m10.alloc.bin")
+	appendM10LoadBinHead(b, 4, 0, 13, 9, 12, "m10.alloc.loadbin")
+	b.emit(movzX(6, 0))
 	b.label("m10.alloc.walk")
-	b.cbz(4, "m10.alloc.bump")
+	b.cbnz(4, "m10.alloc.block")
+	b.emit(addImmX(13, 13, 1), cmpImmX(13, 31))
+	b.bc(9, "m10.alloc.bin")
+	b.b("m10.alloc.bump")
+	b.label("m10.alloc.block")
 	b.emit(addImmX(15, 15, 1), m8Cmp(15, 14))
 	b.bc(8, "m10.alloc.fail")
-	b.emit(m8Cmp(4, 14)) // 索引不得超过 1MiB / 16 字节
+	b.emit(m8Cmp(4, 14)) // index <= configured capacity/16 + 1
 	b.bc(8, "m10.alloc.fail")
 	b.emit(subImmX(5, 4, 1), m10Lsl(5, 5, 4), addX(5, 10, 5))
 	b.emit(m8Cmp(5, 10)) // 相对地址计算不允许 64 位溢出
@@ -302,22 +373,27 @@ func appendM10Alloc(b *m8Assembler) {
 	b.emit(movX(6, 5), movX(4, 7))
 	b.b("m10.alloc.walk")
 	b.label("m10.alloc.found")
-	b.emit(m10Sub(13, 8, 3)) // 块长度与请求都已经对齐，剩余不可能是 1..15
-	b.cbz(13, "m10.alloc.exact")
-	b.emit(addX(14, 5, 3)) // split 后的空闲对象头
-	b.emit(subImmX(9, 13, 16), strX(9, 14, 1))
-	b.emit(movzW(9, 0), m9StrW(9, 14, 0))
-	b.emit(m10Lsl(9, 7, 3), addImmX(9, 9, M10FreeBit), m9StrW(9, 14, 4))
-	b.emit(m10Sub(9, 14, 10), m10Lsr(9, 9, 4), addImmX(7, 9, 1))
-	b.label("m10.alloc.exact")
-	b.cbz(6, "m10.alloc.head")
+	// Unlink from the source bin before a split potentially changes class.
+	b.emit(movX(16, 13))
+	b.cbz(6, "m10.alloc.unlink.head")
 	b.emit(m10Lsl(9, 7, 3), addImmX(9, 9, M10FreeBit), m9StrW(9, 6, 4))
 	b.b("m10.alloc.unlink.done")
-	b.label("m10.alloc.head")
-	b.emit(strX(7, 0, 7))
+	b.label("m10.alloc.unlink.head")
+	appendM10StoreBinHead(b, 7, 0, 16, 9, 12, "m10.alloc.unlink.storebin")
 	b.label("m10.alloc.unlink.done")
+	b.emit(m10Sub(12, 8, 3)) // aligned remainder span
+	b.cbz(12, "m10.alloc.commit")
+	b.emit(addX(14, 5, 3), subImmX(9, 12, 16), strX(9, 14, 1), movzW(9, 0), m9StrW(9, 14, 0))
+	appendM10SizeClass(b, 12, 13, 9, "m10.alloc.remainder.class")
+	appendM10LoadBinHead(b, 7, 0, 13, 9, 16, "m10.alloc.remainder.loadbin")
+	b.emit(m10Lsl(9, 7, 3), addImmX(9, 9, M10FreeBit), m9StrW(9, 14, 4))
+	b.emit(m10Sub(7, 14, 10), m10Lsr(7, 7, 4), addImmX(7, 7, 1))
+	appendM10StoreBinHead(b, 7, 0, 13, 9, 16, "m10.alloc.remainder.storebin")
+	b.label("m10.alloc.commit")
 	b.emit(strX(1, 5, 0), strX(2, 5, 1))
 	b.emit(ldrX(9, 0, 5), addImmX(9, 9, 1), strX(9, 0, 5))
+	b.emit(ldrX(9, 0, 2), ldrX(12, 9, m8TelAllocatedObjects), addImmX(12, 12, 1), strX(12, 9, m8TelAllocatedObjects))
+	b.emit(ldrX(12, 9, m8TelAllocatedBytes), addX(12, 12, 3), strX(12, 9, m8TelAllocatedBytes))
 	b.emit(addImmX(0, 5, M8ObjectHeaderSize), subImmX(8, 3, 16))
 	// 重新使用旧块前清零全部载荷及填充字节，防止旧引用残留。
 	b.emit(movX(9, 0))

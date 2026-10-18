@@ -115,7 +115,7 @@ func TestM7StringCallLinkedAndAddressResolved(t *testing.T) {
 	}
 }
 
-func TestM7StringSectionOverflowRejected(t *testing.T) {
+func TestM7StringSectionExtendsTextSegment(t *testing.T) {
 	e, err := NewStackEmitter(0, 0, 0, 1, false)
 	if err != nil {
 		t.Fatal(err)
@@ -126,9 +126,17 @@ func TestM7StringSectionOverflowRejected(t *testing.T) {
 	if err := e.ChantString(); err != nil {
 		t.Fatal(err)
 	}
-	_, err = e.FinishWithFunctionsAndStrings(nil, []string{strings.Repeat("a", 16000)})
-	if err == nil || !strings.Contains(err.Error(), "__const") {
-		t.Fatalf("expected __const overflow, got %v", err)
+	image, err := e.FinishWithFunctionsAndStrings(nil, []string{strings.Repeat("a", 16000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := macho.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, ro := m.Segment("__TEXT"), m.Section("__const")
+	if text == nil || text.Memsz <= pageSize || ro == nil || uint64(ro.Offset)+ro.Size <= pageSize {
+		t.Fatalf("expected multi-page __TEXT,__const layout: text=%#v const=%#v", text, ro)
 	}
 }
 

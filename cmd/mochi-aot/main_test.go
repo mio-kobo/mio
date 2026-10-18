@@ -2,28 +2,26 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"Mio/internal/aot/bootstrapaudit"
 	"Mio/internal/code"
 	"Mio/internal/compiler"
 	"Mio/internal/mochi"
 	"Mio/internal/value"
 )
 
-func TestRunReportsAndStrictMode(t *testing.T) {
+func TestRunWritesNativeExecutable(t *testing.T) {
 	dir := t.TempDir()
-	input := filepath.Join(dir, "compiler-A.mochi")
-	output := filepath.Join(dir, "audit.json")
+	input := filepath.Join(dir, "program.mochi")
+	output := filepath.Join(dir, "program")
 	f, e := os.Create(input)
 	if e != nil {
 		t.Fatal(e)
 	}
-	program := &compiler.Bytecode{Constants: []value.Value{value.NewInt(42)}, Instructions: code.Instructions{byte(code.OpConstant), 0, 0, byte(code.OpChant), byte(code.OpNil)}}
+	program := &compiler.Bytecode{Constants: []value.Value{value.NewInt(42)}, Instructions: code.Instructions{byte(code.OpConstant), 0, 0, byte(code.OpChant)}}
 	if e = mochi.Encode(f, program); e != nil {
 		f.Close()
 		t.Fatal(e)
@@ -32,37 +30,42 @@ func TestRunReportsAndStrictMode(t *testing.T) {
 		t.Fatal(e)
 	}
 	var stdout, stderr bytes.Buffer
-	status := run([]string{"-in", input, "-json", output, "-top", "3"}, &stdout, &stderr)
+	status := run([]string{"-o", output, input}, &stdout, &stderr)
 	if status != 0 {
 		t.Fatalf("status=%d stderr=%s", status, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "OpNil") || !strings.Contains(stdout.String(), "OpConstant") {
+	if !strings.Contains(stdout.String(), "wrote "+output) {
 		t.Fatalf("unexpected stdout:\n%s", stdout.String())
 	}
 	content, e := os.ReadFile(output)
 	if e != nil {
 		t.Fatal(e)
 	}
-	var report bootstrapaudit.Report
-	if e = json.Unmarshal(content, &report); e != nil {
-		t.Fatal(e)
+	if len(content) < 4 || !bytes.Equal(content[:4], []byte{0xcf, 0xfa, 0xed, 0xfe}) {
+		t.Fatalf("output is not a Mach-O image: %x", content[:min(4, len(content))])
 	}
-	if report.TotalInstructions != 3 || report.MissingInstructions != 1 || report.SourceSHA256 == "" {
-		t.Fatalf("report: %+v", report)
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := run([]string{"-in", input, "-json", "", "-strict"}, &stdout, &stderr); code != 3 {
-		t.Fatalf("strict exit=%d", code)
+	info, e := os.Stat(output)
+	if e != nil || info.Mode()&0o111 == 0 {
+		t.Fatalf("output is not executable: info=%v err=%v", info, e)
 	}
 }
 
 func TestRunRejectsUnavailableFile(t *testing.T) {
 	var out, err bytes.Buffer
-	if code := run([]string{"-in", filepath.Join(t.TempDir(), "absent.mochi"), "-json", ""}, &out, &err); code != 1 {
+	if code := run([]string{"-o", filepath.Join(t.TempDir(), "out"), filepath.Join(t.TempDir(), "absent.mochi")}, &out, &err); code != 1 {
 		t.Fatalf("missing file returned %d", code)
 	}
-	if !strings.Contains(err.String(), "读取失败") {
+	if !strings.Contains(err.String(), "open input") {
 		t.Fatalf("unexpected stderr: %s", err.String())
+	}
+}
+
+func TestRunRejectsHeapOutsideHardLimit(t *testing.T) {
+	var out, stderr bytes.Buffer
+	if status := run([]string{"-heap-mib", "1025", "-o", filepath.Join(t.TempDir(), "out"), "unused.mochi"}, &out, &stderr); status != 1 {
+		t.Fatalf("status=%d stderr=%q", status, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "between 1 and 1024") {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }

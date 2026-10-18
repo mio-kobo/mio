@@ -153,12 +153,14 @@ func (e *StackEmitter) CallClosure(parameters int, returns bool) error {
 	}
 	base := e.depth - parameters - 1
 	e.loadOperand(base, 9)
+	e.words = append(e.words, cbnzX(9, len(e.words), len(e.words)+2))
 	e.closureZeroSites = append(e.closureZeroSites, len(e.words))
 	e.words = append(e.words, 0, ldrX(10, 9, 0), cmpImmX(10, m15ClosureKind))
-	e.trapSites = append(e.trapSites, m6TrapSite{word: len(e.words), cond: 1}) // NE
-	e.words = append(e.words, 0, ldrX(10, 9, 2), cmpImmX(10, uint32(parameters)))
-	e.trapSites = append(e.trapSites, m6TrapSite{word: len(e.words), cond: 1})
-	e.words = append(e.words, 0, addImmX(22, 22, 1), cmpImmX(22, MaxM4CallDepth))
+	e.m6TrapIf(1) // NE
+	e.words = append(e.words, ldrX(10, 9, 2), cmpImmX(10, uint32(parameters)))
+	e.m6TrapIf(1)
+	e.words = append(e.words, addImmX(22, 22, 1), cmpImmX(22, MaxM4CallDepth))
+	e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, 9)) // LS skips long branch
 	e.overflowSites = append(e.overflowSites, len(e.words))
 	e.words = append(e.words, 0)
 

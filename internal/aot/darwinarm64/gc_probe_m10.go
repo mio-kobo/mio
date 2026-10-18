@@ -6,7 +6,7 @@ import "fmt"
 // 该原生自检与标准 Mochi Opcode 分开，仍不自动扫描普通 Mio 程序中的 Stack Frame。
 func M10GCProbe(mode string) ([]byte, error) {
 	switch mode {
-	case "smoke", "cycles", "split", "coalesce", "reset", "badtype", "badsize", "badlink", "oom", "interior", "stress", "holes", "zerobyte", "stale":
+	case "smoke", "cycles", "split", "coalesce", "reset", "badtype", "badsize", "badlink", "oom", "interior", "stress", "holes", "zerobyte", "stale", "largeindex":
 	default:
 		return nil, fmt.Errorf("unknown M10 probe %q", mode)
 	}
@@ -77,6 +77,8 @@ func M10GCProbe(mode string) ([]byte, error) {
 	b.emit(movzX(0, 4096))
 	if mode == "oom" {
 		b.emit(movzX(0, 64))
+	} else if mode == "largeindex" {
+		b.emit(m8MovBits(0, 2<<20)...)
 	}
 	b.bl(m8InitLabel)
 	checkNonZero(0)
@@ -85,6 +87,20 @@ func M10GCProbe(mode string) ([]byte, error) {
 	b.emit(movzX(9, 0), strX(9, 28, 0), strX(9, 28, 1))
 
 	switch mode {
+	case "largeindex":
+		// A valid free block beyond the historical 1 MiB index boundary must
+		// remain addressable when the configured heap is larger.
+		b.emit(ldrX(20, 19, 6))
+		b.emit(m8MovBits(9, 1<<20)...)
+		b.emit(addX(21, 20, 9), movzW(9, 0), m9StrW(9, 21, 0), movzW(9, uint16(M10FreeBit)), m9StrW(9, 21, 4), movzX(9, 16), strX(9, 21, 1))
+		b.emit(addImmX(9, 21, 32), strX(9, 19, 1))
+		b.emit(m8MovBits(9, (1<<20)/16+1)...)
+		b.emit(ldrX(10, 19, 2), strX(9, 10, m8TelFreeBin1))
+		alloc(22, 13, 16)
+		b.emit(addImmX(9, 21, 16))
+		checkEq(22, 9)
+		checkCount(1)
+
 	case "smoke":
 		alloc(20, 11, 16) // A->B
 		alloc(21, 11, 16) // B
@@ -96,7 +112,7 @@ func M10GCProbe(mode string) ([]byte, error) {
 		checkCount(2)
 		b.emit(ldrX(10, 20, 0))
 		checkEq(10, 21)
-		b.emit(ldrX(10, 19, 7))
+		b.emit(ldrX(9, 19, 2), ldrX(10, 9, m8TelFreeBin1))
 		checkNonZero(10)
 		alloc(23, 13, 16)
 		checkEq(23, 22)
@@ -212,7 +228,7 @@ func M10GCProbe(mode string) ([]byte, error) {
 		collect() // 整块变为 free，且有可复用的链表头。
 		checkInt(0, 1)
 		b.emit(ldrX(27, 19, 1))
-		b.emit(movzX(9, 0), movkX(9, 2, 1), strX(9, 19, 7)) // 131072 > 1 MiB/16
+		b.emit(ldrX(10, 19, 2), movzX(9, 0), movkX(9, 2, 1), strX(9, 10, m8TelFreeBin1)) // 131072 > 1 MiB/16
 		b.emit(movX(0, 19), movzX(1, 13), movzX(2, 16))
 		b.bl(m10AllocEntry)
 		checkZero(0)

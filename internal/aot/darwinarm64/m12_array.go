@@ -9,6 +9,7 @@ const (
 	m12ArrayTruncateLabel     = "m12.array.truncate"
 	m12ArrayAppendAllLabel    = "m12.array.append_all"
 	m12StorageAllocLabel      = "m12.array.storage"
+	m12UTF8ValidLabel         = "m13c.utf8.valid"
 )
 
 func m12Or(dst, left, right uint32) uint32 {
@@ -24,6 +25,7 @@ func appendM12ArrayRuntime(b *m8Assembler, allocLabel string) {
 	appendM12ArrayClone(b, allocLabel)
 	appendM12ArrayTruncate(b)
 	appendM12ArrayAppendAll(b)
+	appendM13UTF8Valid(b)
 }
 
 // storage(heap, capacity, width, reference) 分配并清零完整 backing storage。
@@ -328,8 +330,102 @@ func appendM12ArrayAppendAll(b *m8Assembler) {
 	b.emit(ldrX(30, 31, 0), addImmX(31, 31, 80), m8Ret())
 }
 
+// utf8.valid(array) validates compact []uint8 storage without allocating.
+func appendM13UTF8Valid(b *m8Assembler) {
+	b.label(m12UTF8ValidLabel)
+	b.cbz(0, "m13c.utf8.invalid")
+	b.emit(ldrX(9, 0, 1), ldrX(10, 0, 5), addImmX(11, 10, m12PayloadBase), addX(12, 11, 9))
+	b.label("m13c.utf8.loop")
+	b.emit(m8Cmp(11, 12))
+	b.bc(2, "m13c.utf8.success")
+	b.bc(8, "m13c.utf8.invalid")
+	b.emit(m8LdrB(13, 11), cmpImmX(13, 0x80))
+	b.bc(3, "m13c.utf8.ascii")
+	b.emit(cmpImmX(13, 0xc2))
+	b.bc(3, "m13c.utf8.invalid")
+	b.emit(cmpImmX(13, 0xdf))
+	b.bc(9, "m13c.utf8.two")
+	b.emit(cmpImmX(13, 0xef))
+	b.bc(9, "m13c.utf8.three")
+	b.emit(cmpImmX(13, 0xf4))
+	b.bc(9, "m13c.utf8.four")
+	b.b("m13c.utf8.invalid")
+
+	b.label("m13c.utf8.ascii")
+	b.emit(addImmX(11, 11, 1))
+	b.b("m13c.utf8.loop")
+
+	b.label("m13c.utf8.two")
+	b.emit(addImmX(14, 11, 2), m8Cmp(14, 12))
+	b.bc(8, "m13c.utf8.invalid")
+	b.emit(addImmX(14, 11, 1), m8LdrB(14, 14), movzX(15, 0xc0), m8And(14, 14, 15), cmpImmX(14, 0x80))
+	b.bc(1, "m13c.utf8.invalid")
+	b.emit(addImmX(11, 11, 2))
+	b.b("m13c.utf8.loop")
+
+	b.label("m13c.utf8.three")
+	b.emit(addImmX(14, 11, 3), m8Cmp(14, 12))
+	b.bc(8, "m13c.utf8.invalid")
+	b.emit(addImmX(14, 11, 1), m8LdrB(14, 14))
+	b.emit(cmpImmX(13, 0xe0))
+	b.bc(0, "m13c.utf8.e0")
+	b.emit(cmpImmX(13, 0xed))
+	b.bc(0, "m13c.utf8.ed")
+	b.b("m13c.utf8.second.cont")
+	b.label("m13c.utf8.e0")
+	b.emit(cmpImmX(14, 0xa0))
+	b.bc(3, "m13c.utf8.invalid")
+	b.b("m13c.utf8.third")
+	b.label("m13c.utf8.ed")
+	b.emit(cmpImmX(14, 0x9f))
+	b.bc(8, "m13c.utf8.invalid")
+	b.b("m13c.utf8.third")
+	b.label("m13c.utf8.second.cont")
+	b.emit(movzX(15, 0xc0), m8And(14, 14, 15), cmpImmX(14, 0x80))
+	b.bc(1, "m13c.utf8.invalid")
+	b.label("m13c.utf8.third")
+	b.emit(addImmX(14, 11, 2), m8LdrB(14, 14), movzX(15, 0xc0), m8And(14, 14, 15), cmpImmX(14, 0x80))
+	b.bc(1, "m13c.utf8.invalid")
+	b.emit(addImmX(11, 11, 3))
+	b.b("m13c.utf8.loop")
+
+	b.label("m13c.utf8.four")
+	b.emit(addImmX(14, 11, 4), m8Cmp(14, 12))
+	b.bc(8, "m13c.utf8.invalid")
+	b.emit(addImmX(14, 11, 1), m8LdrB(14, 14))
+	b.emit(cmpImmX(13, 0xf0))
+	b.bc(0, "m13c.utf8.f0")
+	b.emit(cmpImmX(13, 0xf4))
+	b.bc(0, "m13c.utf8.f4")
+	b.b("m13c.utf8.four.second.cont")
+	b.label("m13c.utf8.f0")
+	b.emit(cmpImmX(14, 0x90))
+	b.bc(3, "m13c.utf8.invalid")
+	b.b("m13c.utf8.four.tail")
+	b.label("m13c.utf8.f4")
+	b.emit(cmpImmX(14, 0x8f))
+	b.bc(8, "m13c.utf8.invalid")
+	b.b("m13c.utf8.four.tail")
+	b.label("m13c.utf8.four.second.cont")
+	b.emit(movzX(15, 0xc0), m8And(14, 14, 15), cmpImmX(14, 0x80))
+	b.bc(1, "m13c.utf8.invalid")
+	b.label("m13c.utf8.four.tail")
+	for offset := uint32(2); offset <= 3; offset++ {
+		b.emit(addImmX(14, 11, offset), m8LdrB(14, 14), movzX(15, 0xc0), m8And(14, 14, 15), cmpImmX(14, 0x80))
+		b.bc(1, "m13c.utf8.invalid")
+	}
+	b.emit(addImmX(11, 11, 4))
+	b.b("m13c.utf8.loop")
+
+	b.label("m13c.utf8.success")
+	b.emit(movzX(0, 1), m8Ret())
+	b.label("m13c.utf8.invalid")
+	b.emit(movzX(0, 0), m8Ret())
+}
+
 type M12RuntimeEntries struct {
 	M8RuntimeEntries
+	Telemetry         int
 	ArrayMake         int
 	ArrayWithCapacity int
 	ArrayPush         int
@@ -337,6 +433,7 @@ type M12RuntimeEntries struct {
 	ArrayClone        int
 	ArrayTruncate     int
 	ArrayAppendAll    int
+	UTF8Valid         int
 }
 
 // M12ArrayRuntimeWords 将数组 helper 与同一份 M8 Allocator 一次链接。
@@ -353,6 +450,7 @@ func M12ArrayRuntimeWords() ([]uint32, M12RuntimeEntries, error) {
 		ArrayMake:        b.labels[m12ArrayMakeLabel], ArrayWithCapacity: b.labels[m12ArrayWithCapacityLabel],
 		ArrayPush: b.labels[m12ArrayPushLabel], ArrayReserve: b.labels[m12ArrayReserveLabel],
 		ArrayClone: b.labels[m12ArrayCloneLabel], ArrayTruncate: b.labels[m12ArrayTruncateLabel], ArrayAppendAll: b.labels[m12ArrayAppendAllLabel],
+		UTF8Valid: b.labels[m12UTF8ValidLabel],
 	}, nil
 }
 
@@ -361,6 +459,7 @@ func M12ArrayRuntimeWords() ([]uint32, M12RuntimeEntries, error) {
 // allocator probes.
 func M12ArrayGCRuntimeWords(stress bool) ([]uint32, M12RuntimeEntries, error) {
 	b := newM8Assembler()
+	appendM8TelemetryRuntime(b)
 	appendM12ArrayRuntime(b, m11AutoAllocEntry)
 	appendM11ObjectRuntime(b, stress)
 	appendM10Sweep(b)
@@ -372,16 +471,18 @@ func M12ArrayGCRuntimeWords(stress bool) ([]uint32, M12RuntimeEntries, error) {
 	}
 	return words, M12RuntimeEntries{
 		M8RuntimeEntries: M8RuntimeEntries{Init: b.labels[m8InitLabel], Alloc: b.labels[m11AutoAllocEntry], Destroy: b.labels[m8DestroyLabel]},
+		Telemetry:        b.labels[m8TelemetryEntry],
 		ArrayMake:        b.labels[m12ArrayMakeLabel], ArrayWithCapacity: b.labels[m12ArrayWithCapacityLabel],
 		ArrayPush: b.labels[m12ArrayPushLabel], ArrayReserve: b.labels[m12ArrayReserveLabel],
 		ArrayClone: b.labels[m12ArrayCloneLabel], ArrayTruncate: b.labels[m12ArrayTruncateLabel], ArrayAppendAll: b.labels[m12ArrayAppendAllLabel],
+		UTF8Valid: b.labels[m12UTF8ValidLabel],
 	}, nil
 }
 
 // M12ArrayProbe 在原生进程中验证扩容提交、引用位图和失败原子性。
 func M12ArrayProbe() ([]byte, error) {
 	b := newM8Assembler()
-	b.emit(m8MovBits(0, M8MaxHeapCapacity)...)
+	b.emit(m8MovBits(0, M8DefaultHeapCapacity)...)
 	b.bl(m8InitLabel)
 	b.cbz(0, "probe.fail")
 	b.emit(movX(19, 0))

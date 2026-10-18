@@ -40,6 +40,10 @@ func appendM11AutoAlloc(b *m8Assembler, stress bool) {
 		b.emit(ldrX(0, 31, 1), ldrX(1, 31, 2), ldrX(2, 31, 3))
 		b.bl(m10AllocEntry)
 	}
+	b.cbnz(0, "m11.auto.done")
+	// Preserve the physical request that actually exhausted both bump and free
+	// allocation paths. This is available even when the payload is only zero.
+	b.emit(ldrX(9, 31, 3), addImmX(9, 9, 31), m8Movn(10, 15), m8And(9, 9, 10), ldrX(10, 31, 1), ldrX(10, 10, 2), strX(9, 10, m8TelOOMRequestBytes))
 	b.b("m11.auto.done")
 	b.label("m11.auto.fail")
 	b.emit(movzX(0, 0))
@@ -50,12 +54,20 @@ func appendM11AutoAlloc(b *m8Assembler, stress bool) {
 func appendM11ObjectCollect(b *m8Assembler) {
 	b.label(m11ObjectCollectEntry)
 	b.emit(subImmX(31, 31, 32), strX(30, 31, 0), strX(0, 31, 1), strX(1, 31, 2))
+	b.emit(mrsCNTVCT(9), strX(9, 31, 3))
 	b.bl(m11ObjectMarkEntry)
 	b.emit(m8Movn(9, 0), m8Cmp(0, 9))
 	b.bc(0, "m11.collect.done")
 	b.emit(ldrX(0, 31, 1), movzX(1, 0), movzX(2, 0))
 	b.bl(m10SweepEntry)
 	b.label("m11.collect.done")
+	// Record time without allocating or calling into managed code. CNTVCT is a
+	// monotonic user-accessible ARM64 counter; the matching frequency is stored
+	// so diagnostics can report an exact duration.
+	b.emit(movX(10, 0), mrsCNTVCT(9), ldrX(11, 31, 3), m10Sub(9, 9, 11), ldrX(11, 31, 1), ldrX(12, 11, 2))
+	b.emit(ldrX(13, 12, m8TelGCCount), addImmX(13, 13, 1), strX(13, 12, m8TelGCCount))
+	b.emit(strX(9, 12, m8TelLastGCTicks), ldrX(13, 12, m8TelTotalGCTicks), addX(13, 13, 9), strX(13, 12, m8TelTotalGCTicks))
+	b.emit(mrsCNTFRQ(13), strX(13, 12, m8TelTimerFrequency), movX(0, 10))
 	b.emit(ldrX(30, 31, 0), addImmX(31, 31, 32), m8Ret())
 }
 
@@ -121,10 +133,10 @@ func appendM11ObjectMark(b *m8Assembler) {
 
 	// Fixed-point scan. Dynamic M12 layouts carry their exact reference bitmap.
 	b.label("m11.scan.begin")
-	b.emit(movX(25, 21))
+	b.emit(strX(23, 31, 11), movX(25, 21))
 	b.label("m11.scan.loop")
 	b.emit(m8Cmp(25, 22))
-	b.bc(2, "m11.mark.success")
+	b.bc(2, "m11.scan.end")
 	b.emit(m9LdrW(9, 25, 4), cmpImmX(9, M9MarkBit))
 	b.bc(1, "m11.scan.next")
 	b.emit(movzW(9, M9MarkBit|M9ScannedBit), m9StrW(9, 25, 4), m9LdrW(10, 25, 0), addImmX(17, 25, M8ObjectHeaderSize), ldrX(15, 25, 1))
@@ -140,6 +152,10 @@ func appendM11ObjectMark(b *m8Assembler) {
 	b.bc(0, "m11.scan.environment")
 	b.emit(cmpImmX(10, M15CellTypeID))
 	b.bc(0, "m11.scan.cell")
+	b.emit(cmpImmX(10, M13NullableTypeID))
+	b.bc(0, "m11.scan.nullable")
+	b.emit(cmpImmX(10, M13EnumTypeID))
+	b.bc(0, "m11.scan.enum")
 	b.b("m11.mark.fail")
 
 	b.label("m11.scan.struct")
@@ -168,7 +184,8 @@ func appendM11ObjectMark(b *m8Assembler) {
 	b.emit(m10Lsl(9, 28, 3), addX(9, 14, 9), ldrX(0, 9, 0))
 	b.bl(m11TryMarkEntry)
 	b.label("m11.struct.next")
-	b.emit(addImmX(28, 28, 1))
+	// trymark uses x9-x12; rebuild the bitmap base before the next field.
+	b.emit(addImmX(12, 17, m12PayloadBase), addImmX(28, 28, 1))
 	b.b("m11.struct.field")
 
 	b.label("m11.scan.array")
@@ -255,11 +272,49 @@ func appendM11ObjectMark(b *m8Assembler) {
 	b.bl(m11TryMarkEntry)
 	b.b("m11.scan.restart")
 
+	b.label("m11.scan.nullable")
+	b.emit(cmpImmX(15, 16))
+	b.bc(1, "m11.mark.fail")
+	b.emit(ldrX(9, 17, 0), cmpImmX(9, m13NullableKind))
+	b.bc(1, "m11.mark.fail")
+	b.b("m11.scan.restart")
+
+	b.label("m11.scan.enum")
+	b.emit(cmpImmX(15, m12PayloadBase))
+	b.bc(3, "m11.mark.fail")
+	b.emit(ldrX(9, 17, 0), cmpImmX(9, m13EnumKind))
+	b.bc(1, "m11.mark.fail")
+	b.emit(ldrX(26, 17, 2), ldrX(27, 17, 3))
+	b.emit(m8MovBits(9, uint64(M8MaxHeapCapacity/8))...)
+	b.emit(m8Cmp(26, 9))
+	b.bc(8, "m11.mark.fail")
+	// bitmapWords == ceil(payloadCount/64).
+	b.emit(addImmX(9, 26, 63), m10Lsr(9, 9, 6), m8Cmp(9, 27))
+	b.bc(1, "m11.mark.fail")
+	// required = 32 + bitmapWords*8 + payloadCount*8 <= payload.
+	b.emit(addX(10, 27, 26), m10Lsl(10, 10, 3), addImmX(10, 10, m12PayloadBase), m8Cmp(10, 15))
+	b.bc(8, "m11.mark.fail")
+	b.emit(m10Lsl(9, 27, 3), addImmX(12, 17, m12PayloadBase), addX(14, 12, 9), movzX(28, 0))
+	b.label("m11.enum.value")
+	b.emit(m8Cmp(28, 26))
+	b.bc(2, "m11.scan.restart")
+	b.emit(m10Lsr(9, 28, 6), m10Lsl(9, 9, 3), addX(9, 12, 9), ldrX(10, 9, 0), movzX(11, 63), m8And(11, 28, 11), m11Lsrv(10, 10, 11), movzX(11, 1), m8And(10, 10, 11))
+	b.cbz(10, "m11.enum.next")
+	b.emit(m10Lsl(9, 28, 3), addX(9, 14, 9), ldrX(0, 9, 0))
+	b.bl(m11TryMarkEntry)
+	b.label("m11.enum.next")
+	// trymark uses x9-x12; rebuild the bitmap base before the next payload.
+	b.emit(addImmX(12, 17, m12PayloadBase), addImmX(28, 28, 1))
+	b.b("m11.enum.value")
+
 	b.label("m11.scan.restart")
-	b.b("m11.scan.begin")
+	b.b("m11.scan.next")
 	b.label("m11.scan.next")
 	b.emit(ldrX(9, 25, 1), addImmX(9, 9, 31), m8Movn(10, 15), m8And(9, 9, 10), addX(25, 25, 9))
 	b.b("m11.scan.loop")
+	b.label("m11.scan.end")
+	b.emit(ldrX(9, 31, 11), m8Cmp(9, 23))
+	b.bc(1, "m11.scan.begin")
 	b.label("m11.mark.success")
 	b.emit(movX(0, 23))
 	b.b("m11.mark.restore")
@@ -272,17 +327,25 @@ func appendM11ObjectMark(b *m8Assembler) {
 	// start. Interior pointers, integers and stale free-block addresses are ignored.
 	b.label(m11TryMarkEntry)
 	b.cbz(0, "m11.try.done")
-	b.emit(movX(9, 21))
-	b.label("m11.try.loop")
-	b.emit(m8Cmp(9, 22))
-	b.bc(2, "m11.try.done")
-	b.emit(addImmX(10, 9, M8ObjectHeaderSize), m8Cmp(10, 0))
-	b.bc(0, "m11.try.hit")
-	b.emit(ldrX(11, 9, 1), addImmX(11, 11, 31), m8Movn(12, 15), m8And(11, 11, 12), addX(9, 9, 11))
-	b.b("m11.try.loop")
-	b.label("m11.try.hit")
+	// Reject tagged static strings, scalar-looking values and stale pointers in
+	// O(1) before the exact-start scan. Without this guard every small tagged
+	// string root would walk the entire multi-million-object heap.
+	b.emit(addImmX(10, 21, M8ObjectHeaderSize), m8Cmp(0, 10))
+	b.bc(3, "m11.try.done") // LO
+	b.emit(m8Cmp(0, 22))
+	b.bc(2, "m11.try.done") // HS
+	// Precise root maps only contain object references. Validate their canonical
+	// payload alignment and complete header/span in O(1); free blocks have type 0.
+	b.emit(subImmX(9, 0, M8ObjectHeaderSize), m10Sub(10, 9, 21), movzX(11, 15), m8And(10, 10, 11), cmpZeroX(10))
+	b.bc(1, "m11.try.done")
 	b.emit(m9LdrW(10, 9, 0))
 	b.cbz(10, "m11.try.done")
+	b.emit(ldrX(11, 9, 1))
+	b.emit(m8MovBits(12, M8MaxHeapCapacity)...)
+	b.emit(m8Cmp(11, 12))
+	b.bc(8, "m11.try.done")
+	b.emit(addImmX(11, 11, 31), m8Movn(12, 15), m8And(11, 11, 12), addX(11, 9, 11), m8Cmp(11, 22))
+	b.bc(8, "m11.try.done")
 	b.emit(m9LdrW(10, 9, 4))
 	b.cbnz(10, "m11.try.done")
 	b.emit(movzW(10, M9MarkBit), m9StrW(10, 9, 4), addImmX(23, 23, 1))

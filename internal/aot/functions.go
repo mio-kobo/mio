@@ -48,14 +48,16 @@ func decodeM4Block(source code.Instructions) ([]m3Instruction, map[int]int, erro
 			code.OpJump, code.OpJumpIfFalse, code.OpChant, code.OpPop,
 			code.OpGetLocal, code.OpSetLocal, code.OpDefineLocal, code.OpCall, code.OpReturn, code.OpReturnValue,
 			code.OpIntToFloat, code.OpFloatToInt, code.OpIntToFloat32, code.OpFloat32ToInt,
-			code.OpFloat32ToFloat64, code.OpFloat64ToFloat32,
+			code.OpFloat32ToFloat64, code.OpFloat64ToFloat32, code.OpIntegerConvert, code.OpMath, code.OpDataConvert,
 			code.OpArray, code.OpArrayTyped, code.OpIndex, code.OpLen, code.OpSetIndex,
 			code.OpArrayMake, code.OpArrayWithCapacity, code.OpArrayPush,
 			code.OpArrayCapacity, code.OpArrayReserve, code.OpArrayClone,
 			code.OpArrayTruncate, code.OpArrayAppendAll,
 			code.OpStruct, code.OpGetField,
+			code.OpEnum, code.OpEnumTag, code.OpGetEnumValue,
 			code.OpFunction, code.OpClosure, code.OpCallValue,
-			code.OpGetUpvalue, code.OpSetUpvalue, code.OpNil:
+			code.OpGetUpvalue, code.OpSetUpvalue, code.OpNil, code.OpIsNil,
+			code.OpSetNullableIndex:
 		default:
 			return nil, nil, fmt.Errorf("AOT M4 unsupported opcode %s at byte offset %d", def.Name, pos)
 		}

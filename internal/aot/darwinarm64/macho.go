@@ -74,9 +74,7 @@ func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, consta
 	hasData := globalsCount != 0
 	hasConst := len(constants) != 0
 	constOffset := (entryOffset + codeSize + 7) &^ 7
-	if hasConst && (constOffset > pageSize || uint64(len(constants)) > pageSize-constOffset) {
-		return nil, fmt.Errorf("AOT M7 __const data does not fit in the __TEXT page")
-	}
+	textSize := textSegmentSize(codeSize, uint64(len(constants)))
 
 	commands := make([]byte, 0, 768)
 	ncmds := uint32(0)
@@ -90,8 +88,8 @@ func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, consta
 	// __TEXT 包含 Mach-O 头、Load Commands 和原生机器码。
 	textCmdStart := len(commands)
 	commands = appendSegment(commands, segment{
-		name: "__TEXT", vmaddr: textVMAddr, vmsize: pageSize,
-		fileoff: 0, filesize: pageSize,
+		name: "__TEXT", vmaddr: textVMAddr, vmsize: textSize,
+		fileoff: 0, filesize: textSize,
 		maxprot:  vmProtRead | vmProtExecute,
 		initprot: vmProtRead | vmProtExecute,
 	}, true, codeSize)
@@ -105,10 +103,10 @@ func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, consta
 
 	// M2 只在确实存在全局槽位时，才创建可写的 __DATA 页。
 	// __data 段为文件映射，保证下游 codesign 可以覆盖全部数据页。
-	linkeditFileOff := pageSize
-	linkeditVMAddr := textVMAddr + pageSize
+	linkeditFileOff := textSize
+	linkeditVMAddr := textVMAddr + textSize
 	if hasData {
-		commands = appendDataSegment(commands, globalsCount)
+		commands = appendDataSegment(commands, globalsCount, textSize)
 		ncmds++
 		linkeditFileOff += pageSize
 		linkeditVMAddr += pageSize
@@ -149,12 +147,9 @@ func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, consta
 	if headerSize+len(commands)+16 > int(entryOffset) {
 		return nil, fmt.Errorf("mach-o load commands encroach on the entrypoint")
 	}
-	if entryOffset+codeSize > pageSize {
-		return nil, fmt.Errorf("arm64 code does not fit in the __TEXT segment")
-	}
-
-	// M0/M1 仍保持 16 KiB；M2 含全局变量时多一页 __DATA，共 32 KiB。
-	fileSize := pageSize
+	// Small programs retain the original one-page fast path. Larger code and
+	// constants extend __TEXT by whole 16 KiB Apple Silicon pages.
+	fileSize := textSize
 	if hasData {
 		fileSize += pageSize
 	}
@@ -181,10 +176,10 @@ func ExecutableWordsWithGlobalsAndConst(words []uint32, globalsCount int, consta
 
 // appendDataSegment 编码单页可写的 __DATA 与 __data Section。
 // 只记录实际使用的全局槽位尺寸，其余空间保留作为页内填充。
-func appendDataSegment(dst []byte, slots int) []byte {
+func appendDataSegment(dst []byte, slots int, textSize uint64) []byte {
 	const cmdSize = 72 + 80
-	const dataFileOff = pageSize
-	const dataVMAddr = textVMAddr + pageSize
+	dataFileOff := textSize
+	dataVMAddr := textVMAddr + textSize
 	dst = appendU32(dst, lcSegment64)
 	dst = appendU32(dst, cmdSize)
 	dst = appendName16(dst, "__DATA")
@@ -207,6 +202,18 @@ func appendDataSegment(dst []byte, slots int) []byte {
 		dst = appendU32(dst, 0)
 	}
 	return dst
+}
+
+func textSegmentSize(codeSize, constSize uint64) uint64 {
+	end := entryOffset + codeSize
+	if constSize != 0 {
+		end = (end + 7) &^ 7
+		end += constSize
+	}
+	if end < pageSize {
+		return pageSize
+	}
+	return (end + pageSize - 1) &^ (pageSize - 1)
 }
 
 // appendConstSection 编码 __TEXT,__const，只读静态字符串索引及 UTF-8 数据。

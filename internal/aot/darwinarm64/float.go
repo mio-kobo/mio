@@ -156,7 +156,8 @@ func (e *StackEmitter) m6LiteralFloat64(v float64) {
 	e.words = append(e.words, floatMoveFromX(fp64Kind, 1, 10))
 }
 func (e *StackEmitter) m6TrapIf(cond uint32) {
-	e.trapSites = append(e.trapSites, m6TrapSite{word: len(e.words), cond: cond})
+	e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, cond^1))
+	e.trapSites = append(e.trapSites, m6TrapSite{word: len(e.words), cond: ^uint32(0)})
 	e.words = append(e.words, 0)
 }
 

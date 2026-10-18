@@ -182,7 +182,7 @@ func TestM3BadJumpTargetRejected(t *testing.T) {
 	}
 }
 func TestM3RejectUnsupportedUnreachableOpcode(t *testing.T) {
-	p := &compiler.Bytecode{Instructions: code.Instructions{byte(code.OpJump), 0, 4, byte(code.OpNil)}}
+	p := &compiler.Bytecode{Instructions: code.Instructions{byte(code.OpJump), 0, 4, byte(code.OpMap)}}
 	_, err := CompileDarwinARM64(p)
 	if err == nil || !strings.Contains(err.Error(), "unsupported opcode") {
 		t.Fatalf("expected unsupported unreachable opcode, got %v", err)

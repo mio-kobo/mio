@@ -145,10 +145,17 @@ func TestIntegerEmitterRejectsInvalidStack(t *testing.T) {
 	}
 }
 
-func TestIntegerEmitterLargeProgramRejected(t *testing.T) {
-	// 仅 M1 的一页 __TEXT 空间；不能越界写入下一段文件。
+func TestIntegerEmitterLargeProgramUsesMultipleTextPages(t *testing.T) {
 	tooMany := make([]uint32, int((pageSize-entryOffset)/4)+1)
-	if _, err := ExecutableWords(tooMany); err == nil || !strings.Contains(err.Error(), "does not fit") {
-		t.Fatalf("expected oversized Mach-O error, got %v", err)
+	image, err := ExecutableWords(tooMany)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := macho.NewFile(bytes.NewReader(image))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := m.Segment("__TEXT"); text == nil || text.Memsz != 2*pageSize || text.Filesz != 2*pageSize {
+		t.Fatalf("expected two-page __TEXT, got %#v", text)
 	}
 }

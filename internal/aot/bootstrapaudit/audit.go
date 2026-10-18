@@ -78,6 +78,25 @@ type StructuralIssue struct {
 	Reason string `json:"reason"`
 }
 
+func nativeFSSupported(name string) bool {
+	const prefix = "$mma::mio/fs/runtime::"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	op, _, ok := strings.Cut(rest, "::")
+	if !ok {
+		return false
+	}
+	switch op {
+	case "open", "read", "write", "close", "file_status", "open_dir",
+		"dir_next", "dir_name", "dir_is_dir", "dir_is_file", "dir_status", "dir_close":
+		return true
+	default:
+		return false
+	}
+}
+
 type Report struct {
 	SchemaVersion         int               `json:"schema_version"`
 	CompilerBaseline      string            `json:"compiler_baseline"`
@@ -116,15 +135,16 @@ func Analyze(program *compiler.Bytecode) (*Report, error) {
 	}
 	result := &Report{
 		SchemaVersion:    1,
-		CompilerBaseline: "M11c + M12 macOS ARM64（静态降级能力矩阵）",
+		CompilerBaseline: "M11c + M12 + M13a/M13b + M15a/M15b macOS ARM64（静态降级能力矩阵）",
 		FunctionCount:    len(program.Functions),
 		GlobalsCount:     program.GlobalsCount,
 		ConstantCount:    len(program.Constants),
 		Notices: []string{
 			"这是静态 Opcode/常量清单，不是完整的 Native AOT 编译结果；'limited' 表示仅特定类型、调用方式或规模有实现。",
 			"统计包含不可达字节码和未使用函数；不能把降级条数占比当成 Native 自举完成百分比。",
-			"M12 Struct/Array 已接入 M11b 精确 Root 与自动 Mark-Sweep；Heap 仍固定为 1 MiB，回收后仍不足会明确 OOM。",
-			"没有函数体的条目只列为潜在外部/MMA 绑定，需结合原始编译器元数据进一步核实。",
+			"M12 Struct/Array 已接入 M11b 精确 Root 与自动 Mark-Sweep；普通程序默认 1 MiB，NativeFS 自举档受 1 GiB 硬上限约束。",
+			"M13b Enum 使用独立 TypeID、自描述 payload 引用位图，并由 M11 对象扫描器精确追踪。",
+			"M14 已识别的 NativeFS 无函数体条目走 Darwin ARM64 MMA bridge；其他条目仍列为潜在外部绑定。",
 		},
 	}
 	if program.GlobalsCount > darwinarm64.MaxGlobalSlots {
@@ -173,7 +193,7 @@ func Analyze(program *compiler.Bytecode) (*Report, error) {
 		if len(fn.Instructions) == 0 {
 			result.FunctionsWithoutBody++
 		}
-		if len(fn.Instructions) == 0 || strings.HasPrefix(fn.Name, "$mma::") {
+		if (len(fn.Instructions) == 0 || strings.HasPrefix(fn.Name, "$mma::")) && !nativeFSSupported(fn.Name) {
 			reason := "缺少函数体，可能需要 Runtime/MMA 桥接"
 			if strings.HasPrefix(fn.Name, "$mma::") {
 				reason = "MMA 原生函数绑定，需要单独的运行时桥接"
@@ -303,7 +323,7 @@ func classify(name string, operands []int, blockID int, fn *compiler.CompiledFun
 				return StatusMissing, "constant", "当前只处理整数、bool、float32、float64 和静态字符串", "常量类型 " + k.String() + " 尚未实现"
 			}
 		}
-		return StatusLimited, "constant", "静态字符串/数字常量已实现；复杂对象和可空值尚未实现", reason
+		return StatusLimited, "constant", "静态字符串/数字常量及 M13 可空装箱已实现；复杂常量对象尚未实现", reason
 	case "OpGetGlobal", "OpSetGlobal":
 		if blockID >= 0 {
 			return StatusMissing, "slot", "M11a 的函数体内全局槽读写仍被 AOT 拒绝", "函数体内 Global 访问不支持"
@@ -320,6 +340,9 @@ func classify(name string, operands []int, blockID int, fn *compiler.CompiledFun
 			return StatusMissing, "function", "静态 Call 已实现但目标须是可编译的普通函数", "函数索引无效"
 		}
 		target := p.Functions[operands[0]]
+		if nativeFSSupported(target.Name) {
+			return StatusLowered, "ffi", "M14 Darwin ARM64 NativeFS MMA bridge", ""
+		}
 		if len(target.Captures) > 0 {
 			return StatusMissing, "function", "不支持闭包捕获环境", "调用了带 Captures 的函数"
 		}
@@ -331,48 +354,45 @@ func classify(name string, operands []int, blockID int, fn *compiler.CompiledFun
 		return StatusLimited, "numeric", "M6a 已实现浮点转换，包含范围和特殊值约束", reason
 	case "OpArrayTyped":
 		if len(operands) > 1 && !m12AuditDescriptorSupported(operands[1]) {
-			return StatusMissing, "array", "M12.2 仅支持当前 M6 标量与非 nullable 的 string、array、struct 元素", "数组元素 descriptor 尚未支持"
+			return StatusMissing, "array", "M13a 支持当前 M6 标量与 nullable 的 string、array、struct 元素", "数组元素 descriptor 尚未支持"
 		}
 		return StatusLimited, "array", "M12.1 descriptor/storage 已接入 M11b 精确扫描与自动 GC", reason
 	case "OpArrayMake", "OpArrayWithCapacity":
 		if len(operands) > 0 && !m12AuditDescriptorSupported(operands[0]) {
-			return StatusMissing, "array", "M12.2 仅支持当前 M6 标量与非 nullable 的 string、array、struct 元素", "数组元素 descriptor 尚未支持"
+			return StatusMissing, "array", "M13a 支持当前 M6 标量与 nullable 的 string、array、struct 元素", "数组元素 descriptor 尚未支持"
 		}
 		return StatusLimited, "array", "M12 事务式分配已接入 M11c 自动 GC；Heap 上限仍为 1 MiB", reason
 	case "OpArray", "OpArrayPush", "OpArrayCapacity", "OpArrayReserve", "OpArrayClone", "OpArrayTruncate", "OpArrayAppendAll", "OpIndex", "OpSetIndex", "OpLen":
 		return StatusLimited, "array", "M12 共享数组与浅复制操作已接入精确自动 GC；Heap 上限仍为 1 MiB", reason
 	case "OpSetNullableIndex":
-		return StatusMissing, "array", "M12 后续阶段尚未实现这些数组操作", "缺少 Native AOT 数组操作"
+		return StatusLimited, "array", "M13a 可空数组写入已接入精确 GC；仍受当前元素类型集合限制", reason
 	case "OpStruct", "OpGetField":
 		return StatusLimited, "struct", "M12.1 结构体字段位图已接入 M11b 精确扫描与自动 GC", reason
 	case "OpEnum", "OpEnumTag", "OpGetEnumValue":
-		return StatusMissing, "enum", "需要枚举标签、关联值和运行时布局", "M11a 无枚举降级路径"
+		return StatusLimited, "enum", "M13b 原生 Enum 已接入变体标签、关联值位图与 M11 精确 GC；仍受现有静态类型推断边界限制", reason
 	case "OpMap", "OpMapGet", "OpMapSet":
 		return StatusMissing, "map", "需要哈希表、动态内存和精确 GC", "M11a 无 Map 降级路径"
 	case "OpFunction", "OpCallValue", "OpClosure", "OpGetUpvalue", "OpSetUpvalue":
 		return StatusLimited, "closure", "M15b Closure/Environment/Cell 已接入 M11 精确 GC；仍受现有 AOT 值类型与函数签名推断约束", reason
 	case "OpNil", "OpIsNil":
-		return StatusMissing, "nullable", "需要可空值与对象引用表示", "M11a 无可空值降级路径"
+		return StatusLimited, "nullable", "M13a 已实现可空标量装箱、空引用和精确 GC", reason
 	case "OpMath":
-		return StatusMissing, "math", "需要数学原语 Runtime（不能把浮点基本运算等同于 OpMath）", "M11a 无 OpMath 降级路径"
+		return StatusLowered, "math", "M13c 已实现 Compiler A 使用的 is_inf 与非返回 error 原语", ""
 	case "OpIntegerConvert":
-		return StatusMissing, "narrow-int", "需要窄位整数转换、回绕和符号/零扩展", "M11a 无 OpIntegerConvert 降级路径"
+		return StatusLowered, "narrow-int", "M13c 已实现有界转换、窄位回绕和符号/零扩展", ""
 	case "OpDataConvert":
-		return StatusMissing, "data", "需要 string/[]uint8 编解码和动态内存", "M11a 无 OpDataConvert 降级路径"
+		return StatusLowered, "data", "M13c 已实现 string/[]uint8 独立复制与 UTF-8 校验", ""
 	default:
 		return StatusMissing, "other", "已由 Mochi 识别，但当前 Native AOT 未实现", "缺少 Native AOT Opcode 实现"
 	}
 }
 
 func m12AuditDescriptorSupported(descriptor int) bool {
-	if descriptor&0x80 != 0 {
-		return false
-	}
 	switch value.Kind(descriptor & 0x7f) {
 	case value.KindInvalid, value.KindInt, value.KindInt8, value.KindInt16, value.KindInt32,
 		value.KindUint8, value.KindUint16, value.KindUint32,
 		value.KindFloat, value.KindFloat32, value.KindBool, value.KindString,
-		value.KindArray, value.KindStruct:
+		value.KindArray, value.KindStruct, value.KindEnum:
 		return true
 	default:
 		return false

@@ -24,49 +24,122 @@ type closureTargetFixup struct {
 	functionID int
 }
 
+type globalAccessFixup struct {
+	word  int
+	reg   uint32
+	slot  int
+	store bool
+}
+
+type m14NativeCall struct {
+	word int
+	op   string
+}
+
 type StackEmitter struct {
-	m11Enabled        bool
-	m11InitCall       int
-	m11InitFail       int
-	floatCalls        []floatCallFixup
-	stringCalls       []int
-	lastPopString     bool
-	lastPopFloat      bool
-	words             []uint32
-	depth             int
-	maxStack          int
-	locals            int
-	globals           int
-	functionMode      bool
-	lastPopped        bool
-	printCalls        []int
-	boolCalls         []int
-	fixups            []branchFixup
-	functionCalls     []functionCallFixup
-	overflowSites     []int
-	trapSites         []m6TrapSite
-	returnSites       []int
-	m12Enabled        bool
-	m12InitCall       int
-	m12InitFail       int
-	m12Calls          []m12CallSite
-	m12ZeroSites      []int
-	m12BoundsSites    []int
-	m12ArrayFailSites []int
-	stringLenCalls    []int
-	gcEnabled         bool
-	gcStress          bool
-	gcRootCapacity    int
-	gcRecordOffset    int
-	gcSafepoints      []M11StackMap
-	gcFrameRoots      []int
-	gcGlobalRoots     []int
-	frameSlots        int
-	environmentSlot   int
-	cellSlots         map[int]int
-	upvalueCount      int
-	closureTargets    []closureTargetFixup
-	closureZeroSites  []int
+	m11Enabled         bool
+	m11InitCall        int
+	m11InitFail        int
+	floatCalls         []floatCallFixup
+	stringCalls        []int
+	lastPopString      bool
+	lastPopFloat       bool
+	lastPopNullable    bool
+	words              []uint32
+	depth              int
+	maxStack           int
+	locals             int
+	globals            int
+	functionMode       bool
+	lastPopped         bool
+	printCalls         []int
+	boolCalls          []int
+	fixups             []branchFixup
+	functionCalls      []functionCallFixup
+	overflowSites      []int
+	trapSites          []m6TrapSite
+	returnSites        []int
+	m12Enabled         bool
+	m12InitCall        int
+	m12InitFail        int
+	m12Calls           []m12CallSite
+	m12ZeroSites       []int
+	m12BoundsSites     []int
+	m12ArrayFailSites  []int
+	stringLenCalls     []int
+	stringCompareCalls []int
+	stringConstSites   []int
+	gcEnabled          bool
+	gcStress           bool
+	gcRootCapacity     int
+	gcRecordOffset     int
+	gcSafepoints       []M11StackMap
+	gcFrameRoots       []int
+	gcGlobalRoots      []int
+	frameSlots         int
+	environmentSlot    int
+	cellSlots          map[int]int
+	upvalueCount       int
+	closureTargets     []closureTargetFixup
+	closureZeroSites   []int
+	nullableNilSites   []int
+	globalAccesses     []globalAccessFixup
+	nativeFSCalls      []m14NativeCall
+	nativeFSEnabled    bool
+	nativeConstSite    int
+	heapCapacity       uint64
+	gcTelemetry        bool
+}
+
+// EnableNativeFS reserves x28 as the base of __TEXT,__const. Native filesystem
+// entries use it to decode tagged static strings without absolute addresses.
+func (e *StackEmitter) EnableNativeFS() {
+	if e.nativeFSEnabled {
+		return
+	}
+	e.nativeFSEnabled = true
+	e.nativeConstSite = len(e.words)
+	e.words = append(e.words, 0, 0, movzX(27, 0))
+}
+
+// ConfigureRuntime applies an explicit heap policy independently of which
+// native modules the program imports.
+func (e *StackEmitter) ConfigureRuntime(heapCapacity uint64, telemetry bool) error {
+	if heapCapacity == 0 || heapCapacity > M8MaxHeapCapacity || heapCapacity%M8ObjectAlignment != 0 {
+		return fmt.Errorf("AOT invalid heap capacity %d", heapCapacity)
+	}
+	e.heapCapacity = heapCapacity
+	e.gcTelemetry = telemetry
+	return nil
+}
+
+// EmitNativeFSFunction emits the body of one body-less MMA stub. The ordinary
+// M15 frame remains in force, so arguments are reloaded from stable locals.
+func (e *StackEmitter) EmitNativeFSFunction(op string, params int) error {
+	if !e.functionMode || params < 0 || params > M15RegisterParameters {
+		return fmt.Errorf("AOT M14 invalid native function %q", op)
+	}
+	roots := []int(nil)
+	switch op {
+	case "open", "open_dir":
+		roots = []int{0}
+	case "file_status", "close", "dir_status", "dir_close":
+		roots = []int{1}
+	case "read", "write":
+		roots = []int{1, 4}
+	}
+	if err := e.SetGCRoots(roots, nil); err != nil {
+		return err
+	}
+	for i := 0; i < params; i++ {
+		e.localAddr(i)
+		e.words = append(e.words, ldrX(uint32(i), 8, 0))
+	}
+	e.nativeFSCalls = append(e.nativeFSCalls, m14NativeCall{word: len(e.words), op: op})
+	e.words = append(e.words, 0)
+	e.storeOperand(0, 0)
+	e.depth = 1
+	return e.ReturnValue()
 }
 
 // NewStackEmitter 创建固定大小的栈帧。主程序和函数使用同一套槽位布局。
@@ -102,7 +175,7 @@ func newStackEmitter(globals, locals, params, maxStack int, function, gc, stress
 	} else if locals != 0 || params != 0 {
 		return nil, fmt.Errorf("AOT M5 main cannot have locals or parameters")
 	}
-	e := &StackEmitter{maxStack: maxStack, locals: locals, globals: globals, functionMode: function, gcEnabled: gc, gcStress: stress, environmentSlot: -1, cellSlots: make(map[int]int), upvalueCount: upvalues}
+	e := &StackEmitter{maxStack: maxStack, locals: locals, globals: globals, functionMode: function, gcEnabled: gc, gcStress: stress, environmentSlot: -1, cellSlots: make(map[int]int), upvalueCount: upvalues, heapCapacity: M8DefaultHeapCapacity}
 	e.frameSlots = locals + maxStack
 	if function && (upvalues != 0 || len(capturedLocals) != 0) {
 		e.environmentSlot = e.frameSlots
@@ -377,18 +450,12 @@ func (e *StackEmitter) globalAccess(reg uint32, slot int, store bool) error {
 	if slot < 0 || slot >= e.globals {
 		return fmt.Errorf("AOT M5 global slot %d out of range", slot)
 	}
-	// M5 延续 M2 的单页 __TEXT + 单页 __DATA 布局，地址仍采用 ADRP。
-	addr := textVMAddr + pageSize + uint64(slot)*8
-	pc := textVMAddr + entryOffset + uint64(len(e.words))*4
-	ins, err := adrpX(8, pc, addr)
-	if err != nil {
-		return err
-	}
-	access := ldrX(reg, 8, uint32((addr&0xfff)/8))
-	if store {
-		access = strX(reg, 8, uint32((addr&0xfff)/8))
-	}
-	e.words = append(e.words, ins, access)
+	// __DATA follows a page-rounded, variable-size __TEXT. Record both words
+	// and patch them after code and constants have reached their final size.
+	e.globalAccesses = append(e.globalAccesses, globalAccessFixup{
+		word: len(e.words), reg: reg, slot: slot, store: store,
+	})
+	e.words = append(e.words, 0, 0)
 	return nil
 }
 func (e *StackEmitter) SetGlobal(slot int) error {
@@ -616,8 +683,9 @@ func (e *StackEmitter) CallNative(functionID, params int, returns bool) error {
 	}
 	// 先检查调用深度；溢出路径直接退出，不需要构造参数区。
 	e.words = append(e.words, addImmX(22, 22, 1), cmpImmX(22, MaxM4CallDepth))
+	e.words = append(e.words, branchCond(len(e.words), len(e.words)+2, 9)) // LS skips the long branch
 	e.overflowSites = append(e.overflowSites, len(e.words))
-	e.words = append(e.words, 0)
+	e.words = append(e.words, 0) // B has +/-128 MiB reach
 
 	// 第 9 个及后续参数按从左到右的槽位顺序写入调用方临时区域。
 	// 区域向 16 字节取整，BL 前后 SP 始终保持 16 字节对齐。
@@ -709,17 +777,25 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 	floatCalls := append([]floatCallFixup(nil), e.floatCalls...)
 	stringCalls := append([]int(nil), e.stringCalls...)
 	stringLenCalls := append([]int(nil), e.stringLenCalls...)
+	stringCompareCalls := append([]int(nil), e.stringCompareCalls...)
+	stringConstSites := append([]int(nil), e.stringConstSites...)
 	m12Calls := append([]m12CallSite(nil), e.m12Calls...)
 	m12ZeroSites := append([]int(nil), e.m12ZeroSites...)
 	m12BoundsSites := append([]int(nil), e.m12BoundsSites...)
 	m12ArrayFailSites := append([]int(nil), e.m12ArrayFailSites...)
-	if e.lastPopped && e.lastPopString {
+	if e.lastPopped && (e.lastPopString || e.lastPopNullable) {
 		// M7 的表达式结果可能来自不同分支，退出前按最后的实际运行时标签输出。
 		jumpEmpty := len(code)
 		code = append(code, 0)
-		code = append(code, cmpImmX(21, m7StringKind))
-		jumpString := len(code)
+		code = append(code, cmpImmX(21, M13NilOutputKind))
+		jumpNil := len(code)
 		code = append(code, 0)
+		jumpString := -1
+		if e.lastPopString {
+			code = append(code, cmpImmX(21, m7StringKind))
+			jumpString = len(code)
+			code = append(code, 0)
+		}
 		code = append(code, cmpImmX(21, uint32(fp32Kind)))
 		jumpFloat32 := len(code)
 		code = append(code, 0)
@@ -735,12 +811,15 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		intExit := len(code)
 		code = append(code, 0)
 
-		stringStart := len(code)
-		code = append(code, movX(0, 19))
-		stringCalls = append(stringCalls, len(code))
-		code = append(code, 0)
-		stringExit := len(code)
-		code = append(code, 0)
+		stringStart, stringExit := -1, -1
+		if e.lastPopString {
+			stringStart = len(code)
+			code = append(code, movX(0, 19))
+			stringCalls = append(stringCalls, len(code))
+			code = append(code, 0)
+			stringExit = len(code)
+			code = append(code, 0)
+		}
 
 		boolStart := len(code)
 		code = append(code, movX(0, 19))
@@ -760,17 +839,36 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		code = append(code, movX(0, 19), movzX(1, uint16(fp64Kind)))
 		floatCalls = append(floatCalls, floatCallFixup{word: len(code), kind: fp64Kind})
 		code = append(code, 0)
+		float64Exit := len(code)
+		code = append(code, 0)
+
+		nilStart := len(code)
+		code = append(code, subImmX(31, 31, 16))
+		for index, ch := range []byte("mu\n") {
+			code = append(code, movzW(9, uint16(ch)), 0x39000000|uint32(index)<<10|31<<5|9)
+		}
+		code = append(code,
+			movzX(0, 1), addImmX(1, 31, 0), movzX(2, 3),
+			movzX(16, m8DarwinSYSWrite), svc(0x80), addImmX(31, 31, 16),
+		)
 		exitStart := len(code)
 
 		var err error
 		if code[jumpEmpty], err = checkedCBZ(20, jumpEmpty, exitStart); err != nil {
 			return nil, err
 		}
-		code[jumpString] = branchCond(jumpString, stringStart, 0)
+		code[jumpNil] = branchCond(jumpNil, nilStart, 0)
+		if jumpString >= 0 {
+			code[jumpString] = branchCond(jumpString, stringStart, 0)
+		}
 		code[jumpFloat32] = branchCond(jumpFloat32, float32Start, 0)
 		code[jumpFloat64] = branchCond(jumpFloat64, float64Start, 0)
 		code[jumpBool] = branchCond(jumpBool, boolStart, 0)
-		for _, at := range []int{intExit, stringExit, boolExit, float32Exit} {
+		exits := []int{intExit, boolExit, float32Exit, float64Exit}
+		if stringExit >= 0 {
+			exits = append(exits, stringExit)
+		}
+		for _, at := range exits {
 			if code[at], err = branch26(0x14000000, at, exitStart); err != nil {
 				return nil, err
 			}
@@ -865,6 +963,15 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		code = appendM11Lifecycle(code, &m11)
 	}
 	if e.m12Enabled {
+		if e.nativeFSEnabled {
+			e.nativeFSCalls = append(e.nativeFSCalls, m14NativeCall{word: len(code), op: "cleanup"})
+			code = append(code, 0)
+		}
+		if e.gcTelemetry {
+			code = append(code, movX(0, 23), movX(1, 24))
+			m12Calls = append(m12Calls, m12CallSite{at: len(code), kind: m12Telemetry})
+			code = append(code, 0)
+		}
 		code = append(code, movX(0, 23))
 		m12Calls = append(m12Calls, m12CallSite{at: len(code), kind: m12Destroy})
 		code = append(code, 0)
@@ -887,6 +994,9 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 	allCalls := append([]functionCallFixup(nil), e.functionCalls...)
 	closureTargets := append([]closureTargetFixup(nil), e.closureTargets...)
 	closureZeroSites := append([]int(nil), e.closureZeroSites...)
+	nullableNilSites := append([]int(nil), e.nullableNilSites...)
+	globalAccesses := append([]globalAccessFixup(nil), e.globalAccesses...)
+	nativeFSCalls := append([]m14NativeCall(nil), e.nativeFSCalls...)
 	overflows := append([]int(nil), e.overflowSites...)
 	traps := append([]m6TrapSite(nil), e.trapSites...)
 	for i, fn := range functions {
@@ -911,6 +1021,12 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		}
 		for _, at := range fn.stringLenCalls {
 			stringLenCalls = append(stringLenCalls, functionStarts[i]+at)
+		}
+		for _, at := range fn.stringCompareCalls {
+			stringCompareCalls = append(stringCompareCalls, functionStarts[i]+at)
+		}
+		for _, at := range fn.stringConstSites {
+			stringConstSites = append(stringConstSites, functionStarts[i]+at)
 		}
 		for _, call := range fn.m12Calls {
 			call.at += functionStarts[i]
@@ -940,6 +1056,17 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		for _, at := range fn.closureZeroSites {
 			closureZeroSites = append(closureZeroSites, functionStarts[i]+at)
 		}
+		for _, at := range fn.nullableNilSites {
+			nullableNilSites = append(nullableNilSites, functionStarts[i]+at)
+		}
+		for _, fx := range fn.globalAccesses {
+			fx.word += functionStarts[i]
+			globalAccesses = append(globalAccesses, fx)
+		}
+		for _, call := range fn.nativeFSCalls {
+			call.word += functionStarts[i]
+			nativeFSCalls = append(nativeFSCalls, call)
+		}
 		for _, at := range fn.overflowSites {
 			overflows = append(overflows, functionStarts[i]+at)
 		}
@@ -952,37 +1079,47 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		errExit := len(code)
 		code = append(code, movzX(0, 1), movzX(16, 1), svc(0x80))
 		for _, at := range overflows {
-			delta := errExit - at
-			if delta < -(1<<18) || delta >= (1<<18) {
-				return nil, fmt.Errorf("AOT M5 call-depth guard target out of range")
+			word, err := branch26(0x14000000, at, errExit)
+			if err != nil {
+				return nil, fmt.Errorf("AOT M5 call-depth guard target out of range: %w", err)
 			}
-			code[at] = branchCond(at, errExit, 8) // HI
+			code[at] = word
 		}
 		for _, trap := range traps {
+			if trap.cond == ^uint32(0) {
+				word, err := branch26(0x14000000, trap.word, errExit)
+				if err != nil {
+					return nil, fmt.Errorf("AOT M6 trap branch target out of range: %w", err)
+				}
+				code[trap.word] = word
+				continue
+			}
 			delta := errExit - trap.word
 			if delta < -(1<<18) || delta >= 1<<18 {
-				return nil, fmt.Errorf("AOT M6 float trap branch target out of range")
+				return nil, fmt.Errorf("AOT M6 trap branch target out of range")
 			}
 			code[trap.word] = branchCond(trap.word, errExit, trap.cond)
 		}
 		for _, at := range closureZeroSites {
-			var err error
-			code[at], err = checkedCBZ(9, at, errExit)
+			word, err := branch26(0x14000000, at, errExit)
 			if err != nil {
 				return nil, fmt.Errorf("AOT M15b invalid function trap target out of range: %w", err)
 			}
+			code[at] = word
 		}
 	}
 	if e.m12Enabled {
 		m12ZeroSites = append(m12ZeroSites, e.m12InitFail)
 		allocationExit := len(code)
-		code = appendM12Failure(code, "M12 allocation failed\n", &m12Calls)
+		code = appendM12Failure(code, "M12 allocation failed\n", &m12Calls, e.gcTelemetry)
 		boundsExit := len(code)
-		code = appendM12Failure(code, "M12 array index out of bounds\n", &m12Calls)
+		code = appendM12Failure(code, "M12 array index out of bounds\n", &m12Calls, e.gcTelemetry)
 		capacityExit := len(code)
-		code = appendM12Failure(code, "M12 invalid array capacity\n", &m12Calls)
+		code = appendM12Failure(code, "M12 invalid array capacity\n", &m12Calls, e.gcTelemetry)
 		lengthExit := len(code)
-		code = appendM12Failure(code, "M12 invalid array length\n", &m12Calls)
+		code = appendM12Failure(code, "M12 invalid array length\n", &m12Calls, e.gcTelemetry)
+		nullableExit := len(code)
+		code = appendM12Failure(code, "M13 nullable value is nil\n", &m12Calls, e.gcTelemetry)
 		arrayFailureDispatch := len(code)
 		code = append(code, cmpImmX(1, 2))
 		allocationBranch := len(code)
@@ -993,17 +1130,18 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		capacityBranch := len(code)
 		code = append(code, 0)
 		for _, at := range m12ZeroSites {
-			var err error
-			if code[at], err = checkedCBZ(0, at, allocationExit); err != nil {
+			word, err := branch26(0x14000000, at, allocationExit)
+			if err != nil {
 				return nil, err
 			}
+			code[at] = word
 		}
 		for _, at := range m12BoundsSites {
-			delta := boundsExit - at
-			if delta < -(1<<18) || delta >= 1<<18 {
-				return nil, fmt.Errorf("AOT M12 bounds failure target out of range")
+			word, err := branch26(0x14000000, at, boundsExit)
+			if err != nil {
+				return nil, fmt.Errorf("AOT M12 bounds failure target out of range: %w", err)
 			}
-			code[at] = branchCond(at, boundsExit, 2) // HS
+			code[at] = word
 		}
 		var err error
 		code[allocationBranch] = branchCond(allocationBranch, allocationExit, 0)
@@ -1012,9 +1150,18 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			return nil, err
 		}
 		for _, at := range m12ArrayFailSites {
-			if code[at], err = checkedCBZ(0, at, arrayFailureDispatch); err != nil {
-				return nil, err
+			word, branchErr := branch26(0x14000000, at, arrayFailureDispatch)
+			if branchErr != nil {
+				return nil, branchErr
 			}
+			code[at] = word
+		}
+		for _, at := range nullableNilSites {
+			word, err := branch26(0x14000000, at, nullableExit)
+			if err != nil {
+				return nil, fmt.Errorf("AOT M13 nil failure target out of range: %w", err)
+			}
+			code[at] = word
 		}
 	}
 	for _, fx := range allCalls {
@@ -1131,6 +1278,10 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 				target = entries.ArrayTruncate
 			case m12ArrayAppendAll:
 				target = entries.ArrayAppendAll
+			case m12UTF8Valid:
+				target = entries.UTF8Valid
+			case m12Telemetry:
+				target = entries.Telemetry
 			default:
 				return nil, fmt.Errorf("AOT M12 unknown runtime function")
 			}
@@ -1140,9 +1291,40 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			}
 			code[call.at] = word
 		}
-	}
-	if (len(stringCalls) != 0 || len(stringLenCalls) != 0) && len(strings) == 0 {
-		return nil, fmt.Errorf("AOT M7 missing static string table")
+		if len(nativeFSCalls) != 0 {
+			nativeStart := len(code)
+			emptyID := 0
+			for id, value := range strings {
+				if value == "" {
+					emptyID = id
+					break
+				}
+			}
+			nativeWords, nativeEntries, nativeExternal, err := appendM14NativeFSRuntime(uint64(emptyID<<1 | 1))
+			if err != nil {
+				return nil, err
+			}
+			code = append(code, nativeWords...)
+			for _, call := range nativeFSCalls {
+				target, ok := nativeEntries[call.op]
+				if !ok {
+					return nil, fmt.Errorf("AOT M14 unknown native operation %q", call.op)
+				}
+				word, branchErr := branch26(0x94000000, call.word, nativeStart+target)
+				if branchErr != nil {
+					return nil, branchErr
+				}
+				code[call.word] = word
+			}
+			for _, call := range nativeExternal {
+				target := runtimeStart + entries.ArrayWithCapacity
+				word, branchErr := branch26(0x94000000, nativeStart+call, target)
+				if branchErr != nil {
+					return nil, branchErr
+				}
+				code[nativeStart+call] = word
+			}
+		}
 	}
 	var constants []byte
 	if len(strings) != 0 {
@@ -1152,8 +1334,8 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			return nil, err
 		}
 	}
-	if len(stringCalls) != 0 || len(stringLenCalls) != 0 {
-		printStart, lenStart := -1, -1
+	if len(stringCalls) != 0 || len(stringLenCalls) != 0 || len(stringCompareCalls) != 0 || len(stringConstSites) != 0 {
+		printStart, lenStart, compareStart := -1, -1, -1
 		if len(stringCalls) != 0 {
 			printStart = len(code)
 			code = appendPrintStaticString(code)
@@ -1162,11 +1344,19 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			lenStart = len(code)
 			code = appendStaticStringLen(code)
 		}
+		if len(stringCompareCalls) != 0 {
+			compareStart = len(code)
+			compareWords, compareErr := appendStringCompare()
+			if compareErr != nil {
+				return nil, compareErr
+			}
+			code = append(code, compareWords...)
+		}
 		// 先确定字符串表的最终文件偏移，避免将静态绝对地址写入机器码。
 		constOff := (entryOffset + uint64(len(code))*4 + 7) &^ 7
 		constVA := textVMAddr + constOff
 		var err error
-		for _, start := range []int{printStart, lenStart} {
+		for _, start := range []int{printStart, lenStart, compareStart} {
 			if start < 0 {
 				continue
 			}
@@ -1175,6 +1365,13 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 				return nil, err
 			}
 			code[start+1] = addImmX(9, 9, uint32(constVA&0xfff))
+		}
+		for _, start := range stringConstSites {
+			pc := textVMAddr + entryOffset + uint64(start)*4
+			if code[start], err = adrpX(10, pc, constVA); err != nil {
+				return nil, err
+			}
+			code[start+1] = addImmX(10, 10, uint32(constVA&0xfff))
 		}
 		for _, at := range stringCalls {
 			word, err := branch26(0x94000000, at, printStart)
@@ -1190,6 +1387,23 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			}
 			code[at] = word
 		}
+		for _, at := range stringCompareCalls {
+			word, err := branch26(0x94000000, at, compareStart)
+			if err != nil {
+				return nil, err
+			}
+			code[at] = word
+		}
+	}
+	if e.nativeFSEnabled {
+		constOff := (entryOffset + uint64(len(code))*4 + 7) &^ 7
+		constVA := textVMAddr + constOff
+		pc := textVMAddr + entryOffset + uint64(e.nativeConstSite)*4
+		var err error
+		if code[e.nativeConstSite], err = adrpX(28, pc, constVA); err != nil {
+			return nil, err
+		}
+		code[e.nativeConstSite+1] = addImmX(28, 28, uint32(constVA&0xfff))
 	}
 	if e.m11Enabled {
 		// 元数据按 8 字节对齐追加到 __TEXT,__const，字符串表偏移不变。
@@ -1222,6 +1436,22 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			return nil, err
 		}
 		constants = append(constants, encoded...)
+	}
+	if len(globalAccesses) != 0 {
+		dataVA := textVMAddr + textSegmentSize(uint64(len(code))*4, uint64(len(constants)))
+		for _, fx := range globalAccesses {
+			addr := dataVA + uint64(fx.slot)*8
+			pc := textVMAddr + entryOffset + uint64(fx.word)*4
+			page, err := adrpX(8, pc, addr)
+			if err != nil {
+				return nil, err
+			}
+			access := ldrX(fx.reg, 8, uint32((addr&0xfff)/8))
+			if fx.store {
+				access = strX(fx.reg, 8, uint32((addr&0xfff)/8))
+			}
+			code[fx.word], code[fx.word+1] = page, access
+		}
 	}
 	return ExecutableWordsWithGlobalsAndConst(code, e.globals, constants)
 }

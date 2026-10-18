@@ -14,16 +14,42 @@ import (
 //
 // 未来 GC 可以根据 typeID 查询指针布局，但 M8 尚不追踪引用，也不回收单个对象。
 const (
-	M8HeapHeaderSize    = 64
-	M8ObjectHeaderSize  = 16
-	M8ObjectAlignment   = 16
-	M8MaxHeapCapacity   = 1 << 20
-	M8MaxTypeID         = 65535
-	m8DarwinSYSWrite    = 4
-	m8DarwinSYSMunmap   = 73
-	m8DarwinSYSMmap     = 197
-	m8DarwinMapAnonPriv = 0x1002
-	m8HeapMagic         = uint64(0x38504145484F494D) // 小端内存字节顺序为 "MIOHEAP8"
+	M8HeapHeaderSize      = 64
+	M8ObjectHeaderSize    = 16
+	M8ObjectAlignment     = 16
+	M8DefaultHeapCapacity = 1 << 20
+	M8MaxHeapCapacity     = 1 << 30
+	M8TelemetrySize       = 512
+	M8MaxTypeID           = 65535
+	m8DarwinSYSWrite      = 4
+	m8DarwinSYSMunmap     = 73
+	m8DarwinSYSMmap       = 197
+	m8DarwinMapAnonPriv   = 0x1002
+	m8HeapMagic           = uint64(0x38504145484F494D) // 小端内存字节顺序为 "MIOHEAP8"
+)
+
+// Telemetry lives immediately after the managed object area. Keeping it out
+// of the 64-byte heap header preserves the established object origin ABI.
+// All counters are uint64 and are written only by allocation/GC code.
+const (
+	m8TelAllocatedObjects = iota
+	m8TelAllocatedBytes
+	m8TelGCCount
+	m8TelLastBeforeBytes
+	m8TelLastAfterBytes
+	m8TelLastReclaimedObjects
+	m8TelLastReclaimedBytes
+	m8TelLastFreeBytes
+	m8TelLastLargestFree
+	m8TelLastFreeBlocks
+	m8TelLastBumpRemaining
+	m8TelOOMRequestBytes
+	m8TelShadowDepth
+	m8TelRootCount
+	m8TelLastGCTicks
+	m8TelTotalGCTicks
+	m8TelTimerFrequency
+	m8TelFreeBin1 = 32 // bins 1..31 occupy telemetry words 32..62
 )
 
 const (
@@ -143,6 +169,8 @@ func m8Movn(reg uint32, imm uint16) uint32 { return 0x92800000 | uint32(imm)<<5 
 func m8LdrB(dst, addr uint32) uint32       { return 0x39400000 | addr<<5 | dst }
 func m8StrB(src, addr uint32) uint32       { return 0x39000000 | addr<<5 | src }
 func m8Ret() uint32                        { return 0xD65F03C0 }
+func mrsCNTFRQ(rd uint32) uint32           { return 0xD53BE000 | rd }
+func mrsCNTVCT(rd uint32) uint32           { return 0xD53BE040 | rd }
 
 // appendM8Runtime 追加三个原生函数：
 //
@@ -155,12 +183,12 @@ func appendM8Runtime(b *m8Assembler) {
 	b.label(m8InitLabel)
 	// 先拒绝零容量和异常大容量，避免大小溢出或无限制申请虚拟内存。
 	b.cbz(0, "init.fail")
-	b.emit(movzX(9, 0), movkX(9, 16, 1)) // 1 MiB = 16 << 16
+	b.emit(m8MovBits(9, M8MaxHeapCapacity)...)
 	b.emit(m8Cmp(0, 9))
 	b.bc(8, "init.fail") // B.HI
 	// syscall 不依赖用户寄存器保存，容量先存到对齐的栈空间。
 	b.emit(subImmX(31, 31, 16), strX(0, 31, 0))
-	b.emit(addImmX(1, 0, M8HeapHeaderSize))
+	b.emit(addImmX(1, 0, M8HeapHeaderSize+M8TelemetrySize))
 	b.emit(movzX(0, 0), movzX(2, 3), movzX(3, m8DarwinMapAnonPriv), m8Movn(4, 0), movzX(5, 0), movzX(16, m8DarwinSYSMmap), svc(0x80))
 	// Darwin 的 BSD syscall 以 C=1 表示 errno，绝不能将错误码当作指针。
 	b.bc(2, "init.sysfail") // B.CS
@@ -168,12 +196,12 @@ func appendM8Runtime(b *m8Assembler) {
 	b.emit(movX(9, 0))
 	b.emit(m8MovBits(11, m8HeapMagic)...)
 	b.emit(strX(11, 9, 0))
-	b.emit(addImmX(11, 9, M8HeapHeaderSize), strX(11, 9, 6))  // heap[48]: origin
-	b.emit(strX(11, 9, 1))                                    // heap[8]: cursor
-	b.emit(addX(12, 11, 10), strX(12, 9, 2))                  // heap[16]: end
-	b.emit(strX(10, 9, 3))                                    // heap[24]: requested capacity
-	b.emit(addImmX(12, 10, M8HeapHeaderSize), strX(12, 9, 4)) // heap[32]: mmap length
-	b.emit(movzX(12, 0), strX(12, 9, 5), strX(12, 9, 7))      // count、reserved
+	b.emit(addImmX(11, 9, M8HeapHeaderSize), strX(11, 9, 6))                  // heap[48]: origin
+	b.emit(strX(11, 9, 1))                                                    // heap[8]: cursor
+	b.emit(addX(12, 11, 10), strX(12, 9, 2))                                  // heap[16]: end
+	b.emit(strX(10, 9, 3))                                                    // heap[24]: requested capacity
+	b.emit(addImmX(12, 10, M8HeapHeaderSize+M8TelemetrySize), strX(12, 9, 4)) // heap[32]: mmap length
+	b.emit(movzX(12, 0), strX(12, 9, 5), strX(12, 9, 7))                      // count、reserved
 	b.emit(movX(0, 9), m8Ret())
 	b.label("init.sysfail")
 	b.emit(addImmX(31, 31, 16))
@@ -200,6 +228,10 @@ func appendM8Runtime(b *m8Assembler) {
 	b.emit(strX(1, 9, 0), strX(2, 9, 1)) // uint32 typeID、flags=0、uint64 size
 	b.emit(strX(13, 0, 1))
 	b.emit(ldrX(14, 0, 5), addImmX(14, 14, 1), strX(14, 0, 5))
+	// Cumulative allocation counters use physical bytes (header + alignment),
+	// not requested payload bytes.
+	b.emit(ldrX(14, 0, 2), ldrX(15, 14, m8TelAllocatedObjects), addImmX(15, 15, 1), strX(15, 14, m8TelAllocatedObjects))
+	b.emit(ldrX(15, 14, m8TelAllocatedBytes), addX(15, 15, 11), strX(15, 14, m8TelAllocatedBytes))
 	b.emit(addImmX(0, 9, M8ObjectHeaderSize), m8Ret())
 	b.label("alloc.fail")
 	b.emit(movzX(0, 0), m8Ret())

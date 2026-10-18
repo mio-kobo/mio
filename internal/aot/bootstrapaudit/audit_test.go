@@ -54,8 +54,8 @@ func TestAnalyzeCountsMissingAndRestrictedSites(t *testing.T) {
 	if result.FunctionCount != 3 || result.GlobalsCount != 1 || result.MaxLocalSlots != 1 || result.TotalInstructions != 13 {
 		t.Fatalf("unexpected totals: %+v", result)
 	}
-	if result.MissingInstructions != 3 {
-		t.Fatalf("missing=%d, want 3", result.MissingInstructions)
+	if result.MissingInstructions != 2 {
+		t.Fatalf("missing=%d, want 2", result.MissingInstructions)
 	}
 	for _, entry := range result.Opcodes {
 		if entry.Name == "OpCall" && (entry.Missing != 1 || entry.Limited != 1) {
@@ -64,7 +64,7 @@ func TestAnalyzeCountsMissingAndRestrictedSites(t *testing.T) {
 		if entry.Name == "OpGetGlobal" && entry.Missing != 1 {
 			t.Fatalf("global access %+v", entry)
 		}
-		if entry.Name == "OpNil" && entry.Missing != 1 {
+		if entry.Name == "OpNil" && entry.Limited != 1 {
 			t.Fatalf("nil %+v", entry)
 		}
 	}
@@ -114,13 +114,19 @@ func TestAnalyzeZeroProgramAndDeterminism(t *testing.T) {
 }
 
 func TestClassifyKnownButUnavailable(t *testing.T) {
-	for _, name := range []string{"OpMap", "OpDataConvert", "OpMath", "OpIsNil"} {
+	for _, name := range []string{"OpMap"} {
 		st, _, _, _ := classify(name, nil, -1, nil, &compiler.Bytecode{})
 		if st != StatusMissing {
 			t.Errorf("%s: %s", name, st)
 		}
 	}
-	for _, name := range []string{"OpAdd", "OpChant", "OpGetLocal", "OpConstant", "OpIntToFloat", "OpArray", "OpStruct", "OpArrayPush", "OpArrayClone", "OpArrayTruncate", "OpArrayAppendAll", "OpFunction", "OpClosure", "OpCallValue", "OpGetUpvalue", "OpSetUpvalue"} {
+	for _, name := range []string{"OpDataConvert", "OpMath", "OpIntegerConvert"} {
+		st, _, _, _ := classify(name, nil, -1, nil, &compiler.Bytecode{})
+		if st != StatusLowered {
+			t.Errorf("%s: %s", name, st)
+		}
+	}
+	for _, name := range []string{"OpAdd", "OpChant", "OpGetLocal", "OpConstant", "OpIntToFloat", "OpArray", "OpStruct", "OpArrayPush", "OpArrayClone", "OpArrayTruncate", "OpArrayAppendAll", "OpEnum", "OpEnumTag", "OpGetEnumValue", "OpFunction", "OpClosure", "OpCallValue", "OpGetUpvalue", "OpSetUpvalue", "OpNil", "OpIsNil", "OpSetNullableIndex"} {
 		// 对 OpConstant 构造一个可识别的 int64 常量，确保按受限而不是完整支持统计。
 		p := &compiler.Bytecode{Constants: []value.Value{value.NewInt(3)}}
 		st, _, _, _ := classify(name, []int{0}, -1, nil, p)
