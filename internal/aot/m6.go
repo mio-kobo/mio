@@ -98,6 +98,8 @@ func m14NativeSignature(name string) ([]m6Kind, m6Kind, bool) {
 	switch op {
 	case "close", "dir_close", "file_status", "dir_status":
 		return []m6Kind{m6Resource, m6Array}, m6String, true
+	case "stat", "mkdir":
+		return []m6Kind{m6String, m6Array}, m6String, true
 	case "dir_is_dir", "dir_is_file", "dir_next":
 		return []m6Kind{m6Resource}, m6Bool, true
 	case "dir_name":
@@ -643,12 +645,113 @@ type m6Block struct {
 }
 
 type m6Analysis struct {
-	u        *m6Union
-	blocks   []*m6Block
-	globals  []int
-	locals   [][]int
-	returns  []int
-	captures [][]int
+	u                   *m6Union
+	blocks              []*m6Block
+	globals             []int
+	locals              [][]int
+	returns             []int
+	captures            [][]int
+	genericArrayWrapper map[int]code.Opcode
+	genericMathWrapper  map[int]int
+	reachableFunctions  []bool
+}
+
+// m16GenericArrayWrapper recognizes the tiny generic kiso/array forwarding
+// functions emitted by the self-hosted compiler. Mochi v14 does not carry
+// instantiated type arguments, so sharing one inferred function signature
+// across all calls would incorrectly merge []T for unrelated T. These exact
+// wrappers are instead specialized at each static call site.
+func m16GenericArrayWrapper(fn compiler.CompiledFunction) (code.Opcode, bool) {
+	wantName := map[code.Opcode]string{
+		code.OpArrayMake: "make", code.OpArrayWithCapacity: "with_capacity",
+		code.OpArrayPush: "push", code.OpArrayCapacity: "capacity",
+		code.OpArrayReserve: "reserve", code.OpArrayClone: "clone",
+		code.OpArrayTruncate: "truncate", code.OpArrayAppendAll: "append_all",
+	}
+	inst, _, err := decodeM4Block(fn.Instructions)
+	if err != nil {
+		return 0, false
+	}
+	for op, name := range wantName {
+		if fn.Name != name && !strings.HasSuffix(fn.Name, "::"+name) {
+			continue
+		}
+		parameters := 1
+		returns := true
+		if op == code.OpArrayMake || op == code.OpArrayPush || op == code.OpArrayReserve ||
+			op == code.OpArrayTruncate || op == code.OpArrayAppendAll {
+			parameters = 2
+		}
+		if op == code.OpArrayPush || op == code.OpArrayReserve || op == code.OpArrayTruncate || op == code.OpArrayAppendAll {
+			returns = false
+		}
+		if fn.ParameterCount != parameters || fn.LocalCount != parameters || fn.ReturnsValue != returns || len(inst) != parameters+2 {
+			return 0, false
+		}
+		for index := 0; index < parameters; index++ {
+			if inst[index].op != code.OpGetLocal || inst[index].operands[0] != index {
+				return 0, false
+			}
+		}
+		if inst[parameters].op != op {
+			return 0, false
+		}
+		last := code.OpReturn
+		if returns {
+			last = code.OpReturnValue
+		}
+		if inst[parameters+1].op != last {
+			return 0, false
+		}
+		return op, true
+	}
+	return 0, false
+}
+
+func m16GenericMathWrapper(fn compiler.CompiledFunction) (int, bool) {
+	if fn.ParameterCount != 1 || fn.LocalCount != 1 || !fn.ReturnsValue {
+		return 0, false
+	}
+	inst, _, err := decodeM4Block(fn.Instructions)
+	if err != nil || len(inst) != 3 || inst[0].op != code.OpGetLocal || inst[0].operands[0] != 0 ||
+		inst[1].op != code.OpMath || inst[1].operands[1] != 1 || inst[2].op != code.OpReturnValue {
+		return 0, false
+	}
+	primitive := inst[1].operands[0]
+	return primitive, primitive >= code.MathSqrt && primitive <= code.MathIsFinite
+}
+
+func m16ReachableFunctions(p *compiler.Bytecode) ([]bool, error) {
+	reachable := make([]bool, len(p.Functions))
+	queue := []int{-1}
+	for len(queue) != 0 {
+		id := queue[0]
+		queue = queue[1:]
+		source := p.Instructions
+		name := "main"
+		if id >= 0 {
+			source = p.Functions[id].Instructions
+			name = p.Functions[id].Name
+		}
+		inst, _, err := decodeM4Block(source)
+		if err != nil {
+			return nil, fmt.Errorf("AOT M16b reachability %s: %w", name, err)
+		}
+		for _, instruction := range inst {
+			if instruction.op != code.OpCall && instruction.op != code.OpFunction && instruction.op != code.OpClosure {
+				continue
+			}
+			target := instruction.operands[0]
+			if target < 0 || target >= len(p.Functions) {
+				return nil, fmt.Errorf("AOT M16b reachability %s has invalid function %d", name, target)
+			}
+			if !reachable[target] {
+				reachable[target] = true
+				queue = append(queue, target)
+			}
+		}
+	}
+	return reachable, nil
 }
 
 type m6Liveness struct {
@@ -1168,7 +1271,14 @@ func m6Reachability(p *compiler.Bytecode, b *m6Block, callReturns map[int]bool) 
 // analyzeM6 把同一物理槽位及所有调用点的类型统一求解。
 // 无法确定类型时拒绝编译，避免把 float 位模式误当成 int64。
 func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
-	a := &m6Analysis{u: &m6Union{}}
+	reachableFunctions, err := m16ReachableFunctions(p)
+	if err != nil {
+		return nil, err
+	}
+	a := &m6Analysis{
+		u: &m6Union{}, genericArrayWrapper: make(map[int]code.Opcode),
+		genericMathWrapper: make(map[int]int), reachableFunctions: reachableFunctions,
+	}
 	type pendingCallValue struct {
 		block, offset int
 		function      int
@@ -1238,6 +1348,80 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 		} else {
 			a.returns = append(a.returns, -1)
 		}
+		if op, ok := m16GenericArrayWrapper(fn); ok {
+			a.genericArrayWrapper[i] = op
+			array, arrayErr := a.u.newArray(nil, m6Int, false)
+			if arrayErr != nil {
+				return nil, arrayErr
+			}
+			switch op {
+			case code.OpArrayMake:
+				if err := a.u.require(locals[0], m6Int); err != nil {
+					return nil, err
+				}
+				if err := a.u.require(locals[1], m6Int); err != nil {
+					return nil, err
+				}
+				if err := a.u.join(a.returns[i], array); err != nil {
+					return nil, err
+				}
+			case code.OpArrayWithCapacity:
+				if err := a.u.require(locals[0], m6Int); err != nil {
+					return nil, err
+				}
+				if err := a.u.join(a.returns[i], array); err != nil {
+					return nil, err
+				}
+			case code.OpArrayPush:
+				if err := a.u.join(locals[0], array); err != nil {
+					return nil, err
+				}
+				if err := a.u.require(locals[1], m6Int); err != nil {
+					return nil, err
+				}
+			case code.OpArrayCapacity:
+				if err := a.u.join(locals[0], array); err != nil {
+					return nil, err
+				}
+				if err := a.u.require(a.returns[i], m6Int); err != nil {
+					return nil, err
+				}
+			case code.OpArrayReserve, code.OpArrayTruncate:
+				if err := a.u.join(locals[0], array); err != nil {
+					return nil, err
+				}
+				if err := a.u.require(locals[1], m6Int); err != nil {
+					return nil, err
+				}
+			case code.OpArrayClone:
+				if err := a.u.join(locals[0], array); err != nil {
+					return nil, err
+				}
+				if err := a.u.join(a.returns[i], array); err != nil {
+					return nil, err
+				}
+			case code.OpArrayAppendAll:
+				if err := a.u.join(locals[0], array); err != nil {
+					return nil, err
+				}
+				if err := a.u.join(locals[1], array); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if primitive, ok := m16GenericMathWrapper(fn); ok {
+			a.genericMathWrapper[i] = primitive
+			if err := a.u.require(locals[0], m6Float64); err != nil {
+				return nil, err
+			}
+			result := m6Float64
+			if primitive >= code.MathIsNaN {
+				result = m6Bool
+			}
+			if err := a.u.require(a.returns[i], result); err != nil {
+				return nil, err
+			}
+		}
 		if params, result, native := m14NativeSignature(fn.Name); native {
 			if len(params) != fn.ParameterCount || !fn.ReturnsValue {
 				return nil, fmt.Errorf("AOT M14 native signature mismatch for %q", fn.Name)
@@ -1295,6 +1479,9 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 	}
 	a.blocks = blocks
 	for bi, b := range a.blocks {
+		if bi > 0 && !reachableFunctions[bi-1] {
+			continue
+		}
 		for i, ins := range b.inst {
 			if b.reach[i] == nil {
 				continue
@@ -1454,12 +1641,28 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 					if err := require(input, m6String); err != nil {
 						return nil, fail(err)
 					}
-				case code.MathIsInf:
+				case code.MathSqrt, code.MathFloor, code.MathCeil, code.MathRoundEven, code.MathTrunc:
+					kind := a.u.get(input)
+					if kind == m6Unknown {
+						pendingFloats = append(pendingFloats, pendingFloat{block: bi, offset: ins.offset, input: input})
+					} else if kind != m6Float32 && kind != m6Float64 {
+						return nil, fail(fmt.Errorf("floating primitive requires float32 or float64, got %s", kind))
+					}
+					stack = append(stack, input)
+				case code.MathIsNaN, code.MathIsInf, code.MathIsFinite:
 					kind := a.u.get(input)
 					if kind == m6Unknown {
 						pendingFloats = append(pendingFloats, pendingFloat{block: bi, offset: ins.offset, input: input})
 					} else if kind != m6Float32 && kind != m6Float64 && kind != m6FloatAny {
 						return nil, fail(fmt.Errorf("is_inf requires float32 or float64, got %s", kind))
+					}
+					push(m6Bool)
+				case code.MathIsNegative, code.MathNegOverflows:
+					kind := a.u.get(input)
+					if kind == m6Unknown {
+						pendingNumerics = append(pendingNumerics, pendingNumeric{block: bi, offset: ins.offset, input: input})
+					} else if !m6IntegerKind(kind) && kind != m6Float32 && kind != m6Float64 {
+						return nil, fail(fmt.Errorf("sign primitive requires a number, got %s", kind))
 					}
 					push(m6Bool)
 				default:
@@ -1655,7 +1858,88 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 				}
 				push(m6Int)
 			case code.OpCall:
-				callee := p.Functions[ins.operands[0]]
+				target := ins.operands[0]
+				callee := p.Functions[target]
+				if primitive, generic := a.genericMathWrapper[target]; generic {
+					input := pop()
+					kind := a.u.get(input)
+					if kind == m6Unknown {
+						pendingFloats = append(pendingFloats, pendingFloat{block: bi, offset: ins.offset, input: input})
+					} else if kind != m6Float32 && kind != m6Float64 {
+						return nil, fail(fmt.Errorf("generic math primitive %d requires float32 or float64, got %s", primitive, kind))
+					}
+					if primitive >= code.MathIsNaN {
+						push(m6Bool)
+					} else {
+						stack = append(stack, input)
+					}
+					break
+				}
+				if op, generic := a.genericArrayWrapper[target]; generic {
+					switch op {
+					case code.OpArrayMake:
+						initial, length := pop(), pop()
+						if err := require(length, m6Int); err != nil {
+							return nil, fail(err)
+						}
+						array, err := a.u.newArray([]int{initial}, m6Unknown, a.u.isNullable(initial))
+						if err != nil {
+							return nil, fail(err)
+						}
+						stack = append(stack, array)
+					case code.OpArrayWithCapacity:
+						if err := require(pop(), m6Int); err != nil {
+							return nil, fail(err)
+						}
+						array, err := a.u.newArray(nil, m6Unknown, false)
+						if err != nil {
+							return nil, fail(err)
+						}
+						stack = append(stack, array)
+					case code.OpArrayPush:
+						element, array := pop(), pop()
+						arrayElement, err := a.u.arrayElement(array)
+						if err != nil {
+							return nil, fail(err)
+						}
+						if err := join(element, arrayElement); err != nil {
+							return nil, fail(err)
+						}
+					case code.OpArrayCapacity:
+						if _, err := a.u.arrayElement(pop()); err != nil {
+							return nil, fail(err)
+						}
+						push(m6Int)
+					case code.OpArrayReserve, code.OpArrayTruncate:
+						length, array := pop(), pop()
+						if err := require(length, m6Int); err != nil {
+							return nil, fail(err)
+						}
+						if _, err := a.u.arrayElement(array); err != nil {
+							return nil, fail(err)
+						}
+					case code.OpArrayClone:
+						array := pop()
+						if _, err := a.u.arrayElement(array); err != nil {
+							return nil, fail(err)
+						}
+						stack = append(stack, array)
+					case code.OpArrayAppendAll:
+						source, destination := pop(), pop()
+						sourceElement, err := a.u.arrayElement(source)
+						if err != nil {
+							return nil, fail(err)
+						}
+						destinationElement, err := a.u.arrayElement(destination)
+						if err != nil {
+							return nil, fail(err)
+						}
+						if err := join(sourceElement, destinationElement); err != nil {
+							return nil, fail(err)
+						}
+					}
+					break
+				}
 				for j := callee.ParameterCount - 1; j >= 0; j-- {
 					argument := pop()
 					if m13PolymorphicFloatPredicate(callee.Name) && j == 0 {
@@ -1804,8 +2088,11 @@ func analyzeM6(p *compiler.Bytecode) (*m6Analysis, error) {
 			return nil, fmt.Errorf("AOT M6 block %d offset %d: %w", pending.block, pending.offset, err)
 		}
 	}
-	for _, b := range a.blocks {
+	for bi, b := range a.blocks {
 		b.endKind = make([][]m6Kind, len(b.entry))
+		if bi > 0 && !reachableFunctions[bi-1] {
+			continue
+		}
 		for i, st := range b.reach {
 			if st == nil {
 				continue
@@ -1958,6 +2245,9 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 				maximum = st.depth
 			}
 		}
+		if bi > 0 && !a.reachableFunctions[bi-1] && b.fn.ReturnsValue {
+			maximum = 1
+		}
 		locals, params := 0, 0
 		if b.fn != nil {
 			locals, params = b.fn.LocalCount, b.fn.ParameterCount
@@ -1986,7 +2276,7 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 		if bi == 0 && nativeFS {
 			e.EnableNativeFS()
 		}
-		if b.fn != nil {
+		if b.fn != nil && (bi == 0 || a.reachableFunctions[bi-1]) {
 			if op, ok := m14NativeName(b.fn.Name); ok {
 				if err := e.EmitNativeFSFunction(op, b.fn.ParameterCount); err != nil {
 					return nil, err
@@ -2002,6 +2292,26 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 			if err := e.EnableM11Runtime(); err != nil {
 				return nil, err
 			}
+		}
+		if bi > 0 && !a.reachableFunctions[bi-1] {
+			if b.fn.ReturnsValue {
+				if err := e.PushInt64(0); err != nil {
+					return nil, err
+				}
+				if err := e.ReturnValue(); err != nil {
+					return nil, err
+				}
+			} else if err := e.ReturnUnit(); err != nil {
+				return nil, err
+			}
+			if err := e.SetOperandDepth(0); err != nil {
+				return nil, err
+			}
+			if err := e.FinishFunction(); err != nil {
+				return nil, err
+			}
+			all[bi] = e
+			continue
 		}
 		mapping := make(map[int]int, len(b.inst)+1)
 		for i, ins := range b.inst {
@@ -2050,8 +2360,12 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 					code.OpEnum, code.OpDataConvert:
 					emitErr = setRoots(b.entry[i], live.inLocals[i], live.inGlobals[i])
 				case code.OpCall:
-					params := p.Functions[ins.operands[0]].ParameterCount
-					emitErr = setRoots(b.entry[i][:len(st)-params], live.outLocals[i], live.outGlobals[i])
+					if _, generic := a.genericArrayWrapper[ins.operands[0]]; generic {
+						emitErr = setRoots(b.entry[i], live.inLocals[i], live.inGlobals[i])
+					} else {
+						params := p.Functions[ins.operands[0]].ParameterCount
+						emitErr = setRoots(b.entry[i][:len(st)-params], live.outLocals[i], live.outGlobals[i])
+					}
 				case code.OpCallValue:
 					params := ins.operands[0]
 					emitErr = setRoots(b.entry[i][:len(st)-params-1], live.outLocals[i], live.outGlobals[i])
@@ -2239,8 +2553,22 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 				}
 			case code.OpMath:
 				switch ins.operands[0] {
+				case code.MathSqrt, code.MathFloor, code.MathCeil, code.MathRoundEven, code.MathTrunc:
+					emitErr = e.MathFloatUnary(uint8(k), ins.operands[0])
+				case code.MathIsNaN, code.MathIsFinite:
+					emitErr = e.MathFloatPredicate(uint8(k), ins.operands[0], k == m6FloatAny)
 				case code.MathIsInf:
 					emitErr = e.MathIsInf(uint8(k), k == m6FloatAny)
+				case code.MathIsNegative, code.MathNegOverflows:
+					floating := k == m6Float32 || k == m6Float64
+					width := m6IntegerWidth(k)
+					if floating {
+						width = 64
+						if k == m6Float32 {
+							width = 32
+						}
+					}
+					emitErr = e.MathSign(width, !m6UnsignedKind(k), floating, ins.operands[0] == code.MathNegOverflows)
 				case code.MathError:
 					emitErr = e.MathError()
 				default:
@@ -2278,8 +2606,59 @@ func compileM6WithOptions(p *compiler.Bytecode, enableM11, gcStress bool, heapCa
 					emitErr = e.Pop(k == m6Bool)
 				}
 			case code.OpCall:
-				callee := p.Functions[ins.operands[0]]
-				emitErr = e.CallNative(ins.operands[0], callee.ParameterCount, callee.ReturnsValue)
+				target := ins.operands[0]
+				if primitive, generic := a.genericMathWrapper[target]; generic {
+					kind := a.u.get(b.entry[i][len(b.entry[i])-1])
+					switch primitive {
+					case code.MathSqrt, code.MathFloor, code.MathCeil, code.MathRoundEven, code.MathTrunc:
+						emitErr = e.MathFloatUnary(uint8(kind), primitive)
+					case code.MathIsInf:
+						emitErr = e.MathIsInf(uint8(kind), false)
+					case code.MathIsNaN, code.MathIsFinite:
+						emitErr = e.MathFloatPredicate(uint8(kind), primitive, false)
+					}
+				} else if op, generic := a.genericArrayWrapper[target]; generic {
+					arrayNode := -1
+					switch op {
+					case code.OpArrayMake:
+						element := b.entry[i][len(b.entry[i])-1]
+						emitErr = e.ArrayMake(m13ElementBytes(a.u.get(element), a.u.isNullable(element)), m13StoredReference(a.u.get(element), a.u.isNullable(element)))
+					case code.OpArrayWithCapacity:
+						arrayNode = b.exit[i][len(b.exit[i])-1]
+					case code.OpArrayPush, code.OpArrayReserve, code.OpArrayTruncate, code.OpArrayAppendAll:
+						arrayNode = b.entry[i][len(b.entry[i])-2]
+					case code.OpArrayCapacity, code.OpArrayClone:
+						arrayNode = b.entry[i][len(b.entry[i])-1]
+					}
+					if emitErr == nil && arrayNode >= 0 {
+						elementKind := a.u.arrayElementKind(arrayNode)
+						nullable := a.u.arrayElementNullable(arrayNode)
+						if elementKind == m6Unknown {
+							return nil, fmt.Errorf("AOT M16b unknown specialized array element type at %s offset %d", b.name, ins.offset)
+						}
+						elementBytes := m13ElementBytes(elementKind, nullable)
+						reference := m13StoredReference(elementKind, nullable)
+						switch op {
+						case code.OpArrayWithCapacity:
+							emitErr = e.ArrayWithCapacity(elementBytes, reference)
+						case code.OpArrayPush:
+							emitErr = e.ArrayPush(elementBytes, reference)
+						case code.OpArrayCapacity:
+							emitErr = e.ArrayCapacity()
+						case code.OpArrayReserve:
+							emitErr = e.ArrayReserve(elementBytes, reference)
+						case code.OpArrayClone:
+							emitErr = e.ArrayClone(elementBytes, reference)
+						case code.OpArrayTruncate:
+							emitErr = e.ArrayTruncate(elementBytes, reference)
+						case code.OpArrayAppendAll:
+							emitErr = e.ArrayAppendAll(elementBytes, reference)
+						}
+					}
+				} else {
+					callee := p.Functions[target]
+					emitErr = e.CallNative(target, callee.ParameterCount, callee.ReturnsValue)
+				}
 			case code.OpCallValue:
 				position := len(b.entry[i]) - ins.operands[0] - 1
 				targets := a.u.functionTargets(b.entry[i][position])

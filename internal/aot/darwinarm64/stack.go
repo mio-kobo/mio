@@ -123,6 +123,8 @@ func (e *StackEmitter) EmitNativeFSFunction(op string, params int) error {
 	switch op {
 	case "open", "open_dir":
 		roots = []int{0}
+	case "stat", "mkdir":
+		roots = []int{0, 1}
 	case "file_status", "close", "dir_status", "dir_close":
 		roots = []int{1}
 	case "read", "write":

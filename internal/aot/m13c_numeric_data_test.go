@@ -31,6 +31,31 @@ func TestM13cIntegerConvertAndMathDifferential(t *testing.T) {
 	requireM12Differential(t, program)
 }
 
+func TestM16bMathPrimitivesDifferential(t *testing.T) {
+	a := newM3TestAsm()
+	for _, item := range []struct {
+		constant  int
+		primitive int
+	}{
+		{0, code.MathSqrt}, {1, code.MathFloor}, {1, code.MathCeil},
+		{2, code.MathRoundEven}, {3, code.MathTrunc}, {4, code.MathIsNaN},
+		{5, code.MathIsFinite}, {6, code.MathIsNegative}, {7, code.MathNegOverflows},
+	} {
+		a.emit(code.OpConstant, item.constant)
+		a.emit(code.OpMath, item.primitive, 1)
+		a.emit(code.OpChant)
+	}
+	program := &compiler.Bytecode{
+		Constants: []value.Value{
+			value.NewFloat(9), value.NewFloat(-1.2), value.NewFloat(2.5), value.NewFloat(-1.9),
+			value.NewFloat(math.NaN()), value.NewFloat(math.Inf(1)), value.NewFloat(math.Copysign(0, -1)),
+			value.NewInt(math.MinInt64),
+		},
+		Instructions: a.build(),
+	}
+	requireM12Differential(t, program)
+}
+
 func TestM13cDataConvertUTF8CopyDifferential(t *testing.T) {
 	a := newM3TestAsm()
 	// source = UTF-8 bytes for 猫; text = from_utf8(source)

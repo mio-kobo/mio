@@ -9,6 +9,8 @@ const (
 	m14SYSRead          = 3
 	m14SYSOpen          = 5
 	m14SYSClose         = 6
+	m14SYSMkdir         = 136
+	m14SYSStat64        = 338
 	m14SYSGetdirentries = 344
 	m14HandleSlots      = 32
 	m14SlotShift        = 7
@@ -157,15 +159,87 @@ func appendM14NativeFSRuntime(emptyTagged uint64) ([]uint32, map[string]int, []i
 	b.emit(m8Ret())
 
 	appendM14FileEntries(b, emptyTagged)
+	appendM14PathEntries(b, emptyTagged)
 	appendM14DirectoryEntries(b, emptyTagged, &external)
 	appendM14Cleanup(b)
 
 	entries := make(map[string]int)
-	for _, name := range []string{"open", "file_status", "read", "write", "close", "open_dir", "dir_status", "dir_next", "dir_name", "dir_is_dir", "dir_is_file", "dir_close", "cleanup"} {
+	for _, name := range []string{"open", "file_status", "read", "write", "close", "stat", "mkdir", "open_dir", "dir_status", "dir_next", "dir_name", "dir_is_dir", "dir_is_file", "dir_close", "cleanup"} {
 		entries[name] = b.labels["m14."+name]
 	}
 	words, err := b.assemble()
 	return words, entries, external, err
+}
+
+func appendM14PathEntries(b *m8Assembler, emptyTagged uint64) {
+	// stat(path, status) follows symbolic links like os.Stat. status[0] is
+	// 0=missing/error, 1=non-directory, 2=directory; status[1] is FsError.
+	b.label("m14.stat")
+	m14Enter(b)
+	// Slots 0..2 preserve status, cpath address and cpath mapping length.
+	// The Darwin arm64 stat64 buffer begins at SP+32 and is 144 bytes.
+	b.emit(subImmX(31, 31, 192), strX(1, 31, 0))
+	b.bl("m14.cpath")
+	b.cbz(0, "m14.stat.badpath")
+	b.emit(strX(0, 31, 1), strX(1, 31, 2), addImmX(1, 31, 32), movzX(16, m14SYSStat64), svc(0x80))
+	b.bc(2, "m14.stat.syserr")
+	// struct stat::st_mode is a uint16 at byte offset 4 on Darwin arm64.
+	b.emit(m14LdrH(9, 31, 36))
+	b.emit(m8MovBits(10, 0xf000)...)
+	b.emit(m8And(9, 9, 10))
+	b.emit(m8MovBits(10, 0x4000)...)
+	b.emit(m8Cmp(9, 10), movzX(11, 1))
+	b.bc(1, "m14.stat.kind.done")
+	b.emit(movzX(11, 2))
+	b.label("m14.stat.kind.done")
+	b.emit(movzX(13, 0))
+	b.b("m14.stat.release")
+	b.label("m14.stat.syserr")
+	b.emit(movzX(11, 0), movX(13, 0))
+	b.label("m14.stat.release")
+	b.emit(strX(11, 31, 3), strX(13, 31, 4), ldrX(0, 31, 1), ldrX(1, 31, 2), movzX(16, m8DarwinSYSMunmap), svc(0x80))
+	b.emit(ldrX(0, 31, 0), ldrX(9, 0, 1), cmpImmX(9, 2))
+	b.bc(3, "m14.stat.return")
+	b.emit(ldrX(9, 0, 5), addImmX(9, 9, m12PayloadBase), ldrX(11, 31, 3), m8StrB(11, 9), ldrX(0, 31, 4), movzX(1, 1))
+	b.bl("m14.status.classify")
+	b.emit(addImmX(9, 9, 1), m8StrB(0, 9))
+	b.label("m14.stat.return")
+	b.emit(addImmX(31, 31, 192))
+	m14ReturnTagged(b, emptyTagged)
+	b.label("m14.stat.badpath")
+	b.emit(ldrX(0, 31, 0), ldrX(9, 0, 1), cmpImmX(9, 2))
+	b.bc(3, "m14.stat.badpath.return")
+	b.emit(ldrX(9, 0, 5), addImmX(9, 9, m12PayloadBase), m8StrB(31, 9), movzX(10, 7), addImmX(9, 9, 1), m8StrB(10, 9))
+	b.label("m14.stat.badpath.return")
+	b.emit(addImmX(31, 31, 192))
+	m14ReturnTagged(b, emptyTagged)
+
+	// mkdir(path, status) creates exactly one directory. Darwin applies the
+	// process umask to 0777, matching os.Mkdir(path, 0777).
+	b.label("m14.mkdir")
+	m14Enter(b)
+	b.emit(subImmX(31, 31, 48), strX(1, 31, 0))
+	b.bl("m14.cpath")
+	b.cbz(0, "m14.mkdir.badpath")
+	b.emit(strX(0, 31, 1), strX(1, 31, 2), movzX(1, 0x1ff), movzX(16, m14SYSMkdir), svc(0x80))
+	b.bc(2, "m14.mkdir.syserr")
+	b.emit(movzX(13, 0))
+	b.b("m14.mkdir.release")
+	b.label("m14.mkdir.syserr")
+	b.emit(movX(13, 0))
+	b.label("m14.mkdir.release")
+	b.emit(strX(13, 31, 3), ldrX(0, 31, 1), ldrX(1, 31, 2), movzX(16, m8DarwinSYSMunmap), svc(0x80))
+	b.emit(ldrX(0, 31, 3), movzX(1, 1))
+	b.bl("m14.status.classify")
+	b.emit(movX(1, 0), ldrX(0, 31, 0))
+	b.bl("m14.status.byte")
+	b.emit(addImmX(31, 31, 48))
+	m14ReturnTagged(b, emptyTagged)
+	b.label("m14.mkdir.badpath")
+	b.emit(ldrX(0, 31, 0), movzX(1, 7))
+	b.bl("m14.status.byte")
+	b.emit(addImmX(31, 31, 48))
+	m14ReturnTagged(b, emptyTagged)
 }
 
 func appendM14FileEntries(b *m8Assembler, emptyTagged uint64) {

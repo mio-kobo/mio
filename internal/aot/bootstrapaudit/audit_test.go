@@ -120,11 +120,17 @@ func TestClassifyKnownButUnavailable(t *testing.T) {
 			t.Errorf("%s: %s", name, st)
 		}
 	}
-	for _, name := range []string{"OpDataConvert", "OpMath", "OpIntegerConvert"} {
+	for _, name := range []string{"OpDataConvert", "OpIntegerConvert"} {
 		st, _, _, _ := classify(name, nil, -1, nil, &compiler.Bytecode{})
 		if st != StatusLowered {
 			t.Errorf("%s: %s", name, st)
 		}
+	}
+	if st, _, _, _ := classify("OpMath", []int{code.MathIsInf, 1}, -1, nil, &compiler.Bytecode{}); st != StatusLowered {
+		t.Errorf("OpMath is_inf: %s", st)
+	}
+	if st, _, _, _ := classify("OpMath", []int{code.MathAddOverflows, 2}, -1, nil, &compiler.Bytecode{}); st != StatusMissing {
+		t.Errorf("OpMath add_overflows: %s", st)
 	}
 	for _, name := range []string{"OpAdd", "OpChant", "OpGetLocal", "OpConstant", "OpIntToFloat", "OpArray", "OpStruct", "OpArrayPush", "OpArrayClone", "OpArrayTruncate", "OpArrayAppendAll", "OpEnum", "OpEnumTag", "OpGetEnumValue", "OpFunction", "OpClosure", "OpCallValue", "OpGetUpvalue", "OpSetUpvalue", "OpNil", "OpIsNil", "OpSetNullableIndex"} {
 		// 对 OpConstant 构造一个可识别的 int64 常量，确保按受限而不是完整支持统计。

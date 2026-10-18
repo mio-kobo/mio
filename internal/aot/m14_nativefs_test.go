@@ -204,3 +204,134 @@ func TestM14NativeFileWriteAndRead(t *testing.T) {
 		t.Fatalf("native output=%q, want=%q", got, want)
 	}
 }
+
+func TestM14NativeStatSemantics(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file.mio")
+	childDir := filepath.Join(dir, "child")
+	link := filepath.Join(dir, "file-link")
+	locked := filepath.Join(dir, "locked")
+	if err := os.WriteFile(file, []byte("mio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockedChild := filepath.Join(locked, "hidden")
+	if err := os.WriteFile(lockedChild, []byte("mio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	paths := []string{file, childDir, link, filepath.Join(dir, "missing"), lockedChild, "bad\x00path"}
+	constants := make([]value.Value, 0, len(paths)+3)
+	for _, path := range paths {
+		constants = append(constants, value.NewString(path))
+	}
+	zeroByte := len(constants)
+	constants = append(constants, value.NewUint8(0))
+	zeroIndex := len(constants)
+	constants = append(constants, value.NewInt(0))
+	oneIndex := len(constants)
+	constants = append(constants, value.NewInt(1))
+
+	a := newM3TestAsm()
+	a.emit(code.OpConstant, zeroByte)
+	a.emit(code.OpConstant, zeroByte)
+	a.emit(code.OpArrayTyped, 2, int(value.KindUint8))
+	a.emit(code.OpSetGlobal, 0)
+	for pathIndex := range paths {
+		a.emit(code.OpConstant, pathIndex)
+		a.emit(code.OpGetGlobal, 0)
+		a.emit(code.OpCall, 0)
+		a.emit(code.OpChant)
+		for _, index := range []int{zeroIndex, oneIndex} {
+			a.emit(code.OpGetGlobal, 0)
+			a.emit(code.OpConstant, index)
+			a.emit(code.OpIndex)
+			a.emit(code.OpChant)
+		}
+	}
+	p := &compiler.Bytecode{
+		GlobalsCount: 1,
+		Constants:    constants,
+		Instructions: a.build(),
+		Functions:    []compiler.CompiledFunction{m14Stub(0, "stat", 2)},
+	}
+	got, err := runM12Native(t, p)
+	if err != nil {
+		t.Fatalf("native execution failed: %v, output=%q", err, got)
+	}
+	if want := []byte("\n1\n0\n\n2\n0\n\n1\n0\n\n0\n1\n\n0\n2\n\n0\n7\n"); !bytes.Equal(got, want) {
+		t.Fatalf("native output=%q, want=%q", got, want)
+	}
+}
+
+func TestM14NativeMkdirSemantics(t *testing.T) {
+	dir := t.TempDir()
+	created := filepath.Join(dir, "created")
+	existing := filepath.Join(dir, "existing")
+	link := filepath.Join(dir, "existing-link")
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(existing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(existing, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	paths := []string{created, existing, filepath.Join(dir, "missing", "child"), link, filepath.Join(locked, "denied"), "bad\x00path"}
+	constants := make([]value.Value, 0, len(paths)+2)
+	for _, path := range paths {
+		constants = append(constants, value.NewString(path))
+	}
+	zeroByte := len(constants)
+	constants = append(constants, value.NewUint8(0))
+	zeroIndex := len(constants)
+	constants = append(constants, value.NewInt(0))
+
+	a := newM3TestAsm()
+	a.emit(code.OpConstant, zeroByte)
+	a.emit(code.OpArrayTyped, 1, int(value.KindUint8))
+	a.emit(code.OpSetGlobal, 0)
+	for pathIndex := range paths {
+		a.emit(code.OpConstant, pathIndex)
+		a.emit(code.OpGetGlobal, 0)
+		a.emit(code.OpCall, 0)
+		a.emit(code.OpChant)
+		a.emit(code.OpGetGlobal, 0)
+		a.emit(code.OpConstant, zeroIndex)
+		a.emit(code.OpIndex)
+		a.emit(code.OpChant)
+	}
+	p := &compiler.Bytecode{
+		GlobalsCount: 1,
+		Constants:    constants,
+		Instructions: a.build(),
+		Functions:    []compiler.CompiledFunction{m14Stub(0, "mkdir", 2)},
+	}
+	got, err := runM12Native(t, p)
+	if err != nil {
+		t.Fatalf("native execution failed: %v, output=%q", err, got)
+	}
+	if want := []byte("\n0\n\n5\n\n1\n\n5\n\n2\n\n7\n"); !bytes.Equal(got, want) {
+		t.Fatalf("native output=%q, want=%q", got, want)
+	}
+	info, err := os.Stat(created)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("mkdir did not create a directory: info=%v err=%v", info, err)
+	}
+}

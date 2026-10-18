@@ -90,7 +90,8 @@ func nativeFSSupported(name string) bool {
 	}
 	switch op {
 	case "open", "read", "write", "close", "file_status", "open_dir",
-		"dir_next", "dir_name", "dir_is_dir", "dir_is_file", "dir_status", "dir_close":
+		"dir_next", "dir_name", "dir_is_dir", "dir_is_file", "dir_status", "dir_close",
+		"stat", "mkdir":
 		return true
 	default:
 		return false
@@ -135,7 +136,7 @@ func Analyze(program *compiler.Bytecode) (*Report, error) {
 	}
 	result := &Report{
 		SchemaVersion:    1,
-		CompilerBaseline: "M11c + M12 + M13a/M13b + M15a/M15b macOS ARM64（静态降级能力矩阵）",
+		CompilerBaseline: "M11c + M12 + M13a/M13b + M15a/M15b + M16b macOS ARM64（静态降级能力矩阵）",
 		FunctionCount:    len(program.Functions),
 		GlobalsCount:     program.GlobalsCount,
 		ConstantCount:    len(program.Constants),
@@ -377,7 +378,10 @@ func classify(name string, operands []int, blockID int, fn *compiler.CompiledFun
 	case "OpNil", "OpIsNil":
 		return StatusLimited, "nullable", "M13a 已实现可空标量装箱、空引用和精确 GC", reason
 	case "OpMath":
-		return StatusLowered, "math", "M13c 已实现 Compiler A 使用的 is_inf 与非返回 error 原语", ""
+		if len(operands) == 0 || operands[0] == code.MathIsNegativeZero || operands[0] == code.MathAddOverflows {
+			return StatusMissing, "math", "M16b 已实现自举所需的一元浮点、符号、负号溢出与 error 原语", "当前 Math primitive 尚未实现"
+		}
+		return StatusLowered, "math", "M16b 已实现自举使用的一元浮点、谓词、符号与非返回 error 原语", ""
 	case "OpIntegerConvert":
 		return StatusLowered, "narrow-int", "M13c 已实现有界转换、窄位回绕和符号/零扩展", ""
 	case "OpDataConvert":
