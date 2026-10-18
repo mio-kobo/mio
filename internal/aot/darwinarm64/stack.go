@@ -19,32 +19,76 @@ type floatCallFixup struct {
 	kind uint8
 }
 
+type closureTargetFixup struct {
+	word       int
+	functionID int
+}
+
 type StackEmitter struct {
-	m11Enabled    bool
-	m11InitCall   int
-	m11InitFail   int
-	floatCalls    []floatCallFixup
-	stringCalls   []int
-	lastPopString bool
-	lastPopFloat  bool
-	words         []uint32
-	depth         int
-	maxStack      int
-	locals        int
-	globals       int
-	functionMode  bool
-	lastPopped    bool
-	printCalls    []int
-	boolCalls     []int
-	fixups        []branchFixup
-	functionCalls []functionCallFixup
-	overflowSites []int
-	trapSites     []m6TrapSite
-	returnSites   []int
+	m11Enabled        bool
+	m11InitCall       int
+	m11InitFail       int
+	floatCalls        []floatCallFixup
+	stringCalls       []int
+	lastPopString     bool
+	lastPopFloat      bool
+	words             []uint32
+	depth             int
+	maxStack          int
+	locals            int
+	globals           int
+	functionMode      bool
+	lastPopped        bool
+	printCalls        []int
+	boolCalls         []int
+	fixups            []branchFixup
+	functionCalls     []functionCallFixup
+	overflowSites     []int
+	trapSites         []m6TrapSite
+	returnSites       []int
+	m12Enabled        bool
+	m12InitCall       int
+	m12InitFail       int
+	m12Calls          []m12CallSite
+	m12ZeroSites      []int
+	m12BoundsSites    []int
+	m12ArrayFailSites []int
+	stringLenCalls    []int
+	gcEnabled         bool
+	gcStress          bool
+	gcRootCapacity    int
+	gcRecordOffset    int
+	gcSafepoints      []M11StackMap
+	gcFrameRoots      []int
+	gcGlobalRoots     []int
+	frameSlots        int
+	environmentSlot   int
+	cellSlots         map[int]int
+	upvalueCount      int
+	closureTargets    []closureTargetFixup
+	closureZeroSites  []int
 }
 
 // NewStackEmitter 创建固定大小的栈帧。主程序和函数使用同一套槽位布局。
 func NewStackEmitter(globals, locals, params, maxStack int, function bool) (*StackEmitter, error) {
+	return newStackEmitter(globals, locals, params, maxStack, function, false, false, nil, 0)
+}
+
+// NewStackEmitterWithGC creates an M11b frame.  x24 points at a linked shadow
+// record containing only the references selected by the compiler at the most
+// recent safepoint; integer-looking values are never inspected by the GC.
+func NewStackEmitterWithGC(globals, locals, params, maxStack int, function, stress bool) (*StackEmitter, error) {
+	return newStackEmitter(globals, locals, params, maxStack, function, true, stress, nil, 0)
+}
+
+// NewStackEmitterWithClosures reserves precise hidden frame slots for the
+// incoming environment and for lazily-created Cells belonging to capturable
+// locals. The hidden environment is passed in x25, outside the M15a value ABI.
+func NewStackEmitterWithClosures(globals, locals, params, maxStack int, function, stress bool, capturedLocals []int, upvalues int) (*StackEmitter, error) {
+	return newStackEmitter(globals, locals, params, maxStack, function, true, stress, capturedLocals, upvalues)
+}
+
+func newStackEmitter(globals, locals, params, maxStack int, function, gc, stress bool, capturedLocals []int, upvalues int) (*StackEmitter, error) {
 	if globals < 0 || globals > MaxGlobalSlots {
 		return nil, fmt.Errorf("AOT M5 global slot count %d exceeds limit %d", globals, MaxGlobalSlots)
 	}
@@ -52,16 +96,39 @@ func NewStackEmitter(globals, locals, params, maxStack int, function bool) (*Sta
 		return nil, fmt.Errorf("AOT M5 operand stack depth %d exceeds limit %d", maxStack, MaxM5OperandSlots)
 	}
 	if function {
-		if locals < params || locals > MaxM4Locals || params < 0 || params > MaxM4Parameters {
+		if locals < params || locals > MaxM4Locals || params < 0 || params > MaxM15Parameters {
 			return nil, fmt.Errorf("AOT M5 invalid native frame (locals=%d parameters=%d)", locals, params)
 		}
 	} else if locals != 0 || params != 0 {
 		return nil, fmt.Errorf("AOT M5 main cannot have locals or parameters")
 	}
-	e := &StackEmitter{maxStack: maxStack, locals: locals, globals: globals, functionMode: function}
+	e := &StackEmitter{maxStack: maxStack, locals: locals, globals: globals, functionMode: function, gcEnabled: gc, gcStress: stress, environmentSlot: -1, cellSlots: make(map[int]int), upvalueCount: upvalues}
+	e.frameSlots = locals + maxStack
+	if function && (upvalues != 0 || len(capturedLocals) != 0) {
+		e.environmentSlot = e.frameSlots
+		e.frameSlots++
+		for _, local := range capturedLocals {
+			if local < 0 || local >= locals {
+				return nil, fmt.Errorf("AOT M15b capturable local %d out of range", local)
+			}
+			if _, exists := e.cellSlots[local]; exists {
+				continue
+			}
+			e.cellSlots[local] = e.frameSlots
+			e.frameSlots++
+		}
+	}
 	// 先保存 FP/LR，再将当前帧设为 x29；始终保持 SP 的 16 字节对齐。
 	e.words = append(e.words, 0xA9BF7BFD, addImmX(29, 31, 0))
-	frameBytes := (8*(locals+maxStack) + 15) &^ 15
+	slotBytes := 8 * e.frameSlots
+	frameBytes := (slotBytes + 15) &^ 15
+	if gc {
+		e.gcRootCapacity = e.frameSlots + globals
+		// prev + count + the maximum precise root vector, rounded for SP.
+		gcBytes := (16 + 8*e.gcRootCapacity + 15) &^ 15
+		frameBytes += gcBytes
+		e.gcRecordOffset = frameBytes
+	}
 	for remaining := frameBytes; remaining > 0; {
 		step := remaining
 		if step > 4080 {
@@ -70,17 +137,124 @@ func NewStackEmitter(globals, locals, params, maxStack int, function bool) (*Sta
 		e.words = append(e.words, subImmX(31, 31, uint32(step)))
 		remaining -= step
 	}
+	if gc {
+		if !function {
+			e.words = append(e.words, movzX(24, 0))
+		}
+		e.frameAddr(e.gcRecordOffset)
+		e.words = append(e.words, strX(24, 8, 0), strX(31, 8, 1), movX(24, 8))
+	}
+	if e.environmentSlot >= 0 {
+		e.frameAddr(8 * (e.environmentSlot + 1))
+		e.words = append(e.words, strX(25, 8, 0))
+		for _, local := range capturedLocals {
+			slot, exists := e.cellSlots[local]
+			if !exists {
+				continue
+			}
+			e.frameAddr(8 * (slot + 1))
+			e.words = append(e.words, strX(31, 8, 0))
+		}
+	}
 	if function {
-		// 参数暂存在 x0..x6；进入函数时立即写入本帧局部槽位。
+		// M15a：前 8 个参数来自 x0..x7，其余参数位于入口 x29+16 起的
+		// 调用方栈参数区。所有值均立即复制到 callee 独立 local slots，
+		// 因而第一次可能触发 GC 的用户指令之前，引用已有稳定帧内位置。
 		for i := 0; i < params; i++ {
 			e.localAddr(i)
-			e.words = append(e.words, strX(uint32(i), 8, 0))
+			if i < M15RegisterParameters {
+				e.words = append(e.words, strX(uint32(i), 8, 0))
+				continue
+			}
+			e.words = append(e.words,
+				ldrX(9, 29, uint32(2+i-M15RegisterParameters)),
+				strX(9, 8, 0),
+			)
 		}
 	} else {
 		// x20: 是否曾经执行 Pop；x22: 原生用户函数调用深度。
 		e.words = append(e.words, movzX(20, 0), movzX(22, 0))
 	}
 	return e, nil
+}
+
+// SetGCRoots materializes the exact root vector for a safepoint. Slots are
+// frame-relative logical slots: locals first, then operand-stack slots.
+func (e *StackEmitter) SetGCRoots(frameSlots, globalSlots []int) error {
+	if !e.gcEnabled {
+		return nil
+	}
+	hidden := make([]int, 0, 1+len(e.cellSlots))
+	if e.environmentSlot >= 0 {
+		hidden = append(hidden, e.environmentSlot)
+	}
+	for slot := e.locals + e.maxStack; slot < e.frameSlots; slot++ {
+		if slot != e.environmentSlot {
+			hidden = append(hidden, slot)
+		}
+	}
+	frameSlots = append(append([]int(nil), frameSlots...), hidden...)
+	if len(frameSlots)+len(globalSlots) > e.gcRootCapacity {
+		return fmt.Errorf("AOT M11b root vector exceeds frame capacity")
+	}
+	seenFrame := make(map[int]bool, len(frameSlots))
+	seenGlobal := make(map[int]bool, len(globalSlots))
+	rootIndex := 0
+	for _, slot := range frameSlots {
+		if slot < 0 || slot >= e.frameSlots || seenFrame[slot] {
+			return fmt.Errorf("AOT M11b invalid frame root slot %d", slot)
+		}
+		seenFrame[slot] = true
+		e.frameAddr(8 * (slot + 1))
+		e.words = append(e.words, ldrX(9, 8, 0), strX(9, 24, uint32(2+rootIndex)))
+		rootIndex++
+	}
+	for _, slot := range globalSlots {
+		if slot < 0 || slot >= e.globals || seenGlobal[slot] {
+			return fmt.Errorf("AOT M11b invalid global root slot %d", slot)
+		}
+		seenGlobal[slot] = true
+		if err := e.globalAccess(9, slot, false); err != nil {
+			return err
+		}
+		e.words = append(e.words, strX(9, 24, uint32(2+rootIndex)))
+		rootIndex++
+	}
+	e.words = append(e.words, m8MovBits(9, uint64(rootIndex))...)
+	e.words = append(e.words, strX(9, 24, 1))
+	e.gcSafepoints = append(e.gcSafepoints, M11StackMap{
+		NativeWord: uint32(len(e.words)), FrameSlots: append([]int(nil), frameSlots...),
+		GlobalSlots: append([]int(nil), globalSlots...),
+	})
+	e.gcFrameRoots = append(e.gcFrameRoots[:0], frameSlots...)
+	e.gcGlobalRoots = append(e.gcGlobalRoots[:0], globalSlots...)
+	return nil
+}
+
+// ProtectGCTemporary publishes a newly allocated value before a subsequent
+// allocation can collect. If the logical frame slot was already a root its
+// shadow value is replaced; otherwise one temporary root is appended.
+func (e *StackEmitter) ProtectGCTemporary(frameSlot int, reg uint32) error {
+	if !e.gcEnabled {
+		return nil
+	}
+	for i, slot := range e.gcFrameRoots {
+		if slot == frameSlot {
+			e.words = append(e.words, strX(reg, 24, uint32(2+i)))
+			e.gcSafepoints = append(e.gcSafepoints, M11StackMap{NativeWord: uint32(len(e.words)), FrameSlots: append([]int(nil), e.gcFrameRoots...), GlobalSlots: append([]int(nil), e.gcGlobalRoots...)})
+			return nil
+		}
+	}
+	count := len(e.gcFrameRoots) + len(e.gcGlobalRoots)
+	if count >= e.gcRootCapacity {
+		return fmt.Errorf("AOT M11b has no temporary root capacity")
+	}
+	e.words = append(e.words, strX(reg, 24, uint32(2+count)))
+	e.words = append(e.words, m8MovBits(9, uint64(count+1))...)
+	e.words = append(e.words, strX(9, 24, 1))
+	frameRoots := append(append([]int(nil), e.gcFrameRoots...), frameSlot)
+	e.gcSafepoints = append(e.gcSafepoints, M11StackMap{NativeWord: uint32(len(e.words)), FrameSlots: frameRoots, GlobalSlots: append([]int(nil), e.gcGlobalRoots...)})
+	return nil
 }
 
 func (e *StackEmitter) CodeOffset() int { return len(e.words) }
@@ -240,6 +414,14 @@ func (e *StackEmitter) GetGlobal(slot int) error {
 	return nil
 }
 func (e *StackEmitter) SetLocal(slot int) error {
+	return e.setLocal(slot, false)
+}
+
+func (e *StackEmitter) DefineLocal(slot int) error {
+	return e.setLocal(slot, true)
+}
+
+func (e *StackEmitter) setLocal(slot int, fresh bool) error {
 	if !e.functionMode || slot < 0 || slot >= e.locals {
 		return fmt.Errorf("AOT M5 local slot %d out of range", slot)
 	}
@@ -247,6 +429,34 @@ func (e *StackEmitter) SetLocal(slot int) error {
 		return err
 	}
 	e.loadOperand(e.depth-1, 9)
+	if cellSlot, captured := e.cellSlots[slot]; captured {
+		if fresh {
+			e.frameAddr(8 * (cellSlot + 1))
+			e.words = append(e.words, strX(31, 8, 0))
+		} else {
+			e.frameAddr(8 * (cellSlot + 1))
+			e.words = append(e.words, ldrX(10, 8, 0))
+			toRaw := len(e.words)
+			e.words = append(e.words, 0, strX(9, 10, 1))
+			done := len(e.words)
+			e.words = append(e.words, 0)
+			raw := len(e.words)
+			var err error
+			e.words[toRaw], err = checkedCBZ(10, toRaw, raw)
+			if err != nil {
+				return err
+			}
+			e.localAddr(slot)
+			e.words = append(e.words, strX(9, 8, 0))
+			after := len(e.words)
+			e.words[done], err = branch26(0x14000000, done, after)
+			if err != nil {
+				return err
+			}
+			e.depth--
+			return nil
+		}
+	}
 	e.localAddr(slot)
 	e.words = append(e.words, strX(9, 8, 0))
 	e.depth--
@@ -259,8 +469,30 @@ func (e *StackEmitter) GetLocal(slot int) error {
 	if err := e.ensurePush(); err != nil {
 		return err
 	}
-	e.localAddr(slot)
-	e.words = append(e.words, ldrX(9, 8, 0))
+	if cellSlot, captured := e.cellSlots[slot]; captured {
+		e.frameAddr(8 * (cellSlot + 1))
+		e.words = append(e.words, ldrX(10, 8, 0))
+		toRaw := len(e.words)
+		e.words = append(e.words, 0, ldrX(9, 10, 1))
+		done := len(e.words)
+		e.words = append(e.words, 0)
+		raw := len(e.words)
+		var err error
+		e.words[toRaw], err = checkedCBZ(10, toRaw, raw)
+		if err != nil {
+			return err
+		}
+		e.localAddr(slot)
+		e.words = append(e.words, ldrX(9, 8, 0))
+		after := len(e.words)
+		e.words[done], err = branch26(0x14000000, done, after)
+		if err != nil {
+			return err
+		}
+	} else {
+		e.localAddr(slot)
+		e.words = append(e.words, ldrX(9, 8, 0))
+	}
 	e.storeOperand(e.depth, 9)
 	e.depth++
 	return nil
@@ -375,21 +607,40 @@ func (e *StackEmitter) PopFloat(kind uint8) error {
 
 // CallNative 不依赖 x9..x15 保留调用者操作数；所有临时值已经存进当前帧。
 func (e *StackEmitter) CallNative(functionID, params int, returns bool) error {
-	if params < 0 || params > MaxM4Parameters || e.depth < params {
+	if params < 0 || params > MaxM15Parameters || e.depth < params {
 		return fmt.Errorf("AOT M5 invalid native call params=%d depth=%d", params, e.depth)
 	}
 	base := e.depth - params
 	if returns && base >= e.maxStack {
 		return fmt.Errorf("AOT M5 return stack limit exceeded")
 	}
-	for i := 0; i < params; i++ {
-		e.loadOperand(base+i, uint32(i))
-	}
+	// 先检查调用深度；溢出路径直接退出，不需要构造参数区。
 	e.words = append(e.words, addImmX(22, 22, 1), cmpImmX(22, MaxM4CallDepth))
 	e.overflowSites = append(e.overflowSites, len(e.words))
 	e.words = append(e.words, 0)
+
+	// 第 9 个及后续参数按从左到右的槽位顺序写入调用方临时区域。
+	// 区域向 16 字节取整，BL 前后 SP 始终保持 16 字节对齐。
+	stackParams := params - M15RegisterParameters
+	if stackParams < 0 {
+		stackParams = 0
+	}
+	stackBytes := (stackParams*8 + 15) &^ 15
+	if stackBytes != 0 {
+		e.words = append(e.words, subImmX(31, 31, uint32(stackBytes)))
+		for i := M15RegisterParameters; i < params; i++ {
+			e.loadOperand(base+i, 9)
+			e.words = append(e.words, strX(9, 31, uint32(i-M15RegisterParameters)))
+		}
+	}
+	for i := 0; i < params && i < M15RegisterParameters; i++ {
+		e.loadOperand(base+i, uint32(i))
+	}
 	e.functionCalls = append(e.functionCalls, functionCallFixup{word: len(e.words), functionID: functionID})
 	e.words = append(e.words, 0)
+	if stackBytes != 0 {
+		e.words = append(e.words, addImmX(31, 31, uint32(stackBytes)))
+	}
 	e.words = append(e.words, subImmX(22, 22, 1))
 	if returns {
 		e.storeOperand(base, 0)
@@ -424,6 +675,9 @@ func (e *StackEmitter) FinishFunction() error {
 	}
 	ep := len(e.words)
 	// 直接将 SP 恢复到 FP，避免大栈帧的多条 ADD，随后恢复 x29/x30。
+	if e.gcEnabled {
+		e.words = append(e.words, ldrX(24, 24, 0))
+	}
 	e.words = append(e.words, addImmX(31, 29, 0), 0xA8C17BFD, 0xD65F03C0)
 	for _, at := range e.returnSites {
 		word, err := branch26(0x14000000, at, ep)
@@ -454,6 +708,11 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 	boolCalls := append([]int(nil), e.boolCalls...)
 	floatCalls := append([]floatCallFixup(nil), e.floatCalls...)
 	stringCalls := append([]int(nil), e.stringCalls...)
+	stringLenCalls := append([]int(nil), e.stringLenCalls...)
+	m12Calls := append([]m12CallSite(nil), e.m12Calls...)
+	m12ZeroSites := append([]int(nil), e.m12ZeroSites...)
+	m12BoundsSites := append([]int(nil), e.m12BoundsSites...)
+	m12ArrayFailSites := append([]int(nil), e.m12ArrayFailSites...)
 	if e.lastPopped && e.lastPopString {
 		// M7 的表达式结果可能来自不同分支，退出前按最后的实际运行时标签输出。
 		jumpEmpty := len(code)
@@ -605,6 +864,11 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		m11.calls = append(m11.calls, m11CallSite{at: e.m11InitCall, kind: m11Init})
 		code = appendM11Lifecycle(code, &m11)
 	}
+	if e.m12Enabled {
+		code = append(code, movX(0, 23))
+		m12Calls = append(m12Calls, m12CallSite{at: len(code), kind: m12Destroy})
+		code = append(code, 0)
+	}
 	// 正常退出前也恢复入口 SP；不会把 main 的帧遗留在退出路径上。
 	code = append(code, addImmX(31, 29, 0), 0xA8C17BFD, movzX(0, 0), movzX(16, 1), svc(0x80))
 	if e.m11Enabled {
@@ -615,7 +879,14 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		}
 	}
 	functionStarts := make([]int, len(functions))
+	stackMaps := make([]M11StackMap, 0, len(e.gcSafepoints))
+	for _, sm := range e.gcSafepoints {
+		sm.FrameID = 0
+		stackMaps = append(stackMaps, sm)
+	}
 	allCalls := append([]functionCallFixup(nil), e.functionCalls...)
+	closureTargets := append([]closureTargetFixup(nil), e.closureTargets...)
+	closureZeroSites := append([]int(nil), e.closureZeroSites...)
 	overflows := append([]int(nil), e.overflowSites...)
 	traps := append([]m6TrapSite(nil), e.trapSites...)
 	for i, fn := range functions {
@@ -624,6 +895,11 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		}
 		functionStarts[i] = len(code)
 		code = append(code, fn.words...)
+		for _, sm := range fn.gcSafepoints {
+			sm.FrameID = uint32(i + 1)
+			sm.NativeWord += uint32(functionStarts[i])
+			stackMaps = append(stackMaps, sm)
+		}
 		for _, at := range fn.printCalls {
 			calls = append(calls, functionStarts[i]+at)
 		}
@@ -633,6 +909,22 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		for _, at := range fn.stringCalls {
 			stringCalls = append(stringCalls, functionStarts[i]+at)
 		}
+		for _, at := range fn.stringLenCalls {
+			stringLenCalls = append(stringLenCalls, functionStarts[i]+at)
+		}
+		for _, call := range fn.m12Calls {
+			call.at += functionStarts[i]
+			m12Calls = append(m12Calls, call)
+		}
+		for _, at := range fn.m12ZeroSites {
+			m12ZeroSites = append(m12ZeroSites, functionStarts[i]+at)
+		}
+		for _, at := range fn.m12BoundsSites {
+			m12BoundsSites = append(m12BoundsSites, functionStarts[i]+at)
+		}
+		for _, at := range fn.m12ArrayFailSites {
+			m12ArrayFailSites = append(m12ArrayFailSites, functionStarts[i]+at)
+		}
 		for _, fx := range fn.floatCalls {
 			fx.word += functionStarts[i]
 			floatCalls = append(floatCalls, fx)
@@ -640,6 +932,13 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		for _, fx := range fn.functionCalls {
 			fx.word += functionStarts[i]
 			allCalls = append(allCalls, fx)
+		}
+		for _, fx := range fn.closureTargets {
+			fx.word += functionStarts[i]
+			closureTargets = append(closureTargets, fx)
+		}
+		for _, at := range fn.closureZeroSites {
+			closureZeroSites = append(closureZeroSites, functionStarts[i]+at)
 		}
 		for _, at := range fn.overflowSites {
 			overflows = append(overflows, functionStarts[i]+at)
@@ -649,7 +948,7 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			traps = append(traps, trap)
 		}
 	}
-	if len(overflows) > 0 || len(traps) > 0 {
+	if len(overflows) > 0 || len(traps) > 0 || len(closureZeroSites) > 0 {
 		errExit := len(code)
 		code = append(code, movzX(0, 1), movzX(16, 1), svc(0x80))
 		for _, at := range overflows {
@@ -666,6 +965,57 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			}
 			code[trap.word] = branchCond(trap.word, errExit, trap.cond)
 		}
+		for _, at := range closureZeroSites {
+			var err error
+			code[at], err = checkedCBZ(9, at, errExit)
+			if err != nil {
+				return nil, fmt.Errorf("AOT M15b invalid function trap target out of range: %w", err)
+			}
+		}
+	}
+	if e.m12Enabled {
+		m12ZeroSites = append(m12ZeroSites, e.m12InitFail)
+		allocationExit := len(code)
+		code = appendM12Failure(code, "M12 allocation failed\n", &m12Calls)
+		boundsExit := len(code)
+		code = appendM12Failure(code, "M12 array index out of bounds\n", &m12Calls)
+		capacityExit := len(code)
+		code = appendM12Failure(code, "M12 invalid array capacity\n", &m12Calls)
+		lengthExit := len(code)
+		code = appendM12Failure(code, "M12 invalid array length\n", &m12Calls)
+		arrayFailureDispatch := len(code)
+		code = append(code, cmpImmX(1, 2))
+		allocationBranch := len(code)
+		code = append(code, 0)
+		code = append(code, cmpImmX(1, 3))
+		lengthBranch := len(code)
+		code = append(code, 0)
+		capacityBranch := len(code)
+		code = append(code, 0)
+		for _, at := range m12ZeroSites {
+			var err error
+			if code[at], err = checkedCBZ(0, at, allocationExit); err != nil {
+				return nil, err
+			}
+		}
+		for _, at := range m12BoundsSites {
+			delta := boundsExit - at
+			if delta < -(1<<18) || delta >= 1<<18 {
+				return nil, fmt.Errorf("AOT M12 bounds failure target out of range")
+			}
+			code[at] = branchCond(at, boundsExit, 2) // HS
+		}
+		var err error
+		code[allocationBranch] = branchCond(allocationBranch, allocationExit, 0)
+		code[lengthBranch] = branchCond(lengthBranch, lengthExit, 0)
+		if code[capacityBranch], err = branch26(0x14000000, capacityBranch, capacityExit); err != nil {
+			return nil, err
+		}
+		for _, at := range m12ArrayFailSites {
+			if code[at], err = checkedCBZ(0, at, arrayFailureDispatch); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, fx := range allCalls {
 		if fx.functionID < 0 || fx.functionID >= len(functionStarts) {
@@ -676,6 +1026,19 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			return nil, err
 		}
 		code[fx.word] = word
+	}
+	for _, fx := range closureTargets {
+		if fx.functionID < 0 || fx.functionID >= len(functionStarts) {
+			return nil, fmt.Errorf("AOT M15b unknown closure function %d", fx.functionID)
+		}
+		pc := textVMAddr + entryOffset + uint64(fx.word)*4
+		target := textVMAddr + entryOffset + uint64(functionStarts[fx.functionID])*4
+		first, err := adrpX(9, pc, target)
+		if err != nil {
+			return nil, err
+		}
+		code[fx.word] = first
+		code[fx.word+1] = addImmX(9, 9, uint32(target&0xfff))
 	}
 	if len(calls) != 0 {
 		start := len(code)
@@ -710,7 +1073,7 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			code[at.word] = word
 		}
 	}
-	// M10 的机器码全部采用 PC 相对 BL，原封不动链接到主程序后方。
+	// M10 probe runtime uses PC-relative calls and remains isolated from M12.
 	if e.m11Enabled {
 		runtimeStart := len(code)
 		words, entries, err := M10RuntimeWords()
@@ -739,7 +1102,46 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			code[call.at] = ins
 		}
 	}
-	if len(stringCalls) != 0 && len(strings) == 0 {
+	if e.m12Enabled {
+		runtimeStart := len(code)
+		words, entries, err := M12ArrayGCRuntimeWords(e.gcStress)
+		if err != nil {
+			return nil, err
+		}
+		code = append(code, words...)
+		for _, call := range m12Calls {
+			target := entries.Alloc
+			switch call.kind {
+			case m12Init:
+				target = entries.Init
+			case m12Destroy:
+				target = entries.Destroy
+			case m12Alloc:
+			case m12ArrayMake:
+				target = entries.ArrayMake
+			case m12ArrayWithCapacity:
+				target = entries.ArrayWithCapacity
+			case m12ArrayPush:
+				target = entries.ArrayPush
+			case m12ArrayReserve:
+				target = entries.ArrayReserve
+			case m12ArrayClone:
+				target = entries.ArrayClone
+			case m12ArrayTruncate:
+				target = entries.ArrayTruncate
+			case m12ArrayAppendAll:
+				target = entries.ArrayAppendAll
+			default:
+				return nil, fmt.Errorf("AOT M12 unknown runtime function")
+			}
+			word, err := branch26(0x94000000, call.at, runtimeStart+target)
+			if err != nil {
+				return nil, err
+			}
+			code[call.at] = word
+		}
+	}
+	if (len(stringCalls) != 0 || len(stringLenCalls) != 0) && len(strings) == 0 {
 		return nil, fmt.Errorf("AOT M7 missing static string table")
 	}
 	var constants []byte
@@ -750,20 +1152,39 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 			return nil, err
 		}
 	}
-	if len(stringCalls) != 0 {
-		start := len(code)
-		code = appendPrintStaticString(code)
+	if len(stringCalls) != 0 || len(stringLenCalls) != 0 {
+		printStart, lenStart := -1, -1
+		if len(stringCalls) != 0 {
+			printStart = len(code)
+			code = appendPrintStaticString(code)
+		}
+		if len(stringLenCalls) != 0 {
+			lenStart = len(code)
+			code = appendStaticStringLen(code)
+		}
 		// 先确定字符串表的最终文件偏移，避免将静态绝对地址写入机器码。
 		constOff := (entryOffset + uint64(len(code))*4 + 7) &^ 7
 		constVA := textVMAddr + constOff
-		pc := textVMAddr + entryOffset + uint64(start)*4
 		var err error
-		if code[start], err = adrpX(9, pc, constVA); err != nil {
-			return nil, err
+		for _, start := range []int{printStart, lenStart} {
+			if start < 0 {
+				continue
+			}
+			pc := textVMAddr + entryOffset + uint64(start)*4
+			if code[start], err = adrpX(9, pc, constVA); err != nil {
+				return nil, err
+			}
+			code[start+1] = addImmX(9, 9, uint32(constVA&0xfff))
 		}
-		code[start+1] = addImmX(9, 9, uint32(constVA&0xfff))
 		for _, at := range stringCalls {
-			word, err := branch26(0x94000000, at, start)
+			word, err := branch26(0x94000000, at, printStart)
+			if err != nil {
+				return nil, err
+			}
+			code[at] = word
+		}
+		for _, at := range stringLenCalls {
+			word, err := branch26(0x94000000, at, lenStart)
 			if err != nil {
 				return nil, err
 			}
@@ -788,6 +1209,19 @@ func (e *StackEmitter) finishWithM11(functions []*StackEmitter, strings []string
 		if err := m11PatchMetaAddress(code, m11.metadataADRP, constOff+uint64(metaPos)); err != nil {
 			return nil, err
 		}
+	}
+	if len(stackMaps) != 0 {
+		for i := range stackMaps {
+			stackMaps[i].SafepointID = uint32(i + 1)
+		}
+		for len(constants)%8 != 0 {
+			constants = append(constants, 0)
+		}
+		encoded, err := M11EncodeStackMaps(stackMaps)
+		if err != nil {
+			return nil, err
+		}
+		constants = append(constants, encoded...)
 	}
 	return ExecutableWordsWithGlobalsAndConst(code, e.globals, constants)
 }

@@ -67,6 +67,28 @@ func (e *StackEmitter) PopString() error {
 	return nil
 }
 
+// StringLen 返回静态字符串的 UTF-8 字节长度，与 VM 的 len(string) 一致。
+func (e *StackEmitter) StringLen() error {
+	if err := e.ensurePop("OpLen", 1); err != nil {
+		return err
+	}
+	e.loadOperand(e.depth-1, 0)
+	e.stringLenCalls = append(e.stringLenCalls, len(e.words))
+	e.words = append(e.words, 0)
+	e.storeOperand(e.depth-1, 0)
+	return nil
+}
+
+func appendStaticStringLen(dst []uint32) []uint32 {
+	return append(dst,
+		0,          // ADRP x9, __const
+		0,          // ADD x9, x9, lo12(__const)
+		0x8B000D2A, // ADD x10, x9, x0, LSL #3
+		0xB9400540, // LDR w0, [x10, #4]
+		0xD65F03C0,
+	)
+}
+
 // appendPrintStaticString 接收 x0 中的 ID，从 __const 查找字节地址与长度。
 // SYS_write 后再写入一个换行符，不调用 strlen，因此能正确处理内嵌 NUL。
 // 第 0、1 条 ADRP/ADD 指令由最终链接阶段按真实 __const 地址回填。

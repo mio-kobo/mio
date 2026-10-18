@@ -173,17 +173,17 @@ func TestM4BoolReturnRejected(t *testing.T) {
 	}
 }
 
-func TestM4CapturingClosureRejected(t *testing.T) {
+func TestM15bCapturingFunctionMetadataAccepted(t *testing.T) {
 	fn := newM3TestAsm()
 	fn.emit(code.OpReturn)
 	p := &compiler.Bytecode{Functions: []compiler.CompiledFunction{{ID: 0, Name: "capture", Instructions: fn.build(), Captures: []compiler.Capture{{Local: true, Index: 0}}}}}
-	if _, err := CompileDarwinARM64(p); err == nil {
-		t.Fatalf("expected capturing closure rejection, got %v", err)
+	if _, err := CompileDarwinARM64(p); err != nil {
+		t.Fatalf("capturing function metadata should route through M15b: %v", err)
 	}
 }
 
 func TestM4FunctionFrameLimit(t *testing.T) {
-	p := &compiler.Bytecode{Functions: []compiler.CompiledFunction{{ID: 0, Name: "too_many", ParameterCount: 8, LocalCount: 8}}}
+	p := &compiler.Bytecode{Functions: []compiler.CompiledFunction{{ID: 0, Name: "too_many", ParameterCount: 257, LocalCount: 257}}}
 	if _, err := CompileDarwinARM64(p); err == nil || !strings.Contains(err.Error(), "frame limits") {
 		t.Fatalf("expected frame limit, got %v", err)
 	}

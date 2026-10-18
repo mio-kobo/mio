@@ -138,12 +138,21 @@ func CompileDarwinARM64(program *compiler.Bytecode) ([]byte, error) {
 	return emitter.Finish()
 }
 
-// CompileDarwinARM64WithM11Runtime 启用 M11a 可控的 GC Runtime 集成测试模式。
-// 默认编译路径保持不变；Mio 字节码还没有通用堆对象分配和自动 Safepoint。
-// 该模式在主程序执行后完成一次真实的分配/标记/回收/复用自检，再释放 Heap。
+// CompileDarwinARM64WithM11Runtime retains the historical M11a lifecycle
+// probe for scalar programs. Programs containing M12 objects use their normal
+// M11b/M11c precise collector instead, so two independent heaps never overlap.
 func CompileDarwinARM64WithM11Runtime(program *compiler.Bytecode) ([]byte, error) {
 	if err := mochi.Validate(program); err != nil {
 		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
 	}
 	return compileM6WithM11(program, true)
+}
+
+// CompileDarwinARM64WithGCStress forces a collection attempt at every safe
+// M12 allocation. It is intended for root-map and object-scanner testing.
+func CompileDarwinARM64WithGCStress(program *compiler.Bytecode) ([]byte, error) {
+	if err := mochi.Validate(program); err != nil {
+		return nil, fmt.Errorf("invalid Mochi bytecode: %w", err)
+	}
+	return compileM6WithOptions(program, false, true)
 }

@@ -35,6 +35,11 @@ func needsM5Stack(program *compiler.Bytecode) (bool, error) {
 		blocks = append(blocks, m5Block{name: fn.Name, function: fn, instructions: fn.Instructions})
 	}
 	large := false
+	for i := range program.Functions {
+		if program.Functions[i].ParameterCount > darwinarm64.MaxM4Parameters {
+			large = true
+		}
+	}
 	for _, block := range blocks {
 		ins, boundaries, err := decodeM4Block(block.instructions)
 		if err != nil {

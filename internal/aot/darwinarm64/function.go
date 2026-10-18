@@ -2,14 +2,23 @@ package darwinarm64
 
 import "fmt"
 
-// M4 的函数调用使用一套明确的内部 ABI：
-// x0..x6 传递至多 7 个 int64 参数，x0 返回 int64；x9..x15 是表达式寄存器栈。
+// M4 的寄存器快速路径使用 x0..x6 传递至多 7 个 int64 参数。
+// M15a 的通用帧 ABI 使用 x0..x7 传递前 8 个原始 64 位值槽，更多参数
+// 由调用方放在 16 字节对齐的栈参数区；x0 返回一个原始 64 位值槽。
+// 浮点数使用 IEEE 754 位模式，引用使用原生指针值，不采用 Darwin C ABI 的
+// FP/SIMD 参数分类。x9..x15 仍是旧 M4 快速路径的表达式寄存器栈。
+// BL 时 [sp,#0] 是参数 8、[sp,#8] 是参数 9，以此类推；callee 保存 FP/LR
+// 后可从 [x29,#16] 开始读取这些值。caller 在 BL 返回后回收整个对齐区域。
+// x22 是调用深度，x23 是 Heap，x24 是 Shadow Frame 链；内部调用保持它们
+// 的既有生命周期约定。x18 是平台保留寄存器，任何路径都不得使用。
 // 调用方保存 x9..x15，函数使用 x29 作为局部槽位的帧指针并保存 x30。
 // x22 记录当前调用深度；超过 1024 层时，原生程序以状态码 1 退出。
 const (
-	MaxM4Parameters = 7
-	MaxM4Locals     = 256
-	MaxM4CallDepth  = 1024
+	MaxM4Parameters       = 7 // 旧 M4 寄存器表达式栈快速路径。
+	M15RegisterParameters = 8
+	MaxM4Locals           = 256
+	MaxM15Parameters      = MaxM4Locals
+	MaxM4CallDepth        = 1024
 )
 
 type functionCallFixup struct {

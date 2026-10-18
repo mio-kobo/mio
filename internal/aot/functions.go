@@ -48,7 +48,14 @@ func decodeM4Block(source code.Instructions) ([]m3Instruction, map[int]int, erro
 			code.OpJump, code.OpJumpIfFalse, code.OpChant, code.OpPop,
 			code.OpGetLocal, code.OpSetLocal, code.OpDefineLocal, code.OpCall, code.OpReturn, code.OpReturnValue,
 			code.OpIntToFloat, code.OpFloatToInt, code.OpIntToFloat32, code.OpFloat32ToInt,
-			code.OpFloat32ToFloat64, code.OpFloat64ToFloat32:
+			code.OpFloat32ToFloat64, code.OpFloat64ToFloat32,
+			code.OpArray, code.OpArrayTyped, code.OpIndex, code.OpLen, code.OpSetIndex,
+			code.OpArrayMake, code.OpArrayWithCapacity, code.OpArrayPush,
+			code.OpArrayCapacity, code.OpArrayReserve, code.OpArrayClone,
+			code.OpArrayTruncate, code.OpArrayAppendAll,
+			code.OpStruct, code.OpGetField,
+			code.OpFunction, code.OpClosure, code.OpCallValue,
+			code.OpGetUpvalue, code.OpSetUpvalue, code.OpNil:
 		default:
 			return nil, nil, fmt.Errorf("AOT M4 unsupported opcode %s at byte offset %d", def.Name, pos)
 		}
@@ -331,11 +338,8 @@ func compileM4(program *compiler.Bytecode) ([]byte, error) {
 		if fn.ID != id {
 			return nil, fmt.Errorf("AOT M4 function id mismatch: index=%d id=%d", id, fn.ID)
 		}
-		if fn.ParameterCount < 0 || fn.ParameterCount > darwinarm64.MaxM4Parameters || fn.LocalCount < fn.ParameterCount || fn.LocalCount > darwinarm64.MaxM4Locals {
+		if fn.ParameterCount < 0 || fn.ParameterCount > darwinarm64.MaxM15Parameters || fn.LocalCount < fn.ParameterCount || fn.LocalCount > darwinarm64.MaxM4Locals {
 			return nil, fmt.Errorf("AOT M4 function %q exceeds native frame limits (parameters=%d locals=%d)", fn.Name, fn.ParameterCount, fn.LocalCount)
-		}
-		if len(fn.Captures) != 0 {
-			return nil, fmt.Errorf("AOT M4 function %q captures variables; closures are unsupported", fn.Name)
 		}
 	}
 
