@@ -4,7 +4,11 @@ import { ProcessRunner } from './cli/processRunner';
 import { MioCommands } from './commands/commands';
 import { MioDiagnosticManager } from './diagnostics/diagnosticManager';
 import { MioFoldingRangeProvider } from './editor/foldingProvider';
-import { createMioLanguageClient } from './lsp/client';
+import {
+  MioLanguageClient,
+  type MioDiagnosticsOwner,
+  type MioLanguageServerState,
+} from './lsp/client';
 
 interface Runtime {
   readonly output: vscode.OutputChannel;
@@ -16,6 +20,8 @@ let runtime: Runtime | undefined;
 export interface MioExtensionApi {
   readonly outputChannel: vscode.OutputChannel;
   clearDiagnostics(uri: vscode.Uri): void;
+  getLanguageServerState(): MioLanguageServerState;
+  getDiagnosticsOwner(): MioDiagnosticsOwner;
   dispose(): void;
 }
 
@@ -31,7 +37,16 @@ export async function activate(
   const cli = new MioCliService();
   const diagnostics = new MioDiagnosticManager({ output, runner, cli });
   const commands = new MioCommands({ output, runner, cli, diagnostics });
-  const languageClient = createMioLanguageClient(output);
+  const languageClient = new MioLanguageClient({ output, cli });
+
+  // server 就绪时由它独占诊断；其余状态（禁用、失败、停止）回到 CLI 回退。
+  const languageStateListener = languageClient.onDidChangeState((state) => {
+    const lspOwnsDiagnostics = state === 'ready';
+    diagnostics.setFallbackEnabled(!lspOwnsDiagnostics);
+    output.appendLine(
+      `[lsp] state=${state} diagnostics=${lspOwnsDiagnostics ? 'language server' : 'CLI fallback'}`,
+    );
+  });
 
   const guard = (
     action: () => Promise<void>,
@@ -87,10 +102,21 @@ export async function activate(
   });
   const configurationListener =
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration('mio')) {
-        cli.invalidate();
+      if (!event.affectsConfiguration('mio')) {
+        return;
+      }
+      cli.invalidate();
+      if (
+        event.affectsConfiguration('mio.executablePath') ||
+        event.affectsConfiguration('mio.languageServer.enabled')
+      ) {
+        void languageClient.restart(context);
+        return;
+      }
+      if (languageClient.state !== 'ready') {
         diagnostics.onConfigurationChanged();
       }
+      languageClient.syncConfiguration();
     });
 
   let disposed = false;
@@ -103,15 +129,12 @@ export async function activate(
       saveListener.dispose();
       closeListener.dispose();
       configurationListener.dispose();
+      languageStateListener.dispose();
       folding.dispose();
       for (const command of commandDisposables) {
         command.dispose();
       }
-      void languageClient
-        .stop()
-        .catch((error: unknown) => {
-          output.appendLine(`[lsp] ${errorMessage(error)}`);
-        });
+      languageClient.dispose();
       diagnostics.dispose();
       cli.dispose();
       runner.dispose();
@@ -125,16 +148,18 @@ export async function activate(
   const api: MioExtensionApi = {
     outputChannel: output,
     clearDiagnostics: (uri) => diagnostics.clearDocument(uri),
+    getLanguageServerState: () => languageClient.state,
+    getDiagnosticsOwner: () => diagnostics.diagnosticsOwner,
     dispose: () => disposable.dispose(),
   };
 
-  output.appendLine('Mio Language Support activated.');
+  output.appendLine('Mio — Programming Language Tools activated.');
   try {
     await languageClient.start(context);
   } catch (error) {
     output.appendLine(`[lsp] ${errorMessage(error)}`);
   }
-  output.appendLine('Mio Language Support ready.');
+  output.appendLine('Mio — Programming Language Tools ready.');
   return api;
 }
 

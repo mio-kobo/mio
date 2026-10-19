@@ -111,7 +111,7 @@ suite('extension manifest', () => {
 
   test('declares the Marketplace metadata', () => {
     assert.equal(manifest.name, 'mio-language-support');
-    assert.equal(manifest.displayName, 'Mio Language Support');
+    assert.equal(manifest.displayName, 'Mio — Programming Language Tools');
     assert.match(manifest.version ?? '', /^\d+\.\d+\.\d+$/u);
     assert.equal(typeof manifest.publisher, 'string');
     assert.notEqual(manifest.publisher, '');
@@ -169,15 +169,21 @@ suite('extension manifest', () => {
     ]);
   });
 
-  test('contributes the four supported settings and no fake version switch', () => {
+  test('contributes the five supported settings and no fake version switch', () => {
     const properties =
       manifest.contributes?.configuration?.properties ?? {};
     assert.deepEqual(Object.keys(properties).sort(), [
       'mio.diagnostics.enabled',
       'mio.diagnostics.onSave',
       'mio.executablePath',
+      'mio.languageServer.enabled',
       'mio.outputDirectory',
     ]);
+    assert.equal(
+      (properties['mio.languageServer.enabled'] as { default?: boolean })
+        ?.default,
+      true,
+    );
     assert.equal('mio.languageVersion' in properties, false);
   });
 
@@ -441,7 +447,7 @@ suite('extension manifest', () => {
     const english = readText('README.md');
     const chinese = readText('README.zh-CN.md');
     for (const readme of [english, chinese]) {
-      assert.match(readme, /Mio Language Support/u);
+      assert.match(readme, /Mio — Programming Language Tools/u);
       assert.match(readme, /github\.com\/ExMikuPro\/Mio/u);
     }
     assert.match(english, /Known limitations/u);

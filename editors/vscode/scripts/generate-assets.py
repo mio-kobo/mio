@@ -1,17 +1,30 @@
 """生成 VS Code 插件图标和 README 语法高亮预览图。
 
-只使用 Pillow；生成结果是仓库内已有 Mio 语言标识的位图派生，
-不会改动或重绘 Mio / Mochi 角色插画。
+插件图标唯一来源是 JetBrains Marketplace 图标
+`editors/jetbrains/src/main/resources/META-INF/pluginIcon.svg` 内嵌的 PNG；
+本脚本只做等比例缩放和透明留白重建，不会重绘、替换或重新设计图标。
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import os
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN_ICON = (
+    ROOT.parent
+    / "jetbrains"
+    / "src"
+    / "main"
+    / "resources"
+    / "META-INF"
+    / "pluginIcon.svg"
+)
 ASSETS = ROOT / "assets"
 IMAGES = ROOT / "docs" / "images"
 ASSETS.mkdir(parents=True, exist_ok=True)
@@ -25,41 +38,68 @@ def round_rect(draw, box, radius, fill):
     draw.rounded_rectangle(box, radius=radius, fill=fill)
 
 
+def premultiply_alpha(image: Image.Image) -> Image.Image:
+    pixels = image.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            red, green, blue, alpha = pixels[x, y]
+            pixels[x, y] = (
+                red * alpha // 255,
+                green * alpha // 255,
+                blue * alpha // 255,
+                alpha,
+            )
+    return image
+
+
+def unpremultiply_alpha(image: Image.Image) -> Image.Image:
+    pixels = image.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            red, green, blue, alpha = pixels[x, y]
+            if alpha == 0:
+                pixels[x, y] = (0, 0, 0, 0)
+            else:
+                pixels[x, y] = (
+                    min(255, red * 255 // alpha),
+                    min(255, green * 255 // alpha),
+                    min(255, blue * 255 // alpha),
+                    alpha,
+                )
+    return image
+
+
+def load_marketplace_icon() -> Image.Image:
+    svg = PLUGIN_ICON.read_text(encoding="utf-8")
+    match = re.search(r'href="data:image/png;base64,([^"]+)"', svg)
+    if match is None:
+        raise SystemExit(f"no embedded PNG in {PLUGIN_ICON}")
+    data = base64.b64decode(match.group(1))
+    return Image.open(io.BytesIO(data)).convert("RGBA")
+
+
 def build_icon() -> None:
-    scale = 64
-    size = 16 * scale
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
+    source = load_marketplace_icon()
 
-    # 对应 editors/jetbrains/src/main/resources/icons/mio.svg 的圆角方块。
-    round_rect(
-        draw,
-        (1 * scale, 1 * scale, 15 * scale, 15 * scale),
-        3 * scale,
-        "#8A63D2",
+    # pluginIcon.svg 的坐标系：viewBox 40x40，<image x=2 y=2 width=36 height=36>。
+    # 128x128 = 3.2 倍，内容 115.2px，四周透明留白 6.4px，保持 90% 视觉比例。
+    destination = 128
+    scale = destination / 40
+    content = 36 * scale
+    offset = 2 * scale
+    ratio = source.width / content
+    premultiplied = premultiply_alpha(source.copy())
+    icon = premultiplied.transform(
+        (destination, destination),
+        Image.Transform.AFFINE,
+        (ratio, 0, -offset * ratio, 0, ratio, -offset * ratio),
+        resample=Image.Resampling.BICUBIC,
+        fillcolor=(0, 0, 0, 0),
     )
+    icon = unpremultiply_alpha(icon)
+    icon.save(ROOT / "icon.png", format="PNG", optimize=True)
 
-    # SVG 路径 M3 11V5h2l3 3 3-3h2v6h-2V7.6L8 10.4 5 7.6V11z 的顶点。
-    points = [
-        (3, 11),
-        (3, 5),
-        (5, 5),
-        (8, 8),
-        (11, 5),
-        (13, 5),
-        (13, 11),
-        (11, 11),
-        (11, 7.6),
-        (8, 10.4),
-        (5, 7.6),
-        (5, 11),
-    ]
-    draw.polygon([(x * scale, y * scale) for x, y in points], fill="#FFFFFF")
-
-    icon = image.resize((128, 128), Image.Resampling.LANCZOS)
-    icon.save(ROOT / "icon.png")
-
-    # 语言文件图标也复用同一个 M 标识。
+    # 语言文件图标仍使用独立的 M 标识，与 Marketplace 图标无关。
     (ASSETS / "mio.svg").write_text(
         """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
   <rect x="1" y="1" width="14" height="14" rx="3" fill="#8A63D2"/>
@@ -112,7 +152,7 @@ def build_preview(dark: bool) -> None:
             fill=color if dark else color,
         )
     title_font = font_for("hello.mio", 18)
-    draw.text((140, 17), "hello.mio — Mio Language Support", font=title_font, fill=muted)
+    draw.text((140, 17), "hello.mio · Mio — Programming Language Tools", font=title_font, fill=muted)
 
     code_size = 24
     code_font = font_for("M", code_size)

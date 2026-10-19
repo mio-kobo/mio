@@ -25,7 +25,7 @@ Do not publish under an invented or unverified publisher ID.
 
 - [ ] Replace the placeholder `publisher` value.
 - [ ] Confirm the extension name `mio-language-support` and display name
-      `Mio Language Support`.
+      `Mio — Programming Language Tools`.
 - [ ] Confirm the version in `package.json`, `CHANGELOG.md`, and the VSIX file
       name agree.
 - [ ] Confirm the MIT license in `LICENSE` and the artwork note in `NOTICE.md`.

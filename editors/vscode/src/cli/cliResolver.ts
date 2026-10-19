@@ -96,7 +96,7 @@ export function resolveMioExecutable(
         kind: 'invalid',
         executable: configured,
         message:
-          'Mio Language Support only launches native executables. ' +
+          'Mio — Programming Language Tools only launches native executables. ' +
           'Configure the underlying mio.exe instead of a .cmd or .bat launcher.',
       };
     }

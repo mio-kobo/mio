@@ -55,6 +55,65 @@ async function closeAllEditors(): Promise<void> {
   await delay(150);
 }
 
+async function setLanguageServerEnabled(value: boolean): Promise<void> {
+  await vscode.workspace
+    .getConfiguration('mio')
+    .update(
+      'languageServer.enabled',
+      value,
+      vscode.ConfigurationTarget.Global,
+    );
+  await delay(200);
+}
+
+async function waitFor<T>(
+  description: string,
+  check: () => T | undefined | false | Promise<T | undefined | false>,
+  timeoutMs = 30_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await check();
+    if (value !== undefined && value !== false) {
+      return value;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${description}`);
+    }
+    await delay(100);
+  }
+}
+
+
+function hoverText(hovers: vscode.Hover[] | undefined): string {
+  const values: string[] = [];
+  for (const hover of hovers ?? []) {
+    for (const content of hover.contents) {
+      values.push(typeof content === 'string' ? content : content.value);
+    }
+  }
+  return values.join('\n');
+}
+
+function documentOffset(
+  document: vscode.TextDocument,
+  needle: string,
+  delta = 0,
+): vscode.Position {
+  const index = document.getText().indexOf(needle);
+  assert.ok(index >= 0, `missing ${needle}`);
+  return document.positionAt(index + delta);
+}
+
+function completionLabels(
+  list: vscode.CompletionList | vscode.CompletionItem[] | undefined,
+): string[] {
+  const items = Array.isArray(list) ? list : (list?.items ?? []);
+  return items.map((item) =>
+    typeof item.label === 'string' ? item.label : item.label.label,
+  );
+}
+
 function testCliPath(): string | undefined {
   const fromEnvironment = process.env.MIO_TEST_CLI;
   const candidate =
@@ -214,6 +273,7 @@ suite('Mio extension host', () => {
       'utf8',
     );
 
+    await setLanguageServerEnabled(false);
     await setExecutablePath(copiedCli);
     const document = await openDocument(sourcePath);
 
@@ -248,6 +308,311 @@ suite('Mio extension host', () => {
         'the cleanup path should clear diagnostics',
       );
       await setExecutablePath(undefined);
+      await setLanguageServerEnabled(true);
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('starts the MioCore language server and publishes live diagnostics', async function () {
+    const cli = testCliPath();
+    if (cli === undefined) {
+      this.skip();
+      return;
+    }
+    await setLanguageServerEnabled(true);
+    await setExecutablePath(cli);
+    await waitFor(
+      'language server ready',
+      () => api.getLanguageServerState() === 'ready',
+    );
+    assert.equal(api.getDiagnosticsOwner(), 'lsp');
+
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mio lsp live-'),
+    );
+    const sourcePath = path.join(temporaryRoot, 'live.mio');
+    fs.writeFileSync(
+      sourcePath,
+      [
+        'waza broken() -> int64 {',
+        '    kaesu missing_value;',
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    try {
+      const document = await openDocument(sourcePath);
+      const diagnostic = await waitFor('language server E0201', () =>
+        vscode.languages
+          .getDiagnostics(document.uri)
+          .find(
+            (item) => item.source === 'mio' && String(item.code) === 'E0201',
+          ),
+      );
+      assert.equal(diagnostic.range.start.line, 1);
+      assert.equal(diagnostic.range.start.character, 10);
+      assert.match(diagnostic.message, /missing_value/u);
+
+      const editor = vscode.window.activeTextEditor;
+      assert.ok(editor, 'the test document should be active');
+      const fixed = [
+        'waza broken() -> int64 {',
+        '    kaesu 1;',
+        '}',
+        '',
+      ].join('\n');
+      await editor.edit((builder) => {
+        builder.replace(
+          new vscode.Range(
+            new vscode.Position(0, 0),
+            document.positionAt(document.getText().length),
+          ),
+          fixed,
+        );
+      });
+      await waitFor('language server diagnostics cleared', () => {
+        const remaining = vscode.languages
+          .getDiagnostics(document.uri)
+          .filter((item) => item.source === 'mio');
+        return remaining.length === 0;
+      });
+      await document.save();
+    } finally {
+      await closeAllEditors();
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to CLI diagnostics when the language server is disabled', async function () {
+    const cli = testCliPath();
+    if (cli === undefined) {
+      this.skip();
+      return;
+    }
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mio lsp fallback-'),
+    );
+    const sourcePath = path.join(temporaryRoot, 'fallback.mio');
+    fs.writeFileSync(
+      sourcePath,
+      [
+        'waza broken() -> int64 {',
+        '    kaesu missing_value;',
+        '}',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    try {
+      await setExecutablePath(cli);
+      const document = await openDocument(sourcePath);
+      await setLanguageServerEnabled(false);
+      await waitFor(
+        'language server disabled',
+        () => api.getLanguageServerState() === 'disabled',
+      );
+      assert.equal(api.getDiagnosticsOwner(), 'cli');
+
+      const diagnostic = await waitFor('CLI fallback E0201', () =>
+        vscode.languages
+          .getDiagnostics(document.uri)
+          .find(
+            (item) => item.source === 'mio' && String(item.code) === 'E0201',
+          ),
+      );
+      assert.ok(diagnostic);
+
+      await vscode.commands.executeCommand('mio.checkCurrentFile');
+      await delay(500);
+      const ours = vscode.languages
+        .getDiagnostics(document.uri)
+        .filter((item) => item.source === 'mio');
+      assert.equal(
+        ours.length,
+        1,
+        `expected exactly one Mio diagnostic, got ${ours.length}`,
+      );
+
+      await setLanguageServerEnabled(true);
+      await waitFor(
+        'language server ready again',
+        () => api.getLanguageServerState() === 'ready',
+      );
+    } finally {
+      await closeAllEditors();
+      fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+
+  test('provides semantic navigation through the language server', async function () {
+    const cli = testCliPath();
+    if (cli === undefined) {
+      this.skip();
+      return;
+    }
+    await setLanguageServerEnabled(true);
+    await setExecutablePath(cli);
+    await waitFor(
+      'language server ready',
+      () => api.getLanguageServerState() === 'ready',
+    );
+
+    const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'mio lsp semantic-'),
+    );
+    const sourcePath = path.join(temporaryRoot, 'semantic.mio');
+    const source = [
+      'kata Point {',
+      '    x: int64;',
+      '    y: int64;',
+      '}',
+      '',
+      'sentaku Color {',
+      '    Red;',
+      '    Green;',
+      '}',
+      '',
+      '// 两个数相加。',
+      'waza add(a: int64, b: int64) -> int64 {',
+      '    kaku sum = a + b;',
+      '    kaesu sum;',
+      '}',
+      '',
+      'waza main() -> int64 {',
+      '    kaku point = Point { x: 1, y: 2 };',
+      '    kaku color: Color = Color.Red();',
+      '    kaesu add(point.x, point.y);',
+      '}',
+      '',
+    ].join('\n');
+    fs.writeFileSync(sourcePath, source, 'utf8');
+
+    try {
+      const document = await openDocument(sourcePath);
+      const sumUse = documentOffset(document, 'kaesu sum;', 'kaesu '.length);
+
+      const hover = await waitFor('semantic hover', async () => {
+        const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+          'vscode.executeHoverProvider',
+          document.uri,
+          sumUse,
+        );
+        const text = hoverText(hovers);
+        return text.includes('kaku sum') && text.includes('int64')
+          ? text
+          : undefined;
+      });
+      assert.ok(hover.length > 0);
+
+      const definitions = await waitFor('semantic definition', async () => {
+        const result = await vscode.commands.executeCommand<vscode.Location[]>(
+          'vscode.executeDefinitionProvider',
+          document.uri,
+          sumUse,
+        );
+        return result !== undefined && result.length > 0 ? result : undefined;
+      });
+      assert.equal(definitions[0]?.range.start.line, 12);
+
+      const references = await waitFor('semantic references', async () => {
+        const result = await vscode.commands.executeCommand<vscode.Location[]>(
+          'vscode.executeReferenceProvider',
+          document.uri,
+          sumUse,
+        );
+        return result !== undefined && result.length >= 2 ? result : undefined;
+      });
+      assert.ok(references.length >= 2);
+
+      const symbols = await waitFor('semantic document symbols', async () => {
+        const result = await vscode.commands.executeCommand<
+          vscode.DocumentSymbol[]
+        >('vscode.executeDocumentSymbolProvider', document.uri);
+        if (result === undefined) {
+          return undefined;
+        }
+        const names = new Set(result.map((symbol) => symbol.name));
+        const complete = ['Point', 'Color', 'add', 'main'].every((name) =>
+          names.has(name),
+        );
+        return complete ? result : undefined;
+      });
+      const point = symbols.find((symbol) => symbol.name === 'Point');
+      assert.ok(point);
+      assert.deepEqual(
+        (point?.children ?? []).map((child) => child.name),
+        ['x', 'y'],
+      );
+
+      const memberPosition = documentOffset(
+        document,
+        'point.x',
+        'point.'.length,
+      );
+      const completions = await waitFor('semantic completion', async () => {
+        const list = await vscode.commands.executeCommand<vscode.CompletionList>(
+          'vscode.executeCompletionItemProvider',
+          document.uri,
+          memberPosition,
+        );
+        const labels = completionLabels(list);
+        return labels.includes('x') && labels.includes('y')
+          ? labels
+          : undefined;
+      });
+      assert.ok(completions.includes('x'));
+
+      const signaturePosition = documentOffset(
+        document,
+        'add(point.x',
+        'add('.length,
+      );
+      const signature = await waitFor('semantic signature help', async () => {
+        const help = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+          'vscode.executeSignatureHelpProvider',
+          document.uri,
+          signaturePosition,
+          '(',
+        );
+        if (help === undefined || help.signatures.length === 0) {
+          return undefined;
+        }
+        return help.signatures[0]?.label.includes('add') ? help : undefined;
+      });
+      assert.equal(signature.activeParameter, 0);
+
+      // 文档修改后语义结果必须更新。
+      const editor = vscode.window.activeTextEditor;
+      assert.ok(editor);
+      const declarationLine = documentOffset(document, 'kaku sum = a + b;');
+      await editor.edit((builder) => {
+        builder.replace(
+          new vscode.Range(
+            declarationLine.line,
+            0,
+            declarationLine.line,
+            'kaku sum = a + b;'.length,
+          ),
+          '    kaku sum = "text";',
+        );
+      });
+      const updated = await waitFor('updated semantic hover', async () => {
+        const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+          'vscode.executeHoverProvider',
+          document.uri,
+          sumUse,
+        );
+        const text = hoverText(hovers);
+        return text.includes('kaku sum') && text.includes('string')
+          ? text
+          : undefined;
+      });
+      assert.ok(updated.includes('string'));
+    } finally {
+      await closeAllEditors();
       fs.rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });

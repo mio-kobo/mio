@@ -32,11 +32,12 @@ export class MioDiagnosticManager implements vscode.Disposable {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly generations = new Map<string, number>();
   private disposed = false;
+  private fallbackEnabled = true;
 
   constructor(private readonly options: DiagnosticManagerOptions) {}
 
   onDidSave(document: vscode.TextDocument): void {
-    if (!this.enabled || !this.onSave) {
+    if (!this.fallbackEnabled || !this.enabled || !this.onSave) {
       return;
     }
     if (document.languageId !== 'mio' || document.uri.scheme !== 'file') {
@@ -46,6 +47,12 @@ export class MioDiagnosticManager implements vscode.Disposable {
   }
 
   async checkNow(document: vscode.TextDocument): Promise<boolean> {
+    if (!this.fallbackEnabled) {
+      void vscode.window.showInformationMessage(
+        'Mio diagnostics are provided by the Mio language server.',
+      );
+      return true;
+    }
     const key = document.uri.toString();
     this.clearTimer(key);
     this.cancelJob(key);
@@ -54,6 +61,30 @@ export class MioDiagnosticManager implements vscode.Disposable {
 
   onDidClose(document: vscode.TextDocument): void {
     this.clearDocument(document.uri);
+  }
+
+  get diagnosticsOwner(): 'cli' | 'lsp' {
+    return this.fallbackEnabled ? 'cli' : 'lsp';
+  }
+
+  // LSP 就绪时停用 CLI 回退并清空旧诊断；失败或停止时恢复。
+  setFallbackEnabled(enabled: boolean): void {
+    if (this.fallbackEnabled === enabled) {
+      return;
+    }
+    this.fallbackEnabled = enabled;
+    if (!enabled) {
+      this.clearAllTimers();
+      this.cancelAllJobs();
+      this.collection.clear();
+      this.generations.clear();
+      return;
+    }
+    for (const document of vscode.workspace.textDocuments) {
+      if (document.languageId === 'mio' && document.uri.scheme === 'file') {
+        this.schedule(document);
+      }
+    }
   }
 
   // 关闭文件、清理测试资源和工作区切换共用同一条释放路径。
@@ -143,6 +174,9 @@ export class MioDiagnosticManager implements vscode.Disposable {
     document: vscode.TextDocument,
     notify: boolean,
   ): Promise<boolean> {
+    if (!this.fallbackEnabled) {
+      return false;
+    }
     const key = document.uri.toString();
     const generation = (this.generations.get(key) ?? 0) + 1;
     this.generations.set(key, generation);

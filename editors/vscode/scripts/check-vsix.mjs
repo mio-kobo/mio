@@ -22,10 +22,23 @@ const requiredEntries = [
   'extension/package.nls.zh-cn.json',
   'extension/out/extension.js',
   'extension/changelog.md',
+  'extension/node_modules/vscode-languageclient/package.json',
+  'extension/node_modules/vscode-languageserver-protocol/package.json',
+  'extension/node_modules/vscode-jsonrpc/package.json',
+];
+
+const allowedNodeModules = [
+  'vscode-languageclient/',
+  'vscode-languageserver-protocol/',
+  'vscode-languageserver-types/',
+  'vscode-jsonrpc/',
+  'semver/',
+  'minimatch/',
+  'brace-expansion/',
+  'balanced-match/',
 ];
 
 const forbiddenPrefixes = [
-  'extension/node_modules/',
   'extension/src/',
   'extension/out/test/',
   'extension/test-fixtures/',
@@ -72,9 +85,13 @@ const entries = zip
   .filter((entry) => entry.startsWith('extension/'));
 const entrySet = new Set(entries);
 const missing = requiredEntries.filter((entry) => !entrySet.has(entry));
-const forbidden = entries.filter((entry) =>
-  forbiddenPrefixes.some((prefix) => entry.startsWith(prefix)),
-);
+const forbidden = entries.filter((entry) => {
+  if (entry.startsWith('extension/node_modules/')) {
+    const rest = entry.slice('extension/node_modules/'.length);
+    return !allowedNodeModules.some((prefix) => rest.startsWith(prefix));
+  }
+  return forbiddenPrefixes.some((prefix) => entry.startsWith(prefix));
+});
 
 if (missing.length > 0) {
   console.error('[check-vsix] missing required entries:');
@@ -105,8 +122,8 @@ const manifestProblems = [];
 if (manifest.name !== 'mio-language-support') {
   manifestProblems.push('name is not mio-language-support');
 }
-if (manifest.displayName !== 'Mio Language Support') {
-  manifestProblems.push('displayName is not Mio Language Support');
+if (manifest.displayName !== 'Mio — Programming Language Tools') {
+  manifestProblems.push('displayName is not Mio — Programming Language Tools');
 }
 if (typeof manifest.version !== 'string' || manifest.version === '') {
   manifestProblems.push('version is missing');
