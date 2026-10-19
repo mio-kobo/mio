@@ -1,0 +1,369 @@
+yobu "kiso/array";
+yobu "kiso/encoding/binary";
+yobu "kiso/string";
+yobu "kiso/utf8";
+
+koukai teisu VERSION: int64 = 14;
+koukai teisu MAX_FILE_SIZE: int64 = 67108864;
+koukai teisu MAX_CONSTANTS: int64 = 65536;
+koukai teisu MAX_GLOBALS: int64 = 65536;
+koukai teisu MAX_STRING_BYTES: int64 = 16777216;
+koukai teisu MAX_INSTRUCTION_BYTES: int64 = 16777216;
+koukai teisu MAX_FUNCTIONS: int64 = 65536;
+koukai teisu MAX_FUNCTION_SLOTS: int64 = 65536;
+
+koukai sentaku DecodeErrorKind {
+    Truncated;
+    InvalidMagic;
+    UnsupportedVersion;
+    LimitExceeded;
+    InvalidConstant;
+    InvalidUtf8;
+    InvalidFunction;
+    InvalidInstruction;
+    InvalidIndex;
+    InvalidJump;
+    TrailingData;
+    IoFailure;
+}
+
+koukai kata DecodeError { kind: DecodeErrorKind; offset: int64; detail: int64; }
+koukai kata Constant { tag: uint8; bits: binary.U64; data: []uint8; }
+koukai kata Capture { local: bool; index: int64; }
+koukai kata Function {
+    id: int64;
+    name: string;
+    name_bytes: []uint8;
+    parameter_count: int64;
+    local_count: int64;
+    returns_value: bool;
+    captures: []Capture;
+    instructions: []uint8;
+}
+koukai kata File {
+    version: int64;
+    constants: []Constant;
+    global_count: int64;
+    instructions: []uint8;
+    functions: []Function;
+}
+koukai kata DecodeResult { value: File?; error: DecodeError?; }
+
+waza failure(kind: DecodeErrorKind, offset: int64, detail: int64) -> DecodeResult {
+    kaesu DecodeResult { value: mu, error: DecodeError { kind: kind, offset: offset, detail: detail } };
+}
+
+waza empty_file() -> File {
+    kaesu File { version: 0, constants: array.with_capacity[Constant](0), global_count: 0,
+        instructions: array.with_capacity[uint8](0), functions: array.with_capacity[Function](0) };
+}
+
+waza instruction_width(opcode: int64) -> int64 {
+    moshi (opcode == 38) { kaesu 5; }
+    moshi (opcode == 54) { kaesu 3; }
+    moshi (opcode == 56) { kaesu 4; }
+    moshi ((opcode >= 1 && opcode <= 1) || (opcode >= 17 && opcode <= 20) ||
+        (opcode >= 23 && opcode <= 25) || opcode == 30 || opcode == 36 || opcode == 37 ||
+        opcode == 40 || (opcode >= 44 && opcode <= 49)) { kaesu 3; }
+    moshi (opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65) { kaesu 2; }
+    moshi (opcode >= 2 && opcode <= 16) { kaesu 1; }
+    moshi (opcode >= 21 && opcode <= 22) { kaesu 1; }
+    moshi (opcode >= 26 && opcode <= 29) { kaesu 1; }
+    moshi (opcode >= 31 && opcode <= 35) { kaesu 1; }
+    moshi (opcode == 39 || (opcode >= 41 && opcode <= 43)) { kaesu 1; }
+    moshi (opcode >= 50 && opcode <= 53) { kaesu 1; }
+    moshi (opcode >= 59 && opcode <= 64) { kaesu 1; }
+    kaesu 0;
+}
+
+waza version_allows(opcode: int64, version: int64) -> bool {
+    moshi ((opcode == 28 || opcode == 29) && version < 4) { kaesu iie; }
+    moshi ((opcode == 30 || opcode == 31) && version < 5) { kaesu iie; }
+    moshi ((opcode == 32 || opcode == 33) && version < 6) { kaesu iie; }
+    moshi ((opcode == 34 || opcode == 35) && version < 7) { kaesu iie; }
+    moshi (opcode >= 36 && opcode <= 45 && version < 8) { kaesu iie; }
+    moshi (opcode >= 46 && opcode <= 49 && version < 9) { kaesu iie; }
+    moshi (opcode >= 50 && opcode <= 54 && version < 10) { kaesu iie; }
+    moshi (opcode == 55 && version < 11) { kaesu iie; }
+    moshi (opcode >= 56 && opcode <= 62 && version < 12) { kaesu iie; }
+    moshi ((opcode == 63 || opcode == 64) && version < 13) { kaesu iie; }
+    moshi (opcode == 65 && version < 14) { kaesu iie; }
+    kaesu hai;
+}
+
+waza valid_descriptor(value: int64) -> bool {
+    moshi (value == 0) { kaesu hai; }
+    kaku base = value;
+    moshi (base >= 128) { base = base - 128; }
+    moshi (base == 1 || base == 2 || base == 3 || base == 4 || base == 5 ||
+        base == 7 || base == 8 || base == 9 || base == 10 || base == 11 ||
+        (base >= 12 && base <= 17)) { kaesu hai; }
+    kaesu iie;
+}
+
+waza read_operand_u16(data: []uint8, offset: int64) -> int64 {
+    kaesu int64(data[offset]) * 256 + int64(data[offset + 1]);
+}
+
+waza validate_instructions(file: File, data: []uint8, function_index: int64) -> DecodeError? {
+    kaku boundaries = array.make[bool](len(data) + 1, iie);
+    boundaries[len(data)] = hai;
+    kaku jump_offsets = array.with_capacity[int64](8);
+    kaku jump_targets = array.with_capacity[int64](8);
+    kaku offset = 0;
+    aida (offset < len(data)) {
+        boundaries[offset] = hai;
+        kaku opcode = int64(data[offset]);
+        kaku width = instruction_width(opcode);
+        moshi (width == 0 || !version_allows(opcode, file.version)) {
+            kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: opcode };
+        }
+        moshi (width > len(data) - offset) {
+            kaesu DecodeError { kind: DecodeErrorKind.Truncated(), offset: offset, detail: opcode };
+        }
+        kaku first = 0;
+        kaku second = 0;
+        moshi (width >= 3 && opcode != 54) { first = read_operand_u16(data, offset + 1); }
+        moshi (width == 2) { first = int64(data[offset + 1]); }
+        moshi (opcode == 54) { first = int64(data[offset + 1]); second = int64(data[offset + 2]); }
+        moshi (opcode == 56) { first = read_operand_u16(data, offset + 1); second = int64(data[offset + 3]); }
+        moshi (opcode == 38) { first = read_operand_u16(data, offset + 1); second = read_operand_u16(data, offset + 3); }
+
+        moshi (opcode == 1 && first >= len(file.constants)) {
+            kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first };
+        }
+        moshi ((opcode == 19 || opcode == 20) && first >= file.global_count) {
+            kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first };
+        }
+        moshi (opcode == 23 || opcode == 24 || opcode == 49) {
+            moshi (function_index < 0 || first >= file.functions[function_index].local_count) {
+                kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first };
+            }
+        }
+        moshi (opcode == 25 || opcode == 44 || opcode == 46) {
+            moshi (first >= len(file.functions)) { kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first }; }
+            moshi ((opcode == 25 || opcode == 44) && len(file.functions[first].captures) != 0) {
+                kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: first };
+            }
+            moshi (opcode == 46) {
+                moshi (function_index < 0) { kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: first }; }
+                kaku capture_index = 0;
+                aida (capture_index < len(file.functions[first].captures)) {
+                    kaku capture = file.functions[first].captures[capture_index];
+                    kaku limit = len(file.functions[function_index].captures);
+                    moshi (capture.local) { limit = file.functions[function_index].local_count; }
+                    moshi (capture.index >= limit) { kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: capture.index }; }
+                    capture_index = capture_index + 1;
+                }
+            }
+        }
+        moshi (opcode == 47 || opcode == 48) {
+            moshi (function_index < 0 || first >= len(file.functions[function_index].captures)) {
+                kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first };
+            }
+        }
+        moshi (opcode == 26 || opcode == 27) {
+            moshi (function_index < 0) { kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: opcode }; }
+            moshi ((opcode == 26 && file.functions[function_index].returns_value) ||
+                (opcode == 27 && !file.functions[function_index].returns_value)) {
+                kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: opcode };
+            }
+        }
+        moshi (opcode == 54) {
+            moshi (first < 1 || first > 13) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: first }; }
+            kaku expected = 1; moshi (first == 10) { expected = 2; }
+            moshi (second != expected) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: second }; }
+        }
+        moshi (opcode == 55 && (first < 1 || first > 7)) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: first }; }
+        moshi (opcode == 65 && (first < 1 || first > 2)) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: first }; }
+        moshi (opcode == 56 && !valid_descriptor(second)) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: second }; }
+        moshi ((opcode == 57 || opcode == 58) && !valid_descriptor(first)) { kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: first }; }
+        moshi (opcode == 17 || opcode == 18) { array.push(jump_offsets, offset); array.push(jump_targets, first); }
+        offset = offset + width;
+    }
+    kaku index = 0;
+    aida (index < len(jump_targets)) {
+        kaku target = jump_targets[index];
+        moshi (target > len(data) || !boundaries[target]) {
+            kaesu DecodeError { kind: DecodeErrorKind.InvalidJump(), offset: jump_offsets[index], detail: target };
+        }
+        index = index + 1;
+    }
+    kaesu mu;
+}
+
+waza read_constant(input: binary.BinaryReader, version: int64) -> DecodeResult {
+    kaku tag_offset = binary.reader_offset(input);
+    kaku tag_result = binary.reader_read_u8(input);
+    moshi (tag_result.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), tag_offset, 1); }
+    kaku tag = tag_result.value;
+    moshi (tag == uint8(1) || tag == uint8(3)) {
+        moshi (tag == uint8(3) && version < 3) { kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag)); }
+        kaku wide = binary.reader_read_u64_be(input);
+        moshi (wide.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 8); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: wide.value, data: [] });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0,
+            instructions: [], functions: [] }, error: mu };
+    }
+    moshi (tag == uint8(2)) {
+        kaku length_at = binary.reader_offset(input);
+        kaku length = binary.reader_read_u32_be(input);
+        moshi (length.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), length_at, 4); }
+        moshi (int64(length.value) > MAX_STRING_BYTES) { kaesu failure(DecodeErrorKind.LimitExceeded(), length_at, int64(length.value)); }
+        kaku bytes_result = binary.reader_read_bytes(input, int64(length.value));
+        moshi (bytes_result.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), int64(length.value)); }
+        moshi (!utf8.valid(bytes_result.data)) { kaesu failure(DecodeErrorKind.InvalidUtf8(), length_at + 4, int64(length.value)); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: binary.U64 { high: uint32(0), low: uint32(0) }, data: bytes_result.data });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0,
+            instructions: [], functions: [] }, error: mu };
+    }
+    moshi (tag == uint8(4)) {
+        moshi (version < 10) { kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag)); }
+        kaku raw = binary.reader_read_u32_be(input); moshi (raw.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 4); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: binary.U64 { high: uint32(0), low: raw.value }, data: [] });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0, instructions: [], functions: [] }, error: mu };
+    }
+    moshi (tag == uint8(5) || tag == uint8(8)) {
+        moshi (version < 11) { kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag)); }
+        kaku raw = binary.reader_read_u8(input); moshi (raw.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 1); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: binary.U64 { high: uint32(0), low: uint32(raw.value) }, data: [] });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0, instructions: [], functions: [] }, error: mu };
+    }
+    moshi (tag == uint8(6) || tag == uint8(9)) {
+        moshi (version < 11) { kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag)); }
+        kaku raw = binary.reader_read_u16_be(input); moshi (raw.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 2); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: binary.U64 { high: uint32(0), low: uint32(raw.value) }, data: [] });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0, instructions: [], functions: [] }, error: mu };
+    }
+    moshi (tag == uint8(7) || tag == uint8(10)) {
+        moshi (version < 11) { kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag)); }
+        kaku raw = binary.reader_read_u32_be(input); moshi (raw.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 4); }
+        kaku constants = array.with_capacity[Constant](1);
+        array.push(constants, Constant { tag: tag, bits: binary.U64 { high: uint32(0), low: raw.value }, data: [] });
+        kaesu DecodeResult { value: File { version: version, constants: constants, global_count: 0, instructions: [], functions: [] }, error: mu };
+    }
+    kaesu failure(DecodeErrorKind.InvalidConstant(), tag_offset, int64(tag));
+}
+
+koukai waza decode(data: []uint8) -> DecodeResult {
+    moshi (len(data) > MAX_FILE_SIZE) { kaesu failure(DecodeErrorKind.LimitExceeded(), 0, len(data)); }
+    kaku input = binary.reader(data);
+    kaku magic = binary.reader_read_bytes(input, 5);
+    moshi (magic.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), 0, 5); }
+    moshi (magic.data[0] != uint8(77) || magic.data[1] != uint8(79) || magic.data[2] != uint8(67) || magic.data[3] != uint8(72) || magic.data[4] != uint8(73)) {
+        kaesu failure(DecodeErrorKind.InvalidMagic(), 0, 0);
+    }
+    kaku version_result = binary.reader_read_u16_be(input);
+    moshi (version_result.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), 5, 2); }
+    kaku version = int64(version_result.value);
+    moshi (version < 1 || version > VERSION) { kaesu failure(DecodeErrorKind.UnsupportedVersion(), 5, version); }
+    kaku count_at = binary.reader_offset(input);
+    kaku constant_count = binary.reader_read_u32_be(input);
+    moshi (constant_count.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), count_at, 4); }
+    moshi (int64(constant_count.value) > MAX_CONSTANTS) { kaesu failure(DecodeErrorKind.LimitExceeded(), count_at, int64(constant_count.value)); }
+    kaku constants = array.with_capacity[Constant](int64(constant_count.value));
+    kaku index = 0;
+    aida (index < int64(constant_count.value)) {
+        kaku decoded = read_constant(input, version);
+        kaku decoded_error = decoded.error;
+        moshi (decoded_error != mu) { kaesu DecodeResult { value: mu, error: decoded_error }; }
+        kaku part = decoded.value;
+        moshi (part != mu) { array.push(constants, part.constants[0]); }
+        sore { kaesu failure(DecodeErrorKind.InvalidConstant(), binary.reader_offset(input), index); }
+        index = index + 1;
+    }
+    kaku globals_at = binary.reader_offset(input);
+    kaku globals = binary.reader_read_u32_be(input);
+    moshi (globals.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), globals_at, 4); }
+    moshi (int64(globals.value) > MAX_GLOBALS) { kaesu failure(DecodeErrorKind.LimitExceeded(), globals_at, int64(globals.value)); }
+    kaku instructions_at = binary.reader_offset(input);
+    kaku instruction_length = binary.reader_read_u32_be(input);
+    moshi (instruction_length.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), instructions_at, 4); }
+    moshi (int64(instruction_length.value) > MAX_INSTRUCTION_BYTES) { kaesu failure(DecodeErrorKind.LimitExceeded(), instructions_at, int64(instruction_length.value)); }
+    kaku instruction_data = binary.reader_read_bytes(input, int64(instruction_length.value));
+    moshi (instruction_data.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), int64(instruction_length.value)); }
+    kaku functions = array.with_capacity[Function](0);
+    moshi (version >= 2) {
+        kaku functions_at = binary.reader_offset(input);
+        kaku function_count = binary.reader_read_u32_be(input);
+        moshi (function_count.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), functions_at, 4); }
+        moshi (int64(function_count.value) > MAX_FUNCTIONS) { kaesu failure(DecodeErrorKind.LimitExceeded(), functions_at, int64(function_count.value)); }
+        functions = array.with_capacity[Function](int64(function_count.value));
+        index = 0;
+        aida (index < int64(function_count.value)) {
+            kaku function_at = binary.reader_offset(input);
+            kaku id = binary.reader_read_u16_be(input);
+            kaku name_length = binary.reader_read_u16_be(input);
+            moshi (id.error != mu || name_length.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), function_at, 4); }
+            moshi (int64(id.value) != index) { kaesu failure(DecodeErrorKind.InvalidFunction(), function_at, int64(id.value)); }
+            kaku name_data = binary.reader_read_bytes(input, int64(name_length.value));
+            moshi (name_data.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), int64(name_length.value)); }
+            moshi (len(name_data.data) == 0) { kaesu failure(DecodeErrorKind.InvalidFunction(), function_at + 4, 0); }
+            moshi (!utf8.valid(name_data.data)) { kaesu failure(DecodeErrorKind.InvalidUtf8(), function_at + 4, len(name_data.data)); }
+            kaku name = string.from_utf8(name_data.data);
+            moshi (name == mu) { kaesu failure(DecodeErrorKind.InvalidUtf8(), function_at + 4, len(name_data.data)); }
+            kaku parameter_at = binary.reader_offset(input);
+            kaku parameters = binary.reader_read_u32_be(input);
+            kaku locals = binary.reader_read_u32_be(input);
+            kaku flags = binary.reader_read_u8(input);
+            moshi (parameters.error != mu || locals.error != mu || flags.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), parameter_at, 9); }
+            moshi (int64(parameters.value) > MAX_FUNCTION_SLOTS || int64(locals.value) < int64(parameters.value) || int64(locals.value) > MAX_FUNCTION_SLOTS || flags.value > uint8(1)) {
+                kaesu failure(DecodeErrorKind.InvalidFunction(), parameter_at, index);
+            }
+            kaku captures = array.with_capacity[Capture](0);
+            moshi (version >= 9) {
+                kaku capture_at = binary.reader_offset(input);
+                kaku capture_count = binary.reader_read_u32_be(input);
+                moshi (capture_count.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), capture_at, 4); }
+                moshi (int64(capture_count.value) > MAX_FUNCTION_SLOTS) { kaesu failure(DecodeErrorKind.LimitExceeded(), capture_at, int64(capture_count.value)); }
+                captures = array.with_capacity[Capture](int64(capture_count.value));
+                kaku capture_index = 0;
+                aida (capture_index < int64(capture_count.value)) {
+                    kaku source = binary.reader_read_u8(input);
+                    kaku capture_slot = binary.reader_read_u32_be(input);
+                    moshi (source.error != mu || capture_slot.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), 5); }
+                    moshi (source.value > uint8(1) || int64(capture_slot.value) >= MAX_FUNCTION_SLOTS) { kaesu failure(DecodeErrorKind.InvalidFunction(), capture_at, capture_index); }
+                    array.push(captures, Capture { local: source.value == uint8(1), index: int64(capture_slot.value) });
+                    capture_index = capture_index + 1;
+                }
+            }
+            kaku length_at = binary.reader_offset(input);
+            kaku length = binary.reader_read_u32_be(input);
+            moshi (length.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), length_at, 4); }
+            moshi (int64(length.value) > MAX_INSTRUCTION_BYTES) { kaesu failure(DecodeErrorKind.LimitExceeded(), length_at, int64(length.value)); }
+            kaku body = binary.reader_read_bytes(input, int64(length.value));
+            moshi (body.error != mu) { kaesu failure(DecodeErrorKind.Truncated(), binary.reader_offset(input), int64(length.value)); }
+            array.push(functions, Function { id: int64(id.value), name: name, name_bytes: name_data.data,
+                parameter_count: int64(parameters.value), local_count: int64(locals.value), returns_value: flags.value == uint8(1),
+                captures: captures, instructions: body.data });
+            index = index + 1;
+        }
+    }
+    moshi (!binary.reader_eof(input)) { kaesu failure(DecodeErrorKind.TrailingData(), binary.reader_offset(input), binary.reader_remaining(input)); }
+    kaku file = File { version: version, constants: constants, global_count: int64(globals.value),
+        instructions: instruction_data.data, functions: functions };
+    kaku validation = validate_instructions(file, file.instructions, -1);
+    moshi (validation != mu) { kaesu DecodeResult { value: mu, error: validation }; }
+    index = 0;
+    aida (index < len(file.functions)) {
+        validation = validate_instructions(file, file.functions[index].instructions, index);
+        moshi (validation != mu) { kaesu DecodeResult { value: mu, error: validation }; }
+        index = index + 1;
+    }
+    kaesu DecodeResult { value: file, error: mu };
+}
+
+koukai waza error_code(error: DecodeError) -> int64 {
+    awase (error.kind) {
+        baai Truncated { kaesu 1; } baai InvalidMagic { kaesu 2; } baai UnsupportedVersion { kaesu 3; }
+        baai LimitExceeded { kaesu 4; } baai InvalidConstant { kaesu 5; } baai InvalidUtf8 { kaesu 6; }
+        baai InvalidFunction { kaesu 7; } baai InvalidInstruction { kaesu 8; } baai InvalidIndex { kaesu 9; }
+        baai InvalidJump { kaesu 10; } baai TrailingData { kaesu 11; } baai IoFailure { kaesu 12; }
+    }
+    kaesu 0;
+}

@@ -1,0 +1,121 @@
+yobu "kiso/array";
+yobu "kiso/encoding/binary";
+yobu "kiso/testing";
+
+waza minimal(version: uint16) -> []uint8 {
+    kaku output = binary.writer(128);
+    binary.writer_write_bytes(output, [77, 79, 67, 72, 73]);
+    binary.writer_write_u16_be(output, version);
+    binary.writer_write_u32_be(output, uint32(0));
+    binary.writer_write_u32_be(output, uint32(0));
+    binary.writer_write_u32_be(output, uint32(1));
+    binary.writer_write_u8(output, uint8(21));
+    moshi (version >= uint16(2)) { binary.writer_write_u32_be(output, uint32(0)); }
+    kaesu binary.writer_bytes(output);
+}
+
+waza expect_decode_error(data: []uint8, code: int64, message: string) -> unit {
+    kaku decode_error = decode(data).error;
+    moshi (decode_error != mu) { testing.expect(error_code(decode_error) == code, message); }
+    sore { testing.expect(iie, message); }
+}
+
+waza with_main(instructions: []uint8, version: uint16) -> []uint8 {
+    kaku output = binary.writer(256);
+    binary.writer_write_bytes(output, [77, 79, 67, 72, 73]); binary.writer_write_u16_be(output, version);
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0));
+    binary.writer_write_length_prefixed(output, instructions);
+    moshi (version >= uint16(2)) { binary.writer_write_u32_be(output, uint32(0)); }
+    kaesu binary.writer_bytes(output);
+}
+
+waza test_decode_minimal_v14_and_input_immutability() -> unit {
+    kaku data = minimal(uint16(14));
+    kaku before = array.clone(data);
+    kaku result = decode(data);
+    testing.expect(result.error == mu, "minimal v14 should decode");
+    kaku file = result.value;
+    moshi (file != mu) {
+        testing.expect(file.version == 14 && len(file.constants) == 0 && file.global_count == 0 && len(file.instructions) == 1 && len(file.functions) == 0, "decoded fields");
+        kaku canonical = canonical_bytes(file);
+        testing.expect(len(canonical) == len(data), "canonical size");
+        kaku canonical_index = 0; kaku canonical_same = hai;
+        aida (canonical_same && canonical_index < len(data)) { canonical_same = canonical[canonical_index] == data[canonical_index]; canonical_index = canonical_index + 1; }
+        testing.expect(canonical_same, "canonical bytes cover all decoded fields");
+    } sore { testing.expect(iie, "decoded file should be present"); }
+    kaku index = 0; kaku same = len(data) == len(before);
+    aida (same && index < len(data)) { same = data[index] == before[index]; index = index + 1; }
+    testing.expect(same, "decoder must not modify input");
+}
+
+waza test_decode_rejects_header_truncation_version_and_tail() -> unit {
+    kaku truncated = decode([]).error; moshi (truncated != mu) { testing.expect(error_code(truncated) == 1, "truncated magic"); } sore { testing.expect(iie, "truncated magic"); }
+    kaku bad_magic = minimal(uint16(14)); bad_magic[0] = uint8(0);
+    kaku magic_error = decode(bad_magic).error; moshi (magic_error != mu) { testing.expect(error_code(magic_error) == 2, "bad magic"); } sore { testing.expect(iie, "bad magic"); }
+    kaku version_error = decode(minimal(uint16(15))).error; moshi (version_error != mu) { testing.expect(error_code(version_error) == 3, "unsupported version"); } sore { testing.expect(iie, "unsupported version"); }
+    kaku trailing = minimal(uint16(14)); array.push(trailing, uint8(0));
+    kaku trailing_error = decode(trailing).error; moshi (trailing_error != mu) { testing.expect(error_code(trailing_error) == 11, "trailing data"); } sore { testing.expect(iie, "trailing data"); }
+}
+
+waza test_decode_rejects_invalid_instruction_and_jump() -> unit {
+    kaku unknown = minimal(uint16(14));
+    unknown[19] = uint8(255);
+    kaku unknown_error = decode(unknown).error; moshi (unknown_error != mu) { testing.expect(error_code(unknown_error) == 8, "unknown opcode"); } sore { testing.expect(iie, "unknown opcode"); }
+    kaku jump = binary.writer(64);
+    binary.writer_write_bytes(jump, [77, 79, 67, 72, 73]); binary.writer_write_u16_be(jump, uint16(14));
+    binary.writer_write_u32_be(jump, uint32(0)); binary.writer_write_u32_be(jump, uint32(0));
+    binary.writer_write_u32_be(jump, uint32(4)); binary.writer_write_bytes(jump, [17, 0, 2, 21]);
+    binary.writer_write_u32_be(jump, uint32(0));
+    kaku jump_error = decode(binary.writer_bytes(jump)).error; moshi (jump_error != mu) { testing.expect(error_code(jump_error) == 10, "jump into operand"); } sore { testing.expect(iie, "jump into operand"); }
+}
+
+waza test_decode_constants_and_function_metadata() -> unit {
+    kaku output = binary.writer(256);
+    binary.writer_write_bytes(output, [77, 79, 67, 72, 73]); binary.writer_write_u16_be(output, uint16(14));
+    binary.writer_write_u32_be(output, uint32(2));
+    binary.writer_write_u8(output, uint8(1)); binary.writer_write_u64_be(output, binary.U64 { high: uint32(4294967295), low: uint32(4294967295) });
+    binary.writer_write_u8(output, uint8(2)); binary.writer_write_length_prefixed(output, [77, 105, 111]);
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0));
+    binary.writer_write_u32_be(output, uint32(1));
+    binary.writer_write_u16_be(output, uint16(0)); binary.writer_write_u16_be(output, uint16(1)); binary.writer_write_u8(output, uint8(102));
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u8(output, uint8(0));
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(1)); binary.writer_write_u8(output, uint8(26));
+    kaku result = decode(binary.writer_bytes(output)); kaku file = result.value;
+    moshi (file != mu) {
+        testing.expect(result.error == mu && len(file.constants) == 2 && len(file.functions) == 1, "tables decode");
+        testing.expect(file.constants[0].bits.high == uint32(4294967295) && file.constants[0].bits.low == uint32(4294967295), "int64 bits preserved");
+        testing.expect(file.functions[0].name == "f" && file.functions[0].id == 0 && !file.functions[0].returns_value, "function metadata");
+    } sore { testing.expect(iie, "tables decode"); }
+}
+
+waza test_decode_rejects_limits_utf8_indices_and_versioned_opcodes() -> unit {
+    kaku excessive = minimal(uint16(14));
+    excessive[7] = uint8(0); excessive[8] = uint8(1); excessive[9] = uint8(0); excessive[10] = uint8(1);
+    expect_decode_error(excessive, 4, "constant count limit");
+    expect_decode_error(with_main([1, 0, 0], uint16(14)), 9, "constant index");
+    expect_decode_error(with_main([1], uint16(14)), 1, "truncated operand");
+    expect_decode_error(with_main([65, 1], uint16(13)), 8, "versioned opcode");
+    expect_decode_error(with_main([55, 8], uint16(14)), 8, "integer conversion kind");
+    expect_decode_error(with_main([57, 6], uint16(14)), 8, "array descriptor");
+
+    kaku invalid_utf8 = binary.writer(64);
+    binary.writer_write_bytes(invalid_utf8, [77, 79, 67, 72, 73]); binary.writer_write_u16_be(invalid_utf8, uint16(14));
+    binary.writer_write_u32_be(invalid_utf8, uint32(1)); binary.writer_write_u8(invalid_utf8, uint8(2));
+    binary.writer_write_u32_be(invalid_utf8, uint32(1)); binary.writer_write_u8(invalid_utf8, uint8(255));
+    binary.writer_write_u32_be(invalid_utf8, uint32(0)); binary.writer_write_u32_be(invalid_utf8, uint32(0)); binary.writer_write_u32_be(invalid_utf8, uint32(0));
+    expect_decode_error(binary.writer_bytes(invalid_utf8), 6, "invalid UTF-8 constant");
+}
+
+waza test_decode_rejects_invalid_function_flags_and_return() -> unit {
+    kaku output = binary.writer(128);
+    binary.writer_write_bytes(output, [77, 79, 67, 72, 73]); binary.writer_write_u16_be(output, uint16(14));
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0));
+    binary.writer_write_u32_be(output, uint32(1)); binary.writer_write_u16_be(output, uint16(0));
+    binary.writer_write_u16_be(output, uint16(1)); binary.writer_write_u8(output, uint8(102));
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u8(output, uint8(2));
+    binary.writer_write_u32_be(output, uint32(0)); binary.writer_write_u32_be(output, uint32(1)); binary.writer_write_u8(output, uint8(26));
+    expect_decode_error(binary.writer_bytes(output), 7, "invalid function flags");
+
+    kaku bad_return = binary.writer_bytes(output); bad_return[32] = uint8(0); bad_return[41] = uint8(27);
+    expect_decode_error(bad_return, 7, "unit function return value opcode");
+}

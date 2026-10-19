@@ -1,0 +1,34 @@
+yobu "kiso/testing";
+
+waza test_reader_writer_cursor_and_u64() -> unit {
+    kaku output = writer(32);
+    testing.expect(writer_write_u8(output, uint8(7)) == mu, "write u8");
+    kaku patch = writer_reserve(output, 4);
+    testing.expect(patch.error == mu && patch.value == 1, "reserve returns offset");
+    testing.expect(writer_write_u64_be(output, U64 { high: uint32(4294967295), low: uint32(2309737967) }) == mu, "write max high u64 pattern");
+    testing.expect(writer_patch_u32_be(output, patch.value, uint32(305419896)) == mu, "patch u32");
+    kaku data = writer_bytes(output);
+    kaku input = reader(data);
+    testing.expect(reader_read_u8(input).value == uint8(7), "read u8");
+    testing.expect(reader_read_u32_be(input).value == uint32(305419896), "read patched u32");
+    kaku wide = reader_read_u64_be(input);
+    testing.expect(wide.error == mu && wide.value.high == uint32(4294967295) && wide.value.low == uint32(2309737967), "u64 bit pattern round trip");
+    testing.expect(reader_eof(input) && reader_remaining(input) == 0, "reader reaches eof");
+    testing.expect(reader_read_u8(input).error != mu && reader_offset(input) == len(data), "failed read keeps cursor");
+}
+
+waza test_reader_writer_ranges_and_copy() -> unit {
+    kaku source: []uint8 = [1, 2, 3, 4];
+    kaku input = reader(source);
+    testing.expect(reader_skip(input, 1) == mu, "skip");
+    kaku copied = reader_read_bytes(input, 2);
+    testing.expect(copied.error == mu && copied.data[0] == uint8(2) && copied.data[1] == uint8(3), "read bytes");
+    copied.data[0] = uint8(99);
+    testing.expect(source[1] == uint8(2), "read bytes must not alias input");
+    testing.expect(reader_seek(input, 5) != mu && reader_offset(input) == 3, "bad seek keeps cursor");
+
+    kaku limited = writer(5);
+    testing.expect(writer_write_length_prefixed(limited, [1, 2]) != mu, "length prefix respects hard limit");
+    testing.expect(writer_offset(limited) == 0, "failed length-prefixed write is atomic");
+    testing.expect(writer_patch_u32_be(limited, 2, uint32(1)) != mu, "patch range checked");
+}

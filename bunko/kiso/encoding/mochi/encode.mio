@@ -1,0 +1,67 @@
+yobu "kiso/encoding/binary";
+
+waza write_constant(output: binary.BinaryWriter, value: Constant) -> unit {
+    binary.writer_write_u8(output, value.tag);
+    moshi (value.tag == uint8(1) || value.tag == uint8(3)) { binary.writer_write_u64_be(output, value.bits); kaesu; }
+    moshi (value.tag == uint8(2)) { binary.writer_write_length_prefixed(output, value.data); kaesu; }
+    moshi (value.tag == uint8(4) || value.tag == uint8(7) || value.tag == uint8(10)) { binary.writer_write_u32_be(output, value.bits.low); kaesu; }
+    moshi (value.tag == uint8(6) || value.tag == uint8(9)) { binary.writer_write_u16_be(output, uint16(value.bits.low)); kaesu; }
+    binary.writer_write_u8(output, uint8(value.bits.low));
+}
+
+// canonical_bytes deterministically serializes every decoded field.  For a valid
+// Mochi file this is a structural normalization, not a copy of the input buffer.
+koukai waza canonical_bytes(value: File) -> []uint8 {
+    kaku output = binary.writer(MAX_FILE_SIZE);
+    binary.writer_write_bytes(output, [77, 79, 67, 72, 73]);
+    binary.writer_write_u16_be(output, uint16(value.version));
+    binary.writer_write_u32_be(output, uint32(len(value.constants)));
+    kaku index = 0;
+    aida (index < len(value.constants)) { write_constant(output, value.constants[index]); index = index + 1; }
+    binary.writer_write_u32_be(output, uint32(value.global_count));
+    binary.writer_write_length_prefixed(output, value.instructions);
+    moshi (value.version >= 2) {
+        binary.writer_write_u32_be(output, uint32(len(value.functions)));
+        index = 0;
+        aida (index < len(value.functions)) {
+            kaku function = value.functions[index];
+            binary.writer_write_u16_be(output, uint16(function.id));
+            binary.writer_write_u16_be(output, uint16(len(function.name_bytes)));
+            binary.writer_write_bytes(output, function.name_bytes);
+            binary.writer_write_u32_be(output, uint32(function.parameter_count));
+            binary.writer_write_u32_be(output, uint32(function.local_count));
+            kaku flags = uint8(0); moshi (function.returns_value) { flags = uint8(1); }
+            binary.writer_write_u8(output, flags);
+            moshi (value.version >= 9) {
+                binary.writer_write_u32_be(output, uint32(len(function.captures)));
+                kaku capture_index = 0;
+                aida (capture_index < len(function.captures)) {
+                    kaku source = uint8(0); moshi (function.captures[capture_index].local) { source = uint8(1); }
+                    binary.writer_write_u8(output, source);
+                    binary.writer_write_u32_be(output, uint32(function.captures[capture_index].index));
+                    capture_index = capture_index + 1;
+                }
+            }
+            binary.writer_write_length_prefixed(output, function.instructions);
+            index = index + 1;
+        }
+    }
+    kaesu binary.writer_bytes(output);
+}
+
+koukai kata Summary {
+    version: int64;
+    constants: int64;
+    functions: int64;
+    globals: int64;
+    instruction_bytes: int64;
+    canonical_size: int64;
+}
+
+koukai waza summarize(value: File) -> Summary {
+    kaku instruction_bytes = len(value.instructions);
+    kaku index = 0;
+    aida (index < len(value.functions)) { instruction_bytes = instruction_bytes + len(value.functions[index].instructions); index = index + 1; }
+    kaesu Summary { version: value.version, constants: len(value.constants), functions: len(value.functions),
+        globals: value.global_count, instruction_bytes: instruction_bytes, canonical_size: len(canonical_bytes(value)) };
+}

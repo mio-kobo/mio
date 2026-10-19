@@ -1,0 +1,27 @@
+yobu "kiso/array";
+yobu "kiso/fs";
+
+// decode_file enforces the Mochi file ceiling while reading, before an attacker-
+// controlled file can cause an unbounded destination allocation.
+koukai waza decode_file(path: string) -> DecodeResult {
+    kaku opened = fs.open_read(path);
+    kaku open_error = opened.error;
+    moshi (open_error != mu) { kaesu failure(DecodeErrorKind.IoFailure(), 0, 0); }
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu failure(DecodeErrorKind.IoFailure(), 0, 0); }
+    kaku output = array.with_capacity[uint8](32768);
+    kaku buffer = array.make[uint8](32768, uint8(0));
+    aida (hai) {
+        kaku result = fs.read(file, buffer, 0, len(buffer));
+        kaku read_error = result.error;
+        moshi (read_error != mu) { fs.close(file); kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }
+        moshi (result.count > MAX_FILE_SIZE - len(output)) { fs.close(file); kaesu failure(DecodeErrorKind.LimitExceeded(), len(output), result.count); }
+        kaku index = 0;
+        aida (index < result.count) { array.push(output, buffer[index]); index = index + 1; }
+        moshi (result.eof) { nukeru; }
+        moshi (result.count == 0) { fs.close(file); kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }
+    }
+    kaku closed = fs.close(file);
+    moshi (closed.error != mu) { kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }
+    kaesu decode(output);
+}

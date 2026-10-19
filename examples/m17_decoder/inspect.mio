@@ -1,0 +1,25 @@
+yobu "kiso/bytes";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+
+waza inspect(path: string) -> unit {
+    kaku loaded = fs.read_all(path);
+    kaku read_error = loaded.error;
+    moshi (read_error != mu) { chant(-1); kaesu; }
+    kaku decoded = mochi.decode_file(path);
+    kaku decode_error = decoded.error;
+    moshi (decode_error != mu) { chant(mochi.error_code(decode_error)); kaesu; }
+    kaku file = decoded.value;
+    moshi (file != mu) {
+        kaku summary = mochi.summarize(file);
+        chant(summary.version);
+        chant(summary.constants);
+        chant(summary.functions);
+        chant(summary.globals);
+        chant(summary.instruction_bytes);
+        chant(summary.canonical_size);
+        chant(bytes.equal(loaded.data, mochi.canonical_bytes(file)));
+    } sore { chant(-2); }
+}
+
+inspect("build/compiler-B-native.mochi");
