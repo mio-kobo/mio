@@ -1,0 +1,101 @@
+name: Mio Core CI
+
+on:
+  push:
+    paths-ignore:
+      - 'editors/jetbrains/**'
+      - 'editors/vscode/**'
+      - '.github/workflows/ci-jetbrains.yml'
+      - '.github/workflows/ci-vscode.yml'
+  pull_request:
+    paths-ignore:
+      - 'editors/jetbrains/**'
+      - 'editors/vscode/**'
+      - '.github/workflows/ci-jetbrains.yml'
+      - '.github/workflows/ci-vscode.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Go Format and Vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check gofmt
+        shell: bash
+        run: |
+          git ls-files -z -- '*.go' | xargs -0 -r gofmt -l > /tmp/unformatted-go.txt
+          if [ -s /tmp/unformatted-go.txt ]; then
+            cat /tmp/unformatted-go.txt
+            exit 1
+          fi
+      - name: Go Vet
+        run: go vet ./...
+      - name: Check whitespace
+        run: git diff --check
+
+  go-linux:
+    name: Go Tests / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Full repository tests
+        run: go test ./... -count=1 -timeout 30m
+
+  native-aot:
+    name: Native AOT / Apple Silicon
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check ARM64
+        run: test "$(uname -m)" = arm64
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Native AOT tests
+        run: go test ./internal/aot/... -count=1 -timeout 30m
+      - name: Native AOT race tests
+        run: go test -race ./internal/aot/... -count=1 -timeout 30m
+      - name: Full macOS regression
+        run: go test ./... -count=1 -timeout 30m
+      - name: Build tools
+        run: |
+          mkdir -p build
+          go build -o build/mio ./cmd/mio
+          go build -o build/mochi-aot ./cmd/mochi-aot
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-diagnostics
+          path: |
+            build/*.telemetry
+            build/*audit.json
+            build/*.sample.txt
+          if-no-files-found: ignore
+          retention-days: 7

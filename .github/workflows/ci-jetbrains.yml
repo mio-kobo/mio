@@ -1,0 +1,62 @@
+name: JetBrains Plugin CI
+
+on:
+  push:
+    paths:
+      - 'editors/jetbrains/**'
+      - '.github/workflows/ci-jetbrains.yml'
+  pull_request:
+    paths:
+      - 'editors/jetbrains/**'
+      - '.github/workflows/ci-jetbrains.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jetbrains-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jetbrains:
+    name: IntelliJ / GoLand Plugin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: editors/jetbrains
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build, test and verify structure
+        run: |
+          xvfb-run -a bash ./gradlew --no-daemon --stacktrace \
+            test buildPlugin verifyPluginStructure verifyPluginProjectConfiguration
+      - name: Full IDE compatibility verification (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        run: bash ./gradlew --no-daemon --stacktrace verifyPlugin
+      - name: Upload plugin ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mio-jetbrains-plugin
+          path: editors/jetbrains/build/distributions/*.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jetbrains-test-reports
+          path: |
+            editors/jetbrains/build/reports/**
+            editors/jetbrains/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
