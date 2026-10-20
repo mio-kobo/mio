@@ -1,0 +1,45 @@
+yobu "kiso/testing";
+
+waza test_precise_root_categories() -> unit {
+    kaku arena = type_arena();
+    kaku analysis = TypeAnalysis { arena: arena, globals: [], locals: [], returns: [], upvalues: [], cells: [], blocks: [], error_detail: 0 };
+    kaku scalar: []int64 = [type_integer, type_float32, type_float64, type_float_any, type_bool];
+    kaku i = 0;
+    aida (i < len(scalar)) {
+        kaku node = type_new(arena, scalar[i]);
+        testing.expect(!type_is_heap_reference(analysis, node), "raw scalar bits are never a Root");
+        type_mark_nullable(arena, node);
+        testing.expect(type_is_heap_reference(analysis, node), "nullable scalar box is a Root");
+        i = i + 1;
+    }
+    kaku references: []int64 = [type_string_id, type_array_ref, type_struct_ref, type_enum_ref, type_function_ref];
+    i = 0;
+    aida (i < len(references)) {
+        testing.expect(type_is_heap_reference(analysis, type_new(arena, references[i])), "managed/tagged reference slot is published"); i = i + 1;
+    }
+    kaku unknown = type_new(arena, type_unknown); type_mark_nullable(arena, unknown);
+    testing.expect(!type_is_heap_reference(analysis, unknown), "unknown never becomes a safe Root");
+    testing.expect(!type_is_heap_reference(analysis, type_new(arena, type_nil)), "nil needs no Root");
+}
+
+waza test_nil_observation_and_numeric_base_constraints() -> unit {
+    kaku arena = type_arena();
+    kaku raw = type_new(arena, type_integer); kaku boxed = type_new(arena, type_integer);
+    type_mark_nullable(arena, boxed);
+    testing.expect(type_same_kind(arena, raw, boxed, iie), "raw and boxed values have the same numeric base type");
+    testing.expect(!arena.nullable[type_root(arena, raw)], "comparison never changes raw int64 into a managed reference");
+    testing.expect(arena.nullable[type_root(arena, boxed)], "boxed nullable representation is retained");
+}
+
+waza test_nonnil_facts_intersect_and_invalidate() -> unit {
+    // is_nil(local0) false edge reaches byte 8.
+    kaku facts = type_nonnil_entries([24,0,0,34,18,0,8,26,24,0,0,3,26], 1);
+    testing.expect(facts[8][0] && !facts[7][0], "only the non-nil edge narrows a local");
+    // !is_nil(local0) true edge reaches byte 8; call invalidates shared Cells.
+    facts = type_nonnil_entries([24,0,0,34,10,18,0,16,25,0,0,24,0,0,3,26,26], 1);
+    testing.expect(facts[8][0] && !facts[11][0], "a call invalidates a prior nil test");
+    facts = type_nonnil_entries([24,0,0,34,18,0,8,26,21,23,0,0,24,0,0,3,26], 1);
+    testing.expect(facts[9][0] && !facts[12][0], "a store invalidates the local's non-nil fact");
+    facts = type_nonnil_entries([24,0,0,34,18,0,10,17,0,10,24,0,0,3,26], 1);
+    testing.expect(!facts[10][0], "a nil path at the merge prevents narrowing");
+}

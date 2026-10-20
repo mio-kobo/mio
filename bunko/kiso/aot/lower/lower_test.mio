@@ -62,13 +62,13 @@ waza test_get_field_uses_runtime_bitmap_width() -> unit {
     testing.expect(result.error == mu, "metadata-driven get-field should encode");
     // A fixed-offset lowering would not load fieldCount and bitmapWords or
     // scale both bitmapWords and the u16 field index.
-    testing.expect(len(result.words) == 40, "get-field should validate metadata and compute the variable field address");
-    testing.expect(result.words[5] == arm64.ldr_x(10, 9, 0).word, "get-field validates the struct kind");
-    testing.expect(result.words[9] == arm64.ldr_x(10, 9, 8).word, "get-field validates fieldCount");
-    testing.expect(result.words[17] == arm64.ldr_x(10, 9, 24).word, "get-field reads bitmapWords");
-    testing.expect(result.words[18] == arm64.ldr_x(12, 9, 8).word, "get-field revalidates bitmap width from fieldCount");
-    testing.expect(result.words[28] == arm64.ldr_x(14, 14, 8).word, "get-field validates required bytes against object payload");
-    testing.expect(result.words[36] == arm64.ldr_x(9, 9, 32).word, "get-field reads after metadata, bitmap, and scaled index");
+    testing.expect(len(result.words) == 45, "get-field should validate metadata and compute the variable field address");
+    testing.expect(result.words[6] == arm64.ldr_x(10, 9, 0).word, "get-field validates the struct kind");
+    testing.expect(result.words[11] == arm64.ldr_x(10, 9, 8).word, "get-field validates fieldCount");
+    testing.expect(result.words[20] == arm64.ldr_x(10, 9, 24).word, "get-field reads bitmapWords");
+    testing.expect(result.words[21] == arm64.ldr_x(12, 9, 8).word, "get-field revalidates bitmap width from fieldCount");
+    testing.expect(result.words[32] == arm64.ldr_x(14, 14, 8).word, "get-field validates required bytes against object payload");
+    testing.expect(result.words[41] == arm64.ldr_x(9, 9, 32).word, "get-field reads after metadata, bitmap, and scaled index");
 }
 
 waza test_type_analysis_distinguishes_nil_from_nullable_scalar_zero() -> unit {
@@ -102,7 +102,7 @@ waza test_type_analysis_propagates_struct_field_and_call_result() -> unit {
     kaku receiver = analysis.blocks[0].entry[3][0];
     testing.expect(types.type_kind(analysis, receiver) == types.type_struct_ref, "function result is a struct reference");
     kaku field = analysis.blocks[0].entry[6][0];
-    testing.expect(types.type_kind(analysis, field) == types.type_nil && types.type_nullable(analysis, field), "nullable field reaches OpIsNil");
+    testing.expect(types.type_kind(analysis, field) == types.type_nil && !types.type_nullable(analysis, field), "an exact nil field reaches OpIsNil without inventing a boxed representation");
 }
 
 waza test_type_analysis_classifies_struct_global_as_root() -> unit {

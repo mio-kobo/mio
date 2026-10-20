@@ -36,3 +36,83 @@ waza test_label_fixups() -> unit {
     assembler_bl(missing, "absent");
     testing.expect(assembler_assemble(missing).error != mu, "undefined label rejected");
 }
+
+waza test_label_index_collisions_and_growth() -> unit {
+    kaku value = assembler();
+    // These case pairs collide modulo the initial 32-slot table.
+    kaku names: []string = ["a", "A", "b", "B", "c", "C", "d", "D", "e", "E", "f", "F", "g", "G", "h", "H", "i", "I", "j", "J"];
+    kaku index = 0;
+    aida (index < len(names)) {
+        assembler_b(value, names[index]); assembler_label(value, names[index]); index = index + 1;
+    }
+    kaku output = assembler_assemble(value);
+    testing.expect(output.error == mu && len(output.words) == len(names), "label index grows without losing collisions");
+    index = 0;
+    aida (index < len(names)) { testing.expect(output.words[index] == uint32(335544321), "hashed forward label distance"); index = index + 1; }
+}
+
+waza test_imm19_boundaries_and_rejection() -> unit {
+    testing.expect(b_cond(0, 262143).word == uint32(1417674720), "B.eq positive imm19 limit");
+    testing.expect(b_cond(1, -262144).word == uint32(1417674753), "B.ne negative imm19 limit");
+    testing.expect(b_cond(0, 262144).error != mu && b_cond(0, -262145).error != mu, "B.cond rejects both out-of-range directions");
+    testing.expect(cbz_x(9, 262143).word == uint32(3028287465), "CBZ positive imm19 limit");
+    testing.expect(cbnz_x(9, -262144).word == uint32(3045064713), "CBNZ negative imm19 limit");
+    testing.expect(cbz_x(9, -262145).error != mu && cbnz_x(9, 262144).error != mu, "compare branches reject overflow");
+    testing.expect(b(-33554432).error == mu && b(33554431).error == mu, "B imm26 limits");
+    testing.expect(b(-33554433).error != mu && b(33554432).error != mu, "B imm26 overflow");
+}
+
+waza test_conditional_reserved_layout_and_far_fixups() -> unit {
+    kaku kind = 2;
+    aida (kind <= 4) {
+        kaku backwards = 0;
+        aida (backwards < 2) {
+            kaku value = assembler();
+            moshi (backwards == 1) { assembler_label(value, "target"); array.append_all(value.words, array.make[uint32](262145, uint32(3573751839))); }
+            kaku at = len(value.words);
+            assembler_fixup(value, "target", kind, 9);
+            testing.expect(len(value.words) == at + 2, "conditional reserves two words before labels");
+            moshi (backwards == 0) { array.append_all(value.words, array.make[uint32](262144, uint32(3573751839))); assembler_label(value, "target"); }
+            assembler_label(value, "after");
+            kaku target = assembler_label_word(value, "target");
+            kaku after = assembler_label_word(value, "after");
+            kaku output = assembler_assemble(value);
+            testing.expect(output.error == mu && len(output.words) == len(value.words), "far fixup never moves words");
+            kaku inverse = b_cond(8, 2).word;
+            moshi (kind == 3) { inverse = cbnz_x(9, 2).word; }
+            moshi (kind == 4) { inverse = cbz_x(9, 2).word; }
+            testing.expect(output.words[at] == inverse && output.words[at + 1] == b(target - at - 1).word, "inverse skip and B use their own PCs in either direction");
+            testing.expect(assembler_label_word(value, "after") == after && value.words[at] == uint32(0), "assembly preserves labels and input words");
+            testing.expect(assembler_assemble(value).words[at + 1] == output.words[at + 1], "assembly is repeatable");
+            backwards = backwards + 1;
+        }
+        kind = kind + 1;
+    }
+    kaku short = assembler(); assembler_b_cond(short, 0, "near"); assembler_cbz_x(short, 9, "near"); assembler_cbnz_x(short, 10, "near"); assembler_label(short, "near");
+    kaku result = assembler_assemble(short);
+    testing.expect(result.error == mu && len(result.words) == 6, "short layout reserves stable slots");
+    testing.expect(result.words[0] == b_cond(0, 6).word && result.words[2] == cbz_x(9, 4).word && result.words[4] == cbnz_x(10, 2).word, "short conditional encoding unchanged");
+    testing.expect(result.words[1] == uint32(3573751839) && result.words[3] == result.words[1] && result.words[5] == result.words[1], "unused slots are NOP");
+}
+
+waza test_far_conditions_and_imm26_guard() -> unit {
+    kaku condition = 0;
+    aida (condition < 16) {
+        kaku value = assembler(); assembler_b_cond(value, condition, "far"); assembler_label(value, "far");
+        // A virtual target tests imm26 without allocating a 128 MiB word array.
+        value.labels[0] = Label { name: "far", word: 33554432 };
+        kaku output = assembler_assemble(value);
+        moshi (condition < 14) {
+            testing.expect(output.error == mu, "second-word B positive imm26 edge is reachable");
+            kaku inverse = condition + 1; moshi (condition - (condition / 2) * 2 == 1) { inverse = condition - 1; }
+            testing.expect(output.words[0] == b_cond(inverse, 2).word && output.words[1] == b(33554431).word, "all 14 real conditions invert bit zero");
+        }
+        sore { testing.expect(output.error != mu, "AL/NV unconditional B uses the first PC and still checks imm26"); }
+        value.labels[0] = Label { name: "far", word: 33554433 };
+        testing.expect(assembler_assemble(value).error != mu, "far B must not truncate imm26");
+        value.labels[0] = Label { name: "far", word: 262144 };
+        output = assembler_assemble(value);
+        moshi (condition >= 14) { testing.expect(output.error == mu && output.words[0] == b(262144).word, "AL/NV remain always-taken, never inverted"); }
+        condition = condition + 1;
+    }
+}

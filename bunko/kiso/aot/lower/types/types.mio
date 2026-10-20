@@ -21,12 +21,19 @@ koukai teisu type_float_any = 11;
 
 koukai kata TypeArena {
     parent: []int64;
+    revision: []int64;
     kind: []int64;
     nullable: []bool;
     struct_arity: []int64;
     struct_exact: []bool;
     fields: [][]int64;
     array_width: []int64;
+    integer_descriptor: []int64;
+    targets: [][]int64;
+    variants: [][][]int64;
+    trace: []bool;
+    context: []int64;
+    nullable_origins: [][]int64;
 }
 
 koukai kata TypeBlock {
@@ -41,25 +48,29 @@ koukai kata TypeAnalysis {
     globals: []int64;
     locals: [][]int64;
     returns: []int64;
+    upvalues: [][]int64;
+    cells: [][]bool;
     blocks: []TypeBlock;
     error_detail: int64;
 }
 
 waza type_arena() -> TypeArena {
-    kaesu TypeArena { parent: [], kind: [], nullable: [], struct_arity: [],
-        struct_exact: [], fields: [], array_width: [] };
+    kaesu TypeArena { parent: [], revision: [0], kind: [], nullable: [], struct_arity: [],
+        struct_exact: [], fields: [], array_width: [], integer_descriptor: [], targets: [], variants: [], trace: [iie], context: [0], nullable_origins: [] };
 }
 
 waza type_new(arena: TypeArena, kind: int64) -> int64 {
     kaku id = len(arena.parent);
     array.push(arena.parent, id);
     array.push(arena.kind, kind);
-    array.push(arena.array_width, 0);
+    array.push(arena.array_width, 0); array.push(arena.integer_descriptor, 0);
     array.push(arena.nullable, iie);
     array.push(arena.struct_arity, -1);
     array.push(arena.struct_exact, iie);
     kaku empty: []int64 = [];
     array.push(arena.fields, empty);
+    kaku targets: []int64 = []; array.push(arena.targets, targets);
+    kaku variants: [][]int64 = []; array.push(arena.variants, variants);
     kaesu id;
 }
 
@@ -90,7 +101,7 @@ koukai waza type_is_heap_reference(analysis: TypeAnalysis, node: int64) -> bool 
 }
 
 waza type_is_scalar_kind(kind: int64) -> bool {
-    kaesu kind == type_integer || kind == type_float32 || kind == type_float64 ||
+    kaesu kind == type_integer || kind == type_float32 || kind == type_float64 || kind == type_float_any ||
         kind == type_bool || kind == type_string_id;
 }
 
@@ -118,6 +129,8 @@ waza type_join(arena: TypeArena, a: int64, b: int64) -> bool {
     kaku right = type_root(arena, b);
     moshi (left == right) { kaesu hai; }
     kaku left_kind = arena.kind[left];
+    moshi (arena.trace[0] && arena.nullable[left] != arena.nullable[right]) { array.push(arena.nullable_origins, [arena.context[0], a, b, 1]); }
+    moshi (arena.trace[0] && ((arena.kind[left] == type_nil && arena.kind[right] != type_nil && arena.kind[right] != type_unknown) || (arena.kind[right] == type_nil && arena.kind[left] != type_nil && arena.kind[left] != type_unknown))) { array.push(arena.nullable_origins, [arena.context[0], a, b, 2]); }
     kaku right_kind = arena.kind[right];
     kaku resolved = iie;
     moshi ((left_kind == type_float_any && (right_kind == type_float32 || right_kind == type_float64)) ||
@@ -139,9 +152,34 @@ waza type_join(arena: TypeArena, a: int64, b: int64) -> bool {
 
     moshi (arena.struct_exact[left] && arena.struct_exact[right] &&
         arena.struct_arity[left] != arena.struct_arity[right]) { kaesu iie; }
+    moshi (arena.integer_descriptor[left] != 0 && arena.integer_descriptor[right] != 0 && arena.integer_descriptor[left] != arena.integer_descriptor[right]) { kaesu iie; }
+    moshi (arena.integer_descriptor[left] == 0) { arena.integer_descriptor[left] = arena.integer_descriptor[right]; }
+    arena.parent[right] = left; arena.revision[0] = arena.revision[0] + 1;
     moshi (!type_merge_fields(arena, left, right)) { kaesu iie; }
     moshi (arena.array_width[left] != 0 && arena.array_width[right] != 0 && arena.array_width[left] != arena.array_width[right]) { kaesu iie; }
     moshi (arena.array_width[left] == 0) { arena.array_width[left] = arena.array_width[right]; }
+    kaku variants = arena.variants[left]; kaku vi = 0;
+    aida (vi < len(arena.variants[right])) {
+        aida (len(variants) <= vi) { kaku empty: []int64 = []; array.push(variants, empty); }
+        kaku incoming = arena.variants[right][vi]; kaku current = variants[vi];
+        moshi (len(incoming) > 0) {
+            moshi (len(current) == 0) { variants[vi] = incoming; }
+            sore {
+                moshi (len(current) != len(incoming)) { kaesu iie; }
+                kaku fi = 1; aida (fi < len(current)) { moshi (!type_join(arena, current[fi], incoming[fi])) { kaesu iie; } fi = fi + 1; }
+            }
+        }
+        vi = vi + 1;
+    }
+    arena.variants[left] = variants;
+    kaku targets = arena.targets[left];
+    kaku ti = 0;
+    aida (ti < len(arena.targets[right])) {
+        kaku target = arena.targets[right][ti]; kaku found = iie; kaku tj = 0;
+        aida (tj < len(targets)) { moshi (targets[tj] == target) { found = hai; } tj = tj + 1; }
+        moshi (!found) { array.push(targets, target); } ti = ti + 1;
+    }
+    arena.targets[left] = targets;
     arena.parent[right] = left;
     arena.nullable[left] = arena.nullable[left] || arena.nullable[right];
     moshi (!arena.struct_exact[left] && arena.struct_exact[right]) {
@@ -160,6 +198,7 @@ waza type_require(arena: TypeArena, node: int64, kind: int64) -> bool {
 
 waza type_mark_nullable(arena: TypeArena, node: int64) -> unit {
     moshi (node < 0 || node >= len(arena.parent)) { kaesu; }
+    moshi (arena.trace[0]) { array.push(arena.nullable_origins, [arena.context[0], node, node, 3]); }
     arena.nullable[type_root(arena, node)] = hai;
 }
 
@@ -256,7 +295,7 @@ waza type_stack_effect(file: mochi.File, opcode: int64, operand: int64, operand2
     moshi (!handled && opcode == 41) { push = 1; handled = hai; }
     moshi (!handled && opcode == 58) { need = 1; push = 1; handled = hai; }
     moshi (!handled && (opcode == 59 || opcode == 61 || opcode == 63 || opcode == 64)) { need = 2; handled = hai; }
-    moshi (!handled && opcode == 54) { need = operand2; moshi (operand != 11) { push = 1; } handled = hai; }
+    moshi (!handled && opcode == 54) { need = operand2; moshi (operand != 13) { push = 1; } handled = hai; }
     moshi (!handled && opcode == 25) {
         moshi (operand < 0 || operand >= len(file.functions)) { kaesu [-1,-1]; }
         need = file.functions[operand].parameter_count;
@@ -267,7 +306,133 @@ waza type_stack_effect(file: mochi.File, opcode: int64, operand: int64, operand2
     kaesu [need,push];
 }
 
-waza type_block_depths(file: mochi.File, data: []uint8, function_id: int64) -> []int64 {
+waza call_push(file: mochi.File, data: []uint8, offset: int64, count: int64) -> int64 {
+    // Exact targets validate this provisional shape after graph construction.
+    kaku shape = -1; kaku i = 0;
+    aida (i < len(file.functions)) {
+        kaku fn = file.functions[i];
+        moshi (fn.parameter_count == count) {
+            kaku value = 0; moshi (fn.returns_value) { value = 1; }
+            moshi (shape == -1) { shape = value; } sore { moshi (shape != value) { shape = 2; } }
+        }
+        i = i + 1;
+    }
+    moshi (shape < 2 && shape >= 0) { kaesu shape; }
+    // A directly preceding literal has no intervening arguments for arity 0.
+    moshi (count == 0 && offset >= 3 && (data[offset - 3] == uint8(44) || data[offset - 3] == uint8(46))) {
+        kaku id = type_u16(data, offset - 3);
+        moshi (id < len(file.functions)) { moshi (file.functions[id].returns_value) { kaesu 1; } kaesu 0; }
+    }
+    moshi (offset + 3 < len(data)) {
+        kaku next = int64(data[offset + 3]);
+        moshi (next == 3 || next == 19 || next == 22 || next == 23 || next == 27 || next == 48 || next == 49) { kaesu 1; }
+    }
+    moshi (offset + 3 == len(data) || (offset + 3 < len(data) && data[offset + 3] == uint8(26))) { kaesu 0; }
+    kaesu -1;
+}
+
+// Recognize the compiler's exact awase prologue and binding triples.
+// Other control flow stays unresolved rather than merging unrelated variants.
+koukai waza enum_read_tag(file: mochi.File, data: []uint8, at: int64) -> int64 {
+    kaku cursor = 0; kaku tag = -1; kaku binding = -1;
+    aida (cursor < at) {
+        kaku op = int64(data[cursor]); kaku width = type_instruction_width(op);
+        moshi (width == 0) { kaesu -1; }
+        moshi ((op == 20 || op == 24) && cursor + 11 <= len(data) && data[cursor + 3] == uint8(39) &&
+            data[cursor + 4] == uint8(1) && data[cursor + 7] == uint8(11) && data[cursor + 8] == uint8(18)) {
+            kaku id = type_u16(data, cursor + 4);
+            moshi (id < len(file.constants) && file.constants[id].tag == uint8(1) && file.constants[id].bits.high == uint32(0) && file.constants[id].bits.low <= uint32(65535)) {
+                tag = int64(file.constants[id].bits.low); binding = cursor + 11;
+            }
+        }
+        moshi (binding >= 0 && cursor == binding) {
+            moshi (cursor + 9 <= len(data) && (op == 20 || op == 24) && data[cursor + 3] == uint8(40) &&
+                (data[cursor + 6] == uint8(19) || data[cursor + 6] == uint8(23))) {
+                moshi (at == cursor + 3) { kaesu tag; } binding = cursor + 9;
+            } sore { binding = -1; }
+        }
+        cursor = cursor + width;
+    }
+    kaesu -1;
+}
+
+waza merge_targets(destination: []int64, source: []int64) -> bool {
+    kaku changed = iie; kaku i = 0;
+    aida (i < len(source)) {
+        kaku j = 0; kaku found = iie;
+        aida (j < len(destination)) { moshi (destination[j] == source[i]) { found = hai; } j = j + 1; }
+        moshi (!found) { array.push(destination, source[i]); changed = hai; } i = i + 1;
+    }
+    kaesu changed;
+}
+
+// Return-shape hints mirror M15b's branchless literal/local/factory analysis.
+// They decide only provisional stack depths; the full graph validates targets.
+waza call_hints(file: mochi.File) -> [][]int64 {
+    kaku hints: [][]int64 = []; kaku results: [][]int64 = []; kaku globals: [][]int64 = [];
+    kaku i = 0;
+    aida (i < file.global_count) { kaku empty: []int64 = []; array.push(globals, empty); i = i + 1; }
+    i = -1;
+    aida (i < len(file.functions)) {
+        kaku data = file.instructions; moshi (i >= 0) { data = file.functions[i].instructions; }
+        array.push(hints, array.make[int64](len(data) + 1, -1));
+        moshi (i >= 0) { kaku empty: []int64 = []; array.push(results, empty); }
+        i = i + 1;
+    }
+    kaku pass = 0; kaku changed = hai;
+    aida (changed && pass <= len(file.functions) + 1) {
+        changed = iie; i = -1;
+        aida (i < len(file.functions)) {
+            kaku data = file.instructions; kaku count = 0;
+            moshi (i >= 0) { data = file.functions[i].instructions; count = file.functions[i].local_count; }
+            kaku branchless = hai; kaku at = 0;
+            aida (at < len(data)) { kaku op = int64(data[at]); moshi (op == 17 || op == 18) { branchless = iie; } kaku w = type_instruction_width(op); moshi (w == 0) { branchless = iie; nukeru; } at = at + w; }
+            moshi (!branchless) { i = i + 1; tsuzuku; }
+            kaku locals: [][]int64 = []; kaku stack: [][]int64 = []; kaku j = 0;
+            aida (j < count) { kaku empty: []int64 = []; array.push(locals, empty); j = j + 1; }
+            at = 0;
+            aida (at < len(data)) {
+                kaku op = int64(data[at]); kaku w = type_instruction_width(op); kaku arg = 0; kaku arg2 = 0;
+                moshi (w >= 3) { arg = type_u16(data, at); }
+                moshi (op == 38) { arg2 = type_operand2(data, at); }
+                moshi (op == 54 || op == 55 || op == 57 || op == 58 || op == 65) { arg = int64(data[at + 1]); }
+                moshi (op == 54) { arg2 = int64(data[at + 2]); }
+                kaku effect = type_stack_effect(file, op, arg, arg2); kaku value: []int64 = [];
+                moshi (op == 44 || op == 46) { array.push(value, arg); }
+                moshi (op == 20 && arg < len(globals)) { value = globals[arg]; }
+                moshi (op == 24 && arg < len(locals)) { value = locals[arg]; }
+                moshi (op == 25 && arg < len(results)) { value = results[arg]; }
+                moshi (op == 45) {
+                    moshi (len(stack) < arg + 1) { nukeru; }
+                    kaku targets = stack[len(stack) - arg - 1]; kaku shape = -1; kaku ti = 0;
+                    aida (ti < len(targets)) {
+                        kaku target = targets[ti]; kaku fn = file.functions[target]; kaku current = 0; moshi (fn.returns_value) { current = 1; }
+                        moshi (fn.parameter_count != arg || (shape >= 0 && shape != current)) { shape = -2; nukeru; }
+                        shape = current; merge_targets(value, results[target]); ti = ti + 1;
+                    }
+                    moshi (shape >= 0) { moshi (hints[i + 1][at] != shape) { hints[i + 1][at] = shape; changed = hai; } effect[1] = shape; }
+                    sore { effect[1] = call_push(file, data, at, arg); }
+                    moshi (effect[1] < 0) { nukeru; }
+                }
+                moshi (effect[0] > len(stack)) { nukeru; }
+                moshi (op == 19 || op == 23 || op == 49 || op == 27) {
+                    kaku top = stack[len(stack) - 1];
+                    moshi (op == 19) { changed = merge_targets(globals[arg], top) || changed; }
+                    moshi (op == 23 || op == 49) { locals[arg] = top; }
+                    moshi (op == 27 && i >= 0) { changed = merge_targets(results[i], top) || changed; }
+                }
+                array.truncate(stack, len(stack) - effect[0]);
+                moshi (effect[1] > 0) { array.push(stack, value); }
+                at = at + w;
+            }
+            i = i + 1;
+        }
+        pass = pass + 1;
+    }
+    kaesu hints;
+}
+
+waza type_block_depths(file: mochi.File, data: []uint8, function_id: int64, hints: []int64) -> []int64 {
     kaku depths = array.make[int64](len(data) + 1, -1);
     kaku boundary = array.make[bool](len(data) + 1, iie);
     kaku offset = 0;
@@ -293,6 +458,8 @@ waza type_block_depths(file: mochi.File, data: []uint8, function_id: int64) -> [
         moshi (opcode == 54 || opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65) { operand = int64(data[offset + 1]); }
         moshi (opcode == 54) { operand2 = int64(data[offset + 2]); }
         kaku effect = type_stack_effect(file, opcode, operand, operand2);
+        moshi (opcode == 45) { effect[1] = hints[offset]; moshi (effect[1] < 0) { effect[1] = call_push(file, data, offset, operand); } }
+        moshi (effect[1] < 0) { kaesu []; }
         moshi (len(effect) != 2 || effect[0] < 0 || depths[offset] < effect[0]) { kaesu []; }
         kaku next_depth = depths[offset] - effect[0] + effect[1];
         kaku next = offset + width;
@@ -350,17 +517,157 @@ waza type_fail(function_id: int64, offset: int64, opcode: int64) -> int64 {
 // then each value-producing position receives a union node.  Successor stacks
 // are joined at bytecode boundaries, so loops and diamonds share the same
 // representation decision.
+// Non-nil facts are a forward must-analysis: all incoming paths must prove
+// the local non-nil. Stores and calls invalidate facts (a Closure can write a
+// shared Cell). Start unvisited blocks at top, then intersect to a fixed point.
+waza type_nonnil_entries(data: []uint8, count: int64) -> [][]bool {
+    kaku facts: [][]bool = []; kaku visited = array.make[bool](len(data) + 1, iie);
+    kaku at = 0; aida (at <= len(data)) { array.push(facts, array.make[bool](count, iie)); at = at + 1; }
+    visited[0] = hai; kaku changed = hai;
+    aida (changed) {
+        changed = iie; at = 0;
+        aida (at < len(data)) {
+            kaku op = int64(data[at]); kaku width = type_instruction_width(op);
+            moshi (visited[at]) {
+                kaku out = array.clone(facts[at]);
+                moshi (op == 23 || op == 49) { out[type_u16(data, at)] = iie; }
+                moshi (op == 25 || op == 45 || op == 48) { kaku i = 0; aida (i < count) { out[i] = iie; i = i + 1; } }
+                kaku successors: []int64 = []; kaku guard = -1; kaku inverted = iie;
+                moshi (op == 17 || op == 18) { array.push(successors, type_u16(data, at)); }
+                moshi (op != 17 && op != 26 && op != 27) { array.push(successors, at + width); }
+                // These are the compiler's local nil-test forms. All other
+                // conditions provide no fact; no instruction bytes are guessed
+                // from inside operands: verify their instruction boundaries.
+                moshi (op == 18) {
+                    kaku start = at - 4;
+                    moshi (at >= 5 && data[at - 1] == uint8(10)) { start = at - 5; inverted = hai; }
+                    moshi (start >= 0 && data[start] == uint8(24) && data[start + 3] == uint8(34)) {
+                        kaku boundary = 0; aida (boundary < start) { boundary = boundary + type_instruction_width(int64(data[boundary])); }
+                        moshi (boundary == start) { guard = type_u16(data, start); }
+                    }
+                }
+                kaku si = 0;
+                aida (si < len(successors)) {
+                    kaku dest = successors[si]; kaku incoming = array.clone(out);
+                    moshi (guard >= 0 && ((si == 0 && !inverted) || (si == 1 && inverted))) { incoming[guard] = hai; }
+                    moshi (!visited[dest]) { facts[dest] = incoming; visited[dest] = hai; changed = hai; }
+                    sore { kaku i = 0; aida (i < count) { moshi (facts[dest][i] && !incoming[i]) { facts[dest][i] = iie; changed = hai; } i = i + 1; } }
+                    si = si + 1;
+                }
+            }
+            at = at + width;
+        }
+    }
+    kaesu facts;
+}
+
+// Operations relate base types without equating their raw/boxed value
+// representations. Only real value-flow edges use type_join.
+waza type_same_kind(arena: TypeArena, a: int64, b: int64, infer_nil: bool) -> bool {
+    kaku left = type_root(arena, a); kaku right = type_root(arena, b);
+    kaku lk = arena.kind[left]; kaku rk = arena.kind[right];
+    moshi (infer_nil && lk == type_nil && rk != type_nil && rk != type_unknown) {
+        moshi (arena.trace[0]) { array.push(arena.nullable_origins, [arena.context[0], a, b, 2]); }
+        arena.kind[left] = rk; arena.nullable[left] = hai; arena.revision[0] = arena.revision[0] + 1;
+    }
+    moshi (infer_nil && rk == type_nil && lk != type_nil && lk != type_unknown) {
+        moshi (arena.trace[0]) { array.push(arena.nullable_origins, [arena.context[0], b, a, 2]); }
+        arena.kind[right] = lk; arena.nullable[right] = hai; arena.revision[0] = arena.revision[0] + 1;
+    }
+    moshi (lk == type_unknown && rk != type_unknown && rk != type_nil) {
+        arena.kind[left] = rk; arena.revision[0] = arena.revision[0] + 1;
+    }
+    moshi (rk == type_unknown && lk != type_unknown && lk != type_nil) {
+        arena.kind[right] = lk; arena.revision[0] = arena.revision[0] + 1;
+    }
+    moshi (arena.kind[left] == type_integer && arena.kind[right] == type_integer) {
+        kaku ld = arena.integer_descriptor[left]; kaku rd = arena.integer_descriptor[right];
+        moshi (ld != 0 && rd != 0 && ld != rd) { kaesu iie; }
+        moshi (ld == 0 && rd != 0) { arena.integer_descriptor[left] = rd; arena.revision[0] = arena.revision[0] + 1; }
+        moshi (rd == 0 && ld != 0) { arena.integer_descriptor[right] = ld; arena.revision[0] = arena.revision[0] + 1; }
+    }
+    // Nil is a comparison alternative, never a reason to rebox the peer.
+    kaesu lk == rk || lk == type_unknown || rk == type_unknown || lk == type_nil || rk == type_nil ||
+        (lk == type_float_any && (rk == type_float32 || rk == type_float64)) ||
+        (rk == type_float_any && (lk == type_float32 || lk == type_float64));
+}
+
+// Conservative inter-function reachability: static calls and every function
+// value/closure retain their targets, including mutually recursive closures.
+koukai waza reachable_functions(file: mochi.File) -> []bool {
+    kaku reached = array.make[bool](len(file.functions), iie); kaku queue: []int64 = [-1]; kaku next = 0;
+    aida (next < len(queue)) {
+        kaku id = queue[next]; next = next + 1; kaku data = file.instructions;
+        moshi (id >= 0) { data = file.functions[id].instructions; }
+        kaku at = 0;
+        aida (at < len(data)) {
+            kaku op = int64(data[at]); kaku width = type_instruction_width(op);
+            moshi (width == 0 || at + width > len(data)) { kaesu array.make[bool](len(file.functions), hai); }
+            moshi (op == 25 || op == 44 || op == 46) {
+                kaku target = type_u16(data, at);
+                moshi (target >= 0 && target < len(reached) && !reached[target]) { reached[target] = hai; array.push(queue, target); }
+            }
+            at = at + width;
+        }
+    }
+    kaesu reached;
+}
+
+// Self-hosted v14 preserves generic array forwarding functions. Specialize
+// their exact bodies at static call sites, without merging unrelated []T.
+koukai waza array_forward_opcode(function: mochi.Function) -> int64 {
+    kaku data = function.instructions; kaku count = function.parameter_count;
+    moshi (len(function.captures) != 0 || count < 1 || count > 2 || function.local_count != count || len(data) < count * 3 + 2) { kaesu 0; }
+    kaku i = 0;
+    aida (i < count) {
+        moshi (data[i * 3] != uint8(24) || data[i * 3 + 1] != uint8(0) || data[i * 3 + 2] != uint8(i)) { kaesu 0; }
+        i = i + 1;
+    }
+    kaku opcode = int64(data[count * 3]);
+    moshi (opcode < 57 || opcode > 64) { kaesu 0; }
+    kaku parameters = 2; kaku returns = iie;
+    moshi (opcode == 58 || opcode == 60 || opcode == 62) { parameters = 1; }
+    moshi (opcode == 57 || opcode == 58 || opcode == 60 || opcode == 62) { returns = hai; }
+    kaku width = type_instruction_width(opcode);
+    kaku last = 26; moshi (returns) { last = 27; }
+    moshi (count != parameters || function.returns_value != returns || len(data) != count * 3 + width + 1 || int64(data[len(data) - 1]) != last) { kaesu 0; }
+    // Constructors must carry the generic descriptor, not a fixed element ABI.
+    moshi ((opcode == 57 || opcode == 58) && data[count * 3 + 1] != uint8(0)) { kaesu 0; }
+    kaesu opcode;
+}
+
+// A width-polymorphic predicate has no shared argument representation. Match
+// the complete bytecode body, rather than trusting a source function name.
+koukai waza is_float_predicate(function: mochi.Function) -> bool {
+    kaku data = function.instructions;
+    kaesu function.parameter_count == 1 && function.returns_value && len(function.captures) == 0 &&
+        len(data) == 7 && data[0] == uint8(24) && data[1] == uint8(0) && data[2] == uint8(0) &&
+        data[3] == uint8(54) && data[4] >= uint8(6) && data[4] <= uint8(8) && data[5] == uint8(1) && data[6] == uint8(27);
+}
+
 koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
-    kaku arena = type_arena();
+    kaesu analyze_types_traced(file, iie);
+}
+
+// Optional provenance records: [instruction detail, value node, peer node,
+// reason (1: nullable propagation, 2: nil alternative, 3: explicit nullable)].
+koukai waza analyze_types_traced(file: mochi.File, trace: bool) -> TypeAnalysis {
+    kaku arena = type_arena(); arena.trace[0] = trace;
+    kaku function_reachable = reachable_functions(file);
     kaku globals: []int64 = [];
     kaku index = 0; aida (index < file.global_count) { array.push(globals, type_new(arena, type_unknown)); index = index + 1; }
     kaku locals: [][]int64 = [];
     kaku returns: []int64 = [];
+    kaku upvalues: [][]int64 = []; kaku cells: [][]bool = [];
     index = 0;
     aida (index < len(file.functions)) {
         kaku slots: []int64 = [];
         kaku slot = 0; aida (slot < file.functions[index].local_count) { array.push(slots, type_new(arena, type_unknown)); slot = slot + 1; }
         array.push(locals, slots);
+        kaku uv: []int64 = []; kaku ci = 0;
+        aida (ci < len(file.functions[index].captures)) { array.push(uv, type_new(arena, type_unknown)); ci = ci + 1; }
+        array.push(upvalues, uv);
+        array.push(cells, array.make[bool](len(slots), iie));
         kaku result = -1; moshi (file.functions[index].returns_value) { result = type_new(arena, type_unknown); }
         array.push(returns, result);
         kaku native_op = nativefs.operation(file.functions[index].name);
@@ -372,7 +679,13 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
                     kind = type_array_ref;
                     moshi ((native_op == nativefs.op_open || native_op == nativefs.op_open_dir || native_op == nativefs.op_stat || native_op == nativefs.op_mkdir) && parameter == 0) { kind = type_string_id; }
                 }
-                type_require(arena, slots[parameter], kind); parameter = parameter + 1;
+                type_require(arena, slots[parameter], kind);
+                moshi (kind == type_array_ref) {
+                    arena.array_width[type_root(arena, slots[parameter])] = 1;
+                    kaku element = type_array_element(arena, slots[parameter]); type_require(arena, element, type_integer);
+                    arena.integer_descriptor[type_root(arena, element)] = 15;
+                }
+                parameter = parameter + 1;
             }
             kaku result_kind = type_integer;
             moshi (native_op == nativefs.op_dir_is_dir || native_op == nativefs.op_dir_is_file || native_op == nativefs.op_dir_next) { result_kind = type_bool; }
@@ -381,24 +694,36 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             // strings are tagged IDs, dynamic strings are managed descriptors.
             type_require(arena, result, result_kind);
         }
-        moshi (file.functions[index].name == "kiso/math::is_inf" && len(slots) == 1) {
+        kaku forwarding = array_forward_opcode(file.functions[index]);
+        moshi (forwarding != 0) {
+            kaku array_node = type_new(arena, type_array_ref); kaku element = type_array_element(arena, array_node);
+            type_require(arena, element, type_integer); arena.integer_descriptor[type_root(arena, element)] = 1;
+            moshi (forwarding == 57 || forwarding == 58) { type_require(arena, slots[0], type_integer); type_join(arena, result, array_node); }
+            sore { type_join(arena, slots[0], array_node); }
+            moshi (forwarding == 57 || forwarding == 59 || forwarding == 61 || forwarding == 63) { type_require(arena, slots[1], type_integer); }
+            moshi (forwarding == 60) { type_require(arena, result, type_integer); }
+            moshi (forwarding == 62) { type_join(arena, result, array_node); }
+            moshi (forwarding == 64) { type_join(arena, slots[1], array_node); }
+        }
+        moshi (is_float_predicate(file.functions[index])) {
             type_require(arena, slots[0], type_float_any);
         }
         index = index + 1;
     }
+    kaku hints = call_hints(file);
     kaku blocks: []TypeBlock = [];
     kaku block_index = -1;
     aida (block_index < len(file.functions)) {
         kaku data = file.instructions;
         moshi (block_index >= 0) { data = file.functions[block_index].instructions; }
-        kaku depths = type_block_depths(file, data, block_index);
-        moshi (len(depths) == 0) { kaesu TypeAnalysis { arena: arena, globals: globals, locals: locals, returns: returns, blocks: blocks, error_detail: type_fail(block_index, 0, 0) }; }
+        kaku depths = type_block_depths(file, data, block_index, hints[block_index + 1]);
+        moshi (len(depths) == 0) { kaesu TypeAnalysis { arena: arena, globals: globals, locals: locals, returns: returns, upvalues: upvalues, cells: cells, blocks: blocks, error_detail: type_fail(block_index, 0, 0) }; }
         kaku entries: [][]int64 = [];
         kaku reachable: []bool = [];
         kaku at = 0;
         aida (at <= len(data)) {
             kaku values: []int64 = [];
-            moshi (depths[at] >= 0) {
+            moshi (depths[at] >= 0 && (block_index < 0 || function_reachable[block_index])) {
                 kaku depth = 0; aida (depth < depths[at]) { array.push(values, type_new(arena, type_unknown)); depth = depth + 1; }
                 array.push(reachable, hai);
             }
@@ -409,11 +734,17 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
         block_index = block_index + 1;
     }
 
-    kaku deferred_indexes: []int64 = [];
+    kaku kind_links: [][]int64 = []; kaku projections: [][]int64 = [];
+    kaku float_predicate_arguments: [][]int64 = [];
+    kaku deferred_indexes: []int64 = []; kaku enum_reads: []int64 = [];
+    kaku call_nodes: []int64 = []; kaku call_arguments: [][]int64 = [];
+    kaku call_results: []int64 = []; kaku call_details: []int64 = [];
     kaku failed_detail = 0;
     block_index = 0;
     aida (block_index < len(blocks) && failed_detail == 0) {
         kaku block = blocks[block_index];
+        kaku local_count = 0; moshi (block.function_id >= 0) { local_count = len(locals[block.function_id]); }
+        kaku nonnil = type_nonnil_entries(block.data, local_count);
         kaku offset = 0;
         aida (offset < len(block.data) && failed_detail == 0) {
             kaku opcode = int64(block.data[offset]);
@@ -425,9 +756,15 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             moshi (opcode == 56) { operand2 = int64(block.data[offset + 3]); }
             moshi (opcode == 54 || opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65) { operand = int64(block.data[offset + 1]); }
             moshi (opcode == 54) { operand2 = int64(block.data[offset + 2]); }
+            moshi (opcode == 25 && operand >= 0 && operand < len(file.functions)) {
+                kaku forwarding = array_forward_opcode(file.functions[operand]);
+                moshi (forwarding != 0) { opcode = forwarding; operand = 0; }
+            }
+            arena.context[0] = type_fail(block.function_id, offset, opcode);
             kaku stack = type_copy_stack(block.entry[offset]);
             kaku ok = hai;
             kaku expected = type_stack_effect(file, opcode, operand, operand2);
+            moshi (opcode == 45) { expected[1] = hints[block_index][offset]; moshi (expected[1] < 0) { expected[1] = call_push(file, block.data, offset, operand); } }
             moshi (len(expected) != 2 || len(stack) < expected[0]) {
                 failed_detail = type_fail(block.function_id, offset, opcode);
                 offset = offset + width;
@@ -436,7 +773,12 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             kaku handled = iie;
             moshi (!handled && opcode == 1) {
                 moshi (operand < 0 || operand >= len(file.constants)) { ok = iie; }
-                sore { array.push(stack, type_new(arena, type_constant_kind(file.constants[operand]))); }
+                sore {
+                    kaku node = type_new(arena, type_constant_kind(file.constants[operand]));
+                    kaku tag = int64(file.constants[operand].tag);
+                    moshi (arena.kind[node] == type_integer) { kaku descriptor = 1; moshi (tag >= 5 && tag <= 10) { descriptor = tag + 7; } arena.integer_descriptor[node] = descriptor; }
+                    array.push(stack, node);
+                }
                 handled = hai;
             }
             moshi (!handled && (opcode == 8 || opcode == 9)) { array.push(stack, type_new(arena, type_bool)); handled = hai; }
@@ -446,10 +788,54 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
                 kaku value = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
                 moshi (operand >= len(globals) || !type_join(arena, globals[operand], value)) { ok = iie; } handled = hai;
             }
-            moshi (!handled && opcode == 24) { moshi (block.function_id < 0 || operand >= len(locals[block.function_id])) { ok = iie; } sore { array.push(stack, locals[block.function_id][operand]); } handled = hai; }
+            moshi (!handled && opcode == 24) { moshi (block.function_id < 0 || operand >= len(locals[block.function_id])) { ok = iie; } sore {
+                kaku node = locals[block.function_id][operand];
+                moshi (nonnil[offset][operand]) { kaku view = type_new(arena, type_unknown); array.push(projections, [view, node, type_fail(block.function_id, offset, opcode)]); node = view; }
+                array.push(stack, node);
+            } handled = hai; }
             moshi (!handled && (opcode == 23 || opcode == 49)) {
                 kaku value = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
                 moshi (block.function_id < 0 || operand >= len(locals[block.function_id]) || !type_join(arena, locals[block.function_id][operand], value)) { ok = iie; } handled = hai;
+            }
+            moshi (!handled && (opcode == 44 || opcode == 46)) {
+                moshi (operand < 0 || operand >= len(file.functions)) { ok = iie; }
+                sore {
+                    kaku node = type_new(arena, type_function_ref); array.push(arena.targets[node], operand); array.push(stack, node);
+                    moshi (opcode == 44 && len(file.functions[operand].captures) != 0) { ok = iie; }
+                    moshi (opcode == 46) {
+                        kaku ci = 0;
+                        aida (ci < len(file.functions[operand].captures) && ok) {
+                            kaku capture = file.functions[operand].captures[ci];
+                            kaku source = -1;
+                            moshi (block.function_id >= 0) {
+                                moshi (capture.local) {
+                                    moshi (capture.index < len(locals[block.function_id])) { source = locals[block.function_id][capture.index]; cells[block.function_id][capture.index] = hai; }
+                                } sore { moshi (capture.index < len(upvalues[block.function_id])) { source = upvalues[block.function_id][capture.index]; } }
+                            }
+                            ok = source >= 0 && type_join(arena, upvalues[operand][ci], source); ci = ci + 1;
+                        }
+                    }
+                }
+                handled = hai;
+            }
+            moshi (!handled && (opcode == 47 || opcode == 48)) {
+                moshi (block.function_id < 0 || operand >= len(upvalues[block.function_id])) { ok = iie; }
+                sore {
+                    moshi (opcode == 47) { array.push(stack, upvalues[block.function_id][operand]); }
+                    sore { ok = type_join(arena, upvalues[block.function_id][operand], type_pop(stack)); }
+                }
+                handled = hai;
+            }
+            moshi (!handled && opcode == 45) {
+                kaku first = len(stack) - operand - 1;
+                kaku args: []int64 = []; kaku ai = 0;
+                aida (ai < operand) { array.push(args, stack[first + 1 + ai]); ai = ai + 1; }
+                ok = type_require(arena, stack[first], type_function_ref);
+                array.push(call_nodes, stack[first]); array.push(call_arguments, args);
+                array.push(call_details, type_fail(block.function_id, offset, opcode));
+                array.truncate(stack, first);
+                kaku result = -1; moshi (expected[1] != 0) { result = type_new(arena, type_unknown); array.push(stack, result); }
+                array.push(call_results, result); handled = hai;
             }
             moshi (!handled && opcode == 25) {
                 moshi (operand < 0 || operand >= len(file.functions)) { ok = iie; }
@@ -458,7 +844,10 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
                     kaku first = len(stack) - count;
                     kaku parameter = 0;
                     aida (parameter < count && ok) {
-                        moshi (!type_join(arena, locals[operand][parameter], stack[first + parameter])) { ok = iie; }
+                        moshi (is_float_predicate(file.functions[operand])) {
+                            array.push(float_predicate_arguments, [stack[first + parameter], type_fail(block.function_id, offset, opcode)]);
+                        }
+                        sore { moshi (!type_join(arena, locals[operand][parameter], stack[first + parameter])) { ok = iie; } }
                         parameter = parameter + 1;
                     }
                     array.truncate(stack, first);
@@ -466,9 +855,58 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
                 }
                 handled = hai;
             }
+            moshi (!handled && (opcode == 28 || opcode == 29 || (opcode >= 50 && opcode <= 53))) {
+                kaku input = type_pop(stack); kaku source = type_integer; kaku result = type_float64;
+                moshi (opcode == 29 || opcode == 53) { source = type_float64; }
+                moshi (opcode == 51 || opcode == 52) { source = type_float32; }
+                moshi (opcode == 29 || opcode == 51) { result = type_integer; }
+                moshi (opcode == 50 || opcode == 53) { result = type_float32; }
+                ok = type_require(arena, input, source); kaku node = type_new(arena, result);
+                moshi (result == type_integer) { arena.integer_descriptor[node] = 1; }
+                array.push(stack, node); handled = hai;
+            }
+            moshi (!handled && opcode == 55) {
+                type_pop(stack); kaku node = type_new(arena, type_integer); kaku descriptor = operand + 11;
+                moshi (operand == 4) { descriptor = 1; } moshi (operand >= 5) { descriptor = operand + 10; }
+                arena.integer_descriptor[node] = descriptor; array.push(stack, node); handled = hai;
+            }
+            moshi (!handled && opcode == 65) {
+                kaku input = type_pop(stack);
+                moshi (operand == 1) {
+                    ok = type_require(arena, input, type_string_id);
+                    kaku node = type_new(arena, type_array_ref); arena.array_width[node] = 1;
+                    kaku element = type_array_element(arena, node); type_require(arena, element, type_integer); arena.integer_descriptor[type_root(arena, element)] = 15; array.push(stack, node);
+                } sore {
+                    moshi (operand != 2) { ok = iie; }
+                    kaku element = type_array_element(arena, input); ok = ok && element >= 0;
+                    moshi (ok) { ok = type_require(arena, element, type_integer); arena.array_width[type_root(arena, input)] = 1; }
+                    kaku node = type_new(arena, type_string_id); type_mark_nullable(arena, node); array.push(stack, node);
+                }
+                handled = hai;
+            }
+            moshi (!handled && opcode == 54 && ((operand >= 6 && operand <= 8) || operand == 13)) {
+                kaku input = type_pop(stack);
+                moshi (operand == 13) { ok = type_require(arena, input, type_string_id); }
+                sore { array.push(stack, type_new(arena, type_bool)); }
+                handled = hai;
+            }
             moshi (!handled && opcode == 27) {
                 kaku value = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
                 moshi (block.function_id < 0 || !type_join(arena, returns[block.function_id], value)) { ok = iie; } handled = hai;
+            }
+            moshi (!handled && opcode == 38) {
+                kaku values: []int64 = [-1]; kaku first = len(stack) - operand2; kaku vi = first;
+                aida (vi < len(stack)) { array.push(values, stack[vi]); vi = vi + 1; }
+                kaku node = type_new(arena, type_enum_ref); kaku variants = arena.variants[node];
+                aida (len(variants) <= operand) { kaku empty: []int64 = []; array.push(variants, empty); }
+                variants[operand] = values; array.truncate(stack, first); array.push(stack, node); handled = hai;
+            }
+            moshi (!handled && opcode == 39) { ok = type_require(arena, type_pop(stack), type_enum_ref); array.push(stack, type_new(arena, type_integer)); handled = hai; }
+            moshi (!handled && opcode == 40) {
+                kaku receiver = type_pop(stack); kaku result = type_new(arena, type_unknown);
+                array.push(enum_reads, receiver); array.push(enum_reads, result); array.push(enum_reads, operand);
+                array.push(enum_reads, enum_read_tag(file, block.data, offset)); array.push(enum_reads, type_fail(block.function_id, offset, opcode));
+                array.push(stack, result); handled = hai;
             }
             moshi (!handled && opcode == 36) {
                 kaku first = len(stack) - operand;
@@ -485,7 +923,7 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             }
             moshi (!handled && opcode == 34) {
                 kaku value = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
-                type_mark_nullable(arena, value); array.push(stack, type_new(arena, type_bool));
+                array.push(stack, type_new(arena, type_bool));
                 handled = hai;
             }
             moshi (!handled && (opcode == 10 || opcode == 18)) {
@@ -497,18 +935,18 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             moshi (!handled && (opcode == 2 || opcode == 4 || opcode == 5 || opcode == 6)) {
                 kaku right = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
                 kaku left = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
-                ok = type_join(arena, left, right); array.push(stack, left);
+                kaku result = type_new(arena, type_unknown); array.push(kind_links, [left, right, type_fail(block.function_id, offset, opcode)]); array.push(kind_links, [result, left, type_fail(block.function_id, offset, opcode)]); array.push(stack, result);
                 handled = hai;
             }
             moshi (!handled && opcode >= 11 && opcode <= 16) {
                 kaku right = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
                 kaku left = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
-                ok = type_join(arena, left, right); array.push(stack, type_new(arena, type_bool));
+                array.push(kind_links, [left, right, type_fail(block.function_id, offset, opcode)]); array.push(stack, type_new(arena, type_bool));
                 handled = hai;
             }
             moshi (!handled && opcode == 7) {
                 kaku value = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
-                array.push(stack, value); handled = hai;
+                kaku result = type_new(arena, type_unknown); array.push(kind_links, [result, value, type_fail(block.function_id, offset, opcode)]); array.push(stack, result); handled = hai;
             }
             moshi (!handled && (opcode == 30 || opcode == 56 || opcode == 57 || opcode == 58)) {
                 kaku node = type_new(arena, type_array_ref);
@@ -516,9 +954,9 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
                 kaku descriptor = 0;
                 moshi (opcode == 56) { descriptor = operand2; }
                 moshi (opcode == 57 || opcode == 58) { descriptor = operand; }
-                kaku storage_width = 8; moshi (descriptor == 15) { storage_width = 1; }
-                // An untyped literal uses the normal word representation;
-                // byte literals have the explicit uint8 descriptor in v14.
+                kaku storage_width = 8; moshi (opcode == 30 || descriptor == 0) { storage_width = 0; } moshi (descriptor == 15) { storage_width = 1; }
+                // Untyped literals defer storage width until their element
+                // constraints are solved; uint8 remains compact across IO.
                 arena.array_width[type_root(arena, node)] = storage_width;
                 ok = type_require(arena, element, type_descriptor_kind(descriptor));
                 moshi (descriptor >= 128) { type_mark_nullable(arena, element); }
@@ -588,6 +1026,83 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
         blocks[block_index] = block;
         block_index = block_index + 1;
     }
+    // Signature edges must reach a fixed point: returns can themselves carry
+    // function targets, including recursively through parameters and captures.
+    kaku pass = 0; kaku changed = hai;
+    aida (changed && failed_detail == 0) {
+        arena.context[0] = -1;
+        kaku before = arena.revision[0];
+        kaku ki = 0;
+        aida (ki < len(kind_links) && failed_detail == 0) {
+            kaku link = kind_links[ki]; arena.context[0] = link[2]; moshi (!type_same_kind(arena, link[0], link[1], link[2] - (link[2] / 100) * 100 <= 7)) { failed_detail = link[2]; } ki = ki + 1;
+        }
+        ki = 0;
+        aida (ki < len(projections) && failed_detail == 0) {
+            kaku link = projections[ki]; arena.context[0] = link[2]; kaku view = type_root(arena, link[0]); kaku source = type_root(arena, link[1]);
+            moshi (!type_same_kind(arena, view, source, hai)) { failed_detail = link[2]; }
+            // References already use one representation for nil/non-nil.
+            // Keep their complete shape/target/variant edges in the existing
+            // union; only scalar boxes need a distinct non-nil value view.
+            kaku kind = arena.kind[source];
+            moshi (kind == type_array_ref || kind == type_struct_ref || kind == type_enum_ref || kind == type_function_ref || kind == type_string_id) {
+                moshi (!type_join(arena, view, source)) { failed_detail = link[2]; }
+            }
+            ki = ki + 1;
+        }
+        kaku di = 0;
+        aida (di < len(deferred_indexes) && failed_detail == 0) {
+            kaku receiver = deferred_indexes[di];
+            moshi (receiver >= 0) {
+                kaku kind = arena.kind[type_root(arena, receiver)]; kaku result = deferred_indexes[di + 1]; kaku ok = hai;
+                moshi (kind == type_string_id) { ok = type_require(arena, result, type_integer); deferred_indexes[di] = -1; }
+                moshi (kind == type_array_ref) { ok = type_join(arena, result, type_array_element(arena, receiver)); deferred_indexes[di] = -1; }
+                moshi (!ok) { failed_detail = deferred_indexes[di + 2]; }
+            }
+            di = di + 3;
+        }
+        di = 0;
+        aida (di < len(enum_reads) && failed_detail == 0) {
+            kaku variants = arena.variants[type_root(arena, enum_reads[di])]; kaku tag = enum_reads[di + 3];
+            kaku field = enum_reads[di + 2] + 1;
+            moshi (tag >= 0 && tag < len(variants) && len(variants[tag]) > field) {
+                moshi (!type_join(arena, enum_reads[di + 1], variants[tag][field])) { failed_detail = enum_reads[di + 4]; }
+            }
+            di = di + 5;
+        }
+        kaku ci = 0;
+        aida (ci < len(call_nodes) && failed_detail == 0) {
+            kaku node = call_nodes[ci]; kaku targets = arena.targets[type_root(arena, node)]; kaku ti = 0;
+            aida (ti < len(targets) && failed_detail == 0) {
+                kaku target = targets[ti]; kaku fn = file.functions[target]; kaku args = call_arguments[ci];
+                kaku ok = fn.parameter_count == len(args) && fn.returns_value == (call_results[ci] >= 0);
+                kaku ai = 0;
+                aida (ai < len(args) && ok) { ok = type_join(arena, locals[target][ai], args[ai]); ai = ai + 1; }
+                moshi (ok && fn.returns_value) { ok = type_join(arena, call_results[ci], returns[target]); }
+                moshi (!ok || arena.kind[type_root(arena, node)] != type_function_ref) { failed_detail = call_details[ci]; }
+                ti = ti + 1;
+            }
+            ci = ci + 1;
+        }
+        changed = before != arena.revision[0]; pass = pass + 1;
+    }
+    kaku ki = 0;
+    aida (ki < len(kind_links) && failed_detail == 0) {
+        kaku link = kind_links[ki]; kaku op = link[2] - (link[2] / 100) * 100;
+        kaku kind = arena.kind[type_root(arena, link[0])];
+        moshi (kind == type_unknown || ((op == 2 || op == 4 || op == 5 || op == 6 || op == 7) && kind != type_integer && kind != type_float32 && kind != type_float64 && kind != type_float_any)) { failed_detail = link[2]; }
+        ki = ki + 1;
+    }
+    kaku fi = 0;
+    aida (fi < len(float_predicate_arguments) && failed_detail == 0) {
+        kaku arg = float_predicate_arguments[fi]; kaku kind = arena.kind[type_root(arena, arg[0])];
+        moshi (kind != type_float32 && kind != type_float64) { failed_detail = arg[1]; }
+        fi = fi + 1;
+    }
+    kaku ci = 0;
+    aida (ci < len(call_nodes) && failed_detail == 0) {
+        moshi (len(arena.targets[type_root(arena, call_nodes[ci])]) == 0) { failed_detail = call_details[ci]; }
+        ci = ci + 1;
+    }
     // Index is overloaded for strings and arrays. Resolve after all direct
     // call/return edges exist, without guessing unknown receiver kinds.
     kaku progress = hai;
@@ -610,6 +1125,15 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
             index = index + 3;
         }
     }
-    kaesu TypeAnalysis { arena: arena, globals: globals, locals: locals, returns: returns,
+    kaku ni = 0;
+    aida (ni < len(arena.parent)) {
+        moshi (arena.parent[ni] == ni && arena.kind[ni] == type_array_ref && arena.array_width[ni] == 0 && len(arena.fields[ni]) > 0) {
+            kaku element = type_root(arena, arena.fields[ni][0]); kaku width = 8;
+            moshi (arena.integer_descriptor[element] == 15 && !arena.nullable[element]) { width = 1; }
+            arena.array_width[ni] = width;
+        }
+        ni = ni + 1;
+    }
+    kaesu TypeAnalysis { arena: arena, globals: globals, locals: locals, returns: returns, upvalues: upvalues, cells: cells,
         blocks: blocks, error_detail: failed_detail };
 }

@@ -22,6 +22,18 @@ import (
 // Build the image through Mio in both execution engines. Go AOT only hosts
 // the seed builder and supplies an independent semantic reference.
 func m17eArrayImage(t *testing.T, p *compiler.Bytecode) string {
+	return m17eArrayImageMode(t, p, true)
+}
+
+func m17eArrayImageMode(t *testing.T, p *compiler.Bytecode, gcStress bool) string {
+	return m17eArrayImageWithLimits(t, p, gcStress, 500_000_000, 128<<20)
+}
+
+func m17eArrayImageWithLimits(t *testing.T, p *compiler.Bytecode, gcStress bool, instructionLimit uint64, seedHeap uint64) string {
+	return m17eArrayImageWithHeap(t, p, gcStress, instructionLimit, seedHeap, 0)
+}
+
+func m17eArrayImageWithHeap(t *testing.T, p *compiler.Bytecode, gcStress bool, instructionLimit uint64, seedHeap uint64, targetHeap int64) string {
 	t.Helper()
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -36,6 +48,15 @@ func m17eArrayImage(t *testing.T, p *compiler.Bytecode) string {
 	if err := os.WriteFile(in, encoded.Bytes(), 0600); err != nil {
 		t.Fatal(err)
 	}
+	compileFunction := "compile"
+	if gcStress {
+		compileFunction = "compile_gc_stress"
+	}
+	compileCall := fmt.Sprintf("lower.%s(file)", compileFunction)
+	if targetHeap != 0 {
+		compileCall = fmt.Sprintf("lower.compile_with_heap(file, %d, %t)", targetHeap, gcStress)
+		compileCall = strings.ReplaceAll(strings.ReplaceAll(compileCall, "true", "hai"), "false", "iie")
+	}
 	src := fmt.Sprintf(`yobu "kiso/aot/lower";
 yobu "kiso/aot/macho";
 yobu "kiso/encoding/mochi";
@@ -43,7 +64,7 @@ yobu "kiso/fs";
 kaku decoded = mochi.decode_file(%q);
 kaku file = decoded.value;
 moshi (file != mu) {
- kaku lowered = lower.compile_gc_stress(file);
+ kaku lowered = %s;
  kaku problem = lowered.error;
  moshi (problem != mu) { chant(lower.error_detail(problem)); }
  sore {
@@ -52,10 +73,10 @@ moshi (file != mu) {
   sore { kaku result = fs.write_all(%q, image.bytes); moshi (result.error != mu) { chant(-4); } }
  }
 } sore { chant(-1); }
-`, in, out)
+`, in, compileCall, out)
 	builder := m17CompileMio(t, root, src)
 	vmStart := time.Now()
-	if got := m17RunVM(t, builder, 500_000_000); len(got) != 0 {
+	if got := m17RunVM(t, builder, instructionLimit); len(got) != 0 {
 		t.Fatalf("Mio builder: %s", got)
 	}
 	vmElapsed := time.Since(vmStart)
@@ -65,7 +86,7 @@ moshi (file != mu) {
 	}
 	seedStart := time.Now()
 	if got, err := runM12NativeCompile(t, builder, func(p *compiler.Bytecode) ([]byte, error) {
-		return CompileDarwinARM64WithOptions(p, DarwinARM64Options{HeapCapacity: 128 << 20})
+		return CompileDarwinARM64WithOptions(p, DarwinARM64Options{HeapCapacity: seedHeap})
 	}); err != nil || len(got) != 0 {
 		t.Fatalf("Native Mio builder: %v %s", err, got)
 	}
@@ -99,7 +120,7 @@ moshi (file != mu) {
 				t.Fatal(err)
 			}
 		}
-		manifest := map[string]any{"unsigned_sha256": fmt.Sprintf("%x", sha256.Sum256(vmImage)), "image_bytes": len(vmImage), "pure_mio_vm_decode_lower_write_seconds": vmElapsed.Seconds(), "go_seed_build_sign_and_native_mio_run_seconds": seedElapsed.Seconds(), "builder_images_identical": true, "codesign_strict": true, "gc_stress": true}
+		manifest := map[string]any{"unsigned_sha256": fmt.Sprintf("%x", sha256.Sum256(vmImage)), "image_bytes": len(vmImage), "pure_mio_vm_decode_lower_write_seconds": vmElapsed.Seconds(), "go_seed_build_sign_and_native_mio_run_seconds": seedElapsed.Seconds(), "builder_images_identical": true, "codesign_strict": true, "gc_stress": gcStress}
 		m17eWriteJSON(t, filepath.Join(evidence, "build.json"), manifest)
 	}
 	t.Logf("unsigned image: %d bytes; pure Mio VM build %.3fs", len(vmImage), vmElapsed.Seconds())
@@ -390,7 +411,7 @@ func TestM17ePureMioArrayOverflow(t *testing.T) {
 				e(code.OpConstant, 1)
 				e(code.OpArrayReserve)
 			}
-			out := m17eArrayImage(t, p)
+			out := m17eArrayImageWithHeap(t, p, true, 500_000_000, 128<<20, 16384)
 			got, err := m17eExecute(t, out)
 			exit, ok := err.(*exec.ExitError)
 			if !ok || exit.ExitCode() != tc.exit || len(got) != 0 {

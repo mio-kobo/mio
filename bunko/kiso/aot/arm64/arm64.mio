@@ -1,4 +1,5 @@
 yobu "kiso/array";
+yobu "kiso/string";
 
 // This package encodes the AArch64 subset used by Mio's Darwin backend.
 // All arithmetic is performed in int64 and checked before conversion so an
@@ -229,11 +230,11 @@ koukai kata Label { name: string; word: int64; }
 // separate from its operand also makes relocation records layout-stable when
 // stored in generic arrays by the current native self-hosted backend.
 koukai kata Fixup { at_word: int64; target: string; kind: int64; operand: int64; }
-koukai kata Assembler { words: []uint32; labels: []Label; fixups: []Fixup; errors: []EncodeError; }
+koukai kata Assembler { words: []uint32; labels: []Label; label_index: [][]int64; fixups: []Fixup; errors: []EncodeError; }
 koukai kata AssembleResult { words: []uint32; error: EncodeError?; }
 
 koukai waza assembler() -> Assembler {
-    kaesu Assembler { words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
+    kaesu Assembler { words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), label_index: [array.make[int64](32, 0)], fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
 }
 
 koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeError? {
@@ -243,11 +244,24 @@ koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeErro
     kaesu mu;
 }
 
+waza label_hash(name: string, capacity: int64) -> int64 {
+    kaku hash = 0; kaku i = 0; kaku data = string.to_bytes(name);
+    aida (i < len(data)) { hash = hash * 131 + int64(data[i]); hash = hash - (hash / capacity) * capacity; i = i + 1; }
+    kaesu hash;
+}
+
+waza index_label(table: []int64, labels: []Label, index: int64) -> unit {
+    kaku slot = label_hash(labels[index].name, len(table));
+    aida (table[slot] != 0) { slot = slot + 1; moshi (slot == len(table)) { slot = 0; } }
+    table[slot] = index + 1;
+}
+
 waza find_label(value: Assembler, name: string) -> int64 {
-    kaku index = 0;
-    aida (index < len(value.labels)) {
+    kaku table = value.label_index[0]; kaku slot = label_hash(name, len(table)); kaku probes = 0;
+    aida (probes < len(table)) {
+        kaku index = table[slot] - 1; moshi (index < 0) { kaesu -1; }
         moshi (value.labels[index].name == name) { kaesu value.labels[index].word; }
-        index = index + 1;
+        slot = slot + 1; moshi (slot == len(table)) { slot = 0; } probes = probes + 1;
     }
     kaesu -1;
 }
@@ -256,13 +270,24 @@ koukai waza assembler_label(value: Assembler, name: string) -> EncodeError? {
     moshi (find_label(value, name) >= 0) {
         kaku failure = EncodeError.DuplicateLabel(name); array.push(value.errors, failure); kaesu failure;
     }
+    kaku table = value.label_index[0];
+    moshi ((len(value.labels) + 1) * 2 >= len(table)) {
+        table = array.make[int64](len(table) * 2, 0); kaku i = 0;
+        aida (i < len(value.labels)) { index_label(table, value.labels, i); i = i + 1; }
+        value.label_index[0] = table;
+    }
     array.push(value.labels, Label { name: name, word: len(value.words) });
+    index_label(table, value.labels, len(value.labels) - 1);
     kaesu mu;
 }
 
 waza assembler_fixup(value: Assembler, target: string, kind: int64, operand: int64) -> EncodeError? {
     array.push(value.fixups, Fixup { at_word: len(value.words), target: target, kind: kind, operand: operand });
     array.push(value.words, uint32(0));
+    // Reserve before any later label or AddressPatch captures a word index.
+    // Short branches retain their original encoding followed by NOP. Far
+    // branches use the inverted condition over B, without touching NZCV or GPRs.
+    moshi (kind >= 2 && kind <= 4) { array.push(value.words, uint32(3573751839)); }
     kaesu mu;
 }
 
@@ -296,6 +321,23 @@ koukai waza assembler_assemble(value: Assembler) -> AssembleResult {
         moshi (fix.kind == 3) { encoded = cbz_x(fix.operand, delta); }
         moshi (fix.kind == 4) { encoded = cbnz_x(fix.operand, delta); }
         moshi (fix.kind < 0 || fix.kind > 4) { kaesu AssembleResult { words: [], error: EncodeError.InvalidPatch() }; }
+        moshi (fix.kind >= 2 && (delta < -262144 || delta > 262143)) {
+            // AL and NV both mean always for B.cond; they are not inverses.
+            moshi (fix.kind == 2 && fix.operand >= 14) { encoded = b(delta); }
+            sore {
+                kaku inverse = fix.operand + 1;
+                moshi (fix.operand - (fix.operand / 2) * 2 == 1) { inverse = fix.operand - 1; }
+                kaku skip = b_cond(inverse, 2);
+                moshi (fix.kind == 3) { skip = cbnz_x(fix.operand, 2); }
+                moshi (fix.kind == 4) { skip = cbz_x(fix.operand, 2); }
+                moshi (skip.error != mu) { kaesu AssembleResult { words: [], error: skip.error }; }
+                // B's PC is the second word, not the conditional branch's PC.
+                kaku jump = b(delta - 1);
+                moshi (jump.error != mu) { kaesu AssembleResult { words: [], error: jump.error }; }
+                output[fix.at_word + 1] = jump.word;
+                encoded = skip;
+            }
+        }
         kaku failure = encoded.error;
         moshi (failure != mu) { kaesu AssembleResult { words: [], error: failure }; }
         output[fix.at_word] = encoded.word;
@@ -303,3 +345,6 @@ koukai waza assembler_assemble(value: Assembler) -> AssembleResult {
     }
     kaesu AssembleResult { words: output, error: mu };
 }
+
+// Resolve a label through the assembler index for lowering diagnostics/patches.
+koukai waza assembler_label_word(value: Assembler, name: string) -> int64 { kaesu find_label(value, name); }
