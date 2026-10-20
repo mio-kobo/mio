@@ -78,6 +78,9 @@ func TestM12TelemetryUsesStderrAndExplicitHeap(t *testing.T) {
 
 func runM12NativeCompile(t *testing.T, program *compiler.Bytecode, compile func(*compiler.Bytecode) ([]byte, error)) ([]byte, error) {
 	t.Helper()
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("requires macOS ARM64 to sign and execute Mach-O")
+	}
 	image, err := compile(program)
 	if err != nil {
 		return nil, err
