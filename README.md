@@ -10,15 +10,15 @@
 <p align="center"><em>Minimal Core · Modular Bunko · Pay for What You Use</em></p>
 
 <p align="center">
-  <a href="https://github.com/ExMikuPro/Mio/tree/Mio-1.0.0">Mio-1.0.0 开发分支</a>
-  · <a href="https://github.com/ExMikuPro/Mio/releases">Releases</a>
+  <a href="https://github.com/mio-kobo/mio/tree/Mio-1.0.0">Mio-1.0.0 开发分支</a>
+  · <a href="https://github.com/mio-kobo/mio/releases">Releases</a>
   · <a href="editors/jetbrains/README.md">JetBrains 插件</a>
   · <a href="docs/BUNKO.md">Bunko 标准库</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml?query=branch%3AMio-1.0.0"><img alt="CI (Mio-1.0.0)" src="https://github.com/ExMikuPro/Mio/actions/workflows/mio-ci-release-with-plugin.yml/badge.svg?branch=Mio-1.0.0" /></a>
-  <a href="https://github.com/ExMikuPro/Mio/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ExMikuPro/Mio?include_prereleases&label=release" /></a>
+  <a href="https://github.com/mio-kobo/mio/actions/workflows/mio-ci-release-with-plugin.yml?query=branch%3AMio-1.0.0"><img alt="CI (Mio-1.0.0)" src="https://github.com/mio-kobo/mio/actions/workflows/mio-ci-release-with-plugin.yml/badge.svg?branch=Mio-1.0.0" /></a>
+  <a href="https://github.com/mio-kobo/mio/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ExMikuPro/Mio?include_prereleases&label=release" /></a>
   <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-orange" />
 </p>
 
@@ -43,7 +43,7 @@
 开发分支需要 **Go 1.22.2 或兼容版本**进行首次源码构建：
 
 ```bash
-git clone --branch Mio-1.0.0 https://github.com/ExMikuPro/Mio.git
+git clone --branch Mio-1.0.0 https://github.com/mio-kobo/mio.git
 cd Mio
 go build -o mio ./cmd/mio
 ./mio version
@@ -215,7 +215,7 @@ Bootstrap 测试采用隔离的 VM 指令预算，**不改变普通 CLI 的默�
 
 ## 编辑器支持
 
-**[Mio Language Support（JetBrains）](editors/jetbrains/README.md)**：面向 IntelliJ IDEA / GoLand 的插件。当前插件版本 0.6.0 已实现语法高亮、代码补全、Bunko 导入、跳转定义、查找引用、编译诊断、运行配置、新项目创建与 SDK 管理；具体兼容 IDE 版本和安装方式见插件文档。
+**[Mio Language Support（JetBrains）](https://github.com/mio-kobo/mio-jetbrains)**：面向 IntelliJ IDEA / GoLand 的插件。当前插件版本 0.6.0 已实现语法高亮、代码补全、Bunko 导入、跳转定义、查找引用、编译诊断、运行配置、新项目创建与 SDK 管理；具体兼容 IDE 版本和安装方式见插件文档。
 
 **VS Code 与 LSP**：后续开发计划；尚不能作为已完成的开发工具能力宣传。
 
@@ -240,7 +240,7 @@ Bootstrap 测试采用隔离的 VM 指令预算，**不改变普通 CLI 的默�
 - [MMA 原生模块接口](docs/MMA.md)
 - [测试体系](docs/TESTING.md)
 - [诊断与 i18n](docs/I18N.md)
-- [JetBrains IDE 插件](editors/jetbrains/README.md)
+- [JetBrains IDE 插件](https://github.com/mio-kobo/mio-jetbrains)
 
 ## 许可证与角色美术
 

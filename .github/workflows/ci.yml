@@ -2,17 +2,7 @@ name: Mio Core CI
 
 on:
   push:
-    paths-ignore:
-      - 'editors/jetbrains/**'
-      - 'editors/vscode/**'
-      - '.github/workflows/ci-jetbrains.yml'
-      - '.github/workflows/ci-vscode.yml'
   pull_request:
-    paths-ignore:
-      - 'editors/jetbrains/**'
-      - 'editors/vscode/**'
-      - '.github/workflows/ci-jetbrains.yml'
-      - '.github/workflows/ci-vscode.yml'
   workflow_dispatch:
 
 permissions:
@@ -81,6 +71,8 @@ jobs:
         run: go test ./internal/aot/... -count=1 -timeout 30m
       - name: Native AOT race tests
         run: go test -race ./internal/aot/... -count=1 -timeout 30m
+      - name: Mochi VM and bootstrap fixed point
+        run: go test ./internal/vm/... ./internal/mochi/... ./selfhost/bootstrap/... -count=1 -timeout 30m
       - name: Full macOS regression
         run: go test ./... -count=1 -timeout 30m
       - name: Build tools
