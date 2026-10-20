@@ -1,0 +1,27 @@
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+
+// The current CLI has no argv surface.  This checked-in entry therefore uses
+// explicit paths, like the M17cd builder, and exercises the real file API.
+kaku decoded = mochi.decode_file("build/m17e-input.mochi");
+kaku decoded_file = decoded.value;
+moshi (decoded.error != mu) { chant(-1); }
+sore {
+    moshi (decoded_file == mu) { chant(-1); }
+    sore {
+        kaku lowered = lower.compile(decoded_file);
+        kaku lower_error = lowered.error;
+        moshi (lower_error != mu) { kaku code = lower.error_code(lower_error); chant(-(20 + code)); }
+        sore {
+            kaku image = macho.executable(macho.ImageSpec { words: lowered.words, constants: lowered.constants,
+                globals: lowered.globals, patches: lowered.patches });
+            moshi (image.error != mu) { chant(-3); }
+            sore {
+                kaku written = fs.write_all("build/m17e-output", image.bytes);
+                moshi (written.error != mu) { chant(-4); } sore { chant(len(image.bytes)); }
+            }
+        }
+    }
+}

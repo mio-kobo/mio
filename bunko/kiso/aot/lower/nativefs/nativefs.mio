@@ -1,0 +1,251 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Pure-Mio Darwin/ARM64 bridge for the exact NativeFS MMA bindings emitted by
+// selfhost/bootstrap.  Recognition includes the signature fingerprint: a
+// body-less function with only a matching operation name is never accepted.
+koukai teisu op_none = 0;
+koukai teisu op_close = 1;
+koukai teisu op_dir_close = 2;
+koukai teisu op_dir_is_dir = 3;
+koukai teisu op_dir_is_file = 4;
+koukai teisu op_dir_name = 5;
+koukai teisu op_dir_next = 6;
+koukai teisu op_dir_status = 7;
+koukai teisu op_file_status = 8;
+koukai teisu op_mkdir = 9;
+koukai teisu op_open = 10;
+koukai teisu op_open_dir = 11;
+koukai teisu op_read = 12;
+koukai teisu op_stat = 13;
+koukai teisu op_write = 14;
+
+koukai waza operation(name: string) -> int64 {
+    moshi (name == "$mma::mio/fs/runtime::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_close; }
+    moshi (name == "$mma::mio/fs/runtime::dir_close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_dir_close; }
+    moshi (name == "$mma::mio/fs/runtime::dir_is_dir::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6") { kaesu op_dir_is_dir; }
+    moshi (name == "$mma::mio/fs/runtime::dir_is_file::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6") { kaesu op_dir_is_file; }
+    moshi (name == "$mma::mio/fs/runtime::dir_name::ca5c10cb23a1dc4f8d7120a05626b664f700151ff09870e6a2a9204b890efa7c") { kaesu op_dir_name; }
+    moshi (name == "$mma::mio/fs/runtime::dir_next::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6") { kaesu op_dir_next; }
+    moshi (name == "$mma::mio/fs/runtime::dir_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_dir_status; }
+    moshi (name == "$mma::mio/fs/runtime::file_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_file_status; }
+    moshi (name == "$mma::mio/fs/runtime::mkdir::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946") { kaesu op_mkdir; }
+    moshi (name == "$mma::mio/fs/runtime::open::1192df94a5bdf48f4df10a0aa4b61147cfc2e6f2c2f8ea1248826e517f716633") { kaesu op_open; }
+    moshi (name == "$mma::mio/fs/runtime::open_dir::7128dadd824bee38c385b052b0d86ff37b801ae61b35c36db664b2d310b6dbdf") { kaesu op_open_dir; }
+    moshi (name == "$mma::mio/fs/runtime::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430") { kaesu op_read; }
+    moshi (name == "$mma::mio/fs/runtime::stat::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946") { kaesu op_stat; }
+    moshi (name == "$mma::mio/fs/runtime::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430") { kaesu op_write; }
+    kaesu op_none;
+}
+
+koukai waza parameter_count(op: int64) -> int64 {
+    moshi (op == op_dir_is_dir || op == op_dir_is_file || op == op_dir_name || op == op_dir_next || op == op_open_dir) { kaesu 1; }
+    moshi (op == op_read || op == op_write) { kaesu 5; }
+    moshi (op != op_none) { kaesu 2; }
+    kaesu -1;
+}
+
+// Exact managed-reference arguments for the NativeFS ABI. Resource tokens and
+// integer offsets are deliberately excluded from the Shadow Frame.
+koukai waza parameter_is_root(op: int64, index: int64) -> bool {
+    moshi (op == op_open || op == op_open_dir) { kaesu index == 0; }
+    moshi (op == op_stat || op == op_mkdir) { kaesu index == 0 || index == 1; }
+    moshi (op == op_close || op == op_dir_close || op == op_file_status || op == op_dir_status) { kaesu index == 1; }
+    moshi (op == op_read || op == op_write) { kaesu index == 1 || index == 4; }
+    kaesu iie;
+}
+
+koukai waza returns_reference(op: int64) -> bool {
+    kaesu op == op_close || op == op_dir_close || op == op_dir_name || op == op_dir_status ||
+        op == op_file_status || op == op_mkdir || op == op_read || op == op_stat || op == op_write;
+}
+
+koukai waza entry_label(op: int64) -> string {
+    moshi (op == op_close) { kaesu "nativefs_close"; }
+    moshi (op == op_dir_close) { kaesu "nativefs_dir_close"; }
+    moshi (op == op_dir_is_dir) { kaesu "nativefs_dir_is_dir"; }
+    moshi (op == op_dir_is_file) { kaesu "nativefs_dir_is_file"; }
+    moshi (op == op_dir_name) { kaesu "nativefs_dir_name"; }
+    moshi (op == op_dir_next) { kaesu "nativefs_dir_next"; }
+    moshi (op == op_dir_status) { kaesu "nativefs_dir_status"; }
+    moshi (op == op_file_status) { kaesu "nativefs_file_status"; }
+    moshi (op == op_mkdir) { kaesu "nativefs_mkdir"; }
+    moshi (op == op_open) { kaesu "nativefs_open"; }
+    moshi (op == op_open_dir) { kaesu "nativefs_open_dir"; }
+    moshi (op == op_read) { kaesu "nativefs_read"; }
+    moshi (op == op_stat) { kaesu "nativefs_stat"; }
+    kaesu "nativefs_write";
+}
+
+waza emit(code: arm64.Assembler, value: arm64.Instruction) -> unit { arm64.assembler_emit(code, value); }
+waza mov(code: arm64.Assembler, destination: int64, source: int64) -> unit { emit(code, arm64.orr_x(destination, 31, source)); }
+waza bits(code: arm64.Assembler, reg: int64, value: int64) -> unit {
+    emit(code, arm64.movz_x(reg, value - (value / 65536) * 65536, 0));
+    kaku rest = value / 65536; kaku shift = 1;
+    aida (rest > 0) { emit(code, arm64.movk_x(reg, rest - (rest / 65536) * 65536, shift)); rest = rest / 65536; shift = shift + 1; }
+}
+waza enter(code: arm64.Assembler) -> unit { emit(code, arm64.stp_pre_x(29, 30, 31, -16)); emit(code, arm64.add_imm_x(29, 31, 0, iie)); }
+waza leave(code: arm64.Assembler) -> unit { emit(code, arm64.add_imm_x(31, 29, 0, iie)); emit(code, arm64.ldp_post_x(29, 30, 31, 16)); emit(code, arm64.ret()); }
+waza empty_return(code: arm64.Assembler, empty_tagged: int64) -> unit { bits(code, 0, empty_tagged); leave(code); }
+
+waza emit_pointer_helpers(code: arm64.Assembler) -> unit {
+    // string.ptr(x0) -> x0=bytes,x1=len. Tagged IDs address __const via x28;
+    // dynamic strings share the byte-array descriptor representation.
+    arm64.assembler_label(code, "nativefs_string_ptr");
+    emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.and_x(9, 0, 9)); emit(code, arm64.cmp_imm_x(9, 0, iie));
+    arm64.assembler_b_cond(code, 0, "nativefs_string_dynamic");
+    emit(code, arm64.lsr_x(9, 0, 1)); emit(code, arm64.lsl_x(10, 9, 3)); emit(code, arm64.add_x(10, 28, 10));
+    emit(code, arm64.ldr_x(9, 10, 0)); bits(code, 11, 4294967295); emit(code, arm64.and_x(0, 9, 11)); emit(code, arm64.add_x(0, 28, 0)); emit(code, arm64.lsr_x(1, 9, 32)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_string_dynamic");
+    emit(code, arm64.ldr_x(1, 0, 8)); emit(code, arm64.ldr_x(0, 0, 40)); emit(code, arm64.add_imm_x(0, 0, 32, iie)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_array_ptr");
+    emit(code, arm64.ldr_x(1, 0, 8)); emit(code, arm64.ldr_x(0, 0, 40)); emit(code, arm64.add_imm_x(0, 0, 32, iie)); emit(code, arm64.ret());
+}
+
+waza emit_table_helpers(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code, "nativefs_table_ensure");
+    mov(code, 9, 27); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 1, "nativefs_table_have");
+    emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.movz_x(1, 4096, 0)); emit(code, arm64.movz_x(2, 3, 0)); emit(code, arm64.movz_x(3, 4098, 0)); emit(code, arm64.movn_x(4, 0, 0)); emit(code, arm64.movz_x(5, 0, 0)); emit(code, arm64.movz_x(16, 197, 0)); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 2, "nativefs_table_fail"); mov(code, 27, 0); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_table_have"); mov(code, 0, 9); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_table_fail"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.ret());
+
+    // alloc(kind,fd,errno): 32 x 128-byte entries; +0 fd,+8 generation,
+    // +16 kind,+24 errno. Mio only receives a generation-checked token.
+    arm64.assembler_label(code, "nativefs_handle_alloc"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie));
+    emit(code, arm64.str_x(0, 31, 0)); emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.str_x(2, 31, 16)); arm64.assembler_bl(code, "nativefs_table_ensure");
+    arm64.assembler_cbz_x(code, 0, "nativefs_handle_alloc_fail"); mov(code, 9, 0); emit(code, arm64.movz_x(10, 0, 0));
+    arm64.assembler_label(code, "nativefs_handle_alloc_scan"); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 9, 11)); emit(code, arm64.ldr_x(12, 11, 16)); emit(code, arm64.cmp_imm_x(12, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_handle_alloc_found");
+    emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_imm_x(10, 32, iie)); arm64.assembler_b_cond(code, 3, "nativefs_handle_alloc_scan");
+    arm64.assembler_label(code, "nativefs_handle_alloc_fail"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(0, 0, 0)); leave(code);
+    arm64.assembler_label(code, "nativefs_handle_alloc_found"); emit(code, arm64.ldr_x(12, 11, 8)); emit(code, arm64.add_imm_x(12, 12, 1, iie)); emit(code, arm64.cmp_imm_x(12, 0, iie)); arm64.assembler_b_cond(code, 1, "nativefs_handle_alloc_gen"); emit(code, arm64.movz_x(12, 1, 0));
+    arm64.assembler_label(code, "nativefs_handle_alloc_gen"); emit(code, arm64.ldr_x(13, 31, 0)); emit(code, arm64.ldr_x(14, 31, 8)); emit(code, arm64.ldr_x(15, 31, 16)); emit(code, arm64.str_x(14, 11, 0)); emit(code, arm64.str_x(12, 11, 8)); emit(code, arm64.str_x(13, 11, 16)); emit(code, arm64.str_x(15, 11, 24));
+    emit(code, arm64.lsl_x(0, 12, 8)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.orr_x(0, 0, 10)); emit(code, arm64.add_imm_x(31, 31, 32, iie)); leave(code);
+
+    arm64.assembler_label(code, "nativefs_handle_lookup"); mov(code, 12, 1); mov(code, 13, 0); mov(code, 9, 27); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_handle_lookup_fail");
+    bits(code, 15, 255); emit(code, arm64.and_x(10, 13, 15)); emit(code, arm64.sub_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_imm_x(10, 32, iie)); arm64.assembler_b_cond(code, 2, "nativefs_handle_lookup_fail");
+    emit(code, arm64.lsr_x(14, 13, 8)); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 9, 11)); emit(code, arm64.ldr_x(15, 11, 8)); emit(code, arm64.cmp_x(14, 15)); arm64.assembler_b_cond(code, 1, "nativefs_handle_lookup_fail");
+    emit(code, arm64.ldr_x(15, 11, 16)); emit(code, arm64.cmp_x(12, 15)); arm64.assembler_b_cond(code, 1, "nativefs_handle_lookup_fail"); mov(code, 0, 11); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_handle_lookup_fail"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.ret());
+}
+
+waza emit_status_helpers(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code, "nativefs_status_classify"); arm64.assembler_cbz_x(code, 0, "nativefs_status_ok");
+    kaku errors: []int64 = [2,13,1,9,28]; kaku statuses: []int64 = [1,2,2,3,6]; kaku index = 0;
+    aida (index < len(errors)) { emit(code, arm64.cmp_imm_x(0, errors[index], iie)); arm64.assembler_b_cond(code, 0, string.concat("nativefs_status_code_", convert.format_int(index))); index = index + 1; }
+    emit(code, arm64.cmp_imm_x(0, 22, iie)); arm64.assembler_b_cond(code, 0, "nativefs_status_einval"); emit(code, arm64.movz_x(0, 5, 0)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_status_einval"); arm64.assembler_cbz_x(code, 1, "nativefs_status_invalid"); emit(code, arm64.movz_x(0, 7, 0)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_status_invalid"); emit(code, arm64.movz_x(0, 4, 0)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativefs_status_ok"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.ret());
+    index = 0; aida (index < len(errors)) { arm64.assembler_label(code, string.concat("nativefs_status_code_", convert.format_int(index))); emit(code, arm64.movz_x(0, statuses[index], 0)); emit(code, arm64.ret()); index = index + 1; }
+
+    arm64.assembler_label(code, "nativefs_status_byte"); emit(code, arm64.ldr_x(9, 0, 8)); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_status_byte_done"); emit(code, arm64.ldr_x(9, 0, 40)); emit(code, arm64.add_imm_x(9, 9, 32, iie)); emit(code, arm64.strb_w(1, 9, 0)); arm64.assembler_label(code, "nativefs_status_byte_done"); emit(code, arm64.ret());
+}
+
+waza emit_cpath(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code, "nativefs_cpath"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(0, 31, 0)); arm64.assembler_bl(code, "nativefs_string_ptr");
+    emit(code, arm64.str_x(0, 31, 8)); emit(code, arm64.str_x(1, 31, 16)); emit(code, arm64.add_imm_x(1, 1, 1, iie)); emit(code, arm64.str_x(1, 31, 24)); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.movz_x(2, 3, 0)); emit(code, arm64.movz_x(3, 4098, 0)); emit(code, arm64.movn_x(4, 0, 0)); emit(code, arm64.movz_x(5, 0, 0)); emit(code, arm64.movz_x(16, 197, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_cpath_fail");
+    mov(code, 12, 0); emit(code, arm64.ldr_x(10, 31, 8)); emit(code, arm64.ldr_x(11, 31, 16)); emit(code, arm64.movz_x(9, 0, 0));
+    arm64.assembler_label(code, "nativefs_cpath_copy"); emit(code, arm64.cmp_x(9, 11)); arm64.assembler_b_cond(code, 2, "nativefs_cpath_done"); emit(code, arm64.add_x(13, 10, 9)); emit(code, arm64.ldrb_w(14, 13, 0)); emit(code, arm64.cmp_imm_x(14, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_cpath_nul"); emit(code, arm64.add_x(13, 12, 9)); emit(code, arm64.strb_w(14, 13, 0)); emit(code, arm64.add_imm_x(9, 9, 1, iie)); arm64.assembler_b(code, "nativefs_cpath_copy");
+    arm64.assembler_label(code, "nativefs_cpath_done"); emit(code, arm64.add_x(13, 12, 11)); emit(code, arm64.strb_w(31, 13, 0)); mov(code, 0, 12); emit(code, arm64.ldr_x(1, 31, 24)); emit(code, arm64.add_imm_x(31, 31, 32, iie)); leave(code);
+    arm64.assembler_label(code, "nativefs_cpath_nul"); mov(code, 0, 12); emit(code, arm64.ldr_x(1, 31, 24)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128));
+    arm64.assembler_label(code, "nativefs_cpath_fail"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.movz_x(1, 0, 0)); leave(code);
+}
+
+waza emit_file_entries(code: arm64.Assembler, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, "nativefs_open"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 64, iie)); emit(code, arm64.str_x(1, 31, 0)); arm64.assembler_bl(code, "nativefs_cpath"); arm64.assembler_cbz_x(code, 0, "nativefs_open_badpath");
+    emit(code, arm64.str_x(0, 31, 8)); emit(code, arm64.str_x(1, 31, 16)); emit(code, arm64.ldr_x(9, 31, 0)); emit(code, arm64.movz_x(1, 0, 0)); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_open_flags"); emit(code, arm64.cmp_imm_x(9, 1, iie)); arm64.assembler_b_cond(code, 0, "nativefs_open_write"); emit(code, arm64.cmp_imm_x(9, 2, iie)); arm64.assembler_b_cond(code, 0, "nativefs_open_append"); arm64.assembler_b(code, "nativefs_open_invalidmode");
+    arm64.assembler_label(code, "nativefs_open_write"); emit(code, arm64.movz_x(1, 1537, 0)); arm64.assembler_b(code, "nativefs_open_flags"); arm64.assembler_label(code, "nativefs_open_append"); emit(code, arm64.movz_x(1, 521, 0));
+    arm64.assembler_label(code, "nativefs_open_flags"); emit(code, arm64.movz_x(2, 438, 0)); emit(code, arm64.movz_x(16, 5, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_open_syserr"); emit(code, arm64.str_x(0, 31, 24)); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 32)); arm64.assembler_b(code, "nativefs_open_release");
+    arm64.assembler_label(code, "nativefs_open_syserr"); emit(code, arm64.str_x(0, 31, 32)); emit(code, arm64.movn_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 24));
+    arm64.assembler_label(code, "nativefs_open_release"); emit(code, arm64.ldr_x(0, 31, 8)); emit(code, arm64.ldr_x(1, 31, 16)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); emit(code, arm64.movz_x(0, 1, 0)); emit(code, arm64.ldr_x(1, 31, 24)); emit(code, arm64.ldr_x(2, 31, 32)); arm64.assembler_bl(code, "nativefs_handle_alloc"); emit(code, arm64.add_imm_x(31, 31, 64, iie)); leave(code);
+    arm64.assembler_label(code, "nativefs_open_invalidmode"); emit(code, arm64.ldr_x(0, 31, 8)); emit(code, arm64.ldr_x(1, 31, 16)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128));
+    arm64.assembler_label(code, "nativefs_open_badpath"); emit(code, arm64.movz_x(0, 1, 0)); emit(code, arm64.movn_x(1, 0, 0)); emit(code, arm64.movz_x(2, 22, 0)); arm64.assembler_bl(code, "nativefs_handle_alloc"); emit(code, arm64.add_imm_x(31, 31, 64, iie)); leave(code);
+
+    emit_status_entry(code, "nativefs_file_status", 1, empty_tagged);
+    emit_io_entry(code, "nativefs_read", hai, empty_tagged);
+    emit_io_entry(code, "nativefs_write", iie, empty_tagged);
+    emit_close_entry(code, "nativefs_close", 1, empty_tagged);
+}
+
+waza emit_status_entry(code: arm64.Assembler, label: string, kind: int64, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, label); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(1, 31, 0)); emit(code, arm64.movz_x(1, kind, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, string.concat(label, "_invalid")); emit(code, arm64.ldr_x(0, 0, 24)); emit(code, arm64.movz_x(1, 1, 0)); arm64.assembler_bl(code, "nativefs_status_classify"); mov(code, 1, 0); emit(code, arm64.ldr_x(0, 31, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged);
+    arm64.assembler_label(code, string.concat(label, "_invalid")); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.movz_x(1, 4, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged);
+}
+
+waza emit_io_entry(code: arm64.Assembler, label: string, reading: bool, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, label); enter(code); emit(code, arm64.sub_imm_x(31, 31, 64, iie)); emit(code, arm64.str_x(1, 31, 0)); emit(code, arm64.str_x(2, 31, 8)); emit(code, arm64.str_x(3, 31, 16)); emit(code, arm64.str_x(4, 31, 24)); emit(code, arm64.movz_x(1, 1, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, string.concat(label, "_closed")); emit(code, arm64.ldr_x(9, 0, 0)); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 11, string.concat(label, "_closed")); emit(code, arm64.str_x(9, 31, 32)); emit(code, arm64.ldr_x(0, 31, 0)); arm64.assembler_bl(code, "nativefs_array_ptr"); emit(code, arm64.str_x(0, 31, 40)); emit(code, arm64.ldr_x(10, 31, 8)); emit(code, arm64.ldr_x(11, 31, 16)); emit(code, arm64.cmp_imm_x(10, 0, iie)); arm64.assembler_b_cond(code, 11, string.concat(label, "_invalid")); emit(code, arm64.cmp_imm_x(11, 0, iie)); arm64.assembler_b_cond(code, 11, string.concat(label, "_invalid")); emit(code, arm64.cmp_x(10, 1)); arm64.assembler_b_cond(code, 8, string.concat(label, "_invalid")); emit(code, arm64.sub_x(12, 1, 10)); emit(code, arm64.cmp_x(11, 12)); arm64.assembler_b_cond(code, 8, string.concat(label, "_invalid")); emit(code, arm64.ldr_x(0, 31, 32)); emit(code, arm64.ldr_x(1, 31, 40)); emit(code, arm64.add_x(1, 1, 10)); mov(code, 2, 11); emit(code, arm64.movz_x(16, 4, 0)); moshi (reading) { emit(code, arm64.movz_x(16, 3, 0)); } emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, string.concat(label, "_syserr")); mov(code, 9, 0); emit(code, arm64.movz_x(10, 0, 0)); emit(code, arm64.movz_x(11, 0, 0)); moshi (reading) { emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(10, 0)); } arm64.assembler_b(code, string.concat(label, "_status"));
+    arm64.assembler_label(code, string.concat(label, "_syserr")); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.movz_x(10, 0, 0)); mov(code, 11, 0); arm64.assembler_b(code, string.concat(label, "_status"));
+    arm64.assembler_label(code, string.concat(label, "_closed")); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.movz_x(10, 0, 0)); emit(code, arm64.movz_x(11, 9, 0)); arm64.assembler_b(code, string.concat(label, "_status"));
+    arm64.assembler_label(code, string.concat(label, "_invalid")); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.movz_x(10, 0, 0)); emit(code, arm64.movz_x(11, 22, 0));
+    arm64.assembler_label(code, string.concat(label, "_status")); emit(code, arm64.ldr_x(12, 31, 24)); emit(code, arm64.ldr_x(13, 12, 8)); emit(code, arm64.cmp_imm_x(13, 10, iie)); arm64.assembler_b_cond(code, 3, string.concat(label, "_return")); emit(code, arm64.ldr_x(12, 12, 40)); emit(code, arm64.add_imm_x(12, 12, 32, iie)); emit(code, arm64.str_x(9, 12, 0)); emit(code, arm64.add_imm_x(13, 12, 8, iie)); emit(code, arm64.strb_w(10, 13, 0)); mov(code, 0, 11); emit(code, arm64.movz_x(1, 0, 0)); arm64.assembler_bl(code, "nativefs_status_classify"); emit(code, arm64.add_imm_x(13, 12, 9, iie)); emit(code, arm64.strb_w(0, 13, 0));
+    arm64.assembler_label(code, string.concat(label, "_return")); emit(code, arm64.add_imm_x(31, 31, 64, iie)); empty_return(code, empty_tagged);
+}
+
+waza emit_close_entry(code: arm64.Assembler, label: string, kind: int64, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, label); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(1, 31, 0)); emit(code, arm64.movz_x(1, kind, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, string.concat(label, "_invalid")); mov(code, 10, 0); emit(code, arm64.ldr_x(0, 10, 0)); emit(code, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(code, 11, string.concat(label, "_nosys")); emit(code, arm64.movz_x(16, 6, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, string.concat(label, "_syserr")); emit(code, arm64.movz_x(9, 0, 0)); arm64.assembler_b(code, string.concat(label, "_done"));
+    arm64.assembler_label(code, string.concat(label, "_syserr")); mov(code, 9, 0); arm64.assembler_b(code, string.concat(label, "_done")); arm64.assembler_label(code, string.concat(label, "_nosys")); emit(code, arm64.ldr_x(9, 10, 24));
+    arm64.assembler_label(code, string.concat(label, "_done")); emit(code, arm64.movz_x(11, 0, 0)); emit(code, arm64.str_x(11, 10, 16)); mov(code, 0, 9); emit(code, arm64.movz_x(1, 0, 0)); arm64.assembler_bl(code, "nativefs_status_classify"); mov(code, 1, 0); emit(code, arm64.ldr_x(0, 31, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged);
+    arm64.assembler_label(code, string.concat(label, "_invalid")); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.movz_x(1, 3, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged);
+}
+
+// Path and directory entries are kept in a separate continuation file-sized
+// function below to keep the bridge auditable by operation.
+waza emit_path_entries(code: arm64.Assembler, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, "nativefs_stat"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 192, iie)); emit(code, arm64.str_x(1, 31, 0)); arm64.assembler_bl(code, "nativefs_cpath"); arm64.assembler_cbz_x(code, 0, "nativefs_stat_badpath"); emit(code, arm64.str_x(0, 31, 8)); emit(code, arm64.str_x(1, 31, 16)); emit(code, arm64.add_imm_x(1, 31, 32, iie)); emit(code, arm64.movz_x(16, 338, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_stat_syserr"); emit(code, arm64.ldrh_w(9, 31, 36)); bits(code, 10, 61440); emit(code, arm64.and_x(9, 9, 10)); bits(code, 10, 16384); emit(code, arm64.cmp_x(9, 10)); emit(code, arm64.movz_x(11, 1, 0)); arm64.assembler_b_cond(code, 1, "nativefs_stat_kind_done"); emit(code, arm64.movz_x(11, 2, 0)); arm64.assembler_label(code, "nativefs_stat_kind_done"); emit(code, arm64.movz_x(13, 0, 0)); arm64.assembler_b(code, "nativefs_stat_release"); arm64.assembler_label(code, "nativefs_stat_syserr"); emit(code, arm64.movz_x(11, 0, 0)); mov(code, 13, 0);
+    arm64.assembler_label(code, "nativefs_stat_release"); emit(code, arm64.str_x(11, 31, 24)); emit(code, arm64.str_x(13, 31, 32)); emit(code, arm64.ldr_x(0, 31, 8)); emit(code, arm64.ldr_x(1, 31, 16)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.ldr_x(9, 0, 8)); emit(code, arm64.cmp_imm_x(9, 2, iie)); arm64.assembler_b_cond(code, 3, "nativefs_stat_return"); emit(code, arm64.ldr_x(9, 0, 40)); emit(code, arm64.add_imm_x(9, 9, 32, iie)); emit(code, arm64.ldr_x(11, 31, 24)); emit(code, arm64.strb_w(11, 9, 0)); emit(code, arm64.ldr_x(0, 31, 32)); emit(code, arm64.movz_x(1, 1, 0)); arm64.assembler_bl(code, "nativefs_status_classify"); emit(code, arm64.add_imm_x(9, 9, 1, iie)); emit(code, arm64.strb_w(0, 9, 0)); arm64.assembler_label(code, "nativefs_stat_return"); emit(code, arm64.add_imm_x(31, 31, 192, iie)); empty_return(code, empty_tagged);
+    arm64.assembler_label(code, "nativefs_stat_badpath"); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.ldr_x(9, 0, 8)); emit(code, arm64.cmp_imm_x(9, 2, iie)); arm64.assembler_b_cond(code, 3, "nativefs_stat_badpath_return"); emit(code, arm64.ldr_x(9, 0, 40)); emit(code, arm64.add_imm_x(9, 9, 32, iie)); emit(code, arm64.strb_w(31, 9, 0)); emit(code, arm64.movz_x(10, 7, 0)); emit(code, arm64.strb_w(10, 9, 1)); arm64.assembler_label(code, "nativefs_stat_badpath_return"); emit(code, arm64.add_imm_x(31, 31, 192, iie)); empty_return(code, empty_tagged);
+
+    arm64.assembler_label(code, "nativefs_mkdir"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 48, iie)); emit(code, arm64.str_x(1, 31, 0)); arm64.assembler_bl(code, "nativefs_cpath"); arm64.assembler_cbz_x(code, 0, "nativefs_mkdir_badpath"); emit(code, arm64.str_x(0, 31, 8)); emit(code, arm64.str_x(1, 31, 16)); emit(code, arm64.movz_x(1, 511, 0)); emit(code, arm64.movz_x(16, 136, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_mkdir_syserr"); emit(code, arm64.movz_x(13, 0, 0)); arm64.assembler_b(code, "nativefs_mkdir_release"); arm64.assembler_label(code, "nativefs_mkdir_syserr"); mov(code, 13, 0); arm64.assembler_label(code, "nativefs_mkdir_release"); emit(code, arm64.str_x(13, 31, 24)); emit(code, arm64.ldr_x(0, 31, 8)); emit(code, arm64.ldr_x(1, 31, 16)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); emit(code, arm64.ldr_x(0, 31, 24)); emit(code, arm64.movz_x(1, 1, 0)); arm64.assembler_bl(code, "nativefs_status_classify"); mov(code, 1, 0); emit(code, arm64.ldr_x(0, 31, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 48, iie)); empty_return(code, empty_tagged);
+    arm64.assembler_label(code, "nativefs_mkdir_badpath"); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.movz_x(1, 7, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 48, iie)); empty_return(code, empty_tagged);
+}
+
+waza emit_directory_entries(code: arm64.Assembler, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, "nativefs_open_dir"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 64, iie)); arm64.assembler_bl(code, "nativefs_cpath"); arm64.assembler_cbz_x(code, 0, "nativefs_open_dir_badpath"); emit(code, arm64.str_x(0, 31, 0)); emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.movz_x(1, 0, 0)); emit(code, arm64.movk_x(1, 16, 1)); emit(code, arm64.movz_x(2, 0, 0)); emit(code, arm64.movz_x(16, 5, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_open_dir_syserr"); emit(code, arm64.str_x(0, 31, 16)); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 24)); emit(code, arm64.movz_x(0, 0, 0)); bits(code, 1, 16384); emit(code, arm64.movz_x(2, 3, 0)); emit(code, arm64.movz_x(3, 4098, 0)); emit(code, arm64.movn_x(4, 0, 0)); emit(code, arm64.movz_x(5, 0, 0)); emit(code, arm64.movz_x(16, 197, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_open_dir_buffererr"); emit(code, arm64.str_x(0, 31, 32)); arm64.assembler_b(code, "nativefs_open_dir_release");
+    arm64.assembler_label(code, "nativefs_open_dir_buffererr"); emit(code, arm64.str_x(0, 31, 24)); emit(code, arm64.ldr_x(0, 31, 16)); emit(code, arm64.movz_x(16, 6, 0)); emit(code, arm64.svc(128)); emit(code, arm64.movn_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 16)); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 32)); arm64.assembler_b(code, "nativefs_open_dir_release");
+    arm64.assembler_label(code, "nativefs_open_dir_syserr"); emit(code, arm64.str_x(0, 31, 24)); emit(code, arm64.movn_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 16)); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 32));
+    arm64.assembler_label(code, "nativefs_open_dir_release"); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.ldr_x(1, 31, 8)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.ldr_x(1, 31, 16)); emit(code, arm64.ldr_x(2, 31, 24)); arm64.assembler_bl(code, "nativefs_handle_alloc"); emit(code, arm64.str_x(0, 31, 40)); emit(code, arm64.movz_x(1, 2, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, "nativefs_open_dir_return"); emit(code, arm64.ldr_x(9, 31, 32)); emit(code, arm64.str_x(9, 0, 32)); arm64.assembler_label(code, "nativefs_open_dir_return"); emit(code, arm64.ldr_x(0, 31, 40)); emit(code, arm64.add_imm_x(31, 31, 64, iie)); leave(code);
+    arm64.assembler_label(code, "nativefs_open_dir_badpath"); emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.movn_x(1, 0, 0)); emit(code, arm64.movz_x(2, 22, 0)); arm64.assembler_bl(code, "nativefs_handle_alloc"); emit(code, arm64.add_imm_x(31, 31, 64, iie)); leave(code);
+
+    emit_status_entry(code, "nativefs_dir_status", 2, empty_tagged);
+    emit_dir_next(code);
+    emit_dir_name(code);
+    emit_dir_predicate(code, "nativefs_dir_is_dir", 4);
+    emit_dir_predicate(code, "nativefs_dir_is_file", 8);
+    emit_dir_close(code, empty_tagged);
+}
+
+waza emit_dir_next(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code, "nativefs_dir_next"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(1, 2, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, "nativefs_dir_next_false"); mov(code, 10, 0); emit(code, arm64.str_x(10, 31, 0)); emit(code, arm64.ldr_x(9, 10, 24)); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 1, "nativefs_dir_next_false");
+    arm64.assembler_label(code, "nativefs_dir_next_scan"); emit(code, arm64.ldr_x(11, 10, 48)); emit(code, arm64.ldr_x(12, 10, 40)); emit(code, arm64.cmp_x(11, 12)); arm64.assembler_b_cond(code, 3, "nativefs_dir_next_entry"); emit(code, arm64.ldr_x(0, 10, 0)); emit(code, arm64.ldr_x(1, 10, 32)); bits(code, 2, 16384); emit(code, arm64.add_imm_x(3, 31, 8, iie)); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 8)); emit(code, arm64.movz_x(16, 344, 0)); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativefs_dir_next_error"); arm64.assembler_cbz_x(code, 0, "nativefs_dir_next_false"); emit(code, arm64.str_x(0, 10, 40)); emit(code, arm64.movz_x(11, 0, 0)); emit(code, arm64.str_x(11, 10, 48));
+    arm64.assembler_label(code, "nativefs_dir_next_entry"); emit(code, arm64.ldr_x(9, 10, 32)); emit(code, arm64.ldr_x(11, 10, 48)); emit(code, arm64.add_x(9, 9, 11)); emit(code, arm64.ldrh_w(12, 9, 16)); emit(code, arm64.cmp_imm_x(12, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_dir_next_invalid"); emit(code, arm64.add_x(11, 11, 12)); emit(code, arm64.str_x(11, 10, 48)); emit(code, arm64.ldrh_w(13, 9, 18)); emit(code, arm64.add_imm_x(14, 9, 21, iie)); emit(code, arm64.ldrb_w(15, 9, 20)); emit(code, arm64.str_x(14, 10, 56)); emit(code, arm64.str_x(13, 10, 64)); emit(code, arm64.str_x(15, 10, 72)); emit(code, arm64.cmp_imm_x(13, 1, iie)); arm64.assembler_b_cond(code, 1, "nativefs_dir_next_dotdot"); emit(code, arm64.ldrb_w(11, 14, 0)); emit(code, arm64.cmp_imm_x(11, 46, iie)); arm64.assembler_b_cond(code, 0, "nativefs_dir_next_scan"); arm64.assembler_b(code, "nativefs_dir_next_true");
+    arm64.assembler_label(code, "nativefs_dir_next_dotdot"); emit(code, arm64.cmp_imm_x(13, 2, iie)); arm64.assembler_b_cond(code, 1, "nativefs_dir_next_true"); emit(code, arm64.ldrb_w(11, 14, 0)); emit(code, arm64.cmp_imm_x(11, 46, iie)); arm64.assembler_b_cond(code, 1, "nativefs_dir_next_true"); emit(code, arm64.ldrb_w(11, 14, 1)); emit(code, arm64.cmp_imm_x(11, 46, iie)); arm64.assembler_b_cond(code, 0, "nativefs_dir_next_scan");
+    arm64.assembler_label(code, "nativefs_dir_next_true"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(0, 1, 0)); leave(code); arm64.assembler_label(code, "nativefs_dir_next_invalid"); emit(code, arm64.movz_x(0, 22, 0)); arm64.assembler_label(code, "nativefs_dir_next_error"); emit(code, arm64.str_x(0, 10, 24)); arm64.assembler_label(code, "nativefs_dir_next_false"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(0, 0, 0)); leave(code);
+}
+
+waza emit_dir_name(code: arm64.Assembler) -> unit {
+    // Build the standard type-102 byte storage and type-101 descriptor. The
+    // storage pointer is published in a one-root Shadow Frame across the
+    // descriptor allocation, exactly like M12 ArrayWithCapacity.
+    arm64.assembler_label(code, "nativefs_dir_name"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 96, iie)); emit(code, arm64.movz_x(1, 2, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, "nativefs_dir_name_fail"); emit(code, arm64.ldr_x(9, 0, 56)); emit(code, arm64.ldr_x(10, 0, 64)); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_dir_name_fail"); emit(code, arm64.str_x(9, 31, 0)); emit(code, arm64.str_x(10, 31, 8)); emit(code, arm64.add_imm_x(0, 10, 32, iie)); emit(code, arm64.movz_x(1, 102, 0)); arm64.assembler_bl(code, "runtime_alloc"); arm64.assembler_cbz_x(code, 0, "nativefs_dir_name_fail"); mov(code, 14, 0); emit(code, arm64.ldr_x(10, 31, 8)); bits(code, 12, 259); emit(code, arm64.str_x(12, 14, 0)); emit(code, arm64.str_x(10, 14, 8)); emit(code, arm64.movz_x(12, 1, 0)); emit(code, arm64.str_x(12, 14, 16)); emit(code, arm64.movz_x(12, 0, 0)); emit(code, arm64.str_x(12, 14, 24)); emit(code, arm64.ldr_x(9, 31, 0)); emit(code, arm64.add_imm_x(11, 14, 32, iie)); emit(code, arm64.movz_x(12, 0, 0));
+    arm64.assembler_label(code, "nativefs_dir_name_copy"); emit(code, arm64.cmp_x(12, 10)); arm64.assembler_b_cond(code, 2, "nativefs_dir_name_storage_done"); emit(code, arm64.add_x(13, 9, 12)); emit(code, arm64.ldrb_w(13, 13, 0)); emit(code, arm64.add_x(15, 11, 12)); emit(code, arm64.strb_w(13, 15, 0)); emit(code, arm64.add_imm_x(12, 12, 1, iie)); arm64.assembler_b(code, "nativefs_dir_name_copy");
+    arm64.assembler_label(code, "nativefs_dir_name_storage_done"); emit(code, arm64.str_x(14, 31, 16)); emit(code, arm64.str_x(24, 31, 24)); emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.str_x(9, 31, 32)); emit(code, arm64.str_x(14, 31, 40)); emit(code, arm64.add_imm_x(24, 31, 24, iie)); emit(code, arm64.movz_x(0, 48, 0)); emit(code, arm64.movz_x(1, 101, 0)); arm64.assembler_bl(code, "runtime_alloc"); emit(code, arm64.ldr_x(24, 24, 0)); arm64.assembler_cbz_x(code, 0, "nativefs_dir_name_fail"); mov(code, 9, 0); bits(code, 12, 258); emit(code, arm64.str_x(12, 9, 0)); emit(code, arm64.ldr_x(10, 31, 8)); emit(code, arm64.str_x(10, 9, 8)); emit(code, arm64.str_x(10, 9, 16)); emit(code, arm64.movz_x(12, 1, 0)); emit(code, arm64.str_x(12, 9, 24)); emit(code, arm64.str_x(12, 9, 32)); emit(code, arm64.ldr_x(12, 31, 16)); emit(code, arm64.str_x(12, 9, 40)); mov(code, 0, 9); emit(code, arm64.add_imm_x(31, 31, 96, iie)); leave(code);
+    arm64.assembler_label(code, "nativefs_dir_name_fail"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.add_imm_x(31, 31, 96, iie)); leave(code);
+}
+
+waza emit_dir_predicate(code: arm64.Assembler, label: string, kind: int64) -> unit { arm64.assembler_label(code, label); enter(code); emit(code, arm64.movz_x(1, 2, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, string.concat(label, "_false")); emit(code, arm64.ldr_x(9, 0, 72)); emit(code, arm64.cmp_imm_x(9, kind, iie)); emit(code, arm64.cset_w(0, 0)); leave(code); arm64.assembler_label(code, string.concat(label, "_false")); emit(code, arm64.movz_x(0, 0, 0)); leave(code); }
+
+waza emit_dir_close(code: arm64.Assembler, empty_tagged: int64) -> unit {
+    arm64.assembler_label(code, "nativefs_dir_close"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(1, 31, 0)); emit(code, arm64.movz_x(1, 2, 0)); arm64.assembler_bl(code, "nativefs_handle_lookup"); arm64.assembler_cbz_x(code, 0, "nativefs_dir_close_invalid"); mov(code, 10, 0); emit(code, arm64.ldr_x(0, 10, 0)); emit(code, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(code, 11, "nativefs_dir_close_buffer"); emit(code, arm64.movz_x(16, 6, 0)); emit(code, arm64.svc(128)); arm64.assembler_label(code, "nativefs_dir_close_buffer"); emit(code, arm64.ldr_x(0, 10, 32)); emit(code, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_dir_close_clear"); bits(code, 1, 16384); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); arm64.assembler_label(code, "nativefs_dir_close_clear"); emit(code, arm64.movz_x(9, 0, 0)); emit(code, arm64.str_x(9, 10, 16)); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.movz_x(1, 0, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged); arm64.assembler_label(code, "nativefs_dir_close_invalid"); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.movz_x(1, 3, 0)); arm64.assembler_bl(code, "nativefs_status_byte"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); empty_return(code, empty_tagged);
+}
+
+waza emit_cleanup(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code, "nativefs_cleanup"); enter(code); mov(code, 9, 27); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_cleanup_done"); mov(code, 12, 9); emit(code, arm64.movz_x(10, 0, 0));
+    arm64.assembler_label(code, "nativefs_cleanup_loop"); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 12, 11)); emit(code, arm64.ldr_x(13, 11, 16)); emit(code, arm64.cmp_imm_x(13, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_cleanup_next"); emit(code, arm64.ldr_x(0, 11, 0)); emit(code, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(code, 11, "nativefs_cleanup_buffer"); emit(code, arm64.movz_x(16, 6, 0)); emit(code, arm64.svc(128));
+    arm64.assembler_label(code, "nativefs_cleanup_buffer"); emit(code, arm64.cmp_imm_x(13, 2, iie)); arm64.assembler_b_cond(code, 1, "nativefs_cleanup_clear"); emit(code, arm64.ldr_x(0, 11, 32)); emit(code, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_cleanup_clear"); bits(code, 1, 16384); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128));
+    arm64.assembler_label(code, "nativefs_cleanup_clear"); emit(code, arm64.movz_x(13, 0, 0)); emit(code, arm64.str_x(13, 11, 16)); arm64.assembler_label(code, "nativefs_cleanup_next"); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_imm_x(10, 32, iie)); arm64.assembler_b_cond(code, 3, "nativefs_cleanup_loop"); mov(code, 0, 12); emit(code, arm64.movz_x(1, 4096, 0)); emit(code, arm64.movz_x(16, 73, 0)); emit(code, arm64.svc(128)); emit(code, arm64.movz_x(27, 0, 0));
+    arm64.assembler_label(code, "nativefs_cleanup_done"); emit(code, arm64.movz_x(0, 0, 0)); leave(code);
+}
+
+koukai waza emit_runtime(code: arm64.Assembler, empty_tagged: int64) -> unit { emit_pointer_helpers(code); emit_table_helpers(code); emit_status_helpers(code); emit_cpath(code); emit_file_entries(code, empty_tagged); emit_path_entries(code, empty_tagged); emit_directory_entries(code, empty_tagged); emit_cleanup(code); }

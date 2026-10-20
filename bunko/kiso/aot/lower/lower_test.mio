@@ -1,0 +1,118 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/lower/types";
+yobu "kiso/encoding/binary";
+yobu "kiso/encoding/mochi";
+yobu "kiso/testing";
+
+waza empty_v14(instructions: []uint8) -> mochi.File {
+    kaku constants: []mochi.Constant = [];
+    kaku functions: []mochi.Function = [];
+    kaesu mochi.File { version: 14, constants: constants, global_count: 0,
+        instructions: instructions, functions: functions };
+}
+
+waza test_empty_program_lowers_to_native_exit() -> unit {
+    kaku result = compile(empty_v14([]));
+    testing.expect(result.error == mu, "empty v14 program should lower");
+    testing.expect(len(result.words) > 3, "runtime exit and helper should be emitted");
+}
+
+waza test_unsupported_opcode_fails_closed() -> unit {
+    kaku unsupported = compile(empty_v14([41]));
+    kaku unsupported_error = unsupported.error;
+    moshi (unsupported_error != mu) {
+        testing.expect(error_code(unsupported_error) == 2, "unsupported opcode classification");
+        testing.expect(error_detail(unsupported_error) == 41, "unsupported opcode reports main byte offset and opcode");
+    }
+    sore { testing.expect(iie, "unsupported opcode must fail"); }
+
+}
+
+waza test_all_v14_constants_and_static_string_image() -> unit {
+    kaku constants: []mochi.Constant = [
+        mochi.Constant { tag: uint8(1), bits: binary.U64 { high: uint32(4294967295), low: uint32(4294967295) }, data: [] },
+        mochi.Constant { tag: uint8(2), bits: binary.U64 { high: uint32(0), low: uint32(0) }, data: [97,0,228,184,173] },
+        mochi.Constant { tag: uint8(3), bits: binary.U64 { high: uint32(2146959360), low: uint32(66) }, data: [] },
+        mochi.Constant { tag: uint8(4), bits: binary.U64 { high: uint32(0), low: uint32(2143289348) }, data: [] },
+        mochi.Constant { tag: uint8(5), bits: binary.U64 { high: uint32(0), low: uint32(255) }, data: [] },
+        mochi.Constant { tag: uint8(6), bits: binary.U64 { high: uint32(0), low: uint32(65535) }, data: [] },
+        mochi.Constant { tag: uint8(7), bits: binary.U64 { high: uint32(0), low: uint32(4294967295) }, data: [] },
+        mochi.Constant { tag: uint8(8), bits: binary.U64 { high: uint32(0), low: uint32(255) }, data: [] },
+        mochi.Constant { tag: uint8(9), bits: binary.U64 { high: uint32(0), low: uint32(65535) }, data: [] },
+        mochi.Constant { tag: uint8(10), bits: binary.U64 { high: uint32(0), low: uint32(4294967295) }, data: [] },
+        mochi.Constant { tag: uint8(2), bits: binary.U64 { high: uint32(0), low: uint32(0) }, data: [97,0,228,184,173] }
+    ];
+    kaku instructions: []uint8 = [];
+    kaku index = 0;
+    aida (index < len(constants)) { array.push(instructions, uint8(1)); array.push(instructions, uint8(0)); array.push(instructions, uint8(index)); array.push(instructions, uint8(3)); index = index + 1; }
+    kaku functions: []mochi.Function = [];
+    kaku result = compile(mochi.File { version: 14, constants: constants, global_count: 0,
+        instructions: instructions, functions: functions });
+    testing.expect(result.error == mu, "all v14 constants should lower");
+    testing.expect(len(result.constants) == 13, "duplicate UTF-8 strings should share one table entry");
+    testing.expect(result.constants[4] == uint8(5) && result.constants[8] == uint8(97) && result.constants[9] == uint8(0), "static string table preserves length, bytes, and NUL");
+}
+
+waza test_get_field_uses_runtime_bitmap_width() -> unit {
+    kaku code = arm64.assembler();
+    emit_get_field(code, 65);
+    // The common error target is normally emitted by compile().
+    arm64.assembler_label(code, "runtime_error");
+    kaku result = arm64.assembler_assemble(code);
+    testing.expect(result.error == mu, "metadata-driven get-field should encode");
+    // A fixed-offset lowering would not load fieldCount and bitmapWords or
+    // scale both bitmapWords and the u16 field index.
+    testing.expect(len(result.words) == 40, "get-field should validate metadata and compute the variable field address");
+    testing.expect(result.words[5] == arm64.ldr_x(10, 9, 0).word, "get-field validates the struct kind");
+    testing.expect(result.words[9] == arm64.ldr_x(10, 9, 8).word, "get-field validates fieldCount");
+    testing.expect(result.words[17] == arm64.ldr_x(10, 9, 24).word, "get-field reads bitmapWords");
+    testing.expect(result.words[18] == arm64.ldr_x(12, 9, 8).word, "get-field revalidates bitmap width from fieldCount");
+    testing.expect(result.words[28] == arm64.ldr_x(14, 14, 8).word, "get-field validates required bytes against object payload");
+    testing.expect(result.words[36] == arm64.ldr_x(9, 9, 32).word, "get-field reads after metadata, bitmap, and scaled index");
+}
+
+waza test_type_analysis_distinguishes_nil_from_nullable_scalar_zero() -> unit {
+    kaku constants: []mochi.Constant = [
+        mochi.Constant { tag: uint8(1), bits: binary.U64 { high: uint32(0), low: uint32(0) }, data: [] }
+    ];
+    // true ? 0 : mu; the merge at byte 11 must preserve the integer
+    // representation while marking it nullable.  This is what forces type-106
+    // boxing instead of treating raw scalar zero as None.
+    kaku file = mochi.File { version: 14, constants: constants, global_count: 0,
+        instructions: [8,18,0,10,1,0,0,17,0,11,21,34,3], functions: [] };
+    kaku analysis = types.analyze_types(file);
+    testing.expect(analysis.error_detail == 0, "nullable scalar control-flow analysis should succeed");
+    kaku operand = analysis.blocks[0].entry[11][0];
+    testing.expect(types.type_kind(analysis, operand) == types.type_integer, "Some(0) keeps its scalar kind");
+    testing.expect(types.type_nullable(analysis, operand), "nil merge marks the scalar nullable");
+    testing.expect(types.type_is_heap_reference(analysis, operand), "nullable scalar is a boxed precise root");
+}
+
+waza test_type_analysis_propagates_struct_field_and_call_result() -> unit {
+    kaku constants: []mochi.Constant = [
+        mochi.Constant { tag: uint8(1), bits: binary.U64 { high: uint32(0), low: uint32(7) }, data: [] }
+    ];
+    kaku function = mochi.Function { id: 0, name: "make", name_bytes: [109,97,107,101], parameter_count: 0,
+        local_count: 0, returns_value: hai, captures: [],
+        instructions: [1,0,0,21,36,0,2,27] };
+    kaku file = mochi.File { version: 14, constants: constants, global_count: 0,
+        instructions: [25,0,0,37,0,1,34,3], functions: [function] };
+    kaku analysis = types.analyze_types(file);
+    testing.expect(analysis.error_detail == 0, "call and struct field analysis should succeed");
+    kaku receiver = analysis.blocks[0].entry[3][0];
+    testing.expect(types.type_kind(analysis, receiver) == types.type_struct_ref, "function result is a struct reference");
+    kaku field = analysis.blocks[0].entry[6][0];
+    testing.expect(types.type_kind(analysis, field) == types.type_nil && types.type_nullable(analysis, field), "nullable field reaches OpIsNil");
+}
+
+waza test_type_analysis_classifies_struct_global_as_root() -> unit {
+    kaku constants: []mochi.Constant = [
+        mochi.Constant { tag: uint8(1), bits: binary.U64 { high: uint32(0), low: uint32(1) }, data: [] }
+    ];
+    kaku file = mochi.File { version: 14, constants: constants, global_count: 1,
+        instructions: [1,0,0,36,0,1,19,0,0], functions: [] };
+    kaku analysis = types.analyze_types(file);
+    testing.expect(analysis.error_detail == 0, "struct global analysis should succeed");
+    testing.expect(types.type_kind(analysis, analysis.globals[0]) == types.type_struct_ref, "struct global kind");
+    testing.expect(types.type_is_heap_reference(analysis, analysis.globals[0]), "struct global is a precise root");
+}

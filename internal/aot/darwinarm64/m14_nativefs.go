@@ -347,7 +347,11 @@ func appendM14IOEntry(b *m8Assembler, name string, read bool, emptyTagged uint64
 	b.bc(11, "m14."+name+".invalid")
 	b.emit(cmpZeroX(11))
 	b.bc(11, "m14."+name+".invalid")
-	b.emit(addX(12, 10, 11), m8Cmp(12, 1))
+	// Check subtraction only after offset <= length. offset+count can wrap
+	// and must never authorize an out-of-range syscall buffer.
+	b.emit(m8Cmp(10, 1))
+	b.bc(8, "m14."+name+".invalid")
+	b.emit(subX(12, 1, 10), m8Cmp(11, 12))
 	b.bc(8, "m14."+name+".invalid")
 	b.emit(ldrX(0, 31, 4), ldrX(1, 31, 5), addX(1, 1, 10), movX(2, 11), movzX(16, func() uint16 {
 		if read {
