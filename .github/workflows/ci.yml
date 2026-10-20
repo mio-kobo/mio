@@ -2,6 +2,7 @@ name: Mio Core CI
 
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
@@ -58,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [aot, aot-race, full, bootstrap]
+        suite: [aot, aot-race, full, bootstrap, native-fixed-point]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -93,6 +94,20 @@ jobs:
       - name: Native bootstrap B-C-D fixed point and M17 golden artifacts
         if: matrix.suite == 'bootstrap'
         run: bash scripts/check-native-bootstrap.sh
+      - name: M18 pure Mio Native AOT machine-code fixed point
+        if: matrix.suite == 'native-fixed-point'
+        run: |
+          set -euo pipefail
+          python3 scripts/check-native-aot-fixed-point.py --evidence build/m18-ci --gc-witness
+          MIO_M18_EVIDENCE_DIR="$PWD/build/m18-ci" go test ./internal/aot -run '^TestM18' -count=1 -v -timeout 30m | tee build/m18-ci/m18-tests.log
+      - name: Upload M18 provenance and native generations
+        if: always() && matrix.suite == 'native-fixed-point'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-machine-code-fixed-point
+          path: build/m18-ci/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload verified bootstrap artifacts
         if: success() && matrix.suite == 'bootstrap'
         uses: actions/upload-artifact@v4

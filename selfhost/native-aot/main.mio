@@ -1,0 +1,52 @@
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/string";
+
+// Paths belong to the invocation directory, never to the compiler image.
+// The orchestrator supplies fresh output paths and checks the success marker.
+waza compile_file(file: mochi.File, output: string) -> bool {
+    kaku lowered = lower.compile_with_heap(file, 1073741824, iie);
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        chant("native-aot: lowering failed");
+        chant(lower.error_code(problem)); chant(lower.error_detail(problem));
+        kaesu iie;
+    }
+    kaku image = macho.executable(macho.ImageSpec { words: lowered.words, constants: lowered.constants,
+        globals: lowered.globals, patches: lowered.patches });
+    moshi (image.error != mu) { chant("native-aot: writer failed"); kaesu iie; }
+    kaku written = fs.write_all(output, image.bytes);
+    moshi (written.error != mu) { chant("native-aot: write failed"); kaesu iie; }
+    chant("native-aot: ok"); chant(len(lowered.words)); chant(len(image.bytes));
+    kaesu hai;
+}
+
+waza compile(input: string, output: string) -> bool {
+    kaku decoded = mochi.decode_file(input);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { chant("native-aot: decode failed"); }
+    sore {
+        moshi (file == mu) { chant("native-aot: decode failed"); }
+        sore { kaesu compile_file(file, output); }
+    }
+    kaesu iie;
+}
+
+waza run() -> unit {
+    kaku input_config = fs.read_all("input.config");
+    kaku output_config = fs.read_all("output.config");
+    moshi (input_config.error != mu || output_config.error != mu) { chant("native-aot: config unavailable"); }
+    sore {
+        kaku input = string.from_utf8(input_config.data);
+        kaku output = string.from_utf8(output_config.data);
+        moshi (input == mu) { chant("native-aot: invalid config"); }
+        sore {
+            moshi (output == mu) { chant("native-aot: invalid config"); }
+            sore { compile(input, output); }
+        }
+    }
+}
+
+run();
