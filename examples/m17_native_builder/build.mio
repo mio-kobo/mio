@@ -1,0 +1,94 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/array";
+yobu "kiso/fs";
+
+// M17cd demonstration: every instruction and every Mach-O byte is produced by
+// Mio. The host is only asked to write the completed byte array to disk.
+waza build() -> unit {
+kaku code = arm64.assembler();
+kaku patches: []macho.AddressPatch = [];
+
+// A taken long conditional branch crosses the first 16 KiB text boundary.
+// Later failure branches stay short and untaken, while CBNZ is both taken and
+// not taken by the loop.
+arm64.assembler_emit(code, arm64.movz_x(7, 0, 0));
+arm64.assembler_emit(code, arm64.cmp_x(7, 7));
+arm64.assembler_b_cond(code, 0, "tests");
+kaku padding = 0;
+aida (padding < 4100) {
+    arm64.assembler_emit(code, arm64.Instruction { word: uint32(3573751839), error: mu });
+    padding = padding + 1;
+}
+arm64.assembler_label(code, "tests");
+
+arm64.assembler_emit(code, arm64.movz_x(0, 7, 0));
+arm64.assembler_emit(code, arm64.movz_x(1, 5, 0));
+arm64.assembler_emit(code, arm64.add_x(0, 0, 1));
+arm64.assembler_emit(code, arm64.movz_x(1, 2, 0));
+arm64.assembler_emit(code, arm64.sub_x(0, 0, 1));
+arm64.assembler_emit(code, arm64.movz_x(1, 3, 0));
+arm64.assembler_emit(code, arm64.mul_x(0, 0, 1));
+arm64.assembler_emit(code, arm64.movz_x(3, 30, 0));
+arm64.assembler_emit(code, arm64.cmp_x(0, 3));
+arm64.assembler_b_cond(code, 1, "fail");
+
+arm64.assembler_emit(code, arm64.movz_x(1, 5, 0));
+arm64.assembler_emit(code, arm64.movz_x(2, 0, 0));
+arm64.assembler_label(code, "loop");
+arm64.assembler_emit(code, arm64.add_x(2, 2, 1));
+arm64.assembler_emit(code, arm64.sub_imm_x(1, 1, 1, iie));
+arm64.assembler_cbnz_x(code, 1, "loop");
+arm64.assembler_emit(code, arm64.orr_x(0, 31, 2));
+arm64.assembler_bl(code, "add_seven");
+arm64.assembler_emit(code, arm64.movz_x(3, 22, 0));
+arm64.assembler_emit(code, arm64.cmp_x(0, 3));
+arm64.assembler_b_cond(code, 1, "fail");
+
+kaku data_page = len(code.words);
+arm64.assembler_emit(code, arm64.Instruction { word: uint32(0), error: mu });
+arm64.assembler_emit(code, arm64.str_x(0, 8, 0));
+arm64.assembler_emit(code, arm64.movz_x(0, 0, 0));
+arm64.assembler_emit(code, arm64.ldr_x(0, 8, 0));
+arm64.assembler_emit(code, arm64.cmp_x(0, 3));
+arm64.assembler_b_cond(code, 1, "fail");
+array.push(patches, macho.AddressPatch { at_word: data_page, add_at_word: -1, target: macho.data_target(), target_offset: 0, register: 8 });
+
+kaku const_page = len(code.words);
+arm64.assembler_emit(code, arm64.Instruction { word: uint32(0), error: mu });
+arm64.assembler_emit(code, arm64.Instruction { word: uint32(0), error: mu });
+arm64.assembler_emit(code, arm64.ldrb_w(9, 8, 0));
+arm64.assembler_emit(code, arm64.movz_x(10, 77, 0));
+arm64.assembler_emit(code, arm64.cmp_x(9, 10));
+arm64.assembler_b_cond(code, 1, "fail");
+arm64.assembler_emit(code, arm64.ldrb_w(9, 8, 3));
+arm64.assembler_cbnz_x(code, 9, "fail");
+array.push(patches, macho.AddressPatch { at_word: const_page, add_at_word: const_page + 1, target: macho.const_target(), target_offset: 0, register: 8 });
+
+arm64.assembler_emit(code, arm64.movz_x(0, 0, 0));
+arm64.assembler_emit(code, arm64.movz_x(16, 1, 0));
+arm64.assembler_emit(code, arm64.svc(128));
+arm64.assembler_label(code, "fail");
+arm64.assembler_emit(code, arm64.movz_x(0, 1, 0));
+arm64.assembler_emit(code, arm64.movz_x(16, 1, 0));
+arm64.assembler_emit(code, arm64.svc(128));
+
+arm64.assembler_label(code, "add_seven");
+arm64.assembler_emit(code, arm64.stp_pre_x(29, 30, 31, -16));
+arm64.assembler_emit(code, arm64.add_imm_x(29, 31, 0, iie));
+arm64.assembler_emit(code, arm64.add_imm_x(0, 0, 7, iie));
+arm64.assembler_emit(code, arm64.ldp_post_x(29, 30, 31, 16));
+arm64.assembler_emit(code, arm64.ret());
+
+kaku assembled = arm64.assembler_assemble(code);
+moshi (assembled.error != mu) { chant(-1); } sore {
+    kaku constants: []uint8 = [77, 105, 111, 0, 228, 184, 173, 240, 159, 140, 159];
+    kaku image = macho.executable(macho.ImageSpec { words: assembled.words, constants: constants, globals: 1, patches: patches });
+    moshi (image.error != mu) { chant(-2); } sore {
+        kaku written = fs.write_all("build/m17cd-pure-mio", image.bytes);
+        moshi (written.error != mu) { chant(-3); } sore { chant(len(image.bytes)); }
+    }
+}
+}
+
+build();

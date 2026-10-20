@@ -1,0 +1,233 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/array";
+yobu "kiso/encoding/binary";
+
+// Pure Mio Darwin ARM64 Mach-O writer. The layout intentionally mirrors the
+// proven Go AOT writer; relocation records remain empty because every label and
+// image-address patch is resolved before the file is emitted.
+koukai sentaku MachOError {
+    EmptyText;
+    TooManyGlobals;
+    ImageTooLarge;
+    LoadCommandsTooLarge;
+    InvalidPatch;
+    EncodeFailure;
+    WriteFailure;
+}
+
+koukai kata AddressTarget { kind: int64; }
+koukai waza text_target() -> AddressTarget { kaesu AddressTarget { kind: 0 }; }
+koukai waza const_target() -> AddressTarget { kaesu AddressTarget { kind: 1 }; }
+koukai waza data_target() -> AddressTarget { kaesu AddressTarget { kind: 2 }; }
+koukai kata AddressPatch { at_word: int64; add_at_word: int64; target: AddressTarget; target_offset: int64; register: int64; }
+koukai kata Section { segment: string; name: string; file_offset: int64; vm_offset: int64; size: int64; alignment: int64; }
+koukai kata Symbol { name: string; section: int64; value: int64; }
+koukai kata Relocation { section: int64; offset: int64; symbol: int64; pc_relative: bool; width: int64; }
+koukai kata Layout { text_size: int64; const_offset: int64; data_offset: int64; linkedit_offset: int64; file_size: int64; sections: []Section; }
+koukai kata ImageSpec { words: []uint32; constants: []uint8; globals: int64; patches: []AddressPatch; }
+koukai kata ImageResult { bytes: []uint8; layout: Layout; error: MachOError?; }
+
+teisu page_size = 16384;
+teisu entry_offset = 768;
+teisu maximum_image_size = 67108864;
+
+waza align(value: int64, boundary: int64) -> int64 {
+    kaku remainder = value - (value / boundary) * boundary;
+    moshi (remainder == 0) { kaesu value; }
+    kaesu value + boundary - remainder;
+}
+
+koukai waza plan(code_size: int64, const_size: int64, globals: int64) -> Layout {
+    kaku const_offset = align(entry_offset + code_size, 8);
+    kaku text_end = entry_offset + code_size;
+    moshi (const_size > 0) { text_end = const_offset + const_size; }
+    kaku text_size = align(text_end, page_size);
+    kaku data_size = 0; moshi (globals > 0) { data_size = page_size; }
+    kaku sections = array.with_capacity[Section](3);
+    array.push(sections, Section { segment: "__TEXT", name: "__text", file_offset: entry_offset, vm_offset: entry_offset, size: code_size, alignment: 2 });
+    moshi (const_size > 0) { array.push(sections, Section { segment: "__TEXT", name: "__const", file_offset: const_offset, vm_offset: const_offset, size: const_size, alignment: 3 }); }
+    moshi (globals > 0) { array.push(sections, Section { segment: "__DATA", name: "__data", file_offset: text_size, vm_offset: text_size, size: globals * 8, alignment: 3 }); }
+    kaesu Layout { text_size: text_size, const_offset: const_offset, data_offset: text_size, linkedit_offset: text_size + data_size, file_size: text_size + data_size, sections: sections };
+}
+
+waza binary_failure(problem: binary.BinaryError?) -> MachOError? {
+    moshi (problem != mu) { kaesu MachOError.WriteFailure(); }
+    kaesu mu;
+}
+waza put32(output: binary.BinaryWriter, value: int64) -> MachOError? {
+    moshi (value < 0 || value > 4294967295) { kaesu MachOError.WriteFailure(); }
+    kaesu binary_failure(binary.writer_write_u32_le(output, uint32(value)));
+}
+waza put64(output: binary.BinaryWriter, high: int64, low: int64) -> MachOError? {
+    moshi (high < 0 || high > 4294967295 || low < 0 || low > 4294967295) { kaesu MachOError.WriteFailure(); }
+    kaesu binary_failure(binary.writer_write_u64_le(output, binary.U64 { high: uint32(high), low: uint32(low) }));
+}
+waza put_bytes(output: binary.BinaryWriter, value: []uint8) -> MachOError? { kaesu binary_failure(binary.writer_write_bytes(output, value)); }
+waza zeros(output: binary.BinaryWriter, count: int64) -> MachOError? { kaesu binary_failure(binary.writer_reserve(output, count).error); }
+
+waza name16(output: binary.BinaryWriter, value: []uint8) -> MachOError? {
+    moshi (len(value) > 16) { kaesu MachOError.WriteFailure(); }
+    kaku failure = put_bytes(output, value); moshi (failure != mu) { kaesu failure; }
+    kaesu zeros(output, 16 - len(value));
+}
+
+waza segment(output: binary.BinaryWriter, name: []uint8, vm_high: int64, vm_low: int64, vm_size_high: int64, vm_size: int64,
+             file_offset: int64, file_size: int64, max_protection: int64, initial_protection: int64,
+             section_count: int64, command_size: int64) -> MachOError? {
+    kaku failure = put32(output, 25); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, command_size); moshi (failure != mu) { kaesu failure; }
+    failure = name16(output, name); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, vm_high, vm_low); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, vm_size_high, vm_size); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, 0, file_offset); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, 0, file_size); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, max_protection); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, initial_protection); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, section_count); moshi (failure != mu) { kaesu failure; }
+    kaesu put32(output, 0);
+}
+
+waza section(output: binary.BinaryWriter, section_name: []uint8, segment_name: []uint8,
+             vm_low: int64, size: int64, file_offset: int64, alignment: int64, flags: int64) -> MachOError? {
+    kaku failure = name16(output, section_name); moshi (failure != mu) { kaesu failure; }
+    failure = name16(output, segment_name); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, 1, vm_low); moshi (failure != mu) { kaesu failure; }
+    failure = put64(output, 0, size); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, file_offset); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, alignment); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, flags); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu failure; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu failure; }
+    kaesu put32(output, 0);
+}
+
+waza target_is_const(value: AddressTarget) -> bool { kaesu value.kind == 1; }
+waza target_is_data(value: AddressTarget) -> bool { kaesu value.kind == 2; }
+waza target_is_text(value: AddressTarget) -> bool { kaesu value.kind == 0; }
+
+waza patch_words(spec: ImageSpec, layout: Layout) -> ImageResult {
+    kaku words = array.clone(spec.words);
+    kaku index = 0;
+    aida (index < len(spec.patches)) {
+        kaku patch = spec.patches[index];
+        moshi (patch.at_word < 0 || patch.at_word >= len(words) || patch.target_offset < 0) {
+            kaesu ImageResult { bytes: [], layout: layout, error: MachOError.InvalidPatch() };
+        }
+        moshi (patch.target.kind < 0 || patch.target.kind > 2) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.InvalidPatch() }; }
+        kaku target = entry_offset + patch.target_offset;
+        moshi (target_is_const(patch.target)) { target = layout.const_offset + patch.target_offset; }
+        moshi (target_is_data(patch.target)) { target = layout.data_offset + patch.target_offset; }
+        moshi ((target_is_text(patch.target) && patch.target_offset >= len(spec.words) * 4) ||
+               (target_is_const(patch.target) && patch.target_offset >= len(spec.constants)) ||
+               (target_is_data(patch.target) && patch.target_offset >= spec.globals * 8)) {
+            kaesu ImageResult { bytes: [], layout: layout, error: MachOError.InvalidPatch() };
+        }
+        kaku encoded = arm64.adrp_offset(patch.register, entry_offset + patch.at_word * 4, target);
+        moshi (encoded.error != mu) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.EncodeFailure() }; }
+        words[patch.at_word] = encoded.word;
+        moshi (patch.add_at_word >= 0) {
+            moshi (patch.add_at_word >= len(words) || patch.add_at_word == patch.at_word) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.InvalidPatch() }; }
+            kaku low = target - (target / 4096) * 4096;
+            kaku addition = arm64.add_imm_x(patch.register, patch.register, low, iie);
+            moshi (addition.error != mu) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.EncodeFailure() }; }
+            words[patch.add_at_word] = addition.word;
+        }
+        index = index + 1;
+    }
+    // An internal helper result uses bytes as a little-endian word stream.
+    kaku temp = binary.writer(len(words) * 4);
+    index = 0;
+    aida (index < len(words)) {
+        moshi (binary.writer_write_u32_le(temp, words[index]) != mu) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.WriteFailure() }; }
+        index = index + 1;
+    }
+    kaesu ImageResult { bytes: binary.writer_bytes(temp), layout: layout, error: mu };
+}
+
+koukai waza executable(spec: ImageSpec) -> ImageResult {
+    kaku empty_layout = plan(0, 0, 0);
+    moshi (len(spec.words) == 0) { kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.EmptyText() }; }
+    moshi (spec.globals < 0 || spec.globals > 2048) { kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.TooManyGlobals() }; }
+    moshi (len(spec.words) > (maximum_image_size - entry_offset) / 4 || len(spec.constants) > maximum_image_size) {
+        kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.ImageTooLarge() };
+    }
+    kaku layout = plan(len(spec.words) * 4, len(spec.constants), spec.globals);
+    moshi (layout.file_size > maximum_image_size) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.ImageTooLarge() }; }
+    kaku patched = patch_words(spec, layout);
+    moshi (patched.error != mu) { kaesu patched; }
+
+    kaku has_const = len(spec.constants) > 0;
+    kaku has_data = spec.globals > 0;
+    kaku text_command_size = 152; moshi (has_const) { text_command_size = 232; }
+    kaku command_size = 72 + text_command_size + 72 + 32 + 24 + 24 + 80 + 24;
+    kaku command_count = 8;
+    moshi (has_data) { command_size = command_size + 152; command_count = 9; }
+    moshi (32 + command_size + 16 > entry_offset) { kaesu ImageResult { bytes: [], layout: layout, error: MachOError.LoadCommandsTooLarge() }; }
+
+    kaku output = binary.writer(layout.file_size);
+    kaku failure = put32(output, 4277009103); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 16777228); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 2); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, command_count); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, command_size); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 2097285); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    failure = segment(output, [95,95,80,65,71,69,90,69,82,79], 0, 0, 1, 0, 0, 0, 0, 0, 0, 72);
+    moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    kaku text_sections = 1; moshi (has_const) { text_sections = 2; }
+    failure = segment(output, [95,95,84,69,88,84], 1, 0, 0, layout.text_size, 0, layout.text_size, 5, 5, text_sections, text_command_size);
+    moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = section(output, [95,95,116,101,120,116], [95,95,84,69,88,84], entry_offset, len(spec.words) * 4, entry_offset, 2, 2147484672);
+    moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    moshi (has_const) {
+        failure = section(output, [95,95,99,111,110,115,116], [95,95,84,69,88,84], layout.const_offset, len(spec.constants), layout.const_offset, 3, 0);
+        moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    }
+    moshi (has_data) {
+        failure = segment(output, [95,95,68,65,84,65], 1, layout.data_offset, 0, page_size, layout.data_offset, page_size, 3, 3, 1, 152);
+        moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+        failure = section(output, [95,95,100,97,116,97], [95,95,68,65,84,65], layout.data_offset, spec.globals * 8, layout.data_offset, 3, 0);
+        moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    }
+    failure = segment(output, [95,95,76,73,78,75,69,68,73,84], 1, layout.linkedit_offset, 0, page_size, layout.linkedit_offset, 0, 1, 1, 0, 72);
+    moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    // LC_LOAD_DYLINKER, command size 32, path offset 12.
+    failure = put32(output, 14); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 32); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 12); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put_bytes(output, [47,117,115,114,47,108,105,98,47,100,121,108,100,0]); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = zeros(output, 6); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    // LC_BUILD_VERSION: macOS 11.0, no tool records.
+    failure = put32(output, 50); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 24); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 1); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 720896); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 720896); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 0); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    // Empty LC_SYMTAB and LC_DYSYMTAB. All pure-Mio fixups are already final.
+    failure = put32(output, 2); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 24); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = zeros(output, 16); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 11); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 80); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = zeros(output, 72); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    failure = put32(output, 2147483688); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put32(output, 24); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put64(output, 0, entry_offset); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put64(output, 0, 0); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+
+    failure = zeros(output, entry_offset - binary.writer_offset(output)); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = put_bytes(output, patched.bytes); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    failure = zeros(output, layout.const_offset - binary.writer_offset(output)); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    moshi (has_const) { failure = put_bytes(output, spec.constants); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; } }
+    failure = zeros(output, layout.file_size - binary.writer_offset(output)); moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
+    kaesu ImageResult { bytes: binary.writer_bytes(output), layout: layout, error: mu };
+}

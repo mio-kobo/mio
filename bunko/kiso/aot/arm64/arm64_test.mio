@@ -1,0 +1,38 @@
+yobu "kiso/testing";
+
+waza test_instruction_golden_and_ranges() -> unit {
+    testing.expect(movz_x(0, 42, 0).word == uint32(3531605312), "MOVZ X encoding");
+    testing.expect(movk_x(3, 43981, 1).word == uint32(4071979427), "MOVK X encoding");
+    testing.expect(movz_w(4, 10).word == uint32(1384120644), "MOVZ W encoding");
+    testing.expect(add_x(2, 3, 4).word == uint32(2332295266), "ADD X encoding");
+    testing.expect(add_imm_w(4, 4, 48).word == uint32(285261956), "ADD W immediate encoding");
+    testing.expect(msub_x(4, 3, 6, 0).word == uint32(2600894564), "MSUB X encoding");
+    testing.expect(cset_w(9, 0).word == uint32(446633961), "CSET W encoding");
+    testing.expect(stp_pre_x(29, 30, 31, -16).word == uint32(2847898621), "STP pre-index encoding");
+    testing.expect(b(-1).word == uint32(402653183), "backward B encoding");
+    testing.expect(adrp_offset(8, 768, 16384).word == uint32(2415919144), "ADRP uses 4 KiB pages");
+    testing.expect(movz_x(32, 0, 0).error != mu, "invalid register rejected");
+    testing.expect(add_imm_x(0, 0, 4096, iie).error != mu, "oversize immediate rejected");
+    testing.expect(ldr_x(0, 1, 3).error != mu, "misaligned load rejected");
+    testing.expect(b(33554432).error != mu, "unreachable branch rejected");
+}
+
+waza test_label_fixups() -> unit {
+    kaku value = assembler();
+    assembler_b(value, "forward");
+    assembler_label(value, "backward");
+    assembler_emit(value, movz_x(0, 0, 0));
+    assembler_label(value, "forward");
+    assembler_b(value, "backward");
+    kaku output = assembler_assemble(value);
+    testing.expect(output.error == mu && len(output.words) == 3, "forward and backward labels patch");
+    testing.expect(output.words[0] == uint32(335544322), "forward branch distance");
+    testing.expect(output.words[2] == uint32(402653183), "backward branch distance");
+
+    kaku duplicate = assembler();
+    assembler_label(duplicate, "same");
+    testing.expect(assembler_label(duplicate, "same") != mu, "duplicate label rejected");
+    kaku missing = assembler();
+    assembler_bl(missing, "absent");
+    testing.expect(assembler_assemble(missing).error != mu, "undefined label rejected");
+}
