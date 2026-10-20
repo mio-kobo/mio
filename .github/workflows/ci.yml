@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [aot, aot-race, full]
+        suite: [aot, aot-race, full, bootstrap]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -77,9 +77,9 @@ jobs:
       - name: Native AOT race tests
         if: matrix.suite == 'aot-race'
         run: go test -race ./internal/aot/... -count=1 -timeout 30m
-      - name: Mochi VM and bootstrap fixed point
+      - name: Mochi VM regression
         if: matrix.suite == 'full'
-        run: go test ./internal/vm/... ./internal/mochi/... ./selfhost/bootstrap/... -count=1 -timeout 30m
+        run: go test ./internal/vm/... ./internal/mochi/... -count=1 -timeout 30m
       - name: Full macOS regression
         if: matrix.suite == 'full'
         run: go test ./... -count=1 -timeout 30m
@@ -90,6 +90,23 @@ jobs:
           go build -o build/mio ./cmd/mio
           go build -o build/mochi-aot ./cmd/mochi-aot
           go build -o build/mochi-aot-audit ./cmd/mochi-aot-audit
+      - name: Native bootstrap B-C-D fixed point and M17 golden artifacts
+        if: matrix.suite == 'bootstrap'
+        run: bash scripts/check-native-bootstrap.sh
+      - name: Upload verified bootstrap artifacts
+        if: success() && matrix.suite == 'bootstrap'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-bootstrap-golden
+          path: |
+            build/compiler-A.mochi
+            build/compiler-B-native.mochi
+            build/native-bootstrap/compiler-C.mochi
+            build/native-bootstrap/compiler-D.mochi
+            build/native-bootstrap-check.*/SHA256SUMS
+            build/native-bootstrap-check.*/m17-golden.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
