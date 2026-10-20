@@ -12,13 +12,13 @@
 <p align="center">
   <a href="https://github.com/mio-kobo/mio/tree/Mio-1.0.0">Mio-1.0.0 开发分支</a>
   · <a href="https://github.com/mio-kobo/mio/releases">Releases</a>
-  · <a href="editors/jetbrains/README.md">JetBrains 插件</a>
+  · <a href="https://github.com/mio-kobo/mio-jetbrains">JetBrains 插件</a>
   · <a href="docs/BUNKO.md">Bunko 标准库</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/mio-kobo/mio/actions/workflows/mio-ci-release-with-plugin.yml?query=branch%3AMio-1.0.0"><img alt="CI (Mio-1.0.0)" src="https://github.com/mio-kobo/mio/actions/workflows/mio-ci-release-with-plugin.yml/badge.svg?branch=Mio-1.0.0" /></a>
-  <a href="https://github.com/mio-kobo/mio/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/ExMikuPro/Mio?include_prereleases&label=release" /></a>
+  <a href="https://github.com/mio-kobo/mio/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/mio-kobo/mio?include_prereleases&label=release" /></a>
   <img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-orange" />
 </p>
 
