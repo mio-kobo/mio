@@ -54,7 +54,11 @@ jobs:
         run: go test ./... -count=1 -timeout 30m
 
   native-aot:
-    name: Native AOT / Apple Silicon
+    name: Apple Silicon / ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [aot, aot-race, full]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -68,23 +72,29 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Native AOT tests
+        if: matrix.suite == 'aot'
         run: go test ./internal/aot/... -count=1 -timeout 30m
       - name: Native AOT race tests
+        if: matrix.suite == 'aot-race'
         run: go test -race ./internal/aot/... -count=1 -timeout 30m
       - name: Mochi VM and bootstrap fixed point
+        if: matrix.suite == 'full'
         run: go test ./internal/vm/... ./internal/mochi/... ./selfhost/bootstrap/... -count=1 -timeout 30m
       - name: Full macOS regression
+        if: matrix.suite == 'full'
         run: go test ./... -count=1 -timeout 30m
       - name: Build tools
+        if: matrix.suite == 'full'
         run: |
           mkdir -p build
           go build -o build/mio ./cmd/mio
           go build -o build/mochi-aot ./cmd/mochi-aot
+          go build -o build/mochi-aot-audit ./cmd/mochi-aot-audit
       - name: Upload diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: native-aot-diagnostics
+          name: native-aot-diagnostics-${{ matrix.suite }}
           path: |
             build/*.telemetry
             build/*audit.json
