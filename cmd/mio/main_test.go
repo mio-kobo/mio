@@ -135,7 +135,7 @@ age;
 
 // 测试版本命令
 func TestCLIVersion(t *testing.T) {
-	const want = "Mio 1.0.0-beta.1\n"
+	const want = "Mio 2.0.0\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -198,5 +198,12 @@ func TestCLIMissingArguments(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "Usage:") {
 		t.Fatal("expected usage information")
+	}
+}
+
+func TestCLIReleaseVersionAlias(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runCLI([]string{"--version"}, &stdout, &stderr); code != 0 || stdout.String() != "Mio 2.0.0\n" || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

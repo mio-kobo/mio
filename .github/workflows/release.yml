@@ -1,0 +1,285 @@
+name: Mio tag release
+
+on:
+  push:
+    tags: ['v2.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Validate this version only; never creates a Tag or Release'
+        required: true
+        default: v2.0.0-rc.5
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  preflight:
+    runs-on: macos-15
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.policy.outputs.tag }}
+      version: ${{ steps.policy.outputs.version }}
+      notes: ${{ steps.policy.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS ARM64 and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.memsize)" -ge 6442450944
+          df -h .
+          test "$(df -Pk . | tail -1 | awk '{print $4}')" -ge 6291456
+          xcodebuild -version
+          xcrun --find lldb
+      - name: Install workflow parser
+        run: python3 -m pip install PyYAML==6.0.3
+      - name: Policy regression tests
+        run: python3 -m unittest discover -s scripts -p 'test_release_automation.py' -v
+      - name: Workflow, version, tag and existing release checks
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_automation.py preflight
+
+  test:
+    needs: preflight
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS ARM64 and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.memsize)" -ge 6442450944
+          df -h .
+          test "$(df -Pk . | tail -1 | awk '{print $4}')" -ge 6291456
+          xcodebuild -version
+          xcrun --find lldb
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Generate native bootstrap golden fixtures from clean source
+        run: bash scripts/check-native-bootstrap.sh
+      - name: Full repository and Native AOT regressions
+        run: |
+          set -euo pipefail
+          go test ./... -count=1 -timeout 30m
+          go test ./internal/aot/... -count=1 -timeout 30m
+          go test -race ./internal/aot/... -count=1 -timeout 30m
+          go vet ./...
+          go run ./cmd/mio test ./...
+          go run ./cmd/mio test ./bunko/kiso/aot/...
+          git diff --check
+
+  m18:
+    needs: [preflight, test]
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS ARM64 and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.memsize)" -ge 6442450944
+          df -h .
+          test "$(df -Pk . | tail -1 | awk '{print $4}')" -ge 6291456
+          xcodebuild -version
+          xcrun --find lldb
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fresh formal 1 GiB M18 chain and 256 MiB GC witness
+        run: |
+          set -euo pipefail
+          python3 scripts/check-native-aot-fixed-point.py --evidence build/m18 --gc-witness
+          python3 scripts/release_automation.py m18 --evidence build/m18
+      - name: VM and both Native backends, normal and race
+        run: |
+          set -euo pipefail
+          mkdir build/m18-race
+          cp build/m18/{stage4.native,stage2.unsigned,native-aot.mochi} build/m18-race/
+          MIO_M18_EVIDENCE_DIR="$PWD/build/m18" go test ./internal/aot -run '^TestM18' -count=1 -v -timeout 30m
+          MIO_M18_EVIDENCE_DIR="$PWD/build/m18-race" go test -race ./internal/aot -run '^TestM18' -count=1 -v -timeout 30m
+      - name: Save formal evidence from this run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: m18-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/m18/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: m18-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/m18*/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package:
+    needs: [preflight, m18]
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS ARM64 and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.memsize)" -ge 6442450944
+          df -h .
+          test "$(df -Pk . | tail -1 | awk '{print $4}')" -ge 6291456
+          xcodebuild -version
+          xcrun --find lldb
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: m18-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/m18
+      - name: Rebuild signed package from this commit and formal evidence
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          bash scripts/build-release.sh --version "$VERSION" --output build/release --m18-evidence build/m18
+          python3 scripts/release_automation.py provenance
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/release/*.tar.gz
+            build/release/SHA256SUMS
+            build/release/release-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    needs: [preflight, package]
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify macOS ARM64 and resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.memsize)" -ge 6442450944
+          df -h .
+          test "$(df -Pk . | tail -1 | awk '{print $4}')" -ge 6291456
+          xcodebuild -version
+          xcrun --find lldb
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/release
+      - name: Verify the transported archive and repeat isolated no-Go install
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release_automation.py verify
+          python3 scripts/smoke-release.py "build/release/mio-$VERSION-darwin-arm64.tar.gz" --version "$VERSION" --report build/release/verify-smoke.json
+      - name: Promote only the verified exact asset bytes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/release/*.tar.gz
+            build/release/SHA256SUMS
+            build/release/release-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve second installation report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/release/verify-smoke.json
+          if-no-files-found: error
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
+    needs: [preflight, test, m18, package, verify]
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/release
+      - name: Check hashes, run provenance and remote tag again; publish without replacing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_automation.py publish

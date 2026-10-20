@@ -24,7 +24,7 @@ import (
 	"Mio/internal/vm"
 )
 
-var version = "1.0.0-beta.1"
+var version = "2.0.0"
 
 // main 是 Mio 命令行程序的入口
 func main() {
@@ -43,7 +43,7 @@ func runCLI(
 ) int {
 	if len(args) == 1 {
 		switch args[0] {
-		case "version":
+		case "version", "--version":
 			fmt.Fprintf(stdout, "Mio %s\n", version)
 			return 0
 

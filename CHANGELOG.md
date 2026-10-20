@@ -2,6 +2,17 @@
 
 本文件记录 Mio 的公开版本变化。
 
+## 2.0.0 - 发布准备（尚未发布）
+
+- 新增已在 macOS ARM64 验证的 Native AOT 和 Mach-O 输出，保留 Mochi v14 与 v1–v14 解码兼容回归。
+- M18 完成纯 Mio Decoder / Lowering / ARM64 Encoder / Mach-O Writer 原生自举：Seed 后 Stage 1–5 达到机器码固定点，正式 Go AOT 仅生成 Seed。
+- 原生运行时包含精确 Mark-Sweep GC、Shadow Frame、typed Storage、mmap managed arena；256 MiB 自编译见证发生 GC 后仍重建相同产物。正式自举协议为 1 GiB。
+- 提供 CLI、预编译 Go AOT 工具、纯 Mio 原生 AOT 编译器、Bunko、许可、构建来源与校验清单的候选包；本地打包和隔离无 Go 安装 smoke 不创建远程 Release。
+- CLI / help / LSP 核心版本更新为 2.0.0；内置 LSP 和结构化诊断沿用，插件独立版本不跟随核心更新。
+- 限制：源码前端与 VM 仍为 Go 实现，源码重建需 Go；AOT 不是 VM 全语言面的替代品；仅实测 macOS Apple Silicon；当前 ad-hoc 签名，未 Developer ID 签名或公证。
+- 升级：重新编译字节码并检查 AOT 子集差异，不承诺任意 V1 程序无修改转为 Native；历史 beta 的多平台发行不构成 V2 平台承诺。未启动 M19 分代 GC，未实现三档 GC 配置。
+- 完整安装、已知限制、验证结果见 `docs/releases/v2.0.0.md` 和 `v2.0.0-readiness.md`。
+
 ## 1.0.0-beta.1 - 2026-10-17
 
 首个 v1 Beta 预发布版本，面向测试、兼容性验证与反馈收集，不建议用于生产环境。
