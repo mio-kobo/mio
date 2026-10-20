@@ -27,12 +27,18 @@ type Package struct {
 
 // Loader 按公开导入路径读取 Bunko 包
 type Loader struct {
-	root string
+	root    string
+	overlay Overlay
 }
 
 // New 创建 Bunko 包加载器
 func New(root string) *Loader {
-	return &Loader{root: filepath.Clean(root)}
+	return NewWithOverlay(root, Overlay{})
+}
+
+// NewWithOverlay 创建带内存覆盖层的 Bunko 包加载器
+func NewWithOverlay(root string, overlay Overlay) *Loader {
+	return &Loader{root: filepath.Clean(root), overlay: overlay}
 }
 
 // Load 读取导入路径对应目录中的 Mio 源文件
@@ -72,7 +78,7 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 	sources := make([]Source, 0, len(names))
 	for _, name := range names {
 		filePath := filepath.Join(directory, name)
-		content, err := os.ReadFile(filePath)
+		content, err := l.readSourceFile(filePath)
 		if err != nil {
 			return nil, fmt.Errorf("read Bunko source %q: %w", filePath, err)
 		}
@@ -80,6 +86,14 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 	}
 
 	return &Package{ImportPath: importPath, Directory: directory, Sources: sources}, nil
+}
+
+// readSourceFile 优先读取内存覆盖层，其次读取磁盘
+func (l *Loader) readSourceFile(path string) ([]byte, error) {
+	if content, ok := l.overlay.readFile(path); ok {
+		return content, nil
+	}
+	return os.ReadFile(path)
 }
 
 // resolvePackageDirectory 依次查找 Bunko 与同级工作区包

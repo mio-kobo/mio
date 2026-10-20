@@ -15,6 +15,42 @@ type Resolver struct {
 
 	bindings map[*ast.Identifier]Symbol
 	nextID   uint64
+
+	// lenient 为真时收集可恢复错误并继续解析后续语句。
+	// 这是 LSP 处理未完成源码所需的只读扩展，编译器仍然使用严格模式。
+	lenient bool
+	errors  []error
+}
+
+// ResolveProgramLenient 解析程序并收集可恢复错误。
+// 与 ResolveProgram 不同，单个语句失败不会中止后续语句，
+// 已建立的绑定仍然可信；调用方可用 Errors 取得全部错误。
+func (r *Resolver) ResolveProgramLenient(program *ast.Program) []error {
+	r.lenient = true
+	r.errors = nil
+	defer func() { r.lenient = false }()
+	if err := r.resolveStatements(program.Statements, true); err != nil {
+		// 严格模式下不会走到这里；保留兜底以防未来新增不可恢复错误。
+		r.errors = append(r.errors, err)
+	}
+	return r.errors
+}
+
+// Errors 返回宽松解析收集到的错误。
+func (r *Resolver) Errors() []error {
+	return r.errors
+}
+
+// recoverable 记录错误并返回是否继续执行。
+func (r *Resolver) recoverable(err error) bool {
+	if err == nil {
+		return true
+	}
+	if !r.lenient {
+		return false
+	}
+	r.errors = append(r.errors, err)
+	return true
 }
 
 func (r *Resolver) symbol(name string, kind SymbolKind, decl token.Position) Symbol {
@@ -424,12 +460,20 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 			continue
 		}
 		if !allowFunctions {
-			return diagnostic.NewError("E0205", "不支持嵌套类型声明", diagnostic.FromPositions(name.Span().Start, name.Span().End)).
+			err := diagnostic.NewError("E0205", "不支持嵌套类型声明", diagnostic.FromPositions(name.Span().Start, name.Span().End)).
 				WithCause(fmt.Errorf("nested type declaration %q is not supported", name.Name))
+			if !r.recoverable(err) {
+				return err
+			}
+			continue
 		}
 		symbol := r.symbol(name.Name, SymbolType, name.Span().Start)
 		if err := r.scope.DefineSymbol(symbol); err != nil {
-			return duplicateDiagnostic(r.scope, name, err)
+			err = duplicateDiagnostic(r.scope, name, err)
+			if !r.recoverable(err) {
+				return err
+			}
+			continue
 		}
 		r.bindings[name] = symbol
 	}
@@ -448,7 +492,11 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 				pos.Line,
 				pos.Column,
 			)
-			return diagnostic.NewError("E0205", "不支持嵌套函数声明", diagnostic.FromPositions(fn.Name.Span().Start, fn.Name.Span().End)).WithCause(cause)
+			err := diagnostic.NewError("E0205", "不支持嵌套函数声明", diagnostic.FromPositions(fn.Name.Span().Start, fn.Name.Span().End)).WithCause(cause)
+			if !r.recoverable(err) {
+				return err
+			}
+			continue
 		}
 
 		// 构造函数符号
@@ -456,7 +504,11 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 
 		// 注册函数名称
 		if err := r.scope.DefineSymbol(symbol); err != nil {
-			return duplicateDiagnostic(r.scope, fn.Name, err)
+			err = duplicateDiagnostic(r.scope, fn.Name, err)
+			if !r.recoverable(err) {
+				return err
+			}
+			continue
 		}
 
 		// 保存函数声明节点的绑定
@@ -466,7 +518,9 @@ func (r *Resolver) resolveStatements(statements []ast.Statement, allowFunctions 
 	// 按顺序解析所有语句
 	for _, stmt := range statements {
 		if err := r.resolveStatement(stmt); err != nil {
-			return err
+			if !r.recoverable(err) {
+				return err
+			}
 		}
 	}
 

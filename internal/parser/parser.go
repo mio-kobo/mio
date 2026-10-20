@@ -27,6 +27,11 @@ type Parser struct {
 
 	prefixParseFns map[token.Type]prefixParseFn
 	infixParseFns  map[token.Type]infixParseFn
+
+	// recovering 为真时按语句粒度收集错误并继续解析。
+	// 只有 LSP 的容错解析会启用它，编译器的 ParseProgram 行为不变。
+	recovering bool
+	errors     []error
 }
 
 // New 创建解析器，并注册表达式对应的解析函数。
@@ -114,12 +119,24 @@ func (p *Parser) expected(expected, context string, got token.Token) error {
 
 // ParseProgram 解析整个程序，并记录源码范围。
 func (p *Parser) ParseProgram() (*ast.Program, error) {
+	program, err := p.ParseProgramPartial()
+	if err != nil {
+		return nil, err
+	}
+	return program, nil
+}
+
+// ParseProgramPartial 解析语句直到第一个错误，并返回已经完整解析的前缀。
+// 它只服务于需要容错语义的工具链（例如 LSP）：错误时第一个返回值仍可能包含
+// 合法语句，但调用方必须把第二个返回值当作"此源码不完整"的信号。
+// ParseProgram 保持原有行为：出错时返回 nil。
+func (p *Parser) ParseProgramPartial() (*ast.Program, error) {
 	program := &ast.Program{}
 
 	for p.curToken.Type != token.EOF {
 		stmt, err := p.parseStatement()
 		if err != nil {
-			return nil, err
+			return program, err
 		}
 
 		program.Statements = append(program.Statements, stmt)
@@ -142,6 +159,84 @@ func (p *Parser) ParseProgram() (*ast.Program, error) {
 	}
 
 	return program, nil
+}
+
+// ParseProgramRecovering 尽力解析整个程序：单条语句失败时记录错误并跳过，
+// 其余语句仍然进入 AST。它只供 LSP 处理未完成源码使用；
+// ParseProgram 与 ParseProgramPartial 的严格行为不受影响。
+func (p *Parser) ParseProgramRecovering() (*ast.Program, []error) {
+	p.recovering = true
+	p.errors = nil
+	defer func() { p.recovering = false }()
+
+	program := &ast.Program{}
+	for p.curToken.Type != token.EOF {
+		stmt, err := p.parseStatement()
+		if err != nil {
+			p.errors = append(p.errors, err)
+			if !p.skipToNextTopLevel() {
+				break
+			}
+			continue
+		}
+		program.Statements = append(program.Statements, stmt)
+		p.nextToken()
+	}
+	if len(program.Statements) > 0 {
+		first := program.Statements[0]
+		last := program.Statements[len(program.Statements)-1]
+		program.Range = ast.Span{Start: first.Span().Start, End: last.Span().End}
+	} else {
+		program.Range = ast.Span{Start: p.curToken.Start, End: p.curToken.End}
+	}
+	return program, p.errors
+}
+
+// skipToNextTopLevel 跳到下一个顶层语句起点。
+// 返回 false 表示已经到达 EOF。
+func (p *Parser) skipToNextTopLevel() bool {
+	depth := 0
+	for p.curToken.Type != token.EOF {
+		switch p.curToken.Type {
+		case token.LBrace:
+			depth++
+		case token.RBrace:
+			if depth > 0 {
+				depth--
+			}
+		case token.Semicolon:
+			if depth == 0 {
+				p.nextToken()
+				return true
+			}
+		}
+		p.nextToken()
+	}
+	return false
+}
+
+// skipToStatementEnd 在代码块内跳过一条损坏的语句。
+// 返回时停在当前代码块的右大括号或下一条语句起点。
+func (p *Parser) skipToStatementEnd() bool {
+	depth := 0
+	for p.curToken.Type != token.EOF {
+		switch p.curToken.Type {
+		case token.LBrace:
+			depth++
+		case token.RBrace:
+			if depth == 0 {
+				return true
+			}
+			depth--
+		case token.Semicolon:
+			if depth == 0 {
+				p.nextToken()
+				return true
+			}
+		}
+		p.nextToken()
+	}
+	return false
 }
 
 // parseStatement 根据当前 Token 分发语句解析。
@@ -925,6 +1020,11 @@ func (p *Parser) parseBlockStatement() (*ast.BlockStatement, error) {
 	p.nextToken()
 	for p.curToken.Type != token.RBrace {
 		if p.curToken.Type == token.EOF {
+			if p.recovering {
+				// 容错模式：未闭合的代码块保留已经解析的语句。
+				block.Range = ast.Span{Start: open.Start, End: p.curToken.End}
+				return block, nil
+			}
 			cause := fmt.Errorf("expected '}' to close block at %d:%d", open.Start.Line, open.Start.Column)
 			return nil, diagnostic.NewError("E0101", "缺少 '}'", diagnostic.FromPositions(p.curToken.Start, p.curToken.End)).
 				WithLabel(diagnostic.FromPositions(open.Start, open.End), "代码块从这里开始").WithHelp("请添加 '}' 关闭代码块").WithCause(cause)
@@ -932,7 +1032,15 @@ func (p *Parser) parseBlockStatement() (*ast.BlockStatement, error) {
 
 		stmt, err := p.parseStatement()
 		if err != nil {
-			return nil, err
+			if !p.recovering {
+				return nil, err
+			}
+			p.errors = append(p.errors, err)
+			if !p.skipToStatementEnd() {
+				block.Range = ast.Span{Start: open.Start, End: p.curToken.End}
+				return block, nil
+			}
+			continue
 		}
 		block.Statements = append(block.Statements, stmt)
 		p.nextToken()

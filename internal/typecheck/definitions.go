@@ -191,6 +191,20 @@ func (c *Checker) typeParameters(name string) ([]string, bool) {
 	return nil, false
 }
 
+// StructDefinitionOf 查询已登记的结构体定义。
+// 返回值是只读快照，供 LSP 语义索引使用。
+func (c *Checker) StructDefinitionOf(name string) (StructDefinition, bool) {
+	definition, ok := c.structs[name]
+	return definition, ok
+}
+
+// EnumDefinitionOf 查询已登记的枚举定义。
+// 返回值是只读快照，供 LSP 语义索引使用。
+func (c *Checker) EnumDefinitionOf(name string) (EnumDefinition, bool) {
+	definition, ok := c.enums[name]
+	return definition, ok
+}
+
 func (c *Checker) registerTypeDeclarations(program *ast.Program) error {
 	for _, statement := range program.Statements {
 		switch declaration := statement.(type) {

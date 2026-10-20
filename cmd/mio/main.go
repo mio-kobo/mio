@@ -15,6 +15,7 @@ import (
 	"Mio/internal/constant"
 	"Mio/internal/diagnostic"
 	"Mio/internal/lexer"
+	"Mio/internal/lsp"
 	"Mio/internal/mochi"
 	"Mio/internal/resolver"
 	"Mio/internal/stdlib"
@@ -58,6 +59,9 @@ func runCLI(
 	}
 
 	switch args[0] {
+	case "lsp":
+		return runLSP(args[1:], os.Stdin, stdout, stderr)
+
 	case "test":
 		return runTestCommand(args[1:], stdout, stderr)
 
@@ -469,6 +473,31 @@ func printValue(out io.Writer, v value.Value) error {
 	return value.WriteLine(out, v)
 }
 
+// runLSP 启动 MioCore 内置语言服务器；stdout 只用于 JSON-RPC 帧
+func runLSP(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+	for _, arg := range args {
+		switch arg {
+		case "--stdio":
+		case "help", "-h", "--help":
+			fmt.Fprintln(stdout, "Usage: mio lsp [--stdio]")
+			return 0
+		default:
+			fmt.Fprintf(stderr, "mio lsp: unknown argument %q\n", arg)
+			fmt.Fprintln(stderr, "Usage: mio lsp [--stdio]")
+			return 2
+		}
+	}
+
+	if err := lsp.Serve(stdin, stdout, stderr, lsp.Options{Version: version}); err != nil {
+		if errors.Is(err, lsp.ErrExitWithoutShutdown) {
+			return 1
+		}
+		fmt.Fprintln(stderr, "mio lsp:", err)
+		return 1
+	}
+	return 0
+}
+
 // printUsage 显示命令行用法
 func printUsage(out io.Writer) {
 	fmt.Fprintf(out, "Mio %s\n", version)
@@ -480,6 +509,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  mio build [-o <file.mochi>] <file.mio>")
 	fmt.Fprintln(out, "  mio exec <file.mochi>")
 	fmt.Fprintln(out, "  mio disasm <file.mochi>")
+	fmt.Fprintln(out, "  mio lsp [--stdio]")
 	fmt.Fprintln(out, "  mio version")
 	fmt.Fprintln(out, "  mio help")
 }

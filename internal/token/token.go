@@ -1,5 +1,7 @@
 package token
 
+import "sort"
+
 type Type string
 
 const ( // 定义特殊 Token
@@ -171,4 +173,30 @@ func LookupIdent(
 
 	return Ident
 
+}
+
+// Keywords 返回该语言版本可用的全部关键字，按字典序排序。
+// 它供编辑器补全使用，不改变 LookupIdent 的行为。
+func Keywords(version LanguageVersion) []string {
+	tables := []map[string]Type{keywordsV01}
+	if version >= V02 {
+		tables = append(tables, keywordsV02)
+	}
+	if version >= V03 {
+		tables = append(tables, keywordsV03)
+	}
+	if version >= V04 {
+		tables = append(tables, keywordsV04)
+	}
+	if version >= V05 {
+		tables = append(tables, keywordsV05)
+	}
+	keywords := make([]string, 0, len(tables)*4)
+	for _, table := range tables {
+		for literal := range table {
+			keywords = append(keywords, literal)
+		}
+	}
+	sort.Strings(keywords)
+	return keywords
 }

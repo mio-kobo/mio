@@ -20,6 +20,29 @@ type Program struct {
 	PackagesCompiled int
 	SourcesParsed    int
 	Tests            []TestFunction
+	// StatementSources 记录每个合并后顶层语句的来源文件（绝对路径）。
+	// 合成语句（例如 MMA 原生函数声明）没有源文件，因此不出现在映射中。
+	StatementSources map[ast.Statement]string
+	// Files 列出参与本次合并的源文件，按首次加载顺序去重。
+	Files []string
+	// Imports 保序列出根源码文件的显式包导入（别名 → 公开导入路径）。
+	Imports []Import
+}
+
+// Import 表示根源码文件中的一条 yobu 导入。
+type Import struct {
+	Alias string
+	Path  string
+}
+
+// SourceOf 返回合并后顶层语句的来源文件。
+// 第二个返回值为 false 表示该语句由工具链合成，或程序来自旧版加载路径。
+func (p *Program) SourceOf(statement ast.Statement) (string, bool) {
+	if p == nil || p.StatementSources == nil {
+		return "", false
+	}
+	path, ok := p.StatementSources[statement]
+	return path, ok
 }
 
 // TestFunction 保存测试声明及其源码位置
@@ -37,6 +60,10 @@ type packageUnit struct {
 	declared   map[string]string
 	exported   map[string]string
 	statements []ast.Statement
+	// files 与 program.Statements 对齐，记录每个语句的源文件。
+	files []string
+	// statementFiles 与 statements 对齐（已跳过 yobu 导入语句）。
+	statementFiles []string
 }
 
 type programLoader struct {
@@ -57,29 +84,39 @@ func LoadProgram(inputPath, bunkoRoot string) (*Program, error) {
 
 // LoadProgramWithRegistry 读取程序并解析显式注册的原生模块
 func LoadProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
-	root, err := parseInput(inputPath)
+	return LoadProgramWithOverlay(inputPath, bunkoRoot, registry, Overlay{})
+}
+
+// LoadProgramWithOverlay 读取程序，并用内存覆盖层替换文件内容。
+// 覆盖层通常来自编辑器中尚未保存的缓冲区。
+func LoadProgramWithOverlay(inputPath, bunkoRoot string, registry *mma.ModuleRegistry, overlay Overlay) (*Program, error) {
+	root, rootFiles, err := parseInputWithOverlay(inputPath, overlay)
 	if err != nil {
 		return nil, err
 	}
-	return loadRootProgram(root, nil, "", bunkoRoot, registry)
+	return loadRootProgramWithOverlay(root, rootFiles, nil, "", bunkoRoot, registry, overlay)
 }
 
 // LoadTestProgramWithRegistry 读取同包普通源码与测试源码
 func LoadTestProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
-	root, tests, err := parseTestInput(inputPath)
+	root, rootFiles, tests, err := parseTestInput(inputPath)
 	if err != nil {
 		return nil, err
 	}
 	rootPath := packageImportPath(inputPath, bunkoRoot)
-	return loadRootProgram(root, tests, rootPath, bunkoRoot, registry)
+	return loadRootProgramWithOverlay(root, rootFiles, tests, rootPath, bunkoRoot, registry, Overlay{})
 }
 
 func loadRootProgram(root *ast.Program, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
+	return loadRootProgramWithOverlay(root, nil, tests, rootPath, bunkoRoot, registry, Overlay{})
+}
+
+func loadRootProgramWithOverlay(root *ast.Program, rootFiles []string, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry, overlay Overlay) (*Program, error) {
 	state := &programLoader{
-		loader: New(bunkoRoot), registry: registry, visiting: make(map[string]bool),
+		loader: NewWithOverlay(bunkoRoot, overlay), registry: registry, visiting: make(map[string]bool),
 		loaded: make(map[string]*packageUnit), nativeLoaded: make(map[string]bool),
 	}
-	rootUnit := &packageUnit{path: rootPath, program: root, imports: make(map[string]string), declared: declarations(root, rootPath)}
+	rootUnit := &packageUnit{path: rootPath, program: root, imports: make(map[string]string), declared: declarations(root, rootPath), files: rootFiles}
 	rootUnit.exported = exports(root, rootPath)
 	for _, statement := range root.Statements {
 		if imported, ok := statement.(*ast.ImportStatement); ok {
@@ -102,7 +139,70 @@ func loadRootProgram(root *ast.Program, tests []TestFunction, rootPath, bunkoRoo
 	}
 	statements = append(statements, rootUnit.statements...)
 	merged := &ast.Program{Statements: statements, Range: root.Range}
-	return &Program{AST: merged, PackagesCompiled: len(state.ordered), SourcesParsed: state.sources, Tests: tests}, nil
+	return &Program{
+		AST:              merged,
+		PackagesCompiled: len(state.ordered),
+		SourcesParsed:    state.sources,
+		Tests:            tests,
+		StatementSources: mergedStatementSources(state.ordered, rootUnit),
+		Files:            mergedFiles(state.ordered, rootUnit),
+		Imports:          rootImports(rootUnit),
+	}, nil
+}
+
+// mergedStatementSources 建立合并后语句到源文件的映射。
+func mergedStatementSources(units []*packageUnit, root *packageUnit) map[ast.Statement]string {
+	sources := make(map[ast.Statement]string)
+	record := func(unit *packageUnit) {
+		for index, statement := range unit.statements {
+			if index < len(unit.statementFiles) && unit.statementFiles[index] != "" {
+				sources[statement] = unit.statementFiles[index]
+			}
+		}
+	}
+	for _, unit := range units {
+		record(unit)
+	}
+	record(root)
+	return sources
+}
+
+// mergedFiles 按加载顺序收集参与合并的源文件并去重。
+func mergedFiles(units []*packageUnit, root *packageUnit) []string {
+	seen := make(map[string]struct{})
+	files := make([]string, 0, len(units)+len(root.statementFiles))
+	add := func(paths []string) {
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			if _, exists := seen[path]; exists {
+				continue
+			}
+			seen[path] = struct{}{}
+			files = append(files, path)
+		}
+	}
+	for _, unit := range units {
+		add(unit.statementFiles)
+	}
+	add(root.statementFiles)
+	return files
+}
+
+// rootImports 按别名稳定排序根源码文件的导入。
+func rootImports(unit *packageUnit) []Import {
+	imports := make([]Import, 0, len(unit.imports))
+	for alias, path := range unit.imports {
+		imports = append(imports, Import{Alias: alias, Path: path})
+	}
+	sort.Slice(imports, func(left, right int) bool {
+		if imports[left].Alias == imports[right].Alias {
+			return imports[left].Path < imports[right].Path
+		}
+		return imports[left].Alias < imports[right].Alias
+	})
+	return imports
 }
 
 func packageImportPath(inputPath, bunkoRoot string) string {
@@ -156,16 +256,22 @@ func nativeTypeRef(kind mma.Type) *ast.TypeRef {
 	return &ast.TypeRef{Name: string(kind)}
 }
 
-func parseInput(inputPath string) (*ast.Program, error) {
+func parseInputWithOverlay(inputPath string, overlay Overlay) (*ast.Program, []string, error) {
 	info, err := os.Stat(inputPath)
 	if err != nil {
-		return nil, fmt.Errorf("read %q: %w", inputPath, err)
+		if !overlay.Has(inputPath) {
+			return nil, nil, fmt.Errorf("read %q: %w", inputPath, err)
+		}
+		if isTestSource(filepath.Base(inputPath)) {
+			return nil, nil, fmt.Errorf("test source %q can only be executed with 'mio test'", inputPath)
+		}
+		return parsePathsWithOverlay([]string{inputPath}, overlay)
 	}
 	var paths []string
 	if info.IsDir() {
 		entries, err := os.ReadDir(inputPath)
 		if err != nil {
-			return nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
+			return nil, nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
 		}
 		for _, entry := range entries {
 			if entry.Type().IsRegular() && isRegularSource(entry.Name()) {
@@ -174,28 +280,28 @@ func parseInput(inputPath string) (*ast.Program, error) {
 		}
 		sort.Strings(paths)
 		if len(paths) == 0 {
-			return nil, fmt.Errorf("source directory %q has no %s files", inputPath, sourceExtension)
+			return nil, nil, fmt.Errorf("source directory %q has no %s files", inputPath, sourceExtension)
 		}
 	} else {
 		if isTestSource(filepath.Base(inputPath)) {
-			return nil, fmt.Errorf("test source %q can only be executed with 'mio test'", inputPath)
+			return nil, nil, fmt.Errorf("test source %q can only be executed with 'mio test'", inputPath)
 		}
 		paths = []string{inputPath}
 	}
-	return parsePaths(paths)
+	return parsePathsWithOverlay(paths, overlay)
 }
 
-func parseTestInput(inputPath string) (*ast.Program, []TestFunction, error) {
+func parseTestInput(inputPath string) (*ast.Program, []string, []TestFunction, error) {
 	info, err := os.Stat(inputPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read %q: %w", inputPath, err)
+		return nil, nil, nil, fmt.Errorf("read %q: %w", inputPath, err)
 	}
 	if !info.IsDir() {
-		return nil, nil, fmt.Errorf("test target %q is not a source directory", inputPath)
+		return nil, nil, nil, fmt.Errorf("test target %q is not a source directory", inputPath)
 	}
 	entries, err := os.ReadDir(inputPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
+		return nil, nil, nil, fmt.Errorf("read source directory %q: %w", inputPath, err)
 	}
 	var names []string
 	for _, entry := range entries {
@@ -205,18 +311,20 @@ func parseTestInput(inputPath string) (*ast.Program, []TestFunction, error) {
 	}
 	sort.Strings(names)
 	combined := &ast.Program{}
+	combinedFiles := make([]string, 0)
 	var tests []TestFunction
 	for _, name := range names {
 		filePath := filepath.Join(inputPath, name)
 		content, readErr := os.ReadFile(filePath)
 		if readErr != nil {
-			return nil, nil, fmt.Errorf("read %q: %w", filePath, readErr)
+			return nil, nil, nil, fmt.Errorf("read %q: %w", filePath, readErr)
 		}
-		parsed, parseErr := parseSources([]Source{{Name: name, Path: filePath, Content: content}})
+		parsed, files, parseErr := parseSources([]Source{{Name: name, Path: filePath, Content: content}})
 		if parseErr != nil {
-			return nil, nil, fmt.Errorf("%s: %w", filePath, parseErr)
+			return nil, nil, nil, fmt.Errorf("%s: %w", filePath, parseErr)
 		}
 		combined.Statements = append(combined.Statements, parsed.Statements...)
+		combinedFiles = append(combinedFiles, files...)
 		if len(combined.Statements) == len(parsed.Statements) {
 			combined.Range.Start = parsed.Range.Start
 		}
@@ -232,42 +340,52 @@ func parseTestInput(inputPath string) (*ast.Program, []TestFunction, error) {
 			}
 		}
 	}
-	return combined, tests, nil
+	return combined, combinedFiles, tests, nil
 }
 
-func parsePaths(paths []string) (*ast.Program, error) {
+func parsePathsWithOverlay(paths []string, overlay Overlay) (*ast.Program, []string, error) {
 	sources := make([]Source, 0, len(paths))
 	for _, sourcePath := range paths {
-		content, err := os.ReadFile(sourcePath)
-		if err != nil {
-			return nil, fmt.Errorf("read %q: %w", sourcePath, err)
+		content, ok := overlay.readFile(sourcePath)
+		if !ok {
+			var err error
+			content, err = os.ReadFile(sourcePath)
+			if err != nil {
+				return nil, nil, fmt.Errorf("read %q: %w", sourcePath, err)
+			}
 		}
 		sources = append(sources, Source{Name: filepath.Base(sourcePath), Path: sourcePath, Content: content})
 	}
 	return parseSources(sources)
 }
 
-func parseSources(sources []Source) (*ast.Program, error) {
+// parseSources 解析一组源文件并返回合并后的程序；
+// 第二个返回值与注释后的语句一一对应，记录每条语句的来源文件。
+func parseSources(sources []Source) (*ast.Program, []string, error) {
 	combined := &ast.Program{}
+	files := make([]string, 0)
 	for _, source := range sources {
 		lex, err := lexer.NewChecked(string(source.Content), token.V05)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		program, err := parser.New(lex).ParseProgram()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := lex.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		combined.Statements = append(combined.Statements, program.Statements...)
+		for range program.Statements {
+			files = append(files, source.Path)
+		}
 		if len(combined.Statements) == len(program.Statements) {
 			combined.Range.Start = program.Range.Start
 		}
 		combined.Range.End = program.Range.End
 	}
-	return combined, nil
+	return combined, files, nil
 }
 
 func (s *programLoader) load(importPath string, chain []string) (*packageUnit, error) {
@@ -283,12 +401,12 @@ func (s *programLoader) load(importPath string, chain []string) (*packageUnit, e
 	if err != nil {
 		return nil, err
 	}
-	program, err := parseSources(loaded.Sources)
+	program, files, err := parseSources(loaded.Sources)
 	if err != nil {
 		return nil, fmt.Errorf("package %q: %w", importPath, err)
 	}
 	s.sources += len(loaded.Sources)
-	unit := &packageUnit{path: importPath, program: program, imports: make(map[string]string)}
+	unit := &packageUnit{path: importPath, program: program, imports: make(map[string]string), files: files}
 	unit.declared = declarations(program, importPath)
 	unit.exported = exports(program, importPath)
 	for _, statement := range program.Statements {
@@ -378,7 +496,7 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 		arrayInternals:  unit.path == "kiso/array",
 		stringInternals: unit.path == "kiso/string",
 	}
-	for _, statement := range unit.program.Statements {
+	for index, statement := range unit.program.Statements {
 		if _, imported := statement.(*ast.ImportStatement); imported {
 			continue
 		}
@@ -391,6 +509,13 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 			return err
 		}
 		unit.statements = append(unit.statements, statement)
+		// 保留语句与来源文件的对齐关系，LSP 需要据此把改写后的稳定名
+		// (pkg::name) 映射回真实源码位置。
+		if index < len(unit.files) {
+			unit.statementFiles = append(unit.statementFiles, unit.files[index])
+		} else {
+			unit.statementFiles = append(unit.statementFiles, "")
+		}
 	}
 	return nil
 }

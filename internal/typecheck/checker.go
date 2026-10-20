@@ -43,6 +43,11 @@ type Checker struct {
 	functionDepth       int
 	typeParameterScopes []map[string]struct{}
 	constraintScopes    []map[string]string
+
+	// lenient 为真时收集可恢复错误并继续检查后续语句。
+	// 这是 LSP 处理未完成源码所需的只读扩展，编译器仍然使用严格模式。
+	lenient bool
+	errors  []error
 }
 
 func (c *Checker) numeric(kind Kind) bool {
@@ -528,6 +533,30 @@ func (c *Checker) TypeOfIdentifier(identifier *ast.Identifier) (Kind, bool) {
 	}
 	kind, ok := c.types[symbol]
 	return kind, ok
+}
+
+// TypeOfSymbol 查询名称解析器符号的声明类型。
+// 它用于没有标识符节点的绑定（例如 match 分支绑定）。
+func (c *Checker) TypeOfSymbol(symbol resolver.Symbol) (Kind, bool) {
+	kind, ok := c.types[symbol]
+	return kind, ok
+}
+
+// Errors 返回宽松检查收集到的错误。
+func (c *Checker) Errors() []error {
+	return c.errors
+}
+
+// recoverable 记录错误并返回是否继续执行。
+func (c *Checker) recoverable(err error) bool {
+	if err == nil {
+		return true
+	}
+	if !c.lenient {
+		return false
+	}
+	c.errors = append(c.errors, err)
+	return true
 }
 
 func integerKind(name string) Kind {

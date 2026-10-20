@@ -26,6 +26,19 @@ func (c *Checker) CheckProgram(program *ast.Program) error {
 	return err
 }
 
+// CheckProgramLenient 检查程序并收集可恢复错误。
+// 与 CheckProgram 不同，单个语句或函数失败不会阻止后续检查，
+// 已经推断出的类型仍然可信；这是 LSP 处理未完成源码所需的只读扩展。
+func (c *Checker) CheckProgramLenient(program *ast.Program) []error {
+	c.lenient = true
+	c.errors = nil
+	defer func() { c.lenient = false }()
+	if _, err := c.CheckProgramIncremental(program, nil, nil); err != nil {
+		c.errors = append(c.errors, err)
+	}
+	return c.errors
+}
+
 // CheckProgramIncremental 对可复用的函数体跳过重复检查
 func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.FunctionStatement]string, cache FunctionCheckCache) (IncrementalStats, error) {
 	var stats IncrementalStats
@@ -46,7 +59,9 @@ func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.Fu
 			continue
 		}
 		if err := c.registerFunctionSignature(fn); err != nil {
-			return stats, err
+			if !c.recoverable(err) {
+				return stats, err
+			}
 		}
 	}
 
@@ -60,7 +75,9 @@ func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.Fu
 				continue
 			}
 			if err := c.checkStatement(stmt); err != nil {
-				return stats, err
+				if !c.recoverable(err) {
+					return stats, err
+				}
 			}
 			continue
 		}
@@ -75,7 +92,9 @@ func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.Fu
 		}
 		stats.Recomputed++
 		if err := c.checkFunction(fn); err != nil {
-			return stats, err
+			if !c.recoverable(err) {
+				return stats, err
+			}
 		}
 		if cache != nil && key != "" {
 			cache.StoreFunctionCheck(key)
@@ -95,14 +114,18 @@ func (c *Checker) checkStatements(statements []ast.Statement) error {
 		}
 
 		if err := c.registerFunctionSignature(fn); err != nil {
-			return err
+			if !c.recoverable(err) {
+				return err
+			}
 		}
 	}
 
 	// 第二遍：检查语句及函数体
 	for _, stmt := range statements {
 		if err := c.checkStatement(stmt); err != nil {
-			return err
+			if !c.recoverable(err) {
+				return err
+			}
 		}
 	}
 
