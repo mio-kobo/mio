@@ -29,6 +29,11 @@ kotlin {
 }
 
 intellijPlatform {
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+        channels = listOf("default")
+    }
+
     pluginConfiguration {
         id = "com.exmikupro.mio"
         name = "Mio Language Support"
@@ -63,6 +68,16 @@ intellijPlatform {
 }
 
 tasks {
+    register("printReleaseVersion") {
+        val releaseVersion = project.version.toString()
+        doLast { println("MIO_RELEASE_VERSION=$releaseVersion") }
+    }
+    publishPlugin {
+        // Publish exactly the archive produced and verified by the build job.
+        providers.gradleProperty("releaseArchive").orNull?.let {
+            archiveFiles.setFrom(file(it))
+        }
+    }
     test {
         useJUnit()
     }

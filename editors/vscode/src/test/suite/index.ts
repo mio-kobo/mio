@@ -22,6 +22,7 @@ export async function run(): Promise<void> {
     ui: 'tdd',
     color: true,
     timeout: 120_000,
+    forbidPending: process.env.MIO_RELEASE_TESTS === '1',
   });
 
   for (const file of collectTestFiles(__dirname)) {
