@@ -44,7 +44,7 @@
 
 ```bash
 git clone --branch Mio-1.0.0 https://github.com/mio-kobo/mio.git
-cd Mio
+cd mio
 go build -o mio ./cmd/mio
 ./mio version
 ```
