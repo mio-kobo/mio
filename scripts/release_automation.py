@@ -118,15 +118,90 @@ def absent(tag):
         page += 1
 
 
+def object_sha(value):
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{40}', value) is not None
+
+
+def git_tree(tree_sha):
+    """Read a complete non-recursive tree; verify its Git object identity.
+
+    Contents listings have a 1,000-entry limit. Trees expose truncation, and
+    rehashing also rejects silently omitted entries or conflicting paths.
+    """
+    require(object_sha(tree_sha), 'invalid workflow tree SHA')
+    doc = api('/git/trees/' + tree_sha)
+    require(isinstance(doc, dict) and doc.get('sha') == tree_sha and
+            doc.get('truncated') is False and isinstance(doc.get('tree'), list),
+            'cannot inspect complete workflow tree: ' + tree_sha)
+    entries = {}
+    modes = {'040000': 'tree', '100644': 'blob', '100755': 'blob',
+             '120000': 'blob', '160000': 'commit'}
+    for item in doc['tree']:
+        require(isinstance(item, dict), 'invalid workflow tree entry')
+        name, mode = item.get('path'), item.get('mode')
+        require(isinstance(name, str) and name not in {'', '.', '..'} and
+                '/' not in name and '\0' not in name and name not in entries and
+                isinstance(mode, str) and mode in modes and
+                item.get('type') == modes[mode] and object_sha(item.get('sha')),
+                'invalid or duplicate workflow tree entry: ' + repr(name))
+        entries[name] = item
+    ordered = sorted(entries.values(), key=lambda item:
+                     (item['path'] + ('/' if item['type'] == 'tree' else '')).encode())
+    body = b''.join(item['mode'].lstrip('0').encode() + b' ' +
+                    item['path'].encode() + b'\0' + bytes.fromhex(item['sha'])
+                    for item in ordered)
+    actual = hashlib.sha1(b'tree ' + str(len(body)).encode() + b'\0' + body).hexdigest()
+    require(actual == tree_sha, 'incomplete or inconsistent workflow tree: ' + tree_sha)
+    return entries
+
+
+def workflow_inventory(commit):
+    require(object_sha(commit), 'release target must be a full commit SHA')
+    doc = api('/git/commits/' + commit)
+    require(isinstance(doc, dict) and doc.get('sha') == commit and
+            isinstance(doc.get('tree'), dict) and object_sha(doc['tree'].get('sha')),
+            'cannot resolve workflow commit: ' + commit)
+    tree_sha = doc['tree']['sha']
+    for directory in ['.github', 'workflows']:
+        entries = git_tree(tree_sha)
+        entry = entries.get(directory)
+        require(entry is not None and entry['type'] == 'tree',
+                f'missing workflow directory {directory} at {commit}')
+        tree_sha = entry['sha']
+    entries = git_tree(tree_sha)
+    require(entries, 'empty workflow directory at ' + commit)
+    for name, item in entries.items():
+        require(item['mode'] in {'100644', '100755'},
+                f'unsupported workflow entry .github/workflows/{name} at {commit}')
+    # Compare paths, modes and blob SHAs, never the YAML display name.
+    return {'.github/workflows/' + name: (item['mode'], item['sha'])
+            for name, item in entries.items()}
+
+
 def workflow_baseline(commit):
-    # GitHub's contents-only GITHUB_TOKEN cannot create a release whose target
-    # introduces workflow changes relative to the default branch.
+    # Equality with the default branch is the existing trust boundary; it does
+    # not prove a human review. Review/merge must be enforced by maintainers.
     repository = api('')
-    default = api('/contents/.github/workflows?ref=' + urllib.parse.quote(repository['default_branch'], safe=''))
-    target = api('/contents/.github/workflows?ref=' + urllib.parse.quote(commit, safe=''))
-    require(isinstance(default, list) and isinstance(target, list), 'cannot inspect workflow baseline')
-    require({item['name']: item['sha'] for item in default} == {item['name']: item['sha'] for item in target},
-            'merge the reviewed workflow revision into the default branch before tagging')
+    require(isinstance(repository, dict) and
+            isinstance(repository.get('default_branch'), str) and repository['default_branch'],
+            'cannot resolve default branch for workflow baseline')
+    branch = repository['default_branch']
+    ref = api('/git/ref/heads/' + urllib.parse.quote(branch, safe=''))
+    require(isinstance(ref, dict) and ref.get('ref') == 'refs/heads/' + branch and
+            isinstance(ref.get('object'), dict) and ref['object'].get('type') == 'commit' and
+            object_sha(ref['object'].get('sha')), 'cannot resolve default branch HEAD: ' + branch)
+    default_commit = ref['object']['sha']
+    context = f'default_branch={branch} default_commit={default_commit} target_commit={commit}'
+    default = workflow_inventory(default_commit)
+    target = workflow_inventory(commit)
+    differences = []
+    for path in sorted(default.keys() | target.keys()):
+        left, right = default.get(path), target.get(path)
+        if left != right:
+            differences.append(f'{path}: default={left or "MISSING"} target={right or "MISSING"}')
+    require(not differences, 'workflow baseline mismatch; merge the reviewed workflow revision '
+            'into the default branch before tagging\n' + context + '\n' + '\n'.join(differences))
+    print('workflow baseline verified: ' + context)
 
 
 def remote_commit(tag, commit):
@@ -135,7 +210,8 @@ def remote_commit(tag, commit):
     obj = value['object']
     for _ in range(8):
         if obj['type'] == 'commit':
-            require(obj['sha'] == commit, 'remote tag moved or commit differs')
+            require(obj['sha'] == commit,
+                    f'remote tag moved or commit differs: tag={tag} expected={commit} actual={obj["sha"]}')
             return
         require(obj['type'] == 'tag', 'tag must resolve to a commit')
         obj = api('/git/tags/' + obj['sha'])['object']
@@ -198,7 +274,9 @@ def main():
         workflow_policy()
         if os.environ.get('GITHUB_EVENT_NAME') == 'push':
             require(os.environ['GITHUB_REF'] == 'refs/tags/' + args.tag, 'not the triggering tag')
-            require(git('rev-parse', args.tag + '^{commit}') == commit, 'tag differs from checkout')
+            tag_commit = git('rev-parse', 'refs/tags/' + args.tag + '^{commit}')
+            require(tag_commit == commit,
+                    f'tag differs from checkout: tag={args.tag} expected={commit} actual={tag_commit}')
             remote_commit(args.tag, commit)
             workflow_baseline(commit)
             absent(args.tag)

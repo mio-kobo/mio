@@ -1,6 +1,7 @@
 """Regression tests for release boundaries, using fake transport only."""
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -42,6 +43,19 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'CLI source'):
                 release.metadata('v2.1.0', root)
 
+    def test_repository_release_notes_are_tracked_and_not_ignored(self):
+        # Local-only notes can make metadata() pass while a CI checkout fails.
+        info = release.metadata('v' + (release.ROOT / 'VERSION').read_text().strip())
+        notes = info['notes']
+        tracked = subprocess.run(
+            ['git', 'ls-files', '--error-unmatch', '--', notes],
+            cwd=release.ROOT, capture_output=True, text=True)
+        self.assertEqual(tracked.returncode, 0, 'release notes must be tracked: ' + notes)
+        ignored = subprocess.run(
+            ['git', 'check-ignore', '--no-index', '--quiet', '--', notes],
+            cwd=release.ROOT, capture_output=True, text=True)
+        self.assertEqual(ignored.returncode, 1, 'release notes must not be ignored: ' + notes)
+
     def test_workflow_contract(self):
         release.workflow_policy()
 
@@ -50,16 +64,6 @@ class PolicyTests(unittest.TestCase):
             release.absent('v2.0.0')
         with patch.object(release, 'api', side_effect=RuntimeError('HTTP 403')), self.assertRaisesRegex(RuntimeError, '403'):
             release.absent('v2.0.0')
-
-    def test_workflow_revision_requires_default_branch_review(self):
-        for sha, passes in [('same', True), ('different', False)]:
-            with patch.object(release, 'api', side_effect=[{'default_branch': 'main'},
-                    [{'name': 'release.yml', 'sha': 'same'}], [{'name': 'release.yml', 'sha': sha}]]):
-                if passes:
-                    release.workflow_baseline('commit')
-                else:
-                    with self.assertRaisesRegex(RuntimeError, 'default branch'):
-                        release.workflow_baseline('commit')
 
     def test_existing_draft_stops_retry(self):
         with patch.object(release, 'api', side_effect=[None, [{'tag_name': 'v2.0.0', 'draft': True}]]):
@@ -183,6 +187,184 @@ class PolicyTests(unittest.TestCase):
                                  '--output', '/unused', '--version', '2.0.0;bad'], capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b'expected v2.x.y', result.stderr)
+
+
+class BaselineTests(unittest.TestCase):
+    DEFAULT = '1' * 40
+    TARGET = '2' * 40
+    BLOB = '3' * 40
+    OTHER = '4' * 40
+
+    def transport(self, default=None, target=None):
+        # Build real Git trees in an isolated repository, independently of the verifier.
+        import subprocess
+        objects = {}
+
+        def tree(entries):
+            payload = ''.join(f'{mode} {kind} {sha}\t{name}\n'
+                              for name, mode, kind, sha in entries)
+            oid = subprocess.check_output(['git', 'mktree', '--missing'],
+                                          input=payload, text=True, cwd=directory).strip()
+            objects['/git/trees/' + oid] = dict(sha=oid, truncated=False, tree=[
+                dict(path=name, mode=mode, type=kind, sha=sha)
+                for name, mode, kind, sha in entries])
+            return oid
+
+        with tempfile.TemporaryDirectory() as directory:
+            subprocess.run(['git', 'init', '--bare', '--quiet', directory], check=True)
+            for commit, files in [(self.DEFAULT, default), (self.TARGET, target)]:
+                if files is None:
+                    files = [('release.yml', '100644', 'blob', self.BLOB)]
+                workflow_tree = tree(files)
+                github_tree = tree([('workflows', '040000', 'tree', workflow_tree)])
+                root_tree = tree([('.github', '040000', 'tree', github_tree)])
+                objects['/git/commits/' + commit] = dict(sha=commit, tree={'sha': root_tree})
+        objects[''] = {'default_branch': 'release/default'}
+        objects['/git/ref/heads/release%2Fdefault'] = {
+            'ref': 'refs/heads/release/default',
+            'object': {'type': 'commit', 'sha': self.DEFAULT}}
+        objects['/git/ref/tags/v2.0.0-rc.1'] = {'object': {'type': 'commit', 'sha': self.TARGET}}
+        objects['/releases/tags/v2.0.0-rc.1'] = None
+        objects['/releases?per_page=100&page=1'] = []
+        return objects
+
+    def preflight(self, objects, local_tag=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'output'
+            (root / 'cmd/mio').mkdir(parents=True)
+            (root / 'docs/releases').mkdir(parents=True)
+            (root / 'VERSION').write_text('2.0.0\n')
+            (root / 'cmd/mio/main.go').write_text('var version = "2.0.0"\n')
+            (root / 'docs/releases/v2.0.0.md').write_text('RC fixture notes')
+            metadata = release.metadata
+            def git(*args):
+                if args == ('rev-parse', 'HEAD'):
+                    return self.TARGET
+                if args == ('rev-parse', 'refs/tags/v2.0.0-rc.1^{commit}'):
+                    return local_tag or self.TARGET
+                if args == ('status', '--porcelain', '--untracked-files=normal'):
+                    return ''
+                self.fail('unexpected git call: ' + repr(args))
+            with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'push',
+                            'GITHUB_SHA': self.TARGET, 'GITHUB_REF': 'refs/tags/v2.0.0-rc.1',
+                            'GITHUB_OUTPUT': str(output)}, clear=True), \
+                 patch('sys.argv', ['release_automation.py', 'preflight', '--tag', 'v2.0.0-rc.1']), \
+                 patch.object(release, 'git', side_effect=git), \
+                 patch.object(release, 'metadata', side_effect=lambda tag: metadata(tag, root)), \
+                 patch.object(release, 'api', side_effect=lambda path: objects[path]):
+                # Real metadata validation (fixture sources) and repository workflow policy.
+                release.main()
+            self.assertIn('version=2.0.0-rc.1', output.read_text())
+
+    def test_matching_reviewed_default_preflight(self):
+        self.preflight(self.transport())
+
+    def test_changed_unreviewed_target_rejected(self):
+        objects = self.transport(target=[('release.yml', '100644', 'blob', self.OTHER)])
+        with self.assertRaisesRegex(RuntimeError, 'workflow baseline mismatch') as caught:
+            self.preflight(objects)
+        for text in ['release/default', self.DEFAULT, self.TARGET, self.BLOB,
+                     self.OTHER, '.github/workflows/release.yml']:
+            self.assertIn(text, str(caught.exception))
+
+    def test_added_deleted_renamed_and_mode_changed(self):
+        base = [('release.yml', '100644', 'blob', self.BLOB)]
+        for files in [base + [('ci.yml', '100644', 'blob', self.OTHER)],
+                      [('ci.yml', '100644', 'blob', self.OTHER)],
+                      [('renamed.yml', '100644', 'blob', self.BLOB)],
+                      [('release.yml', '100755', 'blob', self.BLOB)]]:
+            with self.subTest(files=files), self.assertRaisesRegex(RuntimeError, 'baseline mismatch'):
+                self.preflight(self.transport(target=files))
+        with self.assertRaisesRegex(RuntimeError, '.github/workflows/ci.yml') as caught:
+            self.preflight(self.transport(
+                default=base + [('ci.yml', '100644', 'blob', self.OTHER)], target=base))
+        self.assertIn('target=MISSING', str(caught.exception))
+        # Adding/deleting/renaming after review on BOTH sides passes.
+        for files in [base, base + [('ci.yml', '100644', 'blob', self.OTHER)],
+                      [('renamed.yml', '100644', 'blob', self.BLOB)]]:
+            with self.subTest(reviewed=files):
+                self.preflight(self.transport(default=files, target=files))
+
+    def test_missing_workflow_and_directory_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'empty workflow directory'):
+            self.preflight(self.transport(target=[]))
+        objects = self.transport()
+        root = objects['/git/commits/' + self.TARGET]['tree']['sha']
+        objects['/git/trees/' + root]['tree'] = []
+        with self.assertRaisesRegex(RuntimeError, 'incomplete or inconsistent'):
+            self.preflight(objects)
+        # A genuinely absent directory in a valid (empty) root tree.
+        empty = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+        objects = self.transport()
+        objects['/git/commits/' + self.TARGET]['tree']['sha'] = empty
+        objects['/git/trees/' + empty] = dict(sha=empty, truncated=False, tree=[])
+        with self.assertRaisesRegex(RuntimeError, 'missing workflow directory'):
+            self.preflight(objects)
+
+    def test_large_complete_listing_has_no_contents_api_limit(self):
+        files = [(f'workflow-{i}.yml', '100644', 'blob', self.BLOB) for i in range(1001)]
+        self.preflight(self.transport(default=files, target=files))
+        with self.assertRaisesRegex(RuntimeError, 'baseline mismatch'):
+            self.preflight(self.transport(default=files, target=files[:-1]))
+
+    def test_symlink_workflow_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'unsupported workflow entry'):
+            self.preflight(self.transport(target=[('release.yml', '120000', 'blob', self.BLOB)]))
+
+    def test_wrong_local_and_remote_tag_diagnosed(self):
+        objects = self.transport()
+        with self.assertRaisesRegex(RuntimeError, 'tag differs from checkout') as caught:
+            self.preflight(objects, local_tag=self.OTHER)
+        self.assertIn(self.TARGET, str(caught.exception))
+        self.assertIn(self.OTHER, str(caught.exception))
+        objects['/git/ref/tags/v2.0.0-rc.1']['object']['sha'] = self.OTHER
+        with self.assertRaisesRegex(RuntimeError, 'remote tag moved') as caught:
+            self.preflight(objects)
+        self.assertIn('v2.0.0-rc.1', str(caught.exception))
+        self.assertIn(self.OTHER, str(caught.exception))
+
+    def test_api_errors_missing_fields_wrong_refs_fail_closed(self):
+        for path, value in [('', None), ('', {}),
+                            ('/git/ref/heads/release%2Fdefault', None),
+                            ('/git/ref/heads/release%2Fdefault', {'ref': 'refs/heads/wrong'}),
+                            ('/git/commits/' + self.TARGET, {}),
+                            ('/git/commits/' + self.TARGET, {'sha': self.OTHER})]:
+            with self.subTest(path=path, value=value):
+                objects = self.transport()
+                objects[path] = value
+                with self.assertRaises(RuntimeError):
+                    self.preflight(objects)
+        for error in [RuntimeError('HTTP 403'), TimeoutError('network unavailable')]:
+            with patch.object(release, 'api', side_effect=error), self.assertRaises(type(error)):
+                release.workflow_baseline(self.TARGET)
+
+    def test_malformed_truncated_incomplete_duplicate_trees_rejected(self):
+        import copy
+        template = self.transport()
+        tree_path = next(path for path, doc in template.items()
+                         if path.startswith('/git/trees/') and doc['tree'][0]['path'] == 'release.yml')
+        good = template[tree_path]
+        bad_documents = [None, [], {}, {**good, 'truncated': True},
+                         {**good, 'truncated': None}, {**good, 'tree': []},
+                         {**good, 'tree': [*good['tree'], *good['tree']]},
+                         {**good, 'tree': [{}]}, {**good, 'sha': self.OTHER}]
+        for field, value in [('path', '../release.yml'), ('sha', None),
+                             ('sha', 'bad'), ('type', 'tree'), ('mode', 'invalid')]:
+            item = {**good['tree'][0], field: value}
+            bad_documents.append({**good, 'tree': [item]})
+        for doc in bad_documents:
+            objects = copy.deepcopy(template)
+            objects[tree_path] = doc
+            with self.subTest(doc=doc), self.assertRaises(RuntimeError):
+                self.preflight(objects)
+
+    def test_same_yaml_display_name_is_not_a_path_collision(self):
+        # Blob identities do not depend on workflow `name:`; two files may share it.
+        files = [('one.yml', '100644', 'blob', self.BLOB),
+                 ('two.yml', '100644', 'blob', self.BLOB)]
+        self.preflight(self.transport(default=files, target=list(reversed(files))))
+
 
 
 if __name__ == '__main__':
