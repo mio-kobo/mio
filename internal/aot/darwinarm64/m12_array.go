@@ -173,6 +173,8 @@ func appendM12ArrayReserve(b *m8Assembler) {
 	b.b("m12.reserve.copy_byte")
 	b.label("m12.reserve.commit")
 	b.emit(ldrX(9, 31, 2), ldrX(10, 31, 8), ldrX(11, 31, 7), strX(10, 9, 5), strX(11, 9, 2))
+	b.emit(ldrX(12, 31, 1))
+	b.emit(m19bRememberWords(9, 12)...)
 	b.label("m12.reserve.success")
 	b.emit(movzX(0, 1), movzX(1, 0))
 	b.b("m12.reserve.done")
@@ -199,6 +201,8 @@ func appendM12ArrayPush(b *m8Assembler) {
 	b.label("m12.push.byte")
 	b.emit(addX(11, 11, 10), m8StrB(13, 11))
 	b.label("m12.push.commit")
+	b.emit(ldrX(11, 9, 5), ldrX(12, 31, 1))
+	b.emit(m19bRememberWords(11, 12)...)
 	b.emit(addImmX(10, 10, 1), strX(10, 9, 1), movzX(0, 1), movzX(1, 0))
 	b.label("m12.push.done")
 	b.emit(ldrX(30, 31, 0), addImmX(31, 31, 64), m8Ret())
@@ -321,6 +325,8 @@ func appendM12ArrayAppendAll(b *m8Assembler) {
 	b.b("m12.append_all.copy_byte_loop")
 	b.label("m12.append_all.commit")
 	b.emit(ldrX(9, 31, 2), ldrX(10, 31, 7), ldrX(11, 31, 6), addX(10, 10, 11), strX(10, 9, 1))
+	b.emit(ldrX(11, 9, 5), ldrX(12, 31, 1))
+	b.emit(m19bRememberWords(11, 12)...)
 	b.label("m12.append_all.success")
 	b.emit(movzX(0, 1), movzX(1, 0))
 	b.b("m12.append_all.done")
@@ -470,7 +476,7 @@ func M12ArrayGCRuntimeWords(stress bool) ([]uint32, M12RuntimeEntries, error) {
 		return nil, M12RuntimeEntries{}, err
 	}
 	return words, M12RuntimeEntries{
-		M8RuntimeEntries: M8RuntimeEntries{Init: b.labels[m8InitLabel], Alloc: b.labels[m11AutoAllocEntry], Destroy: b.labels[m8DestroyLabel]},
+		M8RuntimeEntries: M8RuntimeEntries{Init: b.labels["m19c.init"], Alloc: b.labels[m11AutoAllocEntry], Destroy: b.labels["m19c.destroy"]},
 		Telemetry:        b.labels[m8TelemetryEntry],
 		ArrayMake:        b.labels[m12ArrayMakeLabel], ArrayWithCapacity: b.labels[m12ArrayWithCapacityLabel],
 		ArrayPush: b.labels[m12ArrayPushLabel], ArrayReserve: b.labels[m12ArrayReserveLabel],

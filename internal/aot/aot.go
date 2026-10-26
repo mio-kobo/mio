@@ -19,6 +19,8 @@ type DarwinARM64Options struct {
 	HeapCapacity uint64
 	GCTelemetry  bool
 	GCStress     bool
+	AdaptiveHeap bool   // internal opt-in; CLI semantics unchanged
+	HeapHardCap  uint64 // optional managed page-charge ceiling, including metadata
 }
 
 // CompileDarwinARM64 为 Mochi 生成 macOS ARM64 可执行文件。
@@ -35,9 +37,24 @@ func CompileDarwinARM64WithOptions(program *compiler.Bytecode, options DarwinARM
 	}
 	if options.HeapCapacity == 0 {
 		options.HeapCapacity = darwinarm64.M8DefaultHeapCapacity
+		if options.AdaptiveHeap {
+			options.HeapCapacity = darwinarm64.M8MaxHeapCapacity
+		}
 	}
 	if options.HeapCapacity > darwinarm64.M8MaxHeapCapacity {
 		return nil, fmt.Errorf("AOT heap capacity %d exceeds hard limit %d", options.HeapCapacity, darwinarm64.M8MaxHeapCapacity)
+	}
+	if options.HeapHardCap != 0 {
+		if options.HeapHardCap < (1<<16)+(3<<14) {
+			return nil, fmt.Errorf("AOT managed hard cap %d is too small", options.HeapHardCap)
+		}
+		objectLimit := ((options.HeapHardCap - (1 << 16)) / 3) &^ uint64((1<<14)-1)
+		if options.HeapCapacity > objectLimit {
+			options.HeapCapacity = objectLimit
+		}
+	}
+	if options.AdaptiveHeap {
+		options.HeapCapacity |= darwinarm64.M19cAdaptiveHeapFlag
 	}
 	if needsM6(program) {
 		return compileM6WithOptions(program, false, options.GCStress, options.HeapCapacity, options.GCTelemetry)

@@ -1,0 +1,43 @@
+// Internal policy adapters. The policy block starts at byte 2600, matching Go.
+// Committed is a conservative managed working-page charge, not physical RSS.
+// It includes both arena and sparse side-metadata prefix high-water extents,
+// fixed mapping/page overhead, and the exact rounded lengths of LOS mappings.
+teisu memory_Goal = 2600;
+teisu memory_Limit = 2608;
+teisu memory_Committed = 2616;
+teisu memory_Reserved = 2624;
+teisu memory_Rate = 2632;
+teisu memory_Level = 2640;
+teisu memory_Reason = 2648;
+teisu memory_Sequence = 2656;
+teisu memory_GCActive = 2664;
+teisu memory_ObjectLimit = 2712;
+teisu memory_LOSCommitted = 2720;
+teisu memory_HighWater = 2784;
+waza emit_memory_adapters(code: arm64.Assembler) -> unit {
+ emit_memory_policy(code);
+ arm64.assembler_label(code,"memory_sample");
+ emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8));
+ emit(code,arm64.ldr_x(9,23,0)); emit(code,arm64.add_imm_x(10,23,3072,iie)); emit(code,arm64.sub_x(9,9,10));
+ emit(code,arm64.ldr_x(11,23,memory_HighWater)); emit(code,arm64.cmp_x(9,11)); arm64.assembler_b_cond(code,2,"memory_highwater_store"); move_x(code,9,11);
+ arm64.assembler_label(code,"memory_highwater_store"); emit(code,arm64.str_x(9,23,memory_HighWater));
+ emit(code,arm64.movz_x(10,16383,0)); emit(code,arm64.add_x(9,9,10)); emit(code,arm64.movn_x(10,16383,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.add_x(9,9,9)); move_bits(code,10,uint32(0),uint32(65536)); emit(code,arm64.add_x(9,9,10));
+ emit(code,arm64.ldr_x(11,23,memory_LOSCommitted)); emit(code,arm64.add_x(9,9,11)); emit(code,arm64.str_x(9,23,memory_Committed));
+ emit(code,arm64.ldr_x(3,23,8)); emit(code,arm64.add_imm_x(9,23,3072,iie)); emit(code,arm64.sub_x(3,3,9));
+ emit(code,arm64.add_x(9,3,3)); emit(code,arm64.add_imm_x(9,9,3072,iie)); emit(code,arm64.add_x(9,9,11)); emit(code,arm64.str_x(9,23,memory_Reserved));
+ emit(code,arm64.ldr_x(9,23,memory_Reserved)); emit(code,arm64.movz_x(10,16383,0)); emit(code,arm64.add_x(9,9,10)); emit(code,arm64.movn_x(10,16383,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.str_x(9,23,memory_Reserved)); emit(code,arm64.ldr_x(10,23,memory_Committed)); emit(code,arm64.cmp_x(10,9)); arm64.assembler_b_cond(code,9,"memory_charge_bounded"); emit(code,arm64.str_x(9,23,memory_Committed));
+ arm64.assembler_label(code,"memory_charge_bounded");
+ move_x(code,0,23); emit(code,arm64.ldr_x(1,23,304)); emit(code,arm64.ldr_x(2,23,296)); observation_word(code,3577470980); emit(code,arm64.ldr_x(5,23,872)); emit(code,arm64.ldr_x(6,23,2800));
+ arm64.assembler_bl(code,"memory.update");
+ emit(code,arm64.ldr_x(9,23,memory_Goal)); arm64.assembler_cbnz_x(code,9,"memory_sample_done");
+ move_x(code,0,23); emit(code,arm64.movz_x(1,0,0)); emit(code,arm64.movz_x(2,0,0)); arm64.assembler_bl(code,"memory.goal");
+ arm64.assembler_label(code,"memory_sample_done"); emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
+ arm64.assembler_label(code,"memory_grow"); // payload request in x0
+ emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8));
+ emit(code,arm64.add_imm_x(2,0,31,iie)); emit(code,arm64.movn_x(9,15,0)); emit(code,arm64.and_x(2,2,9)); emit(code,arm64.ldr_x(1,23,304)); move_x(code,0,23); arm64.assembler_bl(code,"memory.goal");
+ emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
+ arm64.assembler_label(code,"memory_aftergc");
+ emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8)); emit(code,arm64.str_x(31,23,memory_GCActive)); arm64.assembler_bl(code,"memory_sample");
+ move_x(code,0,23); emit(code,arm64.ldr_x(1,23,304)); emit(code,arm64.movz_x(2,0,0)); arm64.assembler_bl(code,"memory.goal");
+ emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
+}

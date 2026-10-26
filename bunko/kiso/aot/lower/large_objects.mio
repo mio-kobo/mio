@@ -1,0 +1,64 @@
+yobu "kiso/aot/arm64";
+
+// Independent page-rounded mappings. Prefix: next, mapping bytes, young link,
+// remembered link; unchanged object header at +32 and payload at +48.
+teisu los_Head = 2560;
+teisu los_Bytes = 2568;
+teisu los_Reclaimed = 2576;
+teisu los_Count = 2584;
+teisu los_Threshold = 2592;
+
+waza emit_los_side(code: arm64.Assembler, dst: int64, header: int64, scratch: int64) -> unit {
+ kaku outside = block_label("los_side_", len(code.words));
+ kaku done = string.concat(outside, "_done");
+ emit(code,arm64.add_imm_x(dst,23,3072,iie)); emit(code,arm64.cmp_x(header,dst)); arm64.assembler_b_cond(code,3,outside);
+ emit(code,arm64.ldr_x(scratch,23,8)); emit(code,arm64.cmp_x(header,scratch)); arm64.assembler_b_cond(code,2,outside);
+ emit(code,arm64.sub_x(dst,header,dst)); emit(code,arm64.add_x(dst,dst,scratch)); arm64.assembler_b(code,done);
+ arm64.assembler_label(code,outside); emit(code,arm64.sub_imm_x(dst,header,16,iie)); emit(code,arm64.ldr_x(scratch,23,8));
+ arm64.assembler_label(code,done);
+}
+
+waza emit_los_runtime(code: arm64.Assembler) -> unit {
+ // x19 payload bytes, x20 packed type, x22 physical span; no managed safepoint.
+ arm64.assembler_label(code,"los_alloc");
+ emit(code,arm64.sub_imm_x(31,31,16,iie));
+ emit(code,arm64.add_imm_x(1,22,32,iie)); emit(code,arm64.movz_x(10,16383,0)); emit(code,arm64.add_x(1,1,10)); emit(code,arm64.movn_x(10,16383,0)); emit(code,arm64.and_x(1,1,10)); emit(code,arm64.str_x(1,31,0));
+ emit(code,arm64.ldr_x(9,23,memory_Committed)); emit(code,arm64.add_x(9,9,1)); emit(code,arm64.ldr_x(10,23,memory_Limit)); emit(code,arm64.cmp_x(9,10)); arm64.assembler_b_cond(code,8,"los_alloc_fail");
+ emit(code,arm64.movz_x(0,0,0)); emit(code,arm64.movz_x(2,3,0)); emit(code,arm64.movz_x(3,4098,0)); emit(code,arm64.movn_x(4,0,0)); emit(code,arm64.movz_x(5,0,0)); emit(code,arm64.movz_x(16,197,0)); emit(code,arm64.svc(128));
+ arm64.assembler_b_cond(code,2,"los_alloc_fail");
+ emit(code,arm64.ldr_x(9,23,los_Head)); emit(code,arm64.str_x(9,0,0)); emit(code,arm64.str_x(0,23,los_Head)); emit(code,arm64.ldr_x(9,31,0)); emit(code,arm64.str_x(9,0,8)); emit(code,arm64.ldr_x(10,23,memory_LOSCommitted)); emit(code,arm64.add_x(10,10,9)); emit(code,arm64.str_x(10,23,memory_LOSCommitted)); emit(code,arm64.str_x(20,0,32)); emit(code,arm64.str_x(19,0,40));
+ emit(code,arm64.ldr_x(9,23,los_Bytes)); emit(code,arm64.add_x(9,9,22)); emit(code,arm64.str_x(9,23,los_Bytes));
+ emit(code,arm64.ldr_x(9,23,los_Count)); emit(code,arm64.add_imm_x(9,9,1,iie)); emit(code,arm64.str_x(9,23,los_Count));
+ emit(code,arm64.add_imm_x(0,0,48,iie)); arm64.assembler_b(code,"los_alloc_return");
+ arm64.assembler_label(code,"los_alloc_fail"); emit(code,arm64.movz_x(0,0,0));
+ arm64.assembler_label(code,"los_alloc_return"); emit(code,arm64.add_imm_x(31,31,16,iie)); emit(code,arm64.ret());
+
+ // Dead nodes are unlinked before synchronous munmap; failed releases retain
+ // ownership. Called only after generational links have been reconstructed.
+ arm64.assembler_label(code,"los_prune");
+ emit(code,arm64.stp_pre_x(19,20,31,-16)); emit(code,arm64.stp_pre_x(21,22,31,-16));
+ emit(code,arm64.add_imm_x(19,23,los_Head,iie)); emit(code,arm64.movz_x(22,0,0));
+ arm64.assembler_label(code,"los_prune_loop"); emit(code,arm64.ldr_x(20,19,0)); arm64.assembler_cbz_x(code,20,"los_prune_done");
+ emit(code,arm64.ldr_x(9,20,32)); arm64.assembler_cbz_x(code,9,"los_prune_dead"); move_x(code,19,20); arm64.assembler_b(code,"los_prune_loop");
+ arm64.assembler_label(code,"los_prune_dead"); emit(code,arm64.cmp_imm_x(22,8,iie)); arm64.assembler_b_cond(code,2,"los_prune_done"); emit(code,arm64.add_imm_x(22,22,1,iie)); emit(code,arm64.ldr_x(9,20,0)); emit(code,arm64.str_x(9,19,0)); emit(code,arm64.ldr_x(1,20,8)); move_x(code,21,1); move_x(code,0,20); emit(code,arm64.movz_x(16,73,0)); emit(code,arm64.svc(128)); arm64.assembler_b_cond(code,2,"los_prune_failed"); emit(code,arm64.ldr_x(9,23,memory_LOSCommitted)); emit(code,arm64.sub_x(9,9,21)); emit(code,arm64.str_x(9,23,memory_LOSCommitted)); arm64.assembler_b(code,"los_prune_loop");
+ arm64.assembler_label(code,"los_prune_failed");
+ emit(code,arm64.ldr_x(9,19,0)); emit(code,arm64.str_x(9,20,0)); emit(code,arm64.str_x(20,19,0)); move_x(code,19,20); arm64.assembler_b(code,"los_prune_loop");
+ arm64.assembler_label(code,"los_prune_done"); emit(code,arm64.ldp_post_x(21,22,31,16)); emit(code,arm64.ldp_post_x(19,20,31,16)); emit(code,arm64.ret());
+
+ // Major sweep; returns live physical bytes in x0 for occupied accounting.
+ arm64.assembler_label(code,"los_major");
+ emit(code,arm64.movz_x(0,0,0)); emit(code,arm64.ldr_x(12,23,los_Head));
+ arm64.assembler_label(code,"los_major_loop"); arm64.assembler_cbz_x(code,12,"los_major_done");
+ emit(code,arm64.ldr_x(9,12,32)); arm64.assembler_cbz_x(code,9,"los_major_next");
+ emit(code,arm64.ldr_x(9,12,32)); move_bits(code,10,uint32(1),uint32(0)); emit(code,arm64.and_x(10,9,10));
+ arm64.assembler_cbz_x(code,10,"los_major_dead");
+ move_bits(code,10,uint32(4294967292),uint32(4294967295)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.str_x(9,12,32));
+ emit(code,arm64.ldr_x(9,12,40)); emit(code,arm64.add_imm_x(9,9,31,iie)); emit(code,arm64.movn_x(10,15,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.add_x(0,0,9)); arm64.assembler_b(code,"los_major_next");
+ arm64.assembler_label(code,"los_major_dead"); emit(code,arm64.str_x(31,12,32));
+ emit(code,arm64.ldr_x(9,12,40)); emit(code,arm64.add_imm_x(9,9,31,iie)); emit(code,arm64.movn_x(10,15,0)); emit(code,arm64.and_x(9,9,10));
+ emit(code,arm64.ldr_x(10,23,los_Bytes)); emit(code,arm64.sub_x(10,10,9)); emit(code,arm64.str_x(10,23,los_Bytes));
+ emit(code,arm64.ldr_x(10,23,los_Reclaimed)); emit(code,arm64.add_x(10,10,9)); emit(code,arm64.str_x(10,23,los_Reclaimed));
+ emit(code,arm64.ldr_x(10,23,los_Count)); emit(code,arm64.sub_imm_x(10,10,1,iie)); emit(code,arm64.str_x(10,23,los_Count));
+ arm64.assembler_label(code,"los_major_next"); emit(code,arm64.ldr_x(12,12,0)); arm64.assembler_b(code,"los_major_loop");
+ arm64.assembler_label(code,"los_major_done"); emit(code,arm64.ret());
+}

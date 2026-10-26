@@ -481,6 +481,9 @@ func (e *StackEmitter) ArraySetIndex(elementBytes int) error {
 		e.words = append(e.words, m8StrB(10, 9))
 	} else {
 		e.words = append(e.words, strX(10, 9, 0))
+		e.loadOperand(e.depth-2, 9)
+		e.words = append(e.words, ldrX(9, 9, 5))
+		e.words = append(e.words, m19bRememberWords(9, 23)...)
 	}
 	e.depth -= 2
 	return nil

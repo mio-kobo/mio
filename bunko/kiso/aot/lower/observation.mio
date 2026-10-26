@@ -1,0 +1,157 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/string";
+yobu "kiso/convert";
+
+// Observation metadata is outside the managed arena. M19b reserves 3072
+// bytes in both modes, including generation state and separate pause histograms.
+// All values are uint64 native words; no GC path allocates or writes stderr.
+// 288 objects, 296 physical allocation bytes, 304 occupied bytes, 312 peak,
+// 320 start counter, 328 last pause, 336 total pause, 344 max pause, 352 Hz,
+// 360..871 histogram, 872 before, 880 after, 888 cumulative reclaimed,
+// 896 current collection start. The runtime is currently single-threaded.
+teisu observation_metadata_bytes = 3072;
+
+waza observation_word(code: arm64.Assembler, word: int64) -> unit {
+    emit(code, arm64.Instruction { word: uint32(word), error: mu });
+}
+
+waza emit_observation_init(code: arm64.Assembler) -> unit {
+    observation_word(code, 3577471049); // MRS x9, CNTVCT_EL0 (0xd53be049)
+    emit(code, arm64.str_x(9, 23, 320));
+    observation_word(code, 3577470985); // MRS x9, CNTFRQ_EL0
+    emit(code, arm64.str_x(9, 23, 352));
+}
+
+waza emit_observation_alloc(code: arm64.Assembler) -> unit {
+    arm64.assembler_cbz_x(code, 0, "observation_alloc_done");
+    // Read the actual block span: a reused block can contain unsplit padding.
+    emit(code, arm64.sub_imm_x(9, 0, 16, iie)); emit(code, arm64.ldr_x(9, 9, 8));
+    emit(code, arm64.add_imm_x(9, 9, 31, iie)); emit(code, arm64.movn_x(10, 15, 0)); emit(code, arm64.and_x(9, 9, 10));
+    emit(code, arm64.ldr_x(10, 23, 288)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.str_x(10, 23, 288));
+    emit(code, arm64.ldr_x(10, 23, 296)); emit(code, arm64.add_x(10, 10, 9)); emit(code, arm64.str_x(10, 23, 296));
+    emit(code, arm64.ldr_x(10, 23, 304)); emit(code, arm64.add_x(10, 10, 9)); emit(code, arm64.str_x(10, 23, 304));
+    emit(code, arm64.ldr_x(9, 23, 312)); emit(code, arm64.cmp_x(10, 9)); arm64.assembler_b_cond(code, 9, "observation_alloc_done");
+    emit(code, arm64.str_x(10, 23, 312));
+    arm64.assembler_label(code, "observation_alloc_done");
+}
+
+waza emit_observation_gc_start(code: arm64.Assembler) -> unit {
+    emit(code, arm64.stp_pre_x(25, 26, 31, -16));
+    observation_word(code, 3577471049);
+    emit(code, arm64.str_x(9, 23, 896));
+    emit(code, arm64.ldr_x(9, 23, 304)); emit(code, arm64.str_x(9, 23, 872));
+    emit(code, arm64.movz_x(25, 0, 0));
+}
+
+waza emit_observation_gc_end(code: arm64.Assembler) -> unit {
+    observation_word(code, 3577471049);
+    emit(code, arm64.ldr_x(10, 23, 896)); emit(code, arm64.sub_x(9, 9, 10));
+    emit(code, arm64.ldr_x(10, 23, gen_MajorTicks)); emit(code, arm64.add_x(10, 10, 9)); emit(code, arm64.str_x(10, 23, gen_MajorTicks));
+    emit(code, arm64.ldr_x(10, 23, gen_MajorMax)); emit(code, arm64.cmp_x(9, 10)); arm64.assembler_b_cond(code, 9, "gen_major_kindmax");
+    emit(code, arm64.str_x(9, 23, gen_MajorMax)); arm64.assembler_label(code, "gen_major_kindmax");
+    emit(code, arm64.str_x(9, 23, 328));
+    emit(code, arm64.ldr_x(10, 23, 336)); emit(code, arm64.add_x(10, 10, 9)); emit(code, arm64.str_x(10, 23, 336));
+    emit(code, arm64.ldr_x(10, 23, 344)); emit(code, arm64.cmp_x(9, 10)); arm64.assembler_b_cond(code, 9, "observation_gc_max_done");
+    emit(code, arm64.str_x(9, 23, 344));
+    arm64.assembler_label(code, "observation_gc_max_done");
+    // Bucket i has inclusive upper bound 2^i ticks. Bucket 63 also holds
+    // overflow. Zero and one tick use bucket 0; no samples are dropped.
+    emit(code, arm64.movz_x(11, 0, 0)); arm64.assembler_cbz_x(code, 9, "observation_gc_bucket_done");
+    emit(code, arm64.sub_imm_x(10, 9, 1, iie));
+    arm64.assembler_label(code, "observation_gc_bucket");
+    arm64.assembler_cbz_x(code, 10, "observation_gc_bucket_done");
+    emit(code, arm64.cmp_imm_x(11, 63, iie)); arm64.assembler_b_cond(code, 0, "observation_gc_bucket_done");
+    emit(code, arm64.lsr_x(10, 10, 1)); emit(code, arm64.add_imm_x(11, 11, 1, iie)); arm64.assembler_b(code, "observation_gc_bucket");
+    arm64.assembler_label(code, "observation_gc_bucket_done");
+    emit(code, arm64.lsl_x(11, 11, 3)); emit(code, arm64.add_x(11, 23, 11));
+    emit(code, arm64.ldr_x(10, 11, 360)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.str_x(10, 11, 360));
+    emit(code, arm64.ldr_x(10, 11, 2048)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.str_x(10, 11, 2048));
+    emit(code, arm64.str_x(25, 23, 304)); emit(code, arm64.str_x(25, 23, 880));
+    emit(code, arm64.ldr_x(9, 23, 872)); emit(code, arm64.sub_x(9, 9, 25));
+    emit(code, arm64.ldr_x(10, 23, 888)); emit(code, arm64.add_x(10, 10, 9)); emit(code, arm64.str_x(10, 23, 888));
+    emit(code, arm64.ldp_post_x(25, 26, 31, 16));
+}
+
+// Emit a compile-time ASCII prefix, then print x0 as an unsigned integer.
+// Runtime output only happens on exit, after the measured GC has returned.
+waza emit_observation_metric(code: arm64.Assembler, name: string, offset: int64) -> unit {
+    kaku prefix = string.to_bytes(string.concat(string.concat("mio-gc ", name), "="));
+    kaku bytes = ((len(prefix) + 15) / 16) * 16;
+    emit(code, arm64.sub_imm_x(31, 31, bytes, iie));
+    kaku i = 0;
+    aida (i < len(prefix)) {
+        emit(code, arm64.movz_w(9, int64(prefix[i]))); emit(code, arm64.strb_w(9, 31, i)); i = i + 1;
+    }
+    emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.add_imm_x(1, 31, 0, iie));
+    emit(code, arm64.movz_x(2, len(prefix), 0)); emit(code, arm64.movz_x(16, 4, 0)); emit(code, arm64.svc(128));
+    emit(code, arm64.add_imm_x(31, 31, bytes, iie));
+    emit(code, arm64.ldr_x(0, 23, offset)); arm64.assembler_bl(code, "observation_print_uint");
+}
+
+waza emit_observation_runtime(code: arm64.Assembler, metadata_bytes: int64) -> unit {
+    arm64.assembler_label(code, "observation_dump");
+    emit(code, arm64.stp_pre_x(29, 30, 31, -16));
+    arm64.assembler_cbz_x(code, 23, "observation_dump_done");
+    observation_word(code, 3577471049);
+    emit(code, arm64.ldr_x(10, 23, 320)); emit(code, arm64.sub_x(9, 9, 10)); emit(code, arm64.str_x(9, 23, 912));
+    emit(code, arm64.ldr_x(9, 23, 8)); emit(code, arm64.add_imm_x(10, 23, metadata_bytes, iie));
+    emit(code, arm64.sub_x(9, 9, 10)); emit(code, arm64.str_x(9, 23, 904));
+    emit(code, arm64.ldr_x(9, 23, 0)); emit(code, arm64.sub_x(9, 9, 10)); emit(code, arm64.str_x(9, 23, 920));
+    emit_observation_metric(code,"oom_request_bytes",2816);
+    emit_observation_metric(code,"pressure_transitions",2808);
+    emit_observation_metric(code,"heap_goal",memory_Goal); emit_observation_metric(code,"heap_limit",memory_Limit); emit_observation_metric(code,"heap_committed",memory_Committed); emit_observation_metric(code,"heap_reserved",memory_Reserved); emit_observation_metric(code,"pressure_level",memory_Level); emit_observation_metric(code,"pressure_reason",memory_Reason); emit_observation_metric(code,"pressure_sequence",memory_Sequence); emit_observation_metric(code,"allocation_rate",memory_Rate); emit_observation_metric(code,"system_pressure_available",2752);
+    emit_observation_metric(code,"los_live_bytes",los_Bytes); emit_observation_metric(code,"los_objects",los_Count); emit_observation_metric(code,"los_reclaimed_bytes",los_Reclaimed);
+    emit_observation_metric(code, "heap_capacity", 904);
+    emit_observation_metric(code, "heap_cursor", 920);
+    emit_observation_metric(code, "heap_live_bytes", 304);
+    emit_observation_metric(code, "heap_peak_live_bytes", 312);
+    emit_observation_metric(code, "allocated_objects", 288);
+    emit_observation_metric(code, "allocated_bytes", 296);
+    emit_observation_metric(code, "gc_count", 16);
+    emit_observation_metric(code, "gc_before_bytes", 872);
+    emit_observation_metric(code, "gc_after_bytes", 880);
+    emit_observation_metric(code, "gc_total_reclaimed_bytes", 888);
+    emit_observation_metric(code, "gc_last_ticks", 328);
+    emit_observation_metric(code, "gc_total_ticks", 336);
+    emit_observation_metric(code, "gc_max_ticks", 344);
+    emit_observation_metric(code, "timer_frequency_hz", 352);
+    emit_observation_metric(code, "runtime_ticks", 912);
+    kaku i = 0;
+    aida (i < 64) {
+        emit_observation_metric(code, string.concat("gc_pause_bucket_", convert.format_int(i)), 360 + i * 8);
+        i = i + 1;
+    }
+    emit_observation_metric(code, "minor_gc_max_ticks", gen_MinorMax);
+    emit_observation_metric(code, "major_gc_max_ticks", gen_MajorMax);
+    emit_observation_metric(code, "minor_gc_count", gen_MinorCount);
+    emit_observation_metric(code, "major_gc_count", gen_MajorCount);
+    emit_observation_metric(code, "minor_gc_total_ticks", gen_MinorTicks);
+    emit_observation_metric(code, "major_gc_total_ticks", gen_MajorTicks);
+    emit_observation_metric(code, "young_live_bytes", gen_YoungBytes);
+    emit_observation_metric(code, "old_live_bytes", gen_OldBytes);
+    emit_observation_metric(code, "promoted_objects", gen_PromotedObjects);
+    emit_observation_metric(code, "promoted_bytes", gen_PromotedBytes);
+    emit_observation_metric(code, "promotion_threshold", gen_Threshold);
+    emit_observation_metric(code, "remembered_set_entries", gen_RememberedCount);
+    emit_observation_metric(code, "minor_scanned_old_objects", gen_ScannedOld);
+    i = 0;
+    aida (i < 64) {
+        emit_observation_metric(code, string.concat("minor_gc_pause_bucket_", convert.format_int(i)), 1536 + i * 8);
+        emit_observation_metric(code, string.concat("major_gc_pause_bucket_", convert.format_int(i)), 2048 + i * 8);
+        i = i + 1;
+    }
+    arm64.assembler_label(code, "observation_dump_done");
+    emit(code, arm64.ldp_post_x(29, 30, 31, 16)); emit(code, arm64.ret());
+
+    arm64.assembler_label(code, "observation_print_uint");
+    emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.add_imm_x(1, 31, 31, iie));
+    emit(code, arm64.movz_w(4, 10)); emit(code, arm64.strb_w(4, 1, 0));
+    emit(code, arm64.movz_x(2, 1, 0)); emit(code, arm64.movz_x(6, 10, 0));
+    arm64.assembler_label(code, "observation_print_digit");
+    emit(code, arm64.udiv_x(3, 0, 6)); emit(code, arm64.msub_x(4, 3, 6, 0));
+    emit(code, arm64.add_imm_w(4, 4, 48)); emit(code, arm64.sub_imm_x(1, 1, 1, iie));
+    emit(code, arm64.strb_w(4, 1, 0)); emit(code, arm64.add_imm_x(2, 2, 1, iie));
+    move_x(code, 0, 3); arm64.assembler_cbnz_x(code, 0, "observation_print_digit");
+    emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.movz_x(16, 4, 0)); emit(code, arm64.svc(128));
+    emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.ret());
+}

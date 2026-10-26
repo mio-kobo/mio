@@ -105,7 +105,8 @@ func (e *StackEmitter) EnableNativeFS() {
 // ConfigureRuntime applies an explicit heap policy independently of which
 // native modules the program imports.
 func (e *StackEmitter) ConfigureRuntime(heapCapacity uint64, telemetry bool) error {
-	if heapCapacity == 0 || heapCapacity > M8MaxHeapCapacity || heapCapacity%M8ObjectAlignment != 0 {
+	capacity := heapCapacity &^ M19cAdaptiveHeapFlag
+	if capacity == 0 || capacity > M8MaxHeapCapacity || capacity%M8ObjectAlignment != 0 {
 		return fmt.Errorf("AOT invalid heap capacity %d", heapCapacity)
 	}
 	e.heapCapacity = heapCapacity
@@ -507,6 +508,7 @@ func (e *StackEmitter) setLocal(slot int, fresh bool) error {
 			e.words = append(e.words, ldrX(10, 8, 0))
 			toRaw := len(e.words)
 			e.words = append(e.words, 0, strX(9, 10, 1))
+			e.words = append(e.words, m19bRememberWords(10, 23)...)
 			done := len(e.words)
 			e.words = append(e.words, 0)
 			raw := len(e.words)

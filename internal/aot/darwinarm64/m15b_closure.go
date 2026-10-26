@@ -140,6 +140,7 @@ func (e *StackEmitter) SetUpvalue(index int) error {
 	}
 	e.loadOperand(e.depth-1, 10)
 	e.words = append(e.words, ldrX(9, 25, uint32(2+index)), strX(10, 9, 1))
+	e.words = append(e.words, m19bRememberWords(9, 23)...)
 	e.depth--
 	return nil
 }

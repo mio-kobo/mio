@@ -19,7 +19,7 @@ const (
 	M8ObjectAlignment     = 16
 	M8DefaultHeapCapacity = 1 << 20
 	M8MaxHeapCapacity     = 1 << 30
-	M8TelemetrySize       = 512
+	M8TelemetrySize       = 3072
 	M8MaxTypeID           = 65535
 	m8DarwinSYSWrite      = 4
 	m8DarwinSYSMunmap     = 73
@@ -49,7 +49,13 @@ const (
 	m8TelLastGCTicks
 	m8TelTotalGCTicks
 	m8TelTimerFrequency
-	m8TelFreeBin1 = 32 // bins 1..31 occupy telemetry words 32..62
+	m8TelMaxGCTicks
+	m8TelOccupiedBytes
+	m8TelPeakOccupiedBytes
+	m8TelStartTicks
+	m8TelRuntimeTicks
+	m19TelPauseBucket0 = 64 // 64 inclusive power-of-two tick buckets; last includes overflow
+	m8TelFreeBin1      = 32 // bins 1..31 occupy telemetry words 32..62
 )
 
 const (
@@ -188,7 +194,7 @@ func appendM8Runtime(b *m8Assembler) {
 	b.bc(8, "init.fail") // B.HI
 	// syscall 不依赖用户寄存器保存，容量先存到对齐的栈空间。
 	b.emit(subImmX(31, 31, 16), strX(0, 31, 0))
-	b.emit(addImmX(1, 0, M8HeapHeaderSize+M8TelemetrySize))
+	b.emit(addX(1, 0, 0), addImmX(1, 1, M8HeapHeaderSize+M8TelemetrySize))
 	b.emit(movzX(0, 0), movzX(2, 3), movzX(3, m8DarwinMapAnonPriv), m8Movn(4, 0), movzX(5, 0), movzX(16, m8DarwinSYSMmap), svc(0x80))
 	// Darwin 的 BSD syscall 以 C=1 表示 errno，绝不能将错误码当作指针。
 	b.bc(2, "init.sysfail") // B.CS
@@ -196,12 +202,14 @@ func appendM8Runtime(b *m8Assembler) {
 	b.emit(movX(9, 0))
 	b.emit(m8MovBits(11, m8HeapMagic)...)
 	b.emit(strX(11, 9, 0))
-	b.emit(addImmX(11, 9, M8HeapHeaderSize), strX(11, 9, 6))                  // heap[48]: origin
-	b.emit(strX(11, 9, 1))                                                    // heap[8]: cursor
-	b.emit(addX(12, 11, 10), strX(12, 9, 2))                                  // heap[16]: end
-	b.emit(strX(10, 9, 3))                                                    // heap[24]: requested capacity
-	b.emit(addImmX(12, 10, M8HeapHeaderSize+M8TelemetrySize), strX(12, 9, 4)) // heap[32]: mmap length
-	b.emit(movzX(12, 0), strX(12, 9, 5), strX(12, 9, 7))                      // count、reserved
+	b.emit(addImmX(11, 9, M8HeapHeaderSize), strX(11, 9, 6))                                    // heap[48]: origin
+	b.emit(strX(11, 9, 1))                                                                      // heap[8]: cursor
+	b.emit(addX(12, 11, 10), strX(12, 9, 2))                                                    // heap[16]: end
+	b.emit(strX(10, 9, 3))                                                                      // heap[24]: requested capacity
+	b.emit(addX(12, 10, 10), addImmX(12, 12, M8HeapHeaderSize+M8TelemetrySize), strX(12, 9, 4)) // heap[32]: mmap length
+	b.emit(movzX(12, 0), strX(12, 9, 5), strX(12, 9, 7))                                        // count、reserved
+	b.emit(ldrX(12, 9, 2), mrsCNTFRQ(13), strX(13, 12, m8TelTimerFrequency), mrsCNTVCT(13), strX(13, 12, m8TelStartTicks))
+	b.emit(movzX(13, 3), strX(13, 12, m19bThreshold))
 	b.emit(movX(0, 9), m8Ret())
 	b.label("init.sysfail")
 	b.emit(addImmX(31, 31, 16))
@@ -232,6 +240,7 @@ func appendM8Runtime(b *m8Assembler) {
 	// not requested payload bytes.
 	b.emit(ldrX(14, 0, 2), ldrX(15, 14, m8TelAllocatedObjects), addImmX(15, 15, 1), strX(15, 14, m8TelAllocatedObjects))
 	b.emit(ldrX(15, 14, m8TelAllocatedBytes), addX(15, 15, 11), strX(15, 14, m8TelAllocatedBytes))
+	appendM19OccupiedAllocation(b, 14, 11, 15, "m19.bump.peak.done")
 	b.emit(addImmX(0, 9, M8ObjectHeaderSize), m8Ret())
 	b.label("alloc.fail")
 	b.emit(movzX(0, 0), m8Ret())
