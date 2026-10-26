@@ -67,8 +67,11 @@ def validate_macho(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--gc-witness", action="store_true", help="also self-compile with a 256 MiB arena and observe real GC using LLDB")
+    parser.add_argument("--gc-witness", action="store_true", help="also self-compile with a bounded arena and observe real GC using LLDB")
+    parser.add_argument("--ci-ancestor", default="8b53a25", help="required ancestor commit; override explicitly after repository history migration")
+    parser.add_argument("--gc-witness-heap-mib", type=int, default=256, help="bounded witness arena in MiB (1..1024; must actually collect)")
     args = parser.parse_args()
+    require(1 <= args.gc_witness_heap_mib <= 1024, "gc witness heap must be 1..1024 MiB")
     require(platform.system() == "Darwin" and platform.machine() == "arm64", "requires Darwin ARM64")
     root = Path(__file__).resolve().parent.parent
     evidence = args.evidence.resolve()
@@ -129,7 +132,7 @@ def main():
 
     try:
         run("git-head", ["git", "rev-parse", "HEAD"])
-        run("git-ci-ancestor", ["git", "merge-base", "--is-ancestor", "8b53a25", "HEAD"])
+        run("git-ci-ancestor", ["git", "merge-base", "--is-ancestor", args.ci_ancestor, "HEAD"])
         run("git-status", ["git", "status", "--short"])
         run("git-diff", ["git", "diff", "--binary"])
         files = sorted(set(root.glob("bunko/**/*.mio")) | set(root.glob("selfhost/native-aot/*.mio")) |
@@ -157,7 +160,7 @@ def main():
             # The auxiliary builder changes only the generated image's arena.
             # Stage 4 compiles it; no second Go AOT invocation is permitted.
             helper = evidence / "gc-builder.mio"
-            helper.write_text((root / "selfhost/native-aot/main.mio").read_text().replace("1073741824", "268435456"))
+            helper.write_text((root / "selfhost/native-aot/main.mio").read_text().replace("1073741824", str(args.gc_witness_heap_mib << 20)))
             helper_input = evidence / "gc-builder.mochi"
             run("build-gc-mochi", [evidence / "mio", "build", "-o", helper_input, helper])
             generate("stage4-to-gc-builder", evidence / "stage4.native", helper_input, evidence / "gc-builder.unsigned")
@@ -182,6 +185,11 @@ def main():
                        'r = {"metadata": m, "bump": p.ReadUnsignedFromMemory(m, 8, e), '
                        '"end": p.ReadUnsignedFromMemory(m + 8, 8, e), '
                        '"gc_count": p.ReadUnsignedFromMemory(m + 16, 8, e), '
+                       '"minor_gc_count": p.ReadUnsignedFromMemory(m + 1080, 8, e), '
+                       '"major_gc_count": p.ReadUnsignedFromMemory(m + 1088, 8, e), '
+                       '"young_live_bytes": p.ReadUnsignedFromMemory(m + 1112, 8, e), '
+                       '"old_live_bytes": p.ReadUnsignedFromMemory(m + 1120, 8, e), '
+                       '"promotion_threshold": p.ReadUnsignedFromMemory(m + 1072, 8, e), '
                        '"shadow_frame": f.FindRegister("x24").GetValueAsUnsigned(), '
                        '"exit_argument": f.FindRegister("x0").GetValueAsUnsigned()}; '
                        'assert e.Success(); open(' + repr(str(observation)) + ', "w").write(json.dumps(r, indent=2))')
@@ -192,8 +200,9 @@ def main():
                 argv += ["-o", command]
             run("gc-debug", argv, work)
             counters = json.loads(observation.read_text())
+            require(counters["minor_gc_count"] > 0 and counters["minor_gc_count"] + counters["major_gc_count"] == counters["gc_count"], "generation GC witness failed")
             require(counters["gc_count"] > 0 and counters["shadow_frame"] == 0 and counters["exit_argument"] == 0, "GC/shadow-frame witness failed")
-            require(counters["end"] - counters["metadata"] - 288 == 268435456, "wrong bounded arena")
+            require(counters["end"] - counters["metadata"] - 3072 == args.gc_witness_heap_mib << 20, "wrong bounded arena")
             require((work / "image.unsigned").read_bytes() == baseline, "debug GC output differs")
             report["gc_witness"] = counters
             save()
