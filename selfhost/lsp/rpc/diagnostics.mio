@@ -1,0 +1,77 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+waza boolean_field(document: json.Document, object: int64, name: string) -> bool? {
+    kaku node=json.member(document,object,name);moshi(node<0 || document.values[node].kind!=1){kaesu mu;}
+    kaesu json.text(document,node)=="true";
+}
+waza diagnostics_setting(document: json.Document, settings: int64) -> bool? {
+    kaku enabled=boolean_field(document,settings,"diagnosticsEnabled");moshi(enabled!=mu){kaesu enabled;}
+    kaku mio=json.member(document,settings,"mio");moshi(mio<0 || document.values[mio].kind!=5){mio=settings;}
+    enabled=boolean_field(document,mio,"diagnosticsEnabled");moshi(enabled!=mu){kaesu enabled;}
+    kaesu boolean_field(document,json.member(document,mio,"diagnostics"),"enabled");
+}
+waza configuration_notification(state: Session, document: json.Document, params: int64, messages: []string) -> unit {
+    kaku enabled=diagnostics_setting(document,json.member(document,params,"settings"));moshi(enabled==mu){kaesu;}
+    state.flags[3]=enabled;state.schedule[2]=state.schedule[2]+1;array.truncate(state.dirty,0);kaku at=0;
+    aida(at<len(state.documents.documents)){
+        kaku uri=state.documents.documents[at].uri;
+        moshi(enabled){mark_dirty(state,uri);}sore{array.push(messages,clear_diagnostics(uri));}at=at+1;
+    }
+    state.schedule[1]=0;
+}
+waza published_diagnostics(analysis: DocumentAnalysis) -> string {
+    kaku diagnostics=analysis.index.analysis.diagnostics;kaku selected= -1;kaku at=0;
+    aida(at<len(diagnostics)){moshi(diagnostics[at].path==analysis.path){selected=at;nukeru;}at=at+1;}
+    moshi(selected<0 && len(diagnostics)>0){selected=0;}
+    kaku output=string.new_builder();string.write_string(output,"{\"uri\":");string.write_string(output,json.quote(analysis.uri));
+    string.write_string(output,",\"version\":");string.write_string(output,convert.format_int(analysis.version));string.write_string(output,",\"diagnostics\":[");
+    moshi(selected>=0){
+        kaku diagnostic=diagnostics[selected];kaku buffer=source_buffer(analysis,analysis.path);
+        moshi(buffer!=mu){
+            kaku start=diagnostic.span.start.offset;kaku end=diagnostic.span.end.offset;kaku detail=diagnostic.detail;
+            moshi(diagnostic.path!=analysis.path){start=0;end=0;detail=string.concat(diagnostic.path,string.concat(": ",detail));}
+            string.write_string(output,"{\"range\":");string.write_string(output,range_json(buffer,start,end));
+            string.write_string(output,",\"severity\":1,\"source\":\"mio\",\"code\":");string.write_string(output,json.quote(diagnostic.code));
+            string.write_string(output,",\"message\":");string.write_string(output,json.quote(detail));
+            moshi(diagnostic.path!=analysis.path){
+                kaku location=location_json(analysis,diagnostic.path,diagnostic.span.start.offset,diagnostic.span.end.offset);
+                moshi(location!=mu){string.write_string(output,",\"relatedInformation\":[{\"location\":");string.write_string(output,location);string.write_string(output,",\"message\":");string.write_string(output,json.quote(diagnostic.detail));string.write_string(output,"}]");}
+            }
+            string.write_string(output,"}");
+        }
+    }
+    sore{moshi(analysis.index.analysis.error!=""){
+        string.write_string(output,"{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"severity\":1,\"source\":\"mio\",\"code\":\"E0401\",\"message\":");
+        string.write_string(output,json.quote(analysis.index.analysis.error));string.write_string(output,"}");
+    }}
+    string.write_string(output,"]}");kaesu notification("textDocument/publishDiagnostics",string.builder_string(output));
+}
+
+// Drain the current immutable document versions. Cooperative I/O/debouncing
+// will decide when this is called; the compiler and result schema stay shared.
+koukai waza analyze_pending(state: Session) -> []string {
+    kaku messages: []string=[];moshi(!state.flags[0] || state.flags[1] || !state.flags[3]){kaesu messages;}
+    kaku pending=array.clone(state.dirty);array.truncate(state.dirty,0);kaku at=0;
+    aida(at<len(pending)){
+        kaku uri=pending[at];kaku current=lsp.snapshot(state.documents,uri);
+        moshi(current!=mu){
+            kaku result=analyze_document(state,uri);
+            progress.pump(state.work);
+            moshi(progress.cancelled(state.work)){
+                array.truncate(messages,0);at=0;
+                aida(at<len(pending)){moshi(lsp.snapshot(state.documents,pending[at])!=mu){mark_dirty(state,pending[at]);}at=at+1;}
+                kaesu messages;
+            }
+            moshi(result!=mu){
+                kaku latest=lsp.snapshot(state.documents,uri);
+                moshi(latest!=mu){moshi(latest.version==result.version && latest.text==current.text){array.push(messages,published_diagnostics(result));}}
+            }
+        }at=at+1;
+    }
+    kaesu messages;
+}

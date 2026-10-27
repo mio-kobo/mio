@@ -1,3 +1,4 @@
+yobu "kiso/array";
 yobu "kiso/bytes";
 yobu "kiso/utf8";
 
@@ -98,4 +99,18 @@ koukai waza builder_string(builder: StringBuilder) -> string {
     moshi (result != mu) { kaesu result; }
     __math_error("kiso/string.builder_string: builder contains invalid UTF-8");
     kaesu "";
+}
+
+waza whitespace_rune(value: rune) -> bool {
+    kaku code=int64(value);
+    kaesu (code>=9 && code<=13) || code==32 || code==133 || code==160 || code==5760 || (code>=8192 && code<=8202) || code==8232 || code==8233 || code==8239 || code==8287 || code==12288;
+}
+koukai waza trim_space(value: string) -> string {
+    kaku data=to_bytes(value);kaku low=0;kaku high=len(data);
+    aida(low<high){kaku decoded=utf8.decode_one(data,low);moshi(!decoded.valid || !whitespace_rune(decoded.value)){nukeru;}low=low+decoded.width;}
+    aida(high>low){kaku start=high-1;aida(start>low && data[start]>=uint8(128) && data[start]<uint8(192)){start=start-1;}
+        kaku decoded=utf8.decode_one(data,start);moshi(!decoded.valid || start+decoded.width!=high || !whitespace_rune(decoded.value)){nukeru;}high=start;
+    }
+    kaku output: []uint8=[];kaku at=low;aida(at<high){array.push(output,data[at]);at=at+1;}
+    kaku text=from_utf8(output);moshi(text==mu){kaesu value;}kaesu text;
 }

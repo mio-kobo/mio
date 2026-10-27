@@ -1,0 +1,40 @@
+yobu "kiso/os";
+yobu "kiso/fs";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/array";
+yobu "selfhost/tester";
+
+koukai kata Result { failures: []string; error_code: string; error: string; duration_ms: int64; stdout: []uint8; stderr: []uint8; }
+waza result(failures: []string, code: string, message: string, duration: int64, stdout: []uint8, stderr: []uint8) -> Result {
+    kaesu Result { failures: failures, error_code: code, error: message, duration_ms: duration, stdout: stdout, stderr: stderr };
+}
+koukai waza passed(value: Result) -> bool { kaesu len(value.failures) == 0 && value.error == ""; }
+koukai waza execute(plan: tester.TestPlan, package: string, name: string, temporary: string, sequence: int64) -> Result {
+    kaku started = os.monotonic_ms();
+    kaku prefix = string.concat(temporary, string.concat("/test-", convert.format_int(sequence)));
+    kaku image = string.concat(prefix, ".native"); kaku stdout = string.concat(prefix, ".stdout"); kaku stderr = string.concat(prefix, ".stderr"); kaku records = string.concat(prefix, ".records");
+    kaku built = tester.image(plan, package, name);
+    moshi (built.error != "") { kaesu result([], "E0605", built.error, os.monotonic_ms() - started, [], []); }
+    kaku written = fs.write_all(image, built.bytes);
+    moshi (written.error != mu) { os.remove(image); kaesu result([], "E_IO", "cannot write native test image", os.monotonic_ms() - started, [], []); }
+    moshi (os.chmod(image, 448) != 0) { os.remove(image); kaesu result([], "E_IO", "cannot make native test executable", os.monotonic_ms() - started, [], []); }
+    // Native tests receive independent CPU and wall deadlines. A failed child
+    // cannot consume the parent's budget or prevent later tests from running.
+    kaku running = os.monotonic_ms();
+    kaku status = os.spawn_test(image, [image], stdout, stderr, records, 5);
+    kaku captured_out = tester.read_capture(stdout, 8388608); kaku captured_err = tester.read_capture(stderr, 8388608); kaku captured_records = tester.read_capture(records, 8388608);
+    kaku removed_image = os.remove(image); kaku removed_out = os.remove(stdout); kaku removed_err = os.remove(stderr); kaku removed_records = os.remove(records);
+    kaku duration = os.monotonic_ms() - running;
+    moshi (captured_out.error != "") { kaesu result([], "E0604", captured_out.error, duration, [], []); }
+    moshi (captured_err.error != "") { kaesu result([], "E0604", captured_err.error, duration, captured_out.data, []); }
+    moshi (captured_records.error != "") { kaesu result([], "E0604", captured_records.error, duration, captured_out.data, captured_err.data); }
+    kaku packets = tester.packets(captured_records.data);
+    moshi (packets.error != "") { kaesu result(packets.failures, "E0603", packets.error, duration, captured_out.data, captured_err.data); }
+    moshi (removed_image != 0 || removed_out != 0 || removed_err != 0 || removed_records != 0) { kaesu result(packets.failures, "E_IO", "cannot clean native test files", duration, captured_out.data, captured_err.data); }
+    moshi (status == 137 || status == 142 || status == 152) { kaesu result(packets.failures, "E0604", "native test CPU/wall resource limit", duration, captured_out.data, captured_err.data); }
+    moshi (!packets.complete || (status != 0 && (status != 1 || len(packets.failures) == 0))) {
+        kaesu result(packets.failures, "E0603", string.concat("native test terminated without normal completion; status=", convert.format_int(status)), duration, captured_out.data, captured_err.data);
+    }
+    kaesu result(packets.failures, "", "", duration, captured_out.data, captured_err.data);
+}

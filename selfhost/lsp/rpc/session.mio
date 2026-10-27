@@ -1,0 +1,129 @@
+yobu "selfhost/progress";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+
+// Request dispatch is separate from framing, so the same state machine is
+// tested without substituting an alternate server or compiler implementation.
+koukai kata Session {
+    work: progress.Context;
+    documents: lsp.Store;
+    flags: []bool;
+    roots: []string;
+    bunko: []string;
+    cancelled: []string;
+    dirty: []string;
+    cache: []CachedAnalysis;
+    schedule: []int64;
+    library_root: []string;
+    library: []SourceURI;
+}
+koukai kata Reply { messages: []string; stop: bool; status: int64; }
+koukai waza session(root: string, bunko: string) -> Session {
+    kaesu Session {work:progress.context(),documents:lsp.store(),flags:[iie,iie,iie,hai,hai,iie],roots:[root],bunko:[bunko],cancelled:[],dirty:[],cache:[],schedule:[150,0,0],library_root:[""],library:[]};
+}
+waza response(id: string, value: string) -> string {
+    kaesu string.concat("{\"jsonrpc\":\"2.0\",\"id\":",string.concat(id,string.concat(",\"result\":",string.concat(value,"}"))));
+}
+waza error_response(id: string, code: int64, message: string) -> string {
+    kaku output=string.new_builder();string.write_string(output,"{\"jsonrpc\":\"2.0\",\"id\":");string.write_string(output,id);
+    string.write_string(output,",\"error\":{\"code\":");string.write_string(output,convert.format_int(code));
+    string.write_string(output,",\"message\":");string.write_string(output,json.quote(message));string.write_string(output,"}}");kaesu string.builder_string(output);
+}
+waza notification(method: string, params: string) -> string {
+    kaesu string.concat("{\"jsonrpc\":\"2.0\",\"method\":",string.concat(json.quote(method),string.concat(",\"params\":",string.concat(params,"}"))));
+}
+waza clear_diagnostics(uri: string) -> string {
+    kaesu notification("textDocument/publishDiagnostics",string.concat("{\"uri\":",string.concat(json.quote(uri),",\"diagnostics\":[]}")));
+}
+waza remove_cancelled(state: Session, id: string) -> bool {
+    kaku at=0;aida(at<len(state.cancelled)){
+        moshi(state.cancelled[at]==id){
+            aida(at+1<len(state.cancelled)){state.cancelled[at]=state.cancelled[at+1];at=at+1;}
+            array.truncate(state.cancelled,len(state.cancelled)-1);kaesu hai;
+        }at=at+1;
+    }kaesu iie;
+}
+waza add_cancelled(state: Session, id: string) -> unit {
+    kaku at=0;aida(at<len(state.cancelled)){moshi(state.cancelled[at]==id){kaesu;}at=at+1;}
+    moshi(len(state.cancelled)<256){array.push(state.cancelled,id);}
+}
+waza initialize(state: Session, document: json.Document, params: int64, id: string) -> string {
+    moshi(params>=0 && document.values[params].kind!=0 && document.values[params].kind!=5){kaesu error_response(id,-32602,"Invalid initialize params");}
+    moshi(state.flags[0]){kaesu error_response(id,-32600,"initialize called twice");}
+    kaku roots: []string=[];kaku folders=json.member(document,params,"workspaceFolders");
+    moshi(folders>=0 && document.values[folders].kind==4){
+        kaku at=0;aida(at<len(document.values[folders].children)){
+            kaku folder=document.values[folders].children[at];kaku uri=json.text(document,json.member(document,folder,"uri"));
+            kaku parsed_path=lsp.path_from_uri(uri);moshi(parsed_path.valid){array.push(roots,parsed_path.path);}at=at+1;
+        }
+    }
+    moshi(len(roots)==0){kaku uri=json.text(document,json.member(document,params,"rootUri"));kaku parsed_path=lsp.path_from_uri(uri);moshi(parsed_path.valid){array.push(roots,parsed_path.path);}}
+    moshi(len(roots)==0){kaku root_path=json.text(document,json.member(document,params,"rootPath"));moshi(root_path!=""){array.push(roots,root_path);}}
+    moshi(len(roots)>0){array.truncate(state.roots,0);array.append_all(state.roots,roots);}
+    kaku options=json.member(document,params,"initializationOptions");kaku bunko=json.text(document,json.member(document,options,"bunkoRoot"));moshi(bunko!="" && state.bunko[0]==""){state.bunko[0]=bunko;}
+    kaku enabled=boolean_field(document,options,"diagnosticsEnabled");moshi(enabled!=mu){state.flags[3]=enabled;}
+    kaku delay=json.integer(document,json.member(document,options,"diagnosticsDelayMs"));
+    moshi(delay!=mu){moshi(delay>=0){state.schedule[0]=delay;}}
+    // Documents opened before initialization are analyzed without delay.
+    state.schedule[1]=0;
+    kaku capabilities=json.member(document,params,"capabilities");kaku text_document=json.member(document,capabilities,"textDocument");
+    kaku hover=json.member(document,text_document,"hover");kaku formats=json.member(document,hover,"contentFormat");
+    moshi(formats>=0 && document.values[formats].kind==4 && len(document.values[formats].children)>0){
+        state.flags[4]=iie;kaku at=0;aida(at<len(document.values[formats].children)){moshi(json.text(document,document.values[formats].children[at])=="markdown"){state.flags[4]=hai;}at=at+1;}
+    }
+    kaku completion=json.member(document,text_document,"completion");kaku item=json.member(document,completion,"completionItem");
+    kaku snippets=boolean_field(document,item,"snippetSupport");moshi(snippets!=mu){state.flags[5]=snippets;}
+    state.flags[0]=hai;
+    // These providers share the native frontend and are exercised by the RPC
+    // suite. Unsupported rename/formatting/token providers are not advertised.
+    kaesu response(id,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"],\"retriggerCharacters\":[\",\"]}},\"serverInfo\":{\"name\":\"MioCore\",\"version\":\"2.0.0-dev\"}}");
+}
+
+koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
+    kaku messages: []string=[];kaku document=json.parse(payload);
+    moshi(document.error!=""){array.push(messages,error_response("null",-32700,"Parse error"));kaesu Reply {messages:messages,stop:iie,status:0};}
+    kaku root=document.root;
+    moshi(root<0 || document.values[root].kind!=5){array.push(messages,error_response("null",-32600,"Invalid request"));kaesu Reply {messages:messages,stop:iie,status:0};}
+    kaku method_node=json.member(document,root,"method");kaku id_node=json.member(document,root,"id");
+    kaku method=json.text(document,method_node);kaku id=json.render(document,id_node);
+    kaku requested=id_node>=0 && document.values[id_node].kind!=0;
+    // Client responses carry an ID but no method. No server-originated request
+    // is outstanding in this implementation, so these are intentionally ignored.
+    moshi(method_node<0 && id_node>=0){kaesu Reply {messages:messages,stop:iie,status:0};}
+    moshi(method_node<0 || document.values[method_node].kind!=3 || method=="" ||
+        (requested && document.values[id_node].kind!=2 && document.values[id_node].kind!=3)){
+        array.push(messages,error_response("null",-32600,"Invalid request"));kaesu Reply {messages:messages,stop:iie,status:0};
+    }
+    kaku params=json.member(document,root,"params");
+    moshi(!requested){
+        moshi(method=="exit"){state.flags[2]=hai;kaku status=1;moshi(state.flags[1]){status=0;}kaesu Reply {messages:messages,stop:hai,status:status};}
+        moshi(state.flags[1]){kaesu Reply {messages:messages,stop:iie,status:0};}
+        moshi(method=="$/cancelRequest"){
+            kaku cancelled=json.member(document,params,"id");moshi(cancelled>=0){add_cancelled(state,json.render(document,cancelled));}
+        }
+        moshi(method=="initialized"){
+            array.push(messages,notification("window/logMessage","{\"type\":3,\"message\":\"MioCore language server ready.\"}"));
+        }
+        document_notification(state,document,params,method,messages);
+        moshi(method=="workspace/didChangeConfiguration"){configuration_notification(state,document,params,messages);}
+        kaesu Reply {messages:messages,stop:iie,status:0};
+    }
+    kaku cancelled=remove_cancelled(state,id);
+    moshi(method=="initialize"){array.push(messages,initialize(state,document,params,id));kaesu Reply {messages:messages,stop:iie,status:0};}
+    moshi(!state.flags[0]){array.push(messages,error_response(id,-32002,"Server not initialized"));kaesu Reply {messages:messages,stop:iie,status:0};}
+    moshi(state.flags[1]){array.push(messages,error_response(id,-32600,"Server is shutting down"));kaesu Reply {messages:messages,stop:iie,status:0};}
+    moshi(method=="shutdown"){
+        state.flags[1]=hai;array.truncate(state.cancelled,0);array.truncate(state.dirty,0);array.truncate(state.cache,0);kaku at=0;
+        aida(at<len(state.documents.documents)){array.push(messages,clear_diagnostics(state.documents.documents[at].uri));at=at+1;}
+        moshi(cancelled){array.push(messages,error_response(id,-32800,"Request cancelled"));}
+        sore{array.push(messages,response(id,"null"));}
+    }sore{
+        kaku navigation=navigation_request(state,document,params,method,id,cancelled);
+        moshi(navigation!=mu){array.push(messages,navigation);}
+        sore{array.push(messages,error_response(id,-32601,string.concat("Method not found: ",method)));}
+    }
+    kaesu Reply {messages:messages,stop:iie,status:0};
+}

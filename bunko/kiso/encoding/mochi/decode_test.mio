@@ -29,6 +29,16 @@ waza with_main(instructions: []uint8, version: uint16) -> []uint8 {
     kaesu binary.writer_bytes(output);
 }
 
+waza test_v16_typed_call_metadata_and_rejections() -> unit {
+    kaku bytes=with_main([21,67,0,0,1,3],uint16(16));kaku result=decode(bytes);
+    testing.expect(result.error==mu,"v16 typed call syntax decodes");
+    kaku file=result.value;
+    moshi(file!=mu){kaku canonical=canonical_bytes(file);testing.expect(len(canonical)==len(bytes),"typed call canonical size");kaku at=0;aida(at<len(bytes)){testing.expect(canonical[at]==bytes[at],"typed call canonical byte");at=at+1;}}
+    expect_decode_error(with_main([67,0,0,1],uint16(15)),8,"typed call rejected before v16");
+    expect_decode_error(with_main([67,0,0,2],uint16(16)),8,"invalid return flag rejected");
+    expect_decode_error(with_main([67,0,0],uint16(16)),1,"truncated typed call rejected");
+}
+
 waza test_decode_minimal_v14_and_input_immutability() -> unit {
     kaku data = minimal(uint16(14));
     kaku before = array.clone(data);
@@ -52,7 +62,7 @@ waza test_decode_rejects_header_truncation_version_and_tail() -> unit {
     kaku truncated = decode([]).error; moshi (truncated != mu) { testing.expect(error_code(truncated) == 1, "truncated magic"); } sore { testing.expect(iie, "truncated magic"); }
     kaku bad_magic = minimal(uint16(14)); bad_magic[0] = uint8(0);
     kaku magic_error = decode(bad_magic).error; moshi (magic_error != mu) { testing.expect(error_code(magic_error) == 2, "bad magic"); } sore { testing.expect(iie, "bad magic"); }
-    kaku version_error = decode(minimal(uint16(15))).error; moshi (version_error != mu) { testing.expect(error_code(version_error) == 3, "unsupported version"); } sore { testing.expect(iie, "unsupported version"); }
+    kaku version_error = decode(minimal(uint16(17))).error; moshi (version_error != mu) { testing.expect(error_code(version_error) == 3, "unsupported version"); } sore { testing.expect(iie, "unsupported version"); }
     kaku trailing = minimal(uint16(14)); array.push(trailing, uint8(0));
     kaku trailing_error = decode(trailing).error; moshi (trailing_error != mu) { testing.expect(error_code(trailing_error) == 11, "trailing data"); } sore { testing.expect(iie, "trailing data"); }
 }
@@ -67,6 +77,24 @@ waza test_decode_rejects_invalid_instruction_and_jump() -> unit {
     binary.writer_write_u32_be(jump, uint32(4)); binary.writer_write_bytes(jump, [17, 0, 2, 21]);
     binary.writer_write_u32_be(jump, uint32(0));
     kaku jump_error = decode(binary.writer_bytes(jump)).error; moshi (jump_error != mu) { testing.expect(error_code(jump_error) == 10, "jump into operand"); } sore { testing.expect(iie, "jump into operand"); }
+}
+
+waza test_v15_declared_type_constraint_validation() -> unit {
+    kaku data = binary.writer(64);
+    binary.writer_write_bytes(data, [77,79,67,72,73]); binary.writer_write_u16_be(data,uint16(15));
+    binary.writer_write_u32_be(data,uint32(0)); binary.writer_write_u32_be(data,uint32(0));
+    binary.writer_write_length_prefixed(data,[21,66,1,3]); binary.writer_write_u32_be(data,uint32(0));
+    kaku bytes=binary.writer_bytes(data); kaku decoded=decode(bytes); kaku file=decoded.value;
+    testing.expect(decoded.error==mu,"v15 typed constraint decodes");
+    moshi(file!=mu){
+        kaku encoded=canonical_bytes(file); kaku same=len(encoded)==len(bytes); kaku at=0;
+        aida(same && at<len(bytes)){same=encoded[at]==bytes[at];at=at+1;}
+        testing.expect(same,"typed IR canonical round trip");
+    }
+    bytes[6]=uint8(14); testing.expect(decode(bytes).error!=mu,"v14 rejects v15 constraint opcode");
+    bytes[6]=uint8(15); bytes[21]=uint8(0); testing.expect(decode(bytes).error!=mu,"unknown descriptor rejected");
+    bytes[21]=uint8(129); testing.expect(decode(bytes).error!=mu,"constraint cannot encode a non-nil proof");
+    bytes[21]=uint8(6); testing.expect(decode(bytes).error!=mu,"reserved descriptor rejected");
 }
 
 waza test_decode_constants_and_function_metadata() -> unit {

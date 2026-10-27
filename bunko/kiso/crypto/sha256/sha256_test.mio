@@ -1,0 +1,22 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/array";
+waza digest_hex(data: []uint8) -> string {
+    kaku digits=string.to_bytes("0123456789abcdef");kaku output: []uint8=[];kaku at=0;
+    aida(at<len(data)){kaku value=int64(data[at]);array.push(output,digits[value/16]);array.push(output,digits[value-(value/16)*16]);at=at+1;}
+    kaku text=string.from_utf8(output);moshi(text==mu){kaesu "";}kaesu text;
+}
+waza test_standard_sha256_vectors() -> unit {
+    testing.expect(digest_hex(sum([]))=="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","empty SHA256");
+    testing.expect(digest_hex(sum(string.to_bytes("abc")))=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","abc SHA256");
+    testing.expect(digest_hex(sum(string.to_bytes("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")))=="248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1","two-block padding vector");
+}
+waza test_sha256_range_context_reuse() -> unit {
+    kaku ctx=context();kaku bytes=string.to_bytes("prefixabcpostfix");
+    testing.expect(digest_hex(sum_range(ctx,bytes,6,3))=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","exact subrange");
+    testing.expect(digest_hex(sum_range(ctx,[],0,0))=="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","context resets across messages");
+}
+waza test_sha256_million_a() -> unit {
+    kaku data=array.make[uint8](1000000,uint8(97));
+    testing.expect(digest_hex(sum(data))=="cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0","one million a vector");
+}

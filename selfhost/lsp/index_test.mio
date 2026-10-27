@@ -1,0 +1,32 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/os";
+yobu "selfhost/frontend";
+
+waza semantic_root(suffix: string) -> string { kaesu string.concat("/tmp/mio-semantic-",string.concat(convert.format_int(os.pid()),suffix)); }
+waza test_semantic_shadowing_and_references_use_resolver_identity() -> unit {
+    kaku root=semantic_root("-scope");kaku path=string.concat(root,"/main.mio");
+    kaku text="waza main() -> int64 { kaku value = 1; moshi (hai) { kaku value = \"text\"; chant(value); } kaesu value; } // value\n";
+    kaku analyzed=frontend.analyze_source("/",root,"",[frontend.SourceOverlay {path:path,bytes:string.to_bytes(text)}],iie);testing.expect(len(analyzed.diagnostics)==0,"scope fixture type checks");
+    kaku index=semantic_index(analyzed);kaku inner=symbol_at(index,path,string.index(text,"chant(value")+6);kaku outer=symbol_at(index,path,string.index(text,"kaesu value")+7);
+    moshi(inner==mu){testing.fail("inner symbol");kaesu;}moshi(outer==mu){testing.fail("outer symbol");kaesu;}
+    testing.expect(inner.key!=outer.key && inner.detail=="string" && outer.detail=="int64","shadowed variables keep distinct identities and types");
+    testing.expect(len(references(index,inner.key,hai))==2 && len(references(index,outer.key,hai))==2,"declarations and bound uses only; comments are not references");
+    testing.expect(len(references(index,inner.key,iie))==1,"includeDeclaration false excludes declaration");
+}
+waza test_semantic_cross_file_definition_and_signature() -> unit {
+    kaku root=semantic_root("-files");kaku a=string.concat(root,"/a.mio");kaku z=string.concat(root,"/z.mio");
+    kaku declaration="koukai waza add(x: int64, y: int64) -> int64 { kaesu x + y; }";kaku use="waza use() -> int64 { kaesu add(1, 2); }";
+    kaku analyzed=frontend.analyze_source("/",root,"",[frontend.SourceOverlay {path:z,bytes:string.to_bytes(use)},frontend.SourceOverlay {path:a,bytes:string.to_bytes(declaration)}],iie);
+    kaku index=semantic_index(analyzed);kaku selected=symbol_at(index,z,string.index(use,"add"));moshi(selected==mu){testing.fail("cross-file callee");kaesu;}
+    testing.expect(selected.path==a && selected.selection.start.offset==string.index(declaration,"add"),"definition selection points to the declared name");
+    testing.expect(selected.detail=="add(x: int64, y: int64) -> int64","signature includes typed parameter names and result");
+    testing.expect(len(references(index,selected.key,hai))==2,"cross-file declaration and use share identity");
+}
+waza test_semantic_import_definition_comes_from_dependency_source() -> unit {
+    kaku root=semantic_root("-import");kaku main=string.concat(root,"/main.mio");kaku dep=string.concat(root,"/dep/main.mio");kaku text="yobu \"./dep\"; waza main() -> int64 { kaesu dep.add(1, 2); }";
+    kaku analyzed=frontend.analyze_source("/",root,"",[frontend.SourceOverlay {path:main,bytes:string.to_bytes(text)},frontend.SourceOverlay {path:dep,bytes:string.to_bytes("koukai waza add(x: int64, y: int64) -> int64 { kaesu x + y; }")}],iie);
+    testing.expect(analyzed.error=="" && len(analyzed.diagnostics)==0,"import fixture resolves");kaku index=semantic_index(analyzed);kaku selected=symbol_at(index,main,string.index(text,"dep.add")+4);
+    moshi(selected==mu){testing.fail("import member binding");kaesu;}testing.expect(selected.path==dep && selected.public && selected.name=="add","imported symbol uses original dependency declaration");
+}

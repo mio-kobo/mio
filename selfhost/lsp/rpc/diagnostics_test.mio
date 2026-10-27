@@ -1,0 +1,68 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+yobu "selfhost/lsp";
+
+waza diagnostic_payload(state: Session) -> json.Document {
+    kaku messages=analyze_pending(state);testing.expect(len(messages)==1,"one versioned diagnostics notification");
+    moshi(len(messages)!=1){kaesu json.parse([]);}kaesu json.parse(string.to_bytes(messages[0]));
+}
+waza diagnostic_entries(document: json.Document) -> []int64 {
+    kaku params=json.member(document,document.root,"params");kaku entries=json.member(document,params,"diagnostics");
+    moshi(entries<0){testing.fail("diagnostics field missing");kaesu [];}kaesu document.values[entries].children;
+}
+waza test_rpc_diagnostics_shared_codes_ranges_and_versioned_clear() -> unit {
+    kaku state=session("/","");kaku uri="file:///__mio_rpc_diagnostics__/main.mio";
+    open_source(state,uri,"waza broken() -> int64 {\n    kaesu missing_value;\n}\n");
+    testing.expect(len(analyze_pending(state))==0 && len(state.dirty)==1,"preinitialize source is queued");
+    request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku published=diagnostic_payload(state);kaku entries=diagnostic_entries(published);
+    testing.expect(len(entries)==1,"one primary compiler diagnostic");
+    moshi(len(entries)==1){
+        kaku error=entries[0];testing.expect(json.text(published,json.member(published,error,"code"))=="E0201","undefined name compiler code");
+        testing.expect(json.text(published,json.member(published,error,"source"))=="mio" && string.contains(json.text(published,json.member(published,error,"message")),"help:"),"compiler source and help retained");
+        kaku start=json.member(published,json.member(published,error,"range"),"start");kaku line=json.integer(published,json.member(published,start,"line"));kaku column=json.integer(published,json.member(published,start,"character"));
+        moshi(line==mu){testing.fail("diagnostic line");}sore{testing.expect(line==1,"diagnostic line matches source");}
+        moshi(column==mu){testing.fail("diagnostic column");}sore{testing.expect(column==10,"diagnostic UTF16 column matches source");}
+    }
+    notify(state,string.concat("{\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":",string.concat(json.quote(uri),",\"version\":2},\"contentChanges\":[{\"text\":\"waza fixed() -> int64 {kaesu 42;}\"}]}}")));
+    published=diagnostic_payload(state);testing.expect(len(diagnostic_entries(published))==0,"fixed source clears diagnostics");
+    kaku params=json.member(published,published.root,"params");kaku version=json.integer(published,json.member(published,params,"version"));moshi(version==mu){testing.fail("published version");}sore{testing.expect(version==2,"clear uses current document version");}
+}
+waza test_rpc_lexical_return_and_emoji_diagnostics_use_shared_frontend() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:診断";
+    kaku texts: []string=["kaku x = @;","waza f() -> int64 {\n    kaesu \"text\";\n}","kaku s=\"😀\";\nkaku x=missing_value;"];
+    kaku codes: []string=["E0001","E0304","E0201"];kaku at=0;
+    aida(at<len(texts)){
+        open_source(state,uri,texts[at]);kaku published=diagnostic_payload(state);kaku entries=diagnostic_entries(published);
+        testing.expect(len(entries)==1,"single primary lexical/type/resolver error");
+        moshi(len(entries)==1){
+            kaku error=entries[0];testing.expect(json.text(published,json.member(published,error,"code"))==codes[at],"shared compiler diagnostic code");
+            moshi(at==1){testing.expect(string.contains(json.text(published,json.member(published,error,"message")),"expected/actual"),"return type expected/actual retained");}
+            kaku start=json.member(published,json.member(published,error,"range"),"start");kaku column=json.integer(published,json.member(published,start,"character"));
+            moshi(at==0){moshi(column!=mu){testing.expect(column==9,"lexical position");}}
+            moshi(at==2){kaku wanted=lsp.position_at(lsp.text_buffer(texts[at]),string.index(texts[at],"missing_value"));testing.expect(json.render(published,start)==position_json(wanted),"emoji source reports UTF16 positions");}
+        }at=at+1;
+    }
+}
+waza test_rpc_diagnostics_settings_and_plaintext_hover() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"diagnosticsEnabled\":false},\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"plaintext\"]}}}}}");
+    kaku uri="untitled:settings";kaku text="kaku value=1; chant(value);";open_source(state,uri,text);
+    testing.expect(len(analyze_pending(state))==0,"initialization diagnostics disable honored");
+    kaku hover=query(state,uri,text,string.index(text,"chant(value")+6,"textDocument/hover",iie);kaku result=json.member(hover,hover.root,"result");kaku contents=json.member(hover,result,"contents");
+    testing.expect(json.text(hover,json.member(hover,contents,"kind"))=="plaintext" && json.text(hover,json.member(hover,contents,"value"))=="kaku value: int64","plaintext hover has a real declaration header");
+    notify(state,"{\"method\":\"workspace/didChangeConfiguration\",\"params\":{\"settings\":{\"mio\":{\"diagnostics\":{\"enabled\":true}}}}}");
+    testing.expect(len(diagnostic_entries(diagnostic_payload(state)))==0,"enabled diagnostics run queued current source");
+    kaku disabled=notify(state,"{\"method\":\"workspace/didChangeConfiguration\",\"params\":{\"settings\":{\"diagnosticsEnabled\":false}}}");
+    testing.expect(len(disabled.messages)==1 && len(state.dirty)==0 && !state.flags[3],"disabling diagnostics clears visible errors and pending work");
+}
+waza test_rpc_dependency_failure_cannot_publish_false_success() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="file:///__mio_rpc_dep_error__/main.mio";kaku dep="file:///__mio_rpc_dep_error__/dep/main.mio";
+    open_source(state,uri,"yobu \"./dep\"; waza main() -> int64 {kaesu dep.value();}");open_source(state,dep,"koukai waza value() -> int64 {kaesu \"wrong\";}");
+    kaku messages=analyze_pending(state);testing.expect(len(messages)==2,"each open source receives current diagnostics");
+    kaku at=0;aida(at<len(messages)){
+        kaku published=json.parse(string.to_bytes(messages[at]));kaku entries=diagnostic_entries(published);testing.expect(len(entries)==1,"dependency error never appears as a clean build");
+        moshi(at==0 && len(entries)==1){kaku related=json.member(published,entries[0],"relatedInformation");testing.expect(related>=0 && len(published.values[related].children)==1,"dependency error retains actual source location");}
+        at=at+1;
+    }
+}

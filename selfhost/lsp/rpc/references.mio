@@ -1,0 +1,35 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+waza append_references(locations: []string, analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol, include: bool) -> unit {
+    kaku occurrences=lsp.references(analysis.index,symbol.key,include);kaku at=0;
+    aida(at<len(occurrences)){
+        kaku current=occurrences[at];kaku location=location_json(analysis,current.path,current.start,current.end);
+        moshi(location!=mu){kaku found=iie;kaku prior=0;aida(prior<len(locations)){moshi(locations[prior]==location){found=hai;}prior=prior+1;}moshi(!found){array.push(locations,location);}}
+        at=at+1;
+    }
+}
+waza reference_result(state: Session, analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol, include: bool) -> string {
+    kaku locations: []string=[];append_references(locations,analysis,symbol,include);
+    moshi(symbol.owner=="" || symbol.kind==13 || symbol.kind==8){
+        kaku documents=array.clone(state.documents.documents);kaku at=0;
+        aida(at<len(documents)){
+            moshi(!progress.pump(state.work)){kaesu "[]";}
+            moshi(documents[at].uri!=analysis.uri){
+                kaku other=analyze_document(state,documents[at].uri);
+                moshi(other!=mu){
+                    kaku si=0;aida(si<len(other.index.symbols)){
+                        kaku equivalent=other.index.symbols[si];
+                        moshi(equivalent.path==symbol.path && equivalent.kind==symbol.kind && equivalent.selection.start.offset==symbol.selection.start.offset && equivalent.selection.end.offset==symbol.selection.end.offset){append_references(locations,other,equivalent,iie);nukeru;}
+                        si=si+1;
+                    }
+                }
+            }at=at+1;
+        }
+    }
+    kaku output=string.new_builder();string.write_string(output,"[");kaku at=0;
+    aida(at<len(locations)){moshi(at>0){string.write_string(output,",");}string.write_string(output,locations[at]);at=at+1;}
+    string.write_string(output,"]");kaesu string.builder_string(output);
+}

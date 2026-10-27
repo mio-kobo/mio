@@ -1,0 +1,45 @@
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/math";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "selfhost/pipeline";
+
+// GF2 development transport: four UTF-8 lines on stdin (project root, entry, Bunko root,
+// output). The frontend API itself returns memory bytes for later integration.
+// No bootstrap.config, cwd assumption or compiled-in source path is used.
+waza fail(message: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n")));
+    math.fail(message);
+}
+
+waza run() -> unit {
+    kaku request = fs.read_all("/dev/stdin");
+    moshi (request.error != mu) { fail("E_IO stdin: cannot read frontend request"); kaesu; }
+    kaku fields: []string = []; kaku field: []uint8 = []; kaku index = 0;
+    aida (index < len(request.data)) {
+        kaku value = request.data[index];
+        moshi (value == uint8(10)) {
+            kaku text = string.from_utf8(field);
+            moshi (text == mu) { fail("E_INPUT stdin: request must be UTF-8"); kaesu; }
+            array.push(fields, text); field = [];
+        }
+        sore { array.push(field, value); }
+        index = index + 1;
+    }
+    moshi ((len(fields) != 4 && len(fields) != 6) || len(field) != 0) { fail("E_INPUT stdin: expected four paths, optionally followed by heap and GC mode"); kaesu; }
+    kaku heap = 1073741824; kaku stress = iie;
+    moshi (len(fields) == 6) {
+        kaku capacity = convert.parse_int(fields[4]);
+        moshi (capacity == mu) { fail("E_OPTIONS invalid heap capacity"); kaesu; }
+        heap = capacity;
+        moshi (fields[5] != "normal" && fields[5] != "stress") { fail("E_OPTIONS invalid GC mode"); kaesu; }
+        stress = fields[5] == "stress";
+    }
+    kaku compiled = pipeline.build_source_with_options(fields[0], fields[1], fields[2], heap, stress);
+    moshi (compiled.error != "") { fail(compiled.error); kaesu; }
+    kaku written = fs.write_all(fields[3], compiled.bytes);
+    moshi (written.error != mu) { fail("E_IO output: cannot write compiled source"); }
+}
+
+run();

@@ -1,0 +1,55 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+
+// Incremental framing separates incomplete input from EOF or malformed input.
+// The server can poll without blocking on a fragmented header or payload.
+koukai kata FrameBuffer {bytes: []uint8; cursor: []int64; ended: []bool;}
+koukai waza frame_buffer() -> FrameBuffer {kaesu FrameBuffer {bytes:[],cursor:[0],ended:[iie]};}
+koukai waza feed_frames(buffer: FrameBuffer, bytes: []uint8, offset: int64, length: int64) -> bool {
+    moshi(buffer.ended[0] || offset<0 || length<0 || offset>len(bytes) || length>len(bytes)-offset){kaesu iie;}
+    moshi(buffer.cursor[0]>0){
+        kaku remaining=len(buffer.bytes)-buffer.cursor[0];kaku at=0;
+        aida(at<remaining){buffer.bytes[at]=buffer.bytes[buffer.cursor[0]+at];at=at+1;}
+        array.truncate(buffer.bytes,remaining);buffer.cursor[0]=0;
+    }
+    kaku at=0;aida(at<length){array.push(buffer.bytes,bytes[offset+at]);at=at+1;}kaesu hai;
+}
+koukai waza finish_frames(buffer: FrameBuffer) -> unit {buffer.ended[0]=hai;}
+waza incomplete_frame(buffer: FrameBuffer, header: bool) -> Frame? {
+    moshi(!buffer.ended[0]){kaesu mu;}
+    kaku error="lsp: incomplete message or input error";moshi(header){error="lsp: incomplete header or input error";}
+    kaesu Frame {bytes:[],eof:iie,error:error};
+}
+koukai waza next_buffered_frame(buffer: FrameBuffer) -> Frame? {
+    kaku first=buffer.cursor[0];kaku at=first;kaku length= -1;kaku body= -1;
+    moshi(first>=len(buffer.bytes)){
+        moshi(buffer.ended[0]){kaesu Frame {bytes:[],eof:hai,error:""};}kaesu mu;
+    }
+    aida(at<len(buffer.bytes)){
+        kaku line=at;
+        aida(at<len(buffer.bytes) && buffer.bytes[at]!=uint8(10)){at=at+1;}
+        moshi(at-first>65536){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header: section too large"};}
+        moshi(at>=len(buffer.bytes)){kaesu incomplete_frame(buffer,hai);}
+        kaku next=at+1;kaku end=at;
+        moshi(next-first>65536){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header: section too large"};}
+        aida(end>line && buffer.bytes[end-1]==uint8(13)){end=end-1;}
+        moshi(end==line){body=next;nukeru;}
+        kaku colon=line;aida(colon<end && buffer.bytes[colon]!=uint8(58)){colon=colon+1;}
+        moshi(colon==end){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header"};}
+        moshi(ascii_text(buffer.bytes,line,colon,hai)=="content-length"){
+            kaku value=convert.parse_int(ascii_text(buffer.bytes,colon+1,end,iie));
+            moshi(value==mu){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed Content-Length"};}
+            moshi(value<0){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed Content-Length"};}
+            length=value;
+        }
+        at=next;
+    }
+    moshi(body<0){kaesu incomplete_frame(buffer,hai);}
+    moshi(length<0){kaesu Frame {bytes:[],eof:iie,error:"lsp: missing Content-Length header"};}
+    moshi(length>67108864){kaesu Frame {bytes:[],eof:iie,error:"lsp: message exceeds size limit"};}
+    moshi(length>len(buffer.bytes)-body){kaesu incomplete_frame(buffer,iie);}
+    kaku bytes=array.with_capacity[uint8](length);at=0;
+    aida(at<length){array.push(bytes,buffer.bytes[body+at]);at=at+1;}
+    buffer.cursor[0]=body+length;
+    kaesu Frame {bytes:bytes,eof:iie,error:""};
+}

@@ -1,9 +1,11 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "selfhost/lexer";
 
 teisu max_parser_depth: int64 = 192;
 
 kata ParserState {
+    work: progress.Context;
     tokens: []lexer.Token;
     index: []int64;
     depth: []int64;
@@ -40,6 +42,7 @@ waza peek_kind(state: ParserState) -> int64 {
 }
 
 waza advance(state: ParserState) -> unit {
+    moshi(!progress.checkpoint(state.work)){state.index[0]=len(state.tokens)-1;kaesu;}
     moshi (state.index[0] + 1 < len(state.tokens)) {
         state.index[0] = state.index[0] + 1;
     }
@@ -114,7 +117,8 @@ waza parse_program(state: ParserState) -> int64 {
     kaesu add_node(state.arena, NodeKind.Program(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: end });
 }
 
-koukai waza parse_tokens(tokens: []lexer.Token) -> ParseResult {
+koukai waza parse_tokens(tokens: []lexer.Token) -> ParseResult {kaesu parse_tokens_with_progress(tokens,progress.context());}
+koukai waza parse_tokens_with_progress(tokens: []lexer.Token, work: progress.Context) -> ParseResult {
     kaku arena = new_arena();
     kaku errors = array.with_capacity[ParseError](1);
     moshi (len(tokens) == 0) {
@@ -123,6 +127,7 @@ koukai waza parse_tokens(tokens: []lexer.Token) -> ParseResult {
         kaesu ParseResult { ast: arena, root: -1, tokens: tokens, errors: errors };
     }
     kaku state = ParserState {
+        work: work,
         tokens: tokens,
         index: [0],
         depth: [0],
@@ -133,8 +138,9 @@ koukai waza parse_tokens(tokens: []lexer.Token) -> ParseResult {
     kaesu ParseResult { ast: arena, root: root, tokens: tokens, errors: errors };
 }
 
-koukai waza parse(source: []uint8) -> ParseResult {
-    kaku lexical = lexer.lex(source);
+koukai waza parse(source: []uint8) -> ParseResult {kaesu parse_with_progress(source,progress.context());}
+koukai waza parse_with_progress(source: []uint8, work: progress.Context) -> ParseResult {
+    kaku lexical = lexer.lex_with_progress(source,work);
     moshi (len(lexical.errors) != 0) {
         kaku arena = new_arena();
         kaku errors = array.with_capacity[ParseError](1);
@@ -146,5 +152,5 @@ koukai waza parse(source: []uint8) -> ParseResult {
         });
         kaesu ParseResult { ast: arena, root: -1, tokens: lexical.tokens, errors: errors };
     }
-    kaesu parse_tokens(lexical.tokens);
+    kaesu parse_tokens_with_progress(lexical.tokens,work);
 }

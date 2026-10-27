@@ -1,0 +1,65 @@
+yobu "kiso/testing";
+yobu "selfhost/progress";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+yobu "kiso/convert";
+
+waza virtual_root(suffix: string) -> string { kaesu string.concat("/tmp/mio-analysis-",string.concat(convert.format_int(os.pid()),suffix)); }
+waza has_symbol(result: AnalysisResult, name: string) -> bool {
+    kaku pi=0;aida(pi<len(result.resolved)){kaku symbols=result.resolved[pi].symbols;kaku si=0;aida(si<len(symbols)){moshi(symbols[si].name==name){kaesu hai;}si=si+1;}pi=pi+1;}kaesu iie;
+}
+waza test_virtual_package_and_latest_overlay() -> unit {
+    kaku root=virtual_root("-virtual");kaku primary=string.concat(root,"/main.mio");kaku helper=string.concat(root,"/helper.mio");
+    kaku overlays: []SourceOverlay=[SourceOverlay {path:primary,bytes:string.to_bytes("waza broken() -> int64 { kaesu missing; }")},SourceOverlay {path:helper,bytes:string.to_bytes("waza helper() -> int64 { kaesu 42; }")},SourceOverlay {path:primary,bytes:string.to_bytes("waza value() -> int64 { kaesu helper(); }")}];
+    kaku result=analyze_source("/",root,"",overlays,iie);
+    testing.expect(result.error=="" && len(result.diagnostics)==0,"virtual package needs no physical directory");
+    testing.expect(len(result.resolved)==1 && len(result.checked)==1 && len(result.sources)==2,"shared frontend returns sources, resolver and checker");
+    testing.expect(has_symbol(result,"value") && has_symbol(result,"helper") && !has_symbol(result,"broken"),"latest overlay wins and same-package helpers resolve");
+    testing.expect(!fs.is_dir(root),"analysis did not create a directory");
+}
+waza test_overlay_type_errors_keep_semantics_and_disk_unchanged() -> unit {
+    kaku root=virtual_root("-disk");kaku created=fs.create_dir(root);moshi(created.error!=mu){testing.fail("create owned source fixture");kaesu;}
+    kaku name=string.concat(root,"/main.mio");kaku original="koukai waza value() -> int64 { kaesu 42; }";fs.write_all(name,string.to_bytes(original));
+    kaku result=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("koukai waza value() -> int64 { kaesu \"wrong\"; }")}],iie);
+    testing.expect(result.error=="" && len(result.diagnostics)>0 && has_symbol(result,"value"),"type errors retain semantic graph");
+    kaku read=fs.read_all(name);kaku text=string.from_utf8(read.data);moshi(text==mu){testing.fail("disk source UTF8");}sore{testing.expect(text==original,"memory overlay does not overwrite disk");}
+    os.remove(name);os.remove_dir(root);
+}
+waza test_parse_and_missing_import_recovery() -> unit {
+    kaku root=virtual_root("-recovery");kaku name=string.concat(root,"/main.mio");
+    kaku parsed=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("kaku valid = 1; kaku broken = ;")}],iie);
+    testing.expect(len(parsed.diagnostics)>0 && len(parsed.resolved)>0,"syntax errors retain partial frontend state");
+    testing.expect(has_symbol(parsed,"valid"),"valid declaration survives parse recovery");
+    kaku imported=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("yobu \"./missing\"; koukai waza value() -> int64 { kaesu 1; }")}],iie);
+    testing.expect(imported.error=="" && len(imported.diagnostics)>0 && has_symbol(imported,"value"),"missing import does not erase local semantics");
+}
+waza test_analysis_test_source_selection() -> unit {
+    kaku root=virtual_root("-tests");kaku overlays: []SourceOverlay=[SourceOverlay {path:string.concat(root,"/main.mio"),bytes:string.to_bytes("waza helper() -> int64 { kaesu 42; }")},SourceOverlay {path:string.concat(root,"/main_test.mio"),bytes:string.to_bytes("waza test_value(arg: int64) -> unit { chant(helper()); }")}];
+    kaku ordinary=analyze_source("/",root,"",overlays,iie);kaku tests=analyze_source("/",root,"",overlays,hai);
+    testing.expect(len(ordinary.sources)==1 && !has_symbol(ordinary,"test_value"),"ordinary package excludes test files");
+    testing.expect(len(tests.sources)==2 && has_symbol(tests,"test_value") && len(tests.diagnostics)==0,"editor test source analysis shares ordinary language semantics");
+}
+
+waza test_analysis_diagnostic_codes_and_lexical_recovery() -> unit {
+    kaku root=virtual_root("-diagnostics");kaku name=string.concat(root,"/main.mio");
+    kaku lexical=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("kaku x = @;")}],iie);
+    testing.expect(lexical.error=="" && len(lexical.diagnostics)>0 && len(lexical.sources)==1,"lexical failure retains source without indexing an absent AST root");
+    moshi(len(lexical.diagnostics)>0){testing.expect(lexical.diagnostics[0].code=="E0001" && lexical.diagnostics[0].span.start.offset==9,"lexical code and byte position");}
+    kaku undefined=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("waza value() -> int64 { kaesu missing; }")}],iie);
+    moshi(len(undefined.diagnostics)>0){testing.expect(undefined.diagnostics[0].code=="E0201" && string.contains(undefined.diagnostics[0].detail,"help:"),"undefined name diagnostics retain help");}sore{testing.fail("missing undefined-name diagnostic");}
+    kaku mismatch=analyze_source("/",root,"",[SourceOverlay {path:name,bytes:string.to_bytes("waza value() -> int64 { kaesu \"text\"; }")}],iie);
+    moshi(len(mismatch.diagnostics)>0){testing.expect(mismatch.diagnostics[0].code=="E0304" && string.contains(mismatch.diagnostics[0].detail,"expected/actual"),"return mismatch code and type detail");}sore{testing.fail("missing return mismatch");}
+}
+
+waza test_analysis_cooperative_cancel_and_context_reuse() -> unit {
+    kaku work=progress.context();kaku calls: []int64=[0];
+    progress.install(work,waza () -> bool {calls[0]=calls[0]+1;kaesu iie;});
+    kaku root=virtual_root("-cancel");kaku file=string.concat(root,"/main.mio");
+    kaku text=string.new_builder();kaku at=0;aida(at<1000){string.write_string(text," ");at=at+1;}string.write_string(text,"waza value() -> int64 {kaesu 1;}");
+    kaku cancelled=analyze_source_with_progress("/",root,"",[SourceOverlay {path:file,bytes:string.to_bytes(string.builder_string(text))}],iie,work);
+    testing.expect(progress.cancelled(work) && calls[0]==1 && string.has_prefix(cancelled.error,"E_CANCELLED"),"compiler aborts through the invocation context");
+    progress.clear(work);progress.begin(work);
+    kaku next=analyze_source_with_progress("/",root,"",[SourceOverlay {path:file,bytes:string.to_bytes("waza value() -> int64 {kaesu 2;}")}],iie,work);
+    testing.expect(!progress.cancelled(work) && next.error=="" && len(next.diagnostics)==0 && has_symbol(next,"value"),"cancelled invocation does not poison fresh work");
+}

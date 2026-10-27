@@ -1,0 +1,55 @@
+yobu "kiso/fs";
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/utf8";
+
+koukai kata Reader { file: fs.File; buffer: []uint8; cursor: []int64; count: []int64; ended: []bool; }
+koukai kata Frame { bytes: []uint8; eof: bool; error: string; }
+koukai waza reader(file: fs.File) -> Reader { kaesu Reader { file:file, buffer:array.make[uint8](4096,uint8(0)),cursor:[0],count:[0],ended:[iie] }; }
+waza next(reader: Reader) -> int64 {
+    moshi(reader.cursor[0]>=reader.count[0]) {
+        moshi(reader.ended[0]){kaesu -1;}
+        kaku result=fs.read(reader.file,reader.buffer,0,len(reader.buffer));
+        moshi(result.error!=mu || result.count<0 || result.count>len(reader.buffer)){kaesu -2;}
+        reader.count[0]=result.count;reader.cursor[0]=0;reader.ended[0]=result.eof;
+        moshi(result.count==0){moshi(result.eof){kaesu -1;}kaesu -2;}
+    }
+    kaku byte=int64(reader.buffer[reader.cursor[0]]);reader.cursor[0]=reader.cursor[0]+1;kaesu byte;
+}
+waza space(value: int64) -> bool { kaesu (value>=9 && value<=13) || value==32 || value==133 || value==160 || value==5760 || (value>=8192 && value<=8202) || value==8232 || value==8233 || value==8239 || value==8287 || value==12288; }
+waza ascii_text(bytes: []uint8, first: int64, end: int64, lower: bool) -> string {
+    kaku low=first;kaku high=end;
+    aida(low<high){kaku decoded=utf8.decode_one(bytes,low);moshi(!decoded.valid || low+decoded.width>high){nukeru;}moshi(!space(int64(decoded.value))){nukeru;}low=low+decoded.width;}
+    aida(high>low){kaku start=high-1;aida(start>low && bytes[start]>=uint8(128) && bytes[start]<uint8(192)){start=start-1;}kaku decoded=utf8.decode_one(bytes,start);moshi(!decoded.valid || start+decoded.width!=high){nukeru;}moshi(!space(int64(decoded.value))){nukeru;}high=start;}
+    kaku data: []uint8=[];aida(low<high){kaku byte=bytes[low];moshi(lower && byte>=uint8(65) && byte<=uint8(90)){byte=byte+uint8(32);}array.push(data,byte);low=low+1;}
+    kaku text=string.from_utf8(data);moshi(text==mu){kaesu "";}kaesu text;
+}
+koukai waza read_frame(reader: Reader) -> Frame {
+    kaku length=-1;kaku headers=0;
+    aida(hai){
+        kaku line: []uint8=[];kaku byte=next(reader);
+        aida(byte>=0 && byte!=10){array.push(line,uint8(byte));headers=headers+1;moshi(headers>65536){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header: section too large"};}byte=next(reader);}
+        moshi(byte<0){moshi(byte== -1 && len(line)==0){kaesu Frame {bytes:[],eof:hai,error:""};}kaesu Frame {bytes:[],eof:iie,error:"lsp: incomplete header or input error"};}
+        headers=headers+1;moshi(headers>65536){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header: section too large"};}
+        aida(len(line)>0){moshi(line[len(line)-1]!=uint8(13)){nukeru;}array.truncate(line,len(line)-1);}
+        moshi(len(line)==0){nukeru;}
+        kaku colon=0;aida(colon<len(line) && line[colon]!=uint8(58)){colon=colon+1;}
+        moshi(colon==len(line)){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed header"};}
+        moshi(ascii_text(line,0,colon,hai)=="content-length"){
+            kaku value=convert.parse_int(ascii_text(line,colon+1,len(line),iie));
+            moshi(value==mu){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed Content-Length"};}
+            moshi(value<0){kaesu Frame {bytes:[],eof:iie,error:"lsp: malformed Content-Length"};}length=value;
+        }
+    }
+    moshi(length<0){kaesu Frame {bytes:[],eof:iie,error:"lsp: missing Content-Length header"};}
+    moshi(length>67108864){kaesu Frame {bytes:[],eof:iie,error:"lsp: message exceeds size limit"};}
+    kaku bytes: []uint8=[];array.reserve(bytes,length);kaku at=0;
+    aida(at<length){kaku byte=next(reader);moshi(byte<0){kaesu Frame {bytes:[],eof:iie,error:"lsp: incomplete message or input error"};}array.push(bytes,uint8(byte));at=at+1;}
+    kaesu Frame {bytes:bytes,eof:iie,error:""};
+}
+koukai waza write_frame(file: fs.File, payload: []uint8) -> string {
+    kaku header=string.to_bytes(string.concat("Content-Length: ",string.concat(convert.format_int(len(payload)),"\r\n\r\n")));
+    kaku at=0;aida(at<len(header)){kaku result=fs.write(file,header,at,len(header)-at);moshi(result.error!=mu || result.count<=0 || result.count>len(header)-at){kaesu "lsp: cannot write frame header";}at=at+result.count;}
+    at=0;aida(at<len(payload)){kaku result=fs.write(file,payload,at,len(payload)-at);moshi(result.error!=mu || result.count<=0 || result.count>len(payload)-at){kaesu "lsp: cannot write frame payload";}at=at+result.count;}kaesu "";
+}

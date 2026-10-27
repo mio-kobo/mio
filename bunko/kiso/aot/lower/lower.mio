@@ -182,9 +182,9 @@ waza width(opcode: int64) -> int64 {
     moshi (opcode >= 2 && opcode <= 16) { kaesu 1; }
     moshi (opcode == 54) { kaesu 3; }
     moshi (opcode == 38) { kaesu 5; }
-    moshi (opcode == 39) { kaesu 1; }
-    moshi (opcode == 56) { kaesu 4; }
-    moshi (opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65) { kaesu 2; }
+    moshi (opcode == 39 || opcode == 41 || opcode == 42 || opcode == 43) { kaesu 1; }
+    moshi (opcode == 56 || opcode == 67) { kaesu 4; }
+    moshi (opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65 || opcode == 66) { kaesu 2; }
     moshi (opcode == 59 || opcode == 64 || opcode == 60 || opcode == 61 || opcode == 62 || opcode == 63) { kaesu 1; }
     moshi (opcode == 21 || opcode == 22 || opcode == 26 || opcode == 27 || opcode == 28 || opcode == 29 || (opcode >= 50 && opcode <= 53) || opcode == 31 || opcode == 32 || opcode == 33 || opcode == 34 || opcode == 35) { kaesu 1; }
     kaesu 0;
@@ -252,8 +252,9 @@ waza emit_len(code: arm64.Assembler, kind: int64) -> bool {
     kaesu iie;
 }
 
-waza emit_index(code: arm64.Assembler, kind: int64) -> bool {
+waza emit_index(code: arm64.Assembler, analysis: types.TypeAnalysis, index_node: int64, kind: int64) -> bool {
     pop_register(code, 10); pop_register(code, 9);
+    emit_unbox_register(code, analysis, index_node, 10);
     emit(code, arm64.cmp_imm_x(10, 0, iie)); arm64.assembler_b_cond(code, 11, "runtime_error");
     moshi (kind == types.type_unknown || kind == types.type_string_id) {
         arm64.assembler_cbz_x(code, 9, "runtime_error"); emit(code, arm64.movz_x(11, 1, 0)); emit(code, arm64.and_x(11, 9, 11)); emit(code, arm64.cmp_imm_x(11, 0, iie));
@@ -470,16 +471,16 @@ waza emit_object(code: arm64.Assembler, patches: []macho.AddressPatch,
 waza array_descriptor_width(descriptor: int64) -> int64 { moshi (descriptor - (descriptor / 128) * 128 == 15 && descriptor < 128) { kaesu 1; } kaesu 8; }
 waza array_descriptor_reference(descriptor: int64) -> bool {
     kaku nullable = descriptor >= 128; kaku kind = descriptor - (descriptor / 128) * 128;
-    kaesu nullable || kind == 5 || kind == 7 || kind == 8 || kind == 9 || kind == 11;
+    kaesu nullable || kind == 5 || kind == 7 || kind == 8 || kind == 9 || kind == 10 || kind == 11;
 }
 
 waza emit_array_with_capacity(code: arm64.Assembler, patches: []macho.AddressPatch,
-    type_result: types.TypeAnalysis, function_id: int64, entries: []int64, descriptor: int64) -> bool {
+    type_result: types.TypeAnalysis, function_id: int64, entries: []int64, descriptor: int64, capacity_node: int64) -> bool {
     kaku kind = descriptor - (descriptor / 128) * 128;
-    moshi (descriptor < 0 || descriptor > 255 || kind == 6 || kind == 10 || kind > 17) { kaesu iie; }
+    moshi (descriptor < 0 || descriptor > 255 || kind == 6 || kind > 17) { kaesu iie; }
     kaku width = array_descriptor_width(descriptor); kaku reference = array_descriptor_reference(descriptor);
     kaku shadow_bytes = emit_shadow_push(code, patches, type_result, function_id, entries); moshi (shadow_bytes < 0) { kaesu iie; }
-    pop_register(code, 10); emit(code, arm64.cmp_imm_x(10, 0, iie)); arm64.assembler_b_cond(code, 11, "runtime_error");
+    pop_register(code, 10); moshi (capacity_node >= 0) { emit_unbox_register(code, type_result, capacity_node, 10); } emit(code, arm64.cmp_imm_x(10, 0, iie)); arm64.assembler_b_cond(code, 11, "runtime_error");
     move_bits(code, 9, uint32(0), uint32(runtime_max_storage_bytes / width)); emit(code, arm64.cmp_x(10, 9)); arm64.assembler_b_cond(code, 8, "runtime_oom");
     move_bits(code, 9, uint32(0), uint32(width)); emit(code, arm64.mul_x(0, 10, 9)); emit(code, arm64.add_imm_x(0, 0, 32, iie)); move_bits(code, 1, uint32(0), uint32(102));
     // Capacity and layout survive the allocator in callee-saved registers.
@@ -510,6 +511,7 @@ waza emit_array_mutation(code: arm64.Assembler, patches: []macho.AddressPatch,
     moshi (shadow_bytes < 0) { kaesu iie; }
     emit(code, arm64.add_x(8, 19, 20)); emit(code, arm64.sub_imm_x(8, 8, 16, iie));
     emit(code, arm64.ldr_x(0, 8, 0)); emit(code, arm64.ldr_x(1, 8, 8));
+    moshi (opcode == 61 || opcode == 63) { emit_unbox_register(code, type_result, entries[len(entries) - 1], 1); }
     moshi (opcode == 64) { arm64.assembler_bl(code, "runtime_array_append"); }
     moshi (opcode == 59) { arm64.assembler_bl(code, "runtime_array_push"); }
     moshi (opcode == 61) { arm64.assembler_bl(code, "runtime_array_reserve"); }
@@ -530,6 +532,7 @@ waza array_inferred_descriptor(type_result: types.TypeAnalysis, node: int64) -> 
     moshi (kind == types.type_array_ref) { descriptor = 7; }
     moshi (kind == types.type_struct_ref) { descriptor = 8; }
     moshi (kind == types.type_enum_ref) { descriptor = 9; }
+    moshi (kind == types.type_map_ref) { descriptor = 10; }
     moshi (kind == types.type_function_ref) { descriptor = 11; }
     moshi (types.type_nullable(type_result, element)) { descriptor = descriptor + 128; }
     kaesu descriptor;
@@ -542,10 +545,10 @@ waza emit_array_construct(code: arm64.Assembler, patches: []macho.AddressPatch,
     // Existing elements/source stay on the operand stack throughout both
     // allocations; the temporary capacity is scalar and adds no Root.
     moshi (opcode == 30 || opcode == 56) { move_bits(code, 9, uint32(0), uint32(count)); }
-    moshi (opcode == 57) { emit(code, arm64.add_x(8, 19, 20)); emit(code, arm64.sub_imm_x(8, 8, 16, iie)); emit(code, arm64.ldr_x(9, 8, 0)); }
+    moshi (opcode == 57) { emit(code, arm64.add_x(8, 19, 20)); emit(code, arm64.sub_imm_x(8, 8, 16, iie)); emit(code, arm64.ldr_x(9, 8, 0)); emit_unbox_register(code, type_result, entries[len(entries) - 2], 9); }
     moshi (opcode == 62) { emit(code, arm64.add_x(8, 19, 20)); emit(code, arm64.sub_imm_x(8, 8, 8, iie)); emit(code, arm64.ldr_x(9, 8, 0)); emit(code, arm64.ldr_x(9, 9, 8)); }
     push_register(code, 9);
-    moshi (!emit_array_with_capacity(code, patches, type_result, function_id, entries, descriptor)) { kaesu iie; }
+    moshi (!emit_array_with_capacity(code, patches, type_result, function_id, entries, descriptor, -1)) { kaesu iie; }
     pop_register(code, 12);
     emit(code, arm64.ldr_x(11, 12, 40)); emit(code, arm64.add_imm_x(11, 11, 32, iie));
     kaku width = array_descriptor_width(descriptor);
@@ -559,7 +562,7 @@ waza emit_array_construct(code: arm64.Assembler, patches: []macho.AddressPatch,
         move_bits(code, 10, uint32(0), uint32(count)); emit(code, arm64.str_x(10, 12, 8));
     }
     moshi (opcode == 57) {
-        pop_register(code, 9); pop_register(code, 10); emit(code, arm64.str_x(10, 12, 8));
+        pop_register(code, 9); pop_register(code, 10); emit_unbox_register(code, type_result, entries[len(entries) - 2], 10); emit(code, arm64.str_x(10, 12, 8));
         kaku loop = string.concat("array_make_", convert.format_int(len(code.words))); kaku done = string.concat(loop, "_done");
         arm64.assembler_label(code, loop); arm64.assembler_cbz_x(code, 10, done);
         moshi (width == 1) { emit(code, arm64.strb_w(9, 11, 0)); }
@@ -575,8 +578,9 @@ waza emit_array_construct(code: arm64.Assembler, patches: []macho.AddressPatch,
     push_register(code, 12); kaesu hai;
 }
 
-waza emit_set_index(code: arm64.Assembler) -> unit {
+waza emit_set_index(code: arm64.Assembler, analysis: types.TypeAnalysis, index_node: int64) -> unit {
     pop_register(code, 9); pop_register(code, 10); pop_register(code, 12);
+    emit_unbox_register(code, analysis, index_node, 10);
     arm64.assembler_cbz_x(code, 12, "runtime_error"); emit(code, arm64.ldr_x(11, 12, 8)); emit(code, arm64.cmp_x(10, 11)); arm64.assembler_b_cond(code, 2, "runtime_error");
     emit(code, arm64.ldr_x(13, 12, 0)); emit(code, arm64.lsr_x(13, 13, 8)); move_bits(code, 14, uint32(0), uint32(255)); emit(code, arm64.and_x(13, 13, 14)); emit(code, arm64.ldr_x(11, 12, 40)); emit(code, arm64.add_imm_x(11, 11, 32, iie));
     kaku byte = string.concat("set_index_byte_", convert.format_int(len(code.words))); kaku done = string.concat(byte, "_done");
@@ -616,6 +620,31 @@ waza emit_nullable_box(code: arm64.Assembler, patches: []macho.AddressPatch,
     emit(code, arm64.str_x(9, 0, 8)); push_register(code, 0); kaesu hai;
 }
 
+// Convert one live operand slot to the physical scalar element ABI.
+// A private entry vector describes every intermediate GC safepoint; analysis
+// entries remain immutable and raw bits are never published as boxed Roots.
+waza emit_array_operand(code: arm64.Assembler, patches: []macho.AddressPatch,
+    analysis: types.TypeAnalysis, function_id: int64, entries: []int64, index: int64, target: int64) -> bool {
+    kaku source = entries[index]; kaku source_box = is_nullable_scalar(analysis, source); kaku target_box = is_nullable_scalar(analysis, target);
+    moshi (source_box == target_box || types.type_kind(analysis, source) == types.type_nil) { entries[index] = target; kaesu hai; }
+    emit(code, arm64.ldr_x(9, 19, index * 8));
+    moshi (source_box) {
+        emit_unbox_register(code, analysis, source, 9); emit(code, arm64.str_x(9, 19, index * 8)); entries[index] = target; kaesu hai;
+    }
+    push_register(code, 9);
+    kaku after: []int64 = []; kaku at = 0;
+    aida (at < len(entries)) { array.push(after, entries[at]); at = at + 1; }
+    array.push(after, target);
+    moshi (!emit_nullable_box(code, patches, analysis, function_id, after)) { kaesu iie; }
+    pop_register(code, 9); emit(code, arm64.str_x(9, 19, index * 8)); entries[index] = target; kaesu hai;
+}
+
+waza operand_entries(entries: []int64) -> []int64 {
+    kaku result: []int64 = []; kaku at = 0;
+    aida (at < len(entries)) { array.push(result, entries[at]); at = at + 1; }
+    kaesu result;
+}
+
 waza file_uses_heap(file: mochi.File) -> bool {
     kaku block = -1;
     aida (block < len(file.functions)) {
@@ -626,7 +655,7 @@ waza file_uses_heap(file: mochi.File) -> bool {
         kaku offset = 0;
         aida (offset < len(data)) {
             kaku opcode = int64(data[offset]);
-            moshi (opcode == 65 || opcode == 44 || opcode == 46 || opcode == 36 || opcode == 38 || opcode == 30 || (opcode >= 56 && opcode <= 64)) { kaesu hai; }
+            moshi (opcode == 65 || opcode == 41 || opcode == 42 || opcode == 43 || opcode == 44 || opcode == 46 || opcode == 36 || opcode == 38 || opcode == 30 || (opcode >= 56 && opcode <= 64)) { kaesu hai; }
             moshi (opcode == 21 || opcode == 34) { kaesu hai; }
             kaku size = types.type_instruction_width(opcode); moshi (size == 0) { kaesu iie; }
             offset = offset + size;
@@ -690,6 +719,19 @@ waza pop_register(code: arm64.Assembler, reg: int64) -> unit {
     emit(code, arm64.ldr_x(reg, 8, 0));
 }
 
+// Arithmetic wraps at the source integer width. Operand slots remain eight
+// bytes: signed narrow values are sign extended, unsigned values zero extended.
+waza emit_integer_normalize(code: arm64.Assembler, analysis: types.TypeAnalysis, node: int64) -> unit {
+    kaku descriptor = types.integer_descriptor(analysis, node);
+    moshi (descriptor < 12 || descriptor > 17) { kaesu; }
+    kaku width = 8;
+    moshi (descriptor == 13 || descriptor == 16) { width = 16; }
+    moshi (descriptor == 14 || descriptor == 17) { width = 32; }
+    emit(code, arm64.lsl_x(9, 9, 64 - width));
+    moshi (descriptor <= 14) { emit(code, arm64.asr_x(9, 9, 64 - width)); }
+    sore { emit(code, arm64.lsr_x(9, 9, 64 - width)); }
+}
+
 waza emit_binary(code: arm64.Assembler, opcode: int64, analysis: types.TypeAnalysis, entries: []int64) -> unit {
     pop_register(code, 10);
     pop_register(code, 9);
@@ -703,6 +745,7 @@ waza emit_binary(code: arm64.Assembler, opcode: int64, analysis: types.TypeAnaly
         arm64.assembler_cbz_x(code, 10, "runtime_error");
         emit(code, arm64.sdiv_x(9, 9, 10));
     }
+    emit_integer_normalize(code, analysis, entries[len(entries) - 1]);
     push_register(code, 9);
 }
 
@@ -779,7 +822,7 @@ waza emit_data_convert(code: arm64.Assembler, patches: []macho.AddressPatch,
     moshi (operation == 1) { emit_string_view(code); move_x(code, 9, 10); }
     sore { emit(code, arm64.ldr_x(9, 9, 8)); }
     push_register(code, 9);
-    moshi (!emit_array_with_capacity(code, patches, analysis, function_id, entries, 15)) { kaesu iie; }
+    moshi (!emit_array_with_capacity(code, patches, analysis, function_id, entries, 15, -1)) { kaesu iie; }
     pop_register(code, 12); pop_register(code, 9);
     moshi (operation == 1) { emit_string_view(code); }
     sore { emit(code, arm64.ldr_x(10, 9, 8)); emit(code, arm64.ldr_x(13, 9, 40)); emit(code, arm64.add_imm_x(13, 13, 32, iie)); }
@@ -880,8 +923,9 @@ waza fp_from(code: arm64.Assembler, kind: int64, freg: int64, reg: int64) -> uni
 waza fp_to(code: arm64.Assembler, kind: int64, reg: int64, freg: int64) -> unit {
     kaku word = 2657484800; moshi (kind == types.type_float32) { word = 505806848; } fp_word(code, word + freg * 32 + reg);
 }
-waza emit_float_convert(code: arm64.Assembler, opcode: int64) -> unit {
+waza emit_float_convert(code: arm64.Assembler, opcode: int64, analysis: types.TypeAnalysis, node: int64) -> unit {
     pop_register(code, 9);
+    emit_unbox_register(code, analysis, node, 9);
     moshi (opcode == 28 || opcode == 50) {
         kaku kind = types.type_float64; kaku word = 2657222944;
         moshi (opcode == 50) { kind = types.type_float32; word = 2653028640; }
@@ -1025,6 +1069,7 @@ waza emit_call(code: arm64.Assembler, patches: []macho.AddressPatch,
 
 waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: mochi.File,
     type_result: types.TypeAnalysis, ids: []int64, data: []uint8, prefix: string, function_id: int64) -> LowerError? {
+    kaku main_heap = iie; moshi (function_id < 0) { main_heap = file_uses_heap(file); }
     kaku offset = 0;
     aida (offset < len(data)) {
         arm64.assembler_label(code, block_label(prefix, offset));
@@ -1049,19 +1094,37 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
         moshi (opcode == 2 || opcode == 4 || opcode == 5 || opcode == 6) { emit_binary(code, opcode, type_result, type_result.blocks[function_id + 1].entry[offset]); }
         moshi (opcode == 3) {
             pop_register(code, 9);
-            moshi (function_id < 0) { move_x(code, 25, 9); emit(code, arm64.movz_x(26, 1, 0)); }
+            moshi (function_id < 0) {
+                kaku entries = type_result.blocks[0].entry[offset]; kaku node = entries[len(entries) - 1];
+                kaku kind = types.type_kind(type_result, node);
+                moshi (kind == types.type_unknown) { kaesu LowerError.UnsafeType(offset * 100 + opcode); }
+                kaku tag = kind; moshi (types.type_nullable(type_result, node)) { tag = tag + 128; }
+                move_x(code, 25, 9); emit(code, arm64.movz_x(26, tag, 0));
+                moshi (main_heap) {
+                    moshi (types.type_is_heap_reference(type_result, node)) { emit(code, arm64.str_x(9, 24, 16)); }
+                    sore { emit(code, arm64.str_x(31, 24, 16)); }
+                }
+            }
         }
         moshi (opcode == 7) {
             pop_register(code, 9); kaku entries = type_result.blocks[function_id + 1].entry[offset]; kaku node = entries[len(entries) - 1];
             emit_unbox_register(code, type_result, node, 9); kaku kind = types.type_kind(type_result, node);
             moshi (kind == types.type_float32 || kind == types.type_float64) { fp_from(code, kind, 0, 9); kaku word = 509689856; moshi (kind == types.type_float32) { word = 505495552; } fp_word(code, word); fp_to(code, kind, 9, 0); }
-            sore { emit(code, arm64.sub_x(9, 31, 9)); } push_register(code, 9);
+            sore { emit(code, arm64.sub_x(9, 31, 9)); emit_integer_normalize(code, type_result, node); } push_register(code, 9);
         }
         moshi (opcode == 8 || opcode == 9) { kaku truth = 0; moshi (opcode == 8) { truth = 1; } emit(code, arm64.movz_x(9, truth, 0)); push_register(code, 9); }
-        moshi (opcode == 10) { pop_register(code, 9); emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(9, 0)); push_register(code, 9); }
+        moshi (opcode == 10) {
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            pop_register(code, 9); emit_unbox_register(code, type_result, entries[len(entries) - 1], 9);
+            emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(9, 0)); push_register(code, 9);
+        }
         moshi (opcode >= 11 && opcode <= 16) { emit_compare(code, opcode, type_result, type_result.blocks[function_id + 1].entry[offset]); }
         moshi (opcode == 17) { arm64.assembler_b(code, block_label(prefix, operand)); }
-        moshi (opcode == 18) { pop_register(code, 9); arm64.assembler_cbz_x(code, 9, block_label(prefix, operand)); }
+        moshi (opcode == 18) {
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            pop_register(code, 9); emit_unbox_register(code, type_result, entries[len(entries) - 1], 9);
+            arm64.assembler_cbz_x(code, 9, block_label(prefix, operand));
+        }
         moshi (opcode == 19 || opcode == 20) {
             moshi (operand < 0 || operand >= file.global_count) { kaesu LowerError.InvalidOperand(1000 + offset); }
             emit_global(code, patches, operand, opcode == 19);
@@ -1071,14 +1134,22 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
             kaku entry = type_result.blocks[function_id + 1].entry[offset];
             kaku node = entry[len(entry) - 1]; kaku kind = types.type_kind(type_result, node);
             pop_register(code, 0);
+            emit_unbox_register(code, type_result, node, 0);
             moshi (kind == types.type_bool) { arm64.assembler_bl(code, "print_bool"); }
             sore {
                 moshi (kind == types.type_nil) { arm64.assembler_bl(code, "print_nil"); }
                 sore {
                     moshi (kind == types.type_string_id) { arm64.assembler_bl(code, "print_string"); }
                     sore {
-                        moshi (kind != types.type_integer) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
-                        arm64.assembler_bl(code, "print_int64");
+                        moshi (kind == types.type_float32 || kind == types.type_float64) {
+                            kaku precision = 4; moshi (kind == types.type_float32) { precision = 3; }
+                            emit(code, arm64.movz_x(1, precision, 0));
+                            arm64.assembler_bl(code, "print_float");
+                        }
+                        sore {
+                            moshi (kind != types.type_integer) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+                            arm64.assembler_bl(code, "print_int64");
+                        }
                     }
                 }
             }
@@ -1117,21 +1188,65 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
                 }
             }
         }
-        moshi (opcode == 28 || opcode == 29 || (opcode >= 50 && opcode <= 53)) { emit_float_convert(code, opcode); }
+        moshi (opcode == 28 || opcode == 29 || (opcode >= 50 && opcode <= 53)) {
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            emit_float_convert(code, opcode, type_result, entries[len(entries) - 1]);
+        }
         moshi (opcode == 65) {
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
             moshi (!emit_data_convert(code, patches, type_result, function_id, entries, operand)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
         moshi (opcode == 54) {
             kaku primitive = int64(data[offset + 1]); kaku count = int64(data[offset + 2]);
-            moshi (count != 1 || ((primitive < 6 || primitive > 8) && primitive != 13)) { kaesu LowerError.UnsupportedOpcode((function_id + 1) * 1000000 + offset * 100 + opcode); }
-            pop_register(code, 9);
-            moshi (primitive == 13) { arm64.assembler_b(code, "runtime_error"); }
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            moshi (primitive < 1 || primitive > 13 || (primitive == 10 && count != 2) || (primitive != 10 && count != 1)) { kaesu LowerError.UnsupportedOpcode((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            moshi (primitive == 10) {
+                pop_register(code, 10); pop_register(code, 9);
+                emit_unbox_register(code, type_result, entries[len(entries) - 2], 9); emit_unbox_register(code, type_result, entries[len(entries) - 1], 10);
+                emit(code, arm64.adds_x(11, 9, 10)); emit(code, arm64.cset_w(9, 6)); push_register(code, 9);
+            }
             sore {
-                kaku entries = type_result.blocks[function_id + 1].entry[offset];
-                kaku kind = types.type_kind(type_result, entries[len(entries) - 1]);
-                moshi (kind != types.type_float32 && kind != types.type_float64 && kind != types.type_float_any) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
-                emit_float_predicate(code, kind, primitive);
+                pop_register(code, 9);
+                kaku node = entries[len(entries) - 1]; kaku kind = types.type_kind(type_result, node);
+                emit_unbox_register(code, type_result, node, 9);
+                moshi (primitive == 13) { arm64.assembler_b(code, "runtime_error"); }
+                sore {
+                    moshi (primitive == 11 || primitive == 12) {
+                        moshi (primitive == 11) {
+                            moshi (kind == types.type_float32) { emit(code, arm64.lsr_x(9, 9, 31)); emit(code, arm64.movz_x(10, 1, 0)); emit(code, arm64.and_x(9, 9, 10)); }
+                            sore { moshi (kind == types.type_float64) { emit(code, arm64.lsr_x(9, 9, 63)); }
+                            sore { moshi (kind != types.type_integer) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+                                emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(9, 11)); } }
+                        }
+                        sore {
+                            kaku descriptor = types.integer_descriptor(type_result, node);
+                            moshi (kind != types.type_integer || descriptor >= 15) { emit(code, arm64.movz_x(9, 0, 0)); }
+                            sore {
+                                kaku width = 64; moshi (descriptor == 12) { width = 8; } moshi (descriptor == 13) { width = 16; } moshi (descriptor == 14) { width = 32; }
+                                emit(code, arm64.movz_x(10, 1, 0)); emit(code, arm64.lsl_x(10, 10, width - 1));
+                                moshi (width < 64) { emit(code, arm64.sub_x(10, 31, 10)); }
+                                emit(code, arm64.cmp_x(9, 10)); emit(code, arm64.cset_w(9, 0));
+                            }
+                        }
+                        push_register(code, 9);
+                    }
+                    sore {
+                        moshi (kind != types.type_float32 && kind != types.type_float64 && kind != types.type_float_any) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+                        moshi (primitive >= 6 && primitive <= 8) { emit_float_predicate(code, kind, primitive); }
+                        sore { moshi (primitive == 9) {
+                            kaku high: uint32 = uint32(2147483648); kaku low: uint32 = uint32(0);
+                            moshi (kind == types.type_float32) { high = uint32(0); low = uint32(2147483648); }
+                            move_bits(code, 10, high, low); emit(code, arm64.cmp_x(9, 10)); emit(code, arm64.cset_w(9, 0)); push_register(code, 9);
+                        }
+                        sore {
+                            fp_from(code, kind, 0, 9); kaku instruction = 509722624;
+                            moshi (primitive == 2) { instruction = 509952000; } moshi (primitive == 3) { instruction = 509919232; }
+                            moshi (primitive == 4) { instruction = 509886464; } moshi (primitive == 5) { instruction = 509984768; }
+                            moshi (kind == types.type_float32) { instruction = instruction - 4194304; }
+                            fp_word(code, instruction); fp_to(code, kind, 9, 0); push_register(code, 9);
+                        } }
+                    }
+                }
             }
         }
         moshi (opcode == 44 || opcode == 46) {
@@ -1146,32 +1261,45 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
             moshi (opcode == 47) { emit(code, arm64.ldr_x(9, 10, 8)); push_register(code, 9); }
             sore { pop_register(code, 9); emit(code, arm64.str_x(9, 10, 8)); emit_gen_remember(code, 10); }
         }
-        moshi (opcode == 45) {
+        moshi (opcode == 45 || opcode == 67) {
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
-            kaku after = type_result.blocks[function_id + 1].entry[offset + 3];
+            kaku after = type_result.blocks[function_id + 1].entry[offset + instruction_width];
             moshi (!emit_call_value(code, patches, type_result, function_id, entries, operand, len(after) == len(entries) - operand)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
         moshi (opcode == 25) {
             moshi (operand < 0 || operand >= len(file.functions)) { kaesu LowerError.InvalidFunction(); }
             kaku target = file.functions[operand];
-            moshi (len(target.captures) != 0 || (len(target.instructions) == 0 && nativefs.operation(target.name) == nativefs.op_none)) { kaesu LowerError.UnsupportedClosure(); }
+            moshi (len(target.captures) != 0 || (len(target.instructions) == 0 && nativefs.operation(target.name) == nativefs.op_none && !types.is_testing_report(target.name))) { kaesu LowerError.UnsupportedClosure(); }
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
-            moshi (types.is_float_predicate(target)) {
+            kaku parameter = types.forwarded_parameter(target);
+            moshi (parameter >= 0) {
+                emit(code, arm64.ldr_x(9, 19, (len(entries) - target.parameter_count + parameter) * 8));
+                emit(code, arm64.sub_imm_x(20, 20, target.parameter_count * 8, iie)); push_register(code, 9);
+            }
+            sore { moshi (types.is_float_predicate(target)) {
                 kaku node = entries[len(entries) - 1]; kaku kind = types.type_kind(type_result, node);
                 moshi (kind != types.type_float32 && kind != types.type_float64) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
                 pop_register(code, 9); emit_unbox_register(code, type_result, node, 9); emit_float_predicate(code, kind, int64(target.instructions[4]));
             }
             sore { moshi (!emit_call(code, patches, type_result, function_id, entries, target)) {
                 kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode);
-            } }
+            } } }
         }
         moshi (opcode == 31 || opcode == 32) {
             kaku entry = type_result.blocks[function_id + 1].entry[offset];
             kaku receiver_at = len(entry) - 1; moshi (opcode == 31) { receiver_at = receiver_at - 1; }
             moshi (receiver_at < 0) { kaesu LowerError.InvalidOperand(4000 + offset); }
             kaku kind = types.type_kind(type_result, entry[receiver_at]);
-            kaku ok = iie; moshi (opcode == 31) { ok = emit_index(code, kind); } sore { ok = emit_len(code, kind); }
+            kaku ok = iie; moshi (opcode == 31) { ok = emit_index(code, type_result, entry[len(entry) - 1], kind); } sore { ok = emit_len(code, kind); }
             moshi (!ok) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            moshi (opcode == 31) {
+                kaku after = type_result.blocks[function_id + 1].entry[offset + instruction_width];
+                kaku raw = hai;
+                moshi (kind == types.type_array_ref) { raw = !is_nullable_scalar(type_result, types.type_array_element(type_result.arena, entry[receiver_at])); }
+                moshi (raw && is_nullable_scalar(type_result, after[len(after) - 1])) {
+                    moshi (!emit_nullable_box(code, patches, type_result, function_id, after)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+                }
+            }
         }
         moshi (opcode == 34) {
             kaku block_index = function_id + 1;
@@ -1184,7 +1312,7 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
             moshi (kind == types.type_nil) { emit(code, arm64.movz_x(9, 1, 0)); }
             sore {
                 moshi (nullable && (kind == types.type_array_ref || kind == types.type_struct_ref ||
-                    kind == types.type_enum_ref || kind == types.type_function_ref || kind == types.type_string_id)) {
+                    kind == types.type_enum_ref || kind == types.type_function_ref || kind == types.type_map_ref || kind == types.type_string_id)) {
                     emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(9, 0));
                 }
                 sore {
@@ -1199,6 +1327,10 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
                 }
             }
             push_register(code, 9);
+        }
+        moshi (opcode >= 41 && opcode <= 43) {
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            moshi (!emit_map(code, patches, type_result, function_id, entries, opcode)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
         moshi (opcode == 36) {
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
@@ -1234,12 +1366,29 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
             kaku inferred = array_inferred_descriptor(type_result, after[len(after) - 1]);
             moshi (descriptor == 0) { descriptor = inferred; }
             moshi (inferred < 0 || array_descriptor_width(descriptor) != array_descriptor_width(inferred) || array_descriptor_reference(descriptor) != array_descriptor_reference(inferred)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
-            moshi (!emit_array_construct(code, patches, type_result, function_id, entries, opcode, operand, descriptor)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            kaku working = operand_entries(entries);
+            kaku element = types.type_array_element(type_result.arena, after[len(after) - 1]);
+            kaku first = len(working);
+            moshi (opcode == 30 || opcode == 56) { first = first - operand; }
+            moshi (opcode == 57) { first = first - 1; }
+            kaku at = first;
+            aida (at < len(working)) {
+                moshi (!emit_array_operand(code, patches, type_result, function_id, working, at, element)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+                at = at + 1;
+            }
+            moshi (!emit_array_construct(code, patches, type_result, function_id, working, opcode, operand, descriptor)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
-        moshi (opcode == 33 || opcode == 35) { emit_set_index(code); }
+        moshi (opcode == 33 || opcode == 35) {
+            kaku working = operand_entries(type_result.blocks[function_id + 1].entry[offset]);
+            kaku element = types.type_array_element(type_result.arena, working[len(working) - 3]);
+            moshi (!emit_array_operand(code, patches, type_result, function_id, working, len(working) - 1, element)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            emit_set_index(code, type_result, working[len(working) - 2]);
+        }
         moshi (opcode == 55) {
             moshi (operand < 1 || operand > 7) { kaesu LowerError.InvalidOperand(offset); }
             pop_register(code, 9);
+            kaku entries = type_result.blocks[function_id + 1].entry[offset];
+            emit_unbox_register(code, type_result, entries[len(entries) - 1], 9);
             moshi (operand != 4) {
                 kaku maximum = 127; kaku minimum = 128;
                 moshi (operand == 2) { maximum = 32767; minimum = 32768; }
@@ -1261,11 +1410,16 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
             kaku inferred = array_inferred_descriptor(type_result, after[len(after) - 1]);
             moshi (descriptor == 0) { descriptor = inferred; }
             moshi (inferred < 0 || array_descriptor_width(descriptor) != array_descriptor_width(inferred) || array_descriptor_reference(descriptor) != array_descriptor_reference(inferred)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
-            moshi (!emit_array_with_capacity(code, patches, type_result, function_id, entries, descriptor)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            moshi (!emit_array_with_capacity(code, patches, type_result, function_id, entries, descriptor, entries[len(entries) - 1])) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
         moshi (opcode == 59 || opcode == 64 || opcode == 61 || opcode == 63) {
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
-            moshi (!emit_array_mutation(code, patches, type_result, function_id, entries, opcode)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            kaku working = operand_entries(entries);
+            moshi (opcode == 59) {
+                kaku element = types.type_array_element(type_result.arena, working[len(working) - 2]);
+                moshi (!emit_array_operand(code, patches, type_result, function_id, working, len(working) - 1, element)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
+            }
+            moshi (!emit_array_mutation(code, patches, type_result, function_id, working, opcode)) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
         }
         moshi (opcode == 60) { pop_register(code, 9); arm64.assembler_cbz_x(code, 9, "runtime_error"); emit(code, arm64.ldr_x(9, 9, 16)); push_register(code, 9); }
         moshi (opcode == 26 || opcode == 27) {
@@ -1286,6 +1440,34 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
     }
     arm64.assembler_label(code, block_label(prefix, len(data)));
     kaesu mu;
+}
+
+// Match the CLI's basic-value display rules for ordinary expressions.
+// Composite results are errors, never addresses printed as integers.
+waza emit_last_result(code: arm64.Assembler) -> unit {
+    move_x(code, 0, 25);
+    emit(code, arm64.cmp_imm_x(26, 128, iie)); arm64.assembler_b_cond(code, 3, "last_result_dispatch");
+    emit(code, arm64.sub_imm_x(26, 26, 128, iie)); arm64.assembler_cbz_x(code, 0, "last_result_nil");
+    emit(code, arm64.cmp_imm_x(26, 5, iie)); arm64.assembler_b_cond(code, 2, "last_result_dispatch");
+    emit(code, arm64.ldr_x(0, 0, 8));
+    arm64.assembler_label(code, "last_result_dispatch");
+    emit(code, arm64.cmp_imm_x(26, 1, iie)); arm64.assembler_b_cond(code, 0, "last_result_integer");
+    emit(code, arm64.cmp_imm_x(26, 2, iie)); arm64.assembler_b_cond(code, 0, "last_result_float32");
+    emit(code, arm64.cmp_imm_x(26, 3, iie)); arm64.assembler_b_cond(code, 0, "last_result_float64");
+    emit(code, arm64.cmp_imm_x(26, 4, iie)); arm64.assembler_b_cond(code, 0, "last_result_bool");
+    emit(code, arm64.cmp_imm_x(26, 5, iie)); arm64.assembler_b_cond(code, 0, "last_result_string");
+    emit(code, arm64.cmp_imm_x(26, 10, iie)); arm64.assembler_b_cond(code, 0, "last_result_nil");
+    // An unsupported display is a runtime error just as in the reference CLI.
+    kaku message = string.to_bytes("cannot display composite runtime value\n");
+    adjust_sp(code, 64, hai); kaku at = 0;
+    aida (at < len(message)) { emit(code, arm64.movz_x(9, int64(message[at]), 0)); emit(code, arm64.strb_w(9, 31, at)); at = at + 1; }
+    emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.add_imm_x(1, 31, 0, iie)); emit(code, arm64.movz_x(2, len(message), 0)); emit(code, arm64.movz_x(16, 4, 0)); emit(code, arm64.svc(128)); adjust_sp(code, 64, iie); arm64.assembler_b(code, "runtime_error");
+    arm64.assembler_label(code, "last_result_integer"); arm64.assembler_bl(code, "print_int64"); arm64.assembler_b(code, "normal_exit");
+    arm64.assembler_label(code, "last_result_float32"); emit(code, arm64.movz_x(1, 3, 0)); arm64.assembler_bl(code, "print_float"); arm64.assembler_b(code, "normal_exit");
+    arm64.assembler_label(code, "last_result_float64"); emit(code, arm64.movz_x(1, 4, 0)); arm64.assembler_bl(code, "print_float"); arm64.assembler_b(code, "normal_exit");
+    arm64.assembler_label(code, "last_result_bool"); arm64.assembler_bl(code, "print_bool"); arm64.assembler_b(code, "normal_exit");
+    arm64.assembler_label(code, "last_result_string"); arm64.assembler_bl(code, "print_string"); arm64.assembler_b(code, "normal_exit");
+    arm64.assembler_label(code, "last_result_nil"); arm64.assembler_bl(code, "print_nil"); arm64.assembler_b(code, "normal_exit");
 }
 
 waza emit_main_prologue(code: arm64.Assembler) -> unit {
@@ -1330,7 +1512,8 @@ waza emit_function_epilogue(code: arm64.Assembler, id: int64) -> unit {
     emit(code, arm64.ret());
 }
 
-waza emit_native_body(code: arm64.Assembler, function: mochi.Function, op: int64) -> bool {
+waza emit_native_body(code: arm64.Assembler, patches: []macho.AddressPatch, analysis: types.TypeAnalysis,
+    function: mochi.Function, op: int64) -> bool {
     moshi (nativefs.parameter_count(op) != function.parameter_count || !function.returns_value) { kaesu iie; }
     kaku roots = 0; kaku index = 0;
     aida (index < function.parameter_count) { moshi (nativefs.parameter_is_root(op, index)) { roots = roots + 1; } index = index + 1; }
@@ -1343,9 +1526,19 @@ waza emit_native_body(code: arm64.Assembler, function: mochi.Function, op: int64
         index = index + 1;
     }
     emit(code, arm64.add_imm_x(24, 31, 0, iie));
-    index = 0; aida (index < function.parameter_count) { emit(code, arm64.ldr_x(index, 21, index * 8)); index = index + 1; }
+    index = 0; aida (index < function.parameter_count) {
+        emit(code, arm64.ldr_x(index, 21, index * 8));
+        emit_unbox_register(code, analysis, analysis.locals[function.id][index], index);
+        index = index + 1;
+    }
     arm64.assembler_bl(code, nativefs.entry_label(op));
     emit_shadow_pop(code, shadow_bytes);
+    kaku result = analysis.returns[function.id];
+    moshi (is_nullable_scalar(analysis, result)) {
+        push_register(code, 0); kaku after: []int64 = [result];
+        moshi (!emit_nullable_box(code, patches, analysis, function.id, after)) { kaesu iie; }
+        pop_register(code, 0);
+    }
     arm64.assembler_b(code, function_end_label(function.id));
     kaesu hai;
 }
@@ -1875,19 +2068,47 @@ koukai waza compile_with_memory_budget(file: mochi.File, hard_cap: int64, gc_str
  moshi (capacity>runtime_max_heap_bytes) { capacity=runtime_max_heap_bytes; }
  kaesu compile_memory_impl(file,gc_stress,capacity,observation,iie);
 }
-waza compile_memory_impl(file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool) -> LowerResult {
+waza instruction_error(file: mochi.File) -> LowerError? {
+    kaku function = -1;
+    aida (function < len(file.functions)) {
+        kaku data = file.instructions; moshi (function >= 0) { data = file.functions[function].instructions; }
+        kaku at = 0;
+        aida (at < len(data)) {
+            kaku opcode = int64(data[at]); kaku width = types.type_instruction_width(opcode);
+            moshi (width <= 0 || (opcode == 66 && file.version < 15) || (opcode == 67 && file.version < 16)) { kaesu LowerError.UnsupportedOpcode((function + 1) * 1000000 + at * 100 + opcode); }
+            moshi (width > len(data) - at) { kaesu LowerError.InvalidOperand((function + 1) * 1000000 + at * 100 + opcode); }
+            moshi(opcode==67 && data[at+3]>uint8(1)){kaesu LowerError.InvalidOperand((function+1)*1000000+at*100+opcode);}
+            at = at + width;
+        }
+        function = function + 1;
+    }
+    kaesu mu;
+}
+waza compile_memory_impl(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool) -> LowerResult {
+    kaku file = input_file;
     kaku metadata_bytes = runtime_metadata_bytes;
     moshi (observation) { metadata_bytes = observation_metadata_bytes; }
     moshi (capacity < 64 || capacity > runtime_max_heap_bytes || capacity - (capacity / 16) * 16 != 0) { kaesu failed(LowerError.InvalidOperand(1)); }
-    moshi (file.version < 1 || file.version > 14 || file.global_count < 0 || file.global_count > 2048) { kaesu failed(LowerError.InvalidOperand(1)); }
-    kaku type_result = types.analyze_types(file);
+    moshi (file.version < 1 || file.version > 16 || file.global_count < 0 || file.global_count > 2048) { kaesu failed(LowerError.InvalidOperand(1)); }
+    kaku malformed = instruction_error(file); moshi (malformed != mu) { kaesu failed(malformed); }
+    kaku specialized = specialize(file);
+    file = specialized.file;
+    kaku type_result = specialized.analysis;
     moshi (type_result.error_detail != 0) { kaesu failed(LowerError.UnsafeType(type_result.error_detail)); }
     kaku ids = string_ids(file.constants);
     kaku code = arm64.assembler();
     kaku patches: []macho.AddressPatch = [];
     array.reserve(patches, file.global_count * 2);
     kaku native_fs = file_uses_nativefs(file);
+    kaku testing = uses_testing(file);
     emit_main_prologue(code);
+    kaku os_state = -1; kaku oi = 0;
+    aida (oi < len(file.functions)) { moshi (nativefs.operation(file.functions[oi].name) >= 15) { os_state = file.global_count; moshi (testing) { os_state = os_state + 1; } } oi = oi + 1; }
+    moshi (os_state >= 0) {
+        kaku at = len(code.words); emit(code, arm64.Instruction { word: uint32(0), error: mu }); emit(code, arm64.Instruction { word: uint32(0), error: mu });
+        array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: os_state * 8, register: 9 });
+        emit(code, arm64.str_x(0, 9, 0)); emit(code, arm64.str_x(1, 9, 8)); emit(code, arm64.str_x(2, 9, 16));
+    }
     moshi (native_fs) { emit(code, arm64.movz_x(27, 0, 0)); }
     kaku has_constants = iie;
     kaku constant_index = 0;
@@ -1913,13 +2134,25 @@ waza compile_memory_impl(file: mochi.File, gc_stress: bool, capacity: int64, obs
         move_x(code,0,23); emit(code,arm64.add_imm_x(1,23,3072,iie)); emit(code,arm64.ldr_x(2,23,8)); emit(code,arm64.sub_x(3,2,1)); emit(code,arm64.ldr_x(4,23,memory_Goal)); emit(code,arm64.movz_x(5,1,0)); arm64.assembler_bl(code,"memory.commit"); arm64.assembler_cbz_x(code,0,"runtime_oom");
         arm64.assembler_bl(code,"memory_sample");
     }
+    // A live last expression may outlast later allocations. Keep a single
+    // exact root slot, zero for raw scalars, linked below transient frames.
+    moshi (managed) {
+        emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(24, 31, 0)); emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.str_x(9, 31, 8)); emit(code, arm64.str_x(31, 31, 16)); emit(code, arm64.add_imm_x(24, 31, 0, iie));
+    }
     kaku problem = emit_block(code, patches, file, type_result, ids, file.instructions, "main_", -1);
     moshi (problem != mu) { kaesu failed(problem); }
-    arm64.assembler_cbz_x(code, 26, "normal_exit"); move_x(code, 0, 25); arm64.assembler_bl(code, "print_int64");
+    arm64.assembler_cbz_x(code, 26, "normal_exit");
+    emit_last_result(code);
     arm64.assembler_label(code, "normal_exit");
+    moshi (uses_testing_packet(file)) { emit_testing_completion(code); }
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
     moshi (native_fs) { arm64.assembler_bl(code, "nativefs_cleanup"); }
-    emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
+    moshi (testing) {
+        testing_counter_address(code, patches, file.global_count); emit(code, arm64.ldr_x(9, 8, 0));
+        emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(0, 1));
+    }
+    sore { emit(code, arm64.movz_x(0, 0, 0)); }
+    emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
     arm64.assembler_label(code, "runtime_error");
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
     emit(code, arm64.movz_x(0, 1, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
@@ -1939,27 +2172,32 @@ waza compile_memory_impl(file: mochi.File, gc_stress: bool, capacity: int64, obs
         kaku function = file.functions[id];
         moshi (function.id != id) { kaesu failed(LowerError.UnsupportedClosure()); }
         kaku native_op = nativefs.operation(function.name);
-        moshi (len(function.instructions) == 0 && native_op == nativefs.op_none) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
+        moshi (len(function.instructions) == 0 && native_op == nativefs.op_none && !types.is_testing_report(function.name)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
         arm64.assembler_label(code, function_label(id));
         moshi (!function_reachable[id]) { arm64.assembler_b(code, "runtime_error"); }
         sore {
             problem = emit_function_prologue(code, function); moshi (problem != mu) { kaesu failed(problem); }
-            moshi (native_op != nativefs.op_none) {
-                moshi (!emit_native_body(code, function, native_op)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
+            moshi (types.is_testing_report(function.name)) {
+                moshi (function.parameter_count != 2 || function.returns_value || len(function.captures) != 0) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
+                emit_testing_report(code, patches, file.global_count, type_result, id, types.is_testing_packet(function.name));
+            }
+            sore { moshi (native_op != nativefs.op_none) {
+                moshi (!emit_native_body(code, patches, type_result, function, native_op)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
             }
             sore {
                 problem = emit_block(code, patches, file, type_result, ids, function.instructions, string.concat(function_label(id), "_"), id);
                 moshi (problem != mu) { kaesu failed(problem); }
             }
-            emit_function_epilogue(code, id);
+            } emit_function_epilogue(code, id);
         }
         id = id + 1;
     }
     emit_print_int64(code);
     emit_print_bool_nil(code);
     emit_print_string(code);
+    emit_float_output_runtime(code);
     moshi (managed) { emit_managed_runtime(code, gc_stress, metadata_bytes, observation); }
-    moshi (native_fs) { nativefs.emit_runtime(code, empty_string_id(file.constants, ids) * 2 + 1); }
+    moshi (native_fs) { nativefs.emit_runtime(code, empty_string_id(file.constants, ids) * 2 + 1, patches, os_state); }
     kaku pi = 0;
     aida (pi < len(patches)) {
         kaku patch = patches[pi];
@@ -1989,5 +2227,7 @@ waza compile_memory_impl(file: mochi.File, gc_stress: bool, capacity: int64, obs
         kaesu failed(LowerError.EncodeFailure());
     }
     kaku data_words = file.global_count;
+    moshi (testing) { data_words = data_words + 1; }
+    moshi (os_state >= 0) { data_words = data_words + 3; }
     kaesu LowerResult { words: assembled.words, constants: constant_image(file.constants, ids, native_fs), patches: patches, globals: data_words, error: mu };
 }

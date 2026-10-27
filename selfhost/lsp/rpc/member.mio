@@ -1,0 +1,195 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/lsp";
+yobu "selfhost/typecheck";
+yobu "selfhost/lexer";
+
+kata MemberReceiver { checked: typecheck.TypeCheckResult; type_id: int64; is_type: bool; }
+
+waza member_receiver(analysis: DocumentAnalysis, end: int64) -> MemberReceiver? {
+    kaku selected: MemberReceiver?=mu;
+    kaku width=9223372036854775807;
+    kaku pi=0;
+    aida(pi<len(analysis.index.analysis.resolved) && pi<len(analysis.index.analysis.checked)){
+        kaku resolved=analysis.index.analysis.resolved[pi];
+        kaku checked=analysis.index.analysis.checked[pi];
+        kaku fi=0;
+        aida(fi<len(resolved.files)){
+            kaku file=resolved.files[fi];
+            moshi(file.path==analysis.path){
+                kaku at=0;
+                aida(at<len(checked.node_types)){
+                    kaku typed=checked.node_types[at];
+                    moshi(typed.node.file_id==fi && typed.node.node_id>=0 && typed.node.node_id<len(file.ast.nodes) && typed.type_id>0){
+                        kaku node=file.ast.nodes[typed.node.node_id];
+                        kaku size=node.span.end.offset-node.span.start.offset;
+                        moshi(node.span.end.offset==end && size<width){
+                            kaku symbol=lsp.symbol_at(analysis.index,analysis.path,end-1);
+                            kaku is_type=iie;
+                            moshi(symbol!=mu){is_type=symbol.kind==6 || symbol.kind==7;}
+                            selected=MemberReceiver {checked:checked,type_id:typed.type_id,is_type:is_type};
+                            width=size;
+                        }
+                    }
+                    at=at+1;
+                }
+            }
+            fi=fi+1;
+        }
+        pi=pi+1;
+    }
+    kaesu selected;
+}
+
+waza qualified_definition(package: string, name: string) -> string {
+    moshi(package==""){kaesu name;}
+    kaesu string.concat(package,string.concat(".",name));
+}
+
+waza enum_constructor_items(items: []Completion, definition: typecheck.EnumDefinition, snippets: bool) -> unit {
+    kaku vi=0;
+    aida(vi<len(definition.variants)){
+        kaku variant=definition.variants[vi];
+        kaku insertion=string.new_builder();
+        string.write_string(insertion,variant.name);string.write_string(insertion,"(");
+        kaku pi=0;
+        aida(pi<len(variant.fields)){
+            moshi(pi>0){string.write_string(insertion,", ");}
+            string.write_string(insertion,string.concat("${",string.concat(convert.format_int(pi+1),":value}")));
+            pi=pi+1;
+        }
+        string.write_string(insertion,")");
+        kaku insert=variant.name;moshi(snippets){insert=string.builder_string(insertion);}
+        offer(items,Completion {label:variant.name,detail:qualified_definition(definition.package_path,definition.name),insert:insert,kind:20,rank:1,snippet:snippets});
+        vi=vi+1;
+    }
+}
+
+waza typed_members(items: []Completion, receiver: MemberReceiver, snippets: bool) -> unit {
+    kaku checked=receiver.checked;
+    kaku id=receiver.type_id;
+    moshi(id<0 || id>=len(checked.types)){kaesu;}
+    kaku info=checked.types[id];
+    moshi(typecheck.type_kind_code(info.kind)==16){id=info.element;info=checked.types[id];}
+    moshi(typecheck.type_kind_code(info.kind)!=17){kaesu;}
+    kaku at=0;
+    aida(at<len(checked.structs)){
+        kaku definition=checked.structs[at];
+        moshi(qualified_definition(definition.package_path,definition.name)==info.name){
+            kaku names: []string=[];kaku pi=0;
+            aida(pi<len(definition.parameters)){array.push(names,definition.parameters[pi].name);pi=pi+1;}
+            pi=0;
+            aida(pi<len(definition.fields)){
+                kaku field=definition.fields[pi];
+                kaku concrete=typecheck.specialize_type(checked,field.type_id,names,info.arguments);
+                offer(items,Completion {label:field.name,detail:typecheck.type_name(checked,concrete),insert:field.name,kind:5,rank:1,snippet:iie});
+                pi=pi+1;
+            }
+            kaesu;
+        }
+        at=at+1;
+    }
+    moshi(!receiver.is_type){kaesu;}
+    at=0;
+    aida(at<len(checked.enums)){
+        kaku definition=checked.enums[at];
+        moshi(qualified_definition(definition.package_path,definition.name)==info.name){
+            kaku vi=0;
+            aida(vi<len(definition.variants)){
+                kaku variant=definition.variants[vi];
+                kaku insertion=string.new_builder();
+                string.write_string(insertion,variant.name);
+                string.write_string(insertion,"(");
+                kaku pi=0;
+                aida(pi<len(variant.fields)){
+                    moshi(pi>0){string.write_string(insertion,", ");}
+                    string.write_string(insertion,string.concat("${",string.concat(convert.format_int(pi+1),":value}")));
+                    pi=pi+1;
+                }
+                string.write_string(insertion,")");
+                kaku insert=variant.name;
+                moshi(snippets){insert=string.builder_string(insertion);}
+                offer(items,Completion {label:variant.name,detail:qualified_definition(definition.package_path,definition.name),insert:insert,kind:20,rank:1,snippet:snippets});
+                vi=vi+1;
+            }
+            kaesu;
+        }
+        at=at+1;
+    }
+}
+
+waza member_completions(state: Session, analysis: DocumentAnalysis, tokens: []lexer.Token, dot: int64, offset: int64) -> []Completion {
+    kaku items: []Completion=[];
+    moshi(dot<=0 || dot>=len(tokens)){kaesu items;}
+    kaku token=tokens[dot-1];
+    kaku end=token.end.offset;
+    kaku symbol=lsp.symbol_at(analysis.index,analysis.path,end-1);
+    // Recovery may omit the unfinished selector node. A fallback still uses
+    // the actual nearest visible declaration, including local alias shadowing.
+    moshi(symbol==mu && lexer.token_kind_code(token.kind)==2){
+        kaku best= -1;kaku at=0;
+        aida(at<len(analysis.index.symbols)){
+            kaku candidate=analysis.index.symbols[at];
+            moshi(candidate.name==token.literal){
+                kaku rank=completion_rank(analysis,candidate,offset);
+                moshi(rank>best){symbol=candidate;best=rank;}
+            }
+            at=at+1;
+        }
+    }
+    moshi(symbol!=mu){
+        moshi(symbol.kind==7){
+            kaku declared=lsp.declaration(analysis.index,symbol.key);
+            moshi(declared!=mu){
+                kaku at=0;
+                aida(at<len(declared.checked.enums)){
+                    kaku definition=declared.checked.enums[at];
+                    moshi(definition.symbol_id==declared.symbol.id){enum_constructor_items(items,definition,state.flags[5]);kaesu items;}
+                    at=at+1;
+                }
+            }
+        }
+        moshi(symbol.kind==10){
+            kaku package="";kaku pi=0;
+            aida(pi<len(analysis.index.analysis.resolved)){
+                kaku resolved=analysis.index.analysis.resolved[pi];kaku at=0;
+                aida(at<len(resolved.aliases)){
+                    kaku alias=resolved.aliases[at];
+                    moshi(alias.name==symbol.name && alias.file_id>=0 && alias.file_id<len(resolved.files)){
+                        moshi(resolved.files[alias.file_id].path==analysis.path){package=alias.package_path;}
+                    }
+                    at=at+1;
+                }
+                pi=pi+1;
+            }
+            moshi(package==""){kaesu items;}
+            kaku at=0;
+            aida(at<len(analysis.index.symbols)){
+                kaku exported=analysis.index.symbols[at];
+                moshi(exported.package_path==package && exported.public && exported.owner=="" && exported.kind!=8 && exported.kind!=9){
+                    offer(items,Completion {label:exported.name,detail:exported.detail,insert:exported.name,kind:completion_kind(exported.kind),rank:1,snippet:iie});
+                }
+                at=at+1;
+            }
+            kaesu items;
+        }
+    }
+    kaku receiver=member_receiver(analysis,end);
+    moshi(receiver==mu){moshi(symbol!=mu){
+        kaku declaration=lsp.declaration(analysis.index,symbol.key);
+        moshi(declaration!=mu){
+            kaku at=0;
+            aida(at<len(declaration.checked.symbol_types)){
+                kaku typed=declaration.checked.symbol_types[at];
+                moshi(typed.symbol_id==declaration.symbol.id && typed.package_path==declaration.symbol.package_path){
+                    receiver=MemberReceiver {checked:declaration.checked,type_id:typed.type_id,is_type:symbol.kind==6 || symbol.kind==7};
+                    nukeru;
+                }
+                at=at+1;
+            }
+        }
+    }}
+    moshi(receiver!=mu){typed_members(items,receiver,state.flags[5]);}
+    kaesu items;
+}

@@ -1,3 +1,4 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "kiso/utf8";
@@ -5,6 +6,7 @@ yobu "kiso/utf8";
 teisu max_source_bytes: int64 = 16777216;
 
 kata Scanner {
+    work: progress.Context;
     source: []uint8;
     offset: []int64;
     line: []int64;
@@ -39,6 +41,7 @@ waza at_eof(scanner: Scanner) -> bool {
 }
 
 waza advance(scanner: Scanner) -> unit {
+    moshi(!progress.checkpoint(scanner.work)){scanner.offset[0]=len(scanner.source);kaesu;}
     moshi (at_eof(scanner)) { kaesu; }
     kaku value = current(scanner);
     scanner.offset[0] = scanner.offset[0] + 1;
@@ -428,10 +431,13 @@ waza next_token(scanner: Scanner, version: int64) -> Token {
     kaesu simple_token(scanner, TokenKind.Illegal(), source_text(scanner.source, start.offset, end), start, 1);
 }
 
-koukai waza lex_version(source: []uint8, version: int64) -> LexResult {
+koukai waza lex_version(source: []uint8, version: int64) -> LexResult {kaesu lex_version_with_progress(source,version,progress.context());}
+koukai waza lex_with_progress(source: []uint8, work: progress.Context) -> LexResult {kaesu lex_version_with_progress(source,5,work);}
+koukai waza lex_version_with_progress(source: []uint8, version: int64, work: progress.Context) -> LexResult {
     kaku tokens = array.with_capacity[Token](64);
     kaku errors = array.with_capacity[LexError](1);
     kaku scanner = Scanner {
+        work: work,
         source: source,
         offset: [0],
         line: [1],
@@ -445,6 +451,7 @@ koukai waza lex_version(source: []uint8, version: int64) -> LexResult {
     }
     kaku invalid = 0;
     aida (invalid < len(source)) {
+        moshi(!progress.checkpoint(scanner.work)){scanner.offset[0]=len(source);nukeru;}
         kaku decoded = utf8.decode_one(source, invalid);
         moshi (!decoded.valid) {
             aida (scanner.offset[0] < invalid) { advance(scanner); }

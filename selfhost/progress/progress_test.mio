@@ -1,0 +1,23 @@
+yobu "kiso/testing";
+
+waza test_native_checkpoint_stop_reset_and_clear() -> unit {
+    kaku work=context();clear(work);testing.expect(pump(work) && checkpoint(work) && !cancelled(work),"ordinary compilation has no service hook");
+    kaku calls: []int64=[0];
+    install(work,waza () -> bool {calls[0]=calls[0]+1;kaesu iie;});
+    testing.expect(!pump(work) && cancelled(work),"installed service can stop work");
+    testing.expect(!checkpoint(work) && calls[0]==1,"stopped work does not call the hook again");
+    begin(work);testing.expect(!cancelled(work),"new request clears previous cancellation");
+    clear(work);testing.expect(pump(work) && checkpoint(work) && !cancelled(work) && calls[0]==1,"clear releases the service callback and restores normal compilation");
+}
+
+waza test_native_context_isolation_and_checkpoint_interval() -> unit {
+    kaku first=context();kaku second=context();kaku calls: []int64=[0];
+    install(first,waza () -> bool {calls[0]=calls[0]+1;kaesu iie;});
+    kaku at=0;aida(at<255){testing.expect(checkpoint(first),"bounded work before service checkpoint");at=at+1;}
+    testing.expect(calls[0]==0,"no callback before interval");
+    testing.expect(!checkpoint(first) && calls[0]==1 && cancelled(first),"interval invokes callback and stops invocation");
+    testing.expect(checkpoint(second) && pump(second) && !cancelled(second),"another compiler context remains independent");
+    install(first,waza () -> bool {calls[0]=calls[0]+1;kaesu hai;});
+    testing.expect(pump(first) && calls[0]==2 && !cancelled(first),"replacement releases cancellation state");
+    clear(first);testing.expect(pump(first) && calls[0]==2,"clear stops invoking captured service state");
+}

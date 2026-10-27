@@ -1,0 +1,52 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+yobu "selfhost/lsp";
+
+waza open_source(state: Session, uri: string, text: string) -> unit {
+    notify(state,string.concat("{\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":",string.concat(json.quote(uri),string.concat(",\"version\":1,\"languageId\":\"mio\",\"text\":",string.concat(json.quote(text),"}}}")))));
+}
+waza query(state: Session, uri: string, text: string, offset: int64, method: string, include: bool) -> json.Document {
+    kaku position=lsp.position_at(lsp.text_buffer(text),offset);kaku yes="false";moshi(include){yes="true";}
+    kaku output=string.new_builder();string.write_string(output,"{\"id\":99,\"method\":");string.write_string(output,json.quote(method));
+    string.write_string(output,",\"params\":{\"textDocument\":{\"uri\":");string.write_string(output,json.quote(uri));
+    string.write_string(output,"},\"position\":");string.write_string(output,position_json(position));string.write_string(output,",\"context\":{\"includeDeclaration\":");string.write_string(output,yes);string.write_string(output,"}}}");
+    kaesu request(state,string.builder_string(output));
+}
+waza test_rpc_navigation_uses_shared_frontend_and_utf16_ranges() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="file:///__mio_rpc_navigation__/main.mio";
+    kaku text="// 😀\nkoukai waza add(x: int64, y: int64) -> int64 { kaesu x+y; }\nwaza use() -> int64 { kaesu add(1,2); } // add\n";
+    open_source(state,uri,text);kaku at=string.index(text,"kaesu add")+6;
+    kaku hover=query(state,uri,text,at,"textDocument/hover",iie);kaku result=json.member(hover,hover.root,"result");kaku contents=json.member(hover,result,"contents");
+    testing.expect(rpc_code(hover)==0 && string.index(json.text(hover,json.member(hover,contents,"value")),"add(x: int64, y: int64) -> int64")>=0,"hover comes from checked function signature");
+    kaku definition=query(state,uri,text,at,"textDocument/definition",iie);result=json.member(definition,definition.root,"result");
+    testing.expect(result>=0 && len(definition.values[result].children)==1,"one resolver-backed definition");
+    moshi(result>=0 && len(definition.values[result].children)==1){
+        kaku location=definition.values[result].children[0];testing.expect(json.text(definition,json.member(definition,location,"uri"))==uri,"definition retains client URI");
+        kaku range=json.member(definition,location,"range");kaku start=json.member(definition,range,"start");kaku line=json.integer(definition,json.member(definition,start,"line"));testing.expect(line!=mu,"definition line provided");moshi(line!=mu){testing.expect(line==1,"UTF16 position follows emoji comment line");}
+    }
+    kaku refs=query(state,uri,text,at,"textDocument/references",hai);result=json.member(refs,refs.root,"result");testing.expect(result>=0 && len(refs.values[result].children)==2,"declaration and bound call only, excluding comment");
+    refs=query(state,uri,text,at,"textDocument/references",iie);result=json.member(refs,refs.root,"result");testing.expect(result>=0 && len(refs.values[result].children)==1,"includeDeclaration false preserved");
+    kaku symbols=query(state,uri,text,0,"textDocument/documentSymbol",iie);result=json.member(symbols,symbols.root,"result");testing.expect(result>=0 && len(symbols.values[result].children)==2,"top-level function document symbols");
+}
+waza test_rpc_cross_package_overlays_and_fresh_dependency_edits() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="file:///__mio_rpc_import__/main.mio";kaku dep="file:///__mio_rpc_import__/dep/main.mio";
+    kaku text="yobu \"./dep\"; waza main() -> int64 { kaesu dep.add(1,2); }";
+    open_source(state,uri,text);open_source(state,dep,"koukai waza add(x: int64, y: int64) -> int64 { kaesu x+y; }");
+    kaku at=string.index(text,"dep.add")+4;kaku definition=query(state,uri,text,at,"textDocument/definition",iie);kaku result=json.member(definition,definition.root,"result");
+    testing.expect(result>=0 && len(definition.values[result].children)==1,"overlay dependency resolves without disk writes");
+    moshi(result>=0 && len(definition.values[result].children)==1){kaku location=definition.values[result].children[0];testing.expect(json.text(definition,json.member(definition,location,"uri"))==dep,"import definition targets original dependency URI");}
+    notify(state,string.concat("{\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":",string.concat(json.quote(dep),",\"version\":2},\"contentChanges\":[{\"text\":\"koukai waza other() -> int64 { kaesu 1; }\"}]}}")));
+    definition=query(state,uri,text,at,"textDocument/definition",iie);result=json.member(definition,definition.root,"result");testing.expect(result>=0 && definition.values[result].kind==0,"removed dependency declaration never returns a stale definition");
+}
+waza test_rpc_unsaved_document_and_invalid_navigation_params() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="untitled:新しい文書";kaku text="waza value() -> int64 { kaesu 42; } chant(value());";open_source(state,uri,text);
+    kaku definition=query(state,uri,text,string.index(text,"chant(value")+6,"textDocument/definition",iie);kaku result=json.member(definition,definition.root,"result");
+    testing.expect(result>=0 && len(definition.values[result].children)==1,"memory-only unsaved source can be analyzed");
+    moshi(result>=0 && len(definition.values[result].children)==1){testing.expect(json.text(definition,json.member(definition,definition.values[result].children[0],"uri"))==uri,"unsaved definition retains original URI, not a fabricated file");}
+    testing.expect(rpc_code(request(state,"{\"id\":1,\"method\":\"textDocument/hover\",\"params\":{}}"))== -32602,"navigation requires a document URI");
+    notify(state,"{\"method\":\"$/cancelRequest\",\"params\":{\"id\":99}}");testing.expect(rpc_code(query(state,uri,text,0,"textDocument/hover",iie))== -32800,"registered semantic request honors queued cancellation");
+}

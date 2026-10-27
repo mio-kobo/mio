@@ -1,0 +1,38 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza completion_items(reply: json.Document) -> []int64 {
+    kaku result=json.member(reply,reply.root,"result");kaku items=json.member(reply,result,"items");moshi(items<0){testing.fail("completion list missing");kaesu [];}kaesu reply.values[items].children;
+}
+waza completion_named(reply: json.Document, name: string) -> int64 {
+    kaku items=completion_items(reply);kaku at=0;aida(at<len(items)){moshi(json.text(reply,json.member(reply,items[at],"label"))==name){kaesu items[at];}at=at+1;}kaesu -1;
+}
+waza test_rpc_completion_visible_scope_keywords_and_client_snippets() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"textDocument\":{\"completion\":{\"completionItem\":{\"snippetSupport\":true}}}}}}");
+    kaku uri="untitled:completion";kaku text="waza helper(value: int64) -> int64 {kaesu value;}\nwaza main() -> int64 {\n kaku local=1;\n    \n kaesu local;\n}";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"    \n")+4,"textDocument/completion",iie);
+    kaku names: []string=["local","helper","main","kaku","int64","len","chant"];kaku at=0;
+    aida(at<len(names)){testing.expect(completion_named(reply,names[at])>=0,string.concat("visible completion: ",names[at]));at=at+1;}
+    kaku local=completion_named(reply,"local");testing.expect(json.text(reply,json.member(reply,local,"detail"))=="int64","local completion type comes from checker");
+    kaku helper=completion_named(reply,"helper");testing.expect(json.text(reply,json.member(reply,helper,"insertText"))=="helper(${1:value})","function snippet uses actual parameter name");
+    kaku format=json.integer(reply,json.member(reply,helper,"insertTextFormat"));moshi(format==mu){testing.fail("snippet format");}sore{testing.expect(format==2,"snippet capability honored");}
+}
+waza test_rpc_completion_shadowing_and_block_lifetime() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:shadow-completion";
+    kaku text="waza main() -> int64 {kaku value=1; moshi(hai){kaku value=\"text\"; kaku len=2;\n    \n kaesu len;}\n   \n kaesu value;}";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"    \n")+4,"textDocument/completion",iie);kaku item=completion_named(reply,"value");
+    testing.expect(json.text(reply,json.member(reply,item,"detail"))=="string","nearest lexical declaration wins");
+    item=completion_named(reply,"len");kaku kind=json.integer(reply,json.member(reply,item,"kind"));moshi(kind==mu){testing.fail("shadowed builtin kind");}sore{testing.expect(kind==6,"local shadows builtin completion");}
+    kaku items=completion_items(reply);kaku count=0;kaku at=0;aida(at<len(items)){moshi(json.text(reply,json.member(reply,items[at],"label"))=="len"){count=count+1;}at=at+1;}testing.expect(count==1,"shadowed builtin is offered once");
+    reply=query(state,uri,text,string.index(text,"\n   \n")+4,"textDocument/completion",iie);item=completion_named(reply,"value");testing.expect(json.text(reply,json.member(reply,item,"detail"))=="int64","inner block name does not leak outside its lifetime");
+}
+waza test_rpc_completion_suppresses_comments_strings_and_uses_utf16_edits() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:completion-context";
+    kaku text="kaku value=1; // comment here\n";open_source(state,uri,text);kaku reply=query(state,uri,text,string.index(text,"here"),"textDocument/completion",iie);testing.expect(len(completion_items(reply))==0,"comments suppress completion");
+    text="kaku text=\"hello world\";";open_source(state,uri,text);reply=query(state,uri,text,string.index(text,"world"),"textDocument/completion",iie);testing.expect(len(completion_items(reply))==0,"strings suppress completion");
+    text="kaku s=\"😀\"; kaku value=1; chant(val);";open_source(state,uri,text);kaku start=string.index(text,"chant(val")+6;kaku offset=start+3;
+    reply=query(state,uri,text,offset,"textDocument/completion",iie);kaku item=completion_named(reply,"value");testing.expect(item>=0,"identifier prefix after an emoji matches declared symbol");
+    kaku edit=json.member(reply,item,"textEdit");kaku range=json.member(reply,edit,"range");kaku position=json.member(reply,range,"start");
+    testing.expect(json.render(reply,position)==position_json(lsp.position_at(lsp.text_buffer(text),start)),"completion replacement range uses UTF16, not byte columns");
+}

@@ -1,0 +1,82 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/lower/types";
+yobu "kiso/string";
+
+// Maps use ordinary exact-bitmap managed Struct objects, so the existing
+// non-moving collector, LOS and remembered-set protocol remain authoritative.
+// Descriptor: one reference field (head). Entry: next, key, nullable value.
+// Lookup is linear; replacing a key updates its entry without retaining history.
+waza emit_map_header(code: arm64.Assembler, count: int64, bitmap: int64) -> unit {
+    emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.str_x(9, 12, 0));
+    emit(code, arm64.movz_x(9, count, 0));
+    emit(code, arm64.str_x(9, 12, 8)); emit(code, arm64.str_x(9, 12, 16));
+    emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.str_x(9, 12, 24));
+    emit(code, arm64.movz_x(9, bitmap, 0)); emit(code, arm64.str_x(9, 12, 32));
+}
+
+waza emit_map(code: arm64.Assembler, patches: []macho.AddressPatch,
+    analysis: types.TypeAnalysis, function_id: int64, entries: []int64, opcode: int64) -> bool {
+    moshi (opcode == 41) {
+        kaku shadow = emit_shadow_push(code, patches, analysis, function_id, entries);
+        moshi (shadow < 0) { kaesu iie; }
+        move_bits(code, 0, uint32(0), uint32(48)); move_bits(code, 1, uint32(0), uint32(100));
+        arm64.assembler_bl(code, "runtime_alloc"); emit_shadow_pop(code, shadow);
+        arm64.assembler_cbz_x(code, 0, "runtime_oom"); move_x(code, 12, 0);
+        emit_map_header(code, 1, 1); emit(code, arm64.str_x(31, 12, 40)); push_register(code, 12);
+        kaesu hai;
+    }
+    kaku count = 2; moshi (opcode == 43) { count = 3; }
+    kaku first = len(entries) - count; moshi (first < 0) { kaesu iie; }
+    kaku key = entries[first + 1]; kaku kind = types.type_kind(analysis, key);
+    moshi (kind != types.type_integer && kind != types.type_bool && kind != types.type_string_id) { kaesu iie; }
+    kaku prefix = block_label("map_", len(code.words));
+    kaku loop = string.concat(prefix, "_loop"); kaku missing = string.concat(prefix, "_missing");
+    kaku found = string.concat(prefix, "_found"); kaku done = string.concat(prefix, "_done");
+    // x22 is the Mio call-depth counter, not a disposable cursor register.
+    // Preserve it while searching; runtime allocation helpers preserve x22,
+    // and descriptor/entry operands remain in the exact Shadow Frame.
+    emit(code, arm64.sub_imm_x(31, 31, 16, iie)); emit(code, arm64.str_x(22, 31, 0));
+    emit(code, arm64.ldr_x(9, 19, first * 8)); arm64.assembler_cbz_x(code, 9, "runtime_error");
+    emit(code, arm64.ldr_x(22, 9, 40));
+    arm64.assembler_label(code, loop); arm64.assembler_cbz_x(code, 22, missing);
+    emit(code, arm64.ldr_x(9, 22, 48)); emit(code, arm64.ldr_x(10, 19, (first + 1) * 8));
+    moshi (kind == types.type_string_id) { emit_string_equal(code, 11); arm64.assembler_cbnz_x(code, 9, found); }
+    sore {
+        emit_unbox_register(code, analysis, key, 9); emit_unbox_register(code, analysis, key, 10);
+        emit(code, arm64.cmp_x(9, 10)); arm64.assembler_b_cond(code, 0, found);
+    }
+    emit(code, arm64.ldr_x(22, 22, 40)); arm64.assembler_b(code, loop);
+    arm64.assembler_label(code, found);
+    moshi (opcode == 42) {
+        emit(code, arm64.ldr_x(9, 22, 56)); emit(code, arm64.sub_imm_x(20, 20, 16, iie)); push_register(code, 9);
+    }
+    sore {
+        emit(code, arm64.ldr_x(9, 19, (first + 2) * 8)); emit(code, arm64.str_x(9, 22, 56));
+        emit_gen_remember(code, 22); emit(code, arm64.sub_imm_x(20, 20, 24, iie));
+    }
+    arm64.assembler_b(code, done); arm64.assembler_label(code, missing);
+    moshi (opcode == 42) {
+        emit(code, arm64.sub_imm_x(20, 20, 16, iie)); emit(code, arm64.movz_x(9, 0, 0)); push_register(code, 9);
+    }
+    sore {
+        kaku value = entries[first + 2]; moshi (!root_node_ok(analysis, value)) { kaesu iie; }
+        kaku bitmap = 1;
+        moshi (types.type_is_heap_reference(analysis, key)) { bitmap = bitmap + 2; }
+        moshi (types.type_is_heap_reference(analysis, value)) { bitmap = bitmap + 4; }
+        kaku shadow = emit_shadow_push(code, patches, analysis, function_id, entries);
+        moshi (shadow < 0) { kaesu iie; }
+        move_bits(code, 0, uint32(0), uint32(64)); move_bits(code, 1, uint32(0), uint32(100));
+        arm64.assembler_bl(code, "runtime_alloc"); emit_shadow_pop(code, shadow);
+        arm64.assembler_cbz_x(code, 0, "runtime_oom"); move_x(code, 12, 0);
+        emit_map_header(code, 3, bitmap);
+        emit(code, arm64.ldr_x(10, 19, first * 8)); emit(code, arm64.ldr_x(9, 10, 40)); emit(code, arm64.str_x(9, 12, 40));
+        emit(code, arm64.ldr_x(9, 19, (first + 1) * 8)); emit(code, arm64.str_x(9, 12, 48));
+        emit(code, arm64.ldr_x(9, 19, (first + 2) * 8)); emit(code, arm64.str_x(9, 12, 56));
+        emit(code, arm64.str_x(12, 10, 40)); emit_gen_remember(code, 10);
+        emit(code, arm64.sub_imm_x(20, 20, 24, iie));
+    }
+    arm64.assembler_label(code, done);
+    emit(code, arm64.ldr_x(22, 31, 0)); emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    kaesu hai;
+}

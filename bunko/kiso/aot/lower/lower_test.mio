@@ -1,8 +1,26 @@
+yobu "kiso/array";
 yobu "kiso/aot/arm64";
 yobu "kiso/aot/lower/types";
 yobu "kiso/encoding/binary";
 yobu "kiso/encoding/mochi";
 yobu "kiso/testing";
+
+waza typed_call_case(flag: uint8, returns: bool) -> mochi.File {
+    kaku body: []uint8=[26];moshi(returns){body=[8,27];}
+    kaku main: []uint8=[44,0,0,67,0,0,flag];moshi(flag==uint8(1)){array.push(main,uint8(3));}
+    kaku functions: []mochi.Function=[mochi.Function {id:0,name:"callback",name_bytes:[],parameter_count:0,local_count:0,returns_value:returns,captures:[],instructions:body}];
+    kaesu mochi.File {version:16,constants:[],global_count:0,instructions:main,functions:functions};
+}
+waza test_typed_indirect_call_shapes_are_verified() -> unit {
+    testing.expect(compile(typed_call_case(uint8(1),hai)).error==mu,"typed value callback lowers");
+    testing.expect(compile(typed_call_case(uint8(0),iie)).error==mu,"typed unit callback lowers");
+    testing.expect(compile(typed_call_case(uint8(0),hai)).error!=mu,"value target cannot use unit return shape");
+    testing.expect(compile(typed_call_case(uint8(1),iie)).error!=mu,"unit target cannot use value return shape");
+    testing.expect(compile(typed_call_case(uint8(2),hai)).error!=mu,"invalid typed return flag fails closed");
+    kaku file=typed_call_case(uint8(1),hai);
+    kaku legacy=mochi.File {version:15,constants:file.constants,global_count:0,instructions:file.instructions,functions:file.functions};
+    testing.expect(compile(legacy).error!=mu,"typed call cannot enter a v15 module");
+}
 
 waza empty_v14(instructions: []uint8) -> mochi.File {
     kaku constants: []mochi.Constant = [];
@@ -17,12 +35,32 @@ waza test_empty_program_lowers_to_native_exit() -> unit {
     testing.expect(len(result.words) > 3, "runtime exit and helper should be emitted");
 }
 
+waza test_v15_constraints_preserve_nullable_and_reject_conflicts() -> unit {
+    kaku file=mochi.File {version:15,constants:[],global_count:0,instructions:[21,66,1,3],functions:[]};
+    kaku analyzed=types.analyze_types(file);
+    testing.expect(analyzed.error_detail==0,"declared scalar type fills an otherwise nil-only value");
+    kaku stack=analyzed.blocks[0].entry[3];
+    moshi(len(stack)==1){
+        testing.expect(types.type_kind(analyzed,stack[0])==types.type_integer,"declared integer representation retained");
+        testing.expect(types.type_nullable(analyzed,stack[0]),"type constraint never removes nullable state");
+    } sore {testing.fail("typed scalar entry missing");}
+    testing.expect(compile(file).error==mu,"nullable constraint lowers without a cast");
+    kaku conflict=mochi.File {version:15,constants:[],global_count:0,instructions:[8,66,1,3],functions:[]};
+    testing.expect(compile(conflict).error!=mu,"boolean cannot be asserted to be integer");
+    kaku empty_stack=mochi.File {version:15,constants:[],global_count:0,instructions:[66,1],functions:[]};
+    testing.expect(compile(empty_stack).error!=mu,"constraint requires an operand");
+    testing.expect(compile(empty_v14([21,66,1,3])).error!=mu,"legacy version still rejects opcode 66");
+}
+
 waza test_unsupported_opcode_fails_closed() -> unit {
-    kaku unsupported = compile(empty_v14([41]));
+    // Opcode 41 is now the supported native Map constructor. Keep the
+    // rejection gate on the first opcode outside the implemented v14 set.
+    testing.expect(compile(empty_v14([41])).error == mu, "native empty Map opcode is supported");
+    kaku unsupported = compile(empty_v14([66]));
     kaku unsupported_error = unsupported.error;
     moshi (unsupported_error != mu) {
         testing.expect(error_code(unsupported_error) == 2, "unsupported opcode classification");
-        testing.expect(error_detail(unsupported_error) == 41, "unsupported opcode reports main byte offset and opcode");
+        testing.expect(error_detail(unsupported_error) == 66, "unsupported opcode reports main byte offset and opcode");
     }
     sore { testing.expect(iie, "unsupported opcode must fail"); }
 

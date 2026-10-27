@@ -14,7 +14,11 @@ waza test_mach_o_header_layout_and_limits() -> unit {
     testing.expect(binary.read_u32_le(image.bytes, 768).value == words[0], "entry machine code is little endian");
     testing.expect(image.layout.const_offset == 784 && image.bytes[784] == uint8(77) && image.bytes[787] == uint8(0), "constant bytes preserve embedded NUL");
     testing.expect(executable(ImageSpec { words: [], constants: [], globals: 0, patches: patches }).error != mu, "empty text rejected");
-    testing.expect(executable(ImageSpec { words: words, constants: [], globals: 2049, patches: patches }).error != mu, "global limit rejected");
+    kaku full = executable(ImageSpec { words: words, constants: [], globals: 2052, patches: patches });
+    testing.expect(full.error == mu && full.layout.linkedit_offset - full.layout.data_offset == 32768, "full user globals and private ABI state have two data pages");
+    testing.expect(binary.read_u32_le(full.bytes, 288).value == uint32(32768), "data segment VM size covers private ABI state");
+    testing.expect(binary.read_u32_le(full.bytes, 304).value == uint32(32768), "data segment file size covers private ABI state");
+    testing.expect(executable(ImageSpec { words: words, constants: [], globals: 2053, patches: patches }).error != mu, "physical global limit rejected");
 }
 
 waza test_image_address_patch_bounds() -> unit {

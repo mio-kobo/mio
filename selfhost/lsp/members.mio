@@ -1,0 +1,115 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+yobu "selfhost/typecheck";
+yobu "selfhost/progress";
+
+waza semantic_node_type(checked: typecheck.TypeCheckResult, file: int64, node: int64) -> int64 {
+    kaku at=0;aida(at<len(checked.node_types)){kaku current=checked.node_types[at];moshi(current.node.file_id==file && current.node.node_id==node){kaesu current.type_id;}at=at+1;}kaesu 0;
+}
+waza semantic_binding(package: resolver.ResolvedPackage, file: int64, node: int64) -> int64 {
+    kaku at=0;aida(at<len(package.bindings)){kaku current=package.bindings[at];moshi(current.reference.file_id==file && current.reference.node_id==node){kaesu current.symbol_id;}at=at+1;}kaesu -1;
+}
+waza semantic_named_owner(symbols: []SemanticSymbol, checked: typecheck.TypeCheckResult, requested: int64) -> string {
+    kaku id=requested;moshi(id<=0 || id>=len(checked.types)){kaesu "";}
+    moshi(typecheck.type_kind_code(checked.types[id].kind)==16){id=checked.types[id].element;}
+    moshi(id<=0 || id>=len(checked.types) || typecheck.type_kind_code(checked.types[id].kind)!=17){kaesu "";}
+    kaku name=checked.types[id].name;kaku at=0;
+    aida(at<len(symbols)){kaku symbol=symbols[at];moshi((symbol.kind==6 || symbol.kind==7) && name==string.concat(symbol.package_path,string.concat(".",symbol.name))){kaesu symbol.key;}at=at+1;}kaesu "";
+}
+waza semantic_member(symbols: []SemanticSymbol, owner: string, name: string) -> SemanticSymbol? {
+    moshi(owner==""){kaesu mu;}kaku at=0;aida(at<len(symbols)){kaku symbol=symbols[at];moshi(symbol.owner==owner && symbol.name==name && (symbol.kind==13 || symbol.kind==8)){kaesu symbol;}at=at+1;}kaesu mu;
+}
+waza member_occurrence(occurrences: []Occurrence, source: SemanticSource, node: parser.Node, member: SemanticSymbol, last: bool) -> unit {
+    kaku selection=semantic_selection(source,node.span,member.name,last);
+    array.push(occurrences,Occurrence {path:source.path,start:selection.start.offset,end:selection.end.offset,key:member.key,declaration:iie});
+}
+waza semantic_members(analysis: frontend.AnalysisResult, sources: []SemanticSource, symbols: []SemanticSymbol, occurrences: []Occurrence, work: progress.Context) -> unit {
+    kaku pi=0;
+    // Field identities belong to their actual type declaration, not to a name
+    // shared by unrelated records or a use-site's substituted field type.
+    aida(pi<len(analysis.resolved) && pi<len(analysis.checked)){
+        kaku package=analysis.resolved[pi];kaku checked=analysis.checked[pi];kaku si=0;
+        aida(si<len(package.symbols)){
+            moshi(!progress.checkpoint(work)){kaesu;}
+            kaku symbol=package.symbols[si];kaku ref=symbol.declaration;kaku kind=resolver.symbol_kind_code(symbol.kind);
+            moshi(symbol.package_path==package.package_path && (kind==6 || kind==7) && ref.file_id>=0 && ref.file_id<len(package.files)){
+                kaku file=package.files[ref.file_id];kaku source=semantic_source(sources,file.path);
+                moshi(source>=0 && ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){
+                    kaku node=file.ast.nodes[ref.node_id];kaku owner=semantic_key(analysis,symbol);kaku ci=node.integer;
+                    aida(ci<len(node.children)){
+                        kaku child=file.ast.nodes[node.children[ci]];
+                        moshi(kind==6){
+                            kaku detail="";kaku di=0;
+                            aida(di<len(checked.structs)){kaku definition=checked.structs[di];moshi(definition.symbol_id==symbol.id && definition.package_path==symbol.package_path){kaku fi=0;aida(fi<len(definition.fields)){moshi(definition.fields[fi].name==child.text){detail=typecheck.type_name(checked,definition.fields[fi].type_id);}fi=fi+1;}}di=di+1;}
+                            kaku key=string.concat(owner,string.concat("/field:",child.text));kaku selection=semantic_selection(sources[source],child.span,child.text,iie);
+                            array.push(symbols,SemanticSymbol {key:key,name:child.text,kind:13,package_path:symbol.package_path,path:file.path,span:child.span,selection:selection,detail:detail,public:symbol.public,owner:owner});
+                            array.push(occurrences,Occurrence {path:file.path,start:selection.start.offset,end:selection.end.offset,key:key,declaration:hai});
+                        }sore{
+                            kaku vi=0;aida(vi<len(symbols)){kaku current=symbols[vi];moshi(current.path==file.path && current.kind==8 && current.span.start.offset==child.span.start.offset){symbols[vi]=SemanticSymbol {key:current.key,name:current.name,kind:current.kind,package_path:current.package_path,path:current.path,span:current.span,selection:current.selection,detail:string.concat(symbol.name,string.concat(".",current.name)),public:current.public,owner:owner};}vi=vi+1;}
+                        }
+                        ci=ci+1;
+                    }
+                }
+            }si=si+1;
+        }pi=pi+1;
+    }
+    pi=0;
+    aida(pi<len(analysis.resolved) && pi<len(analysis.checked)){
+        kaku package=analysis.resolved[pi];kaku checked=analysis.checked[pi];kaku fi=0;
+        aida(fi<len(package.files)){
+            kaku file=package.files[fi];kaku source=semantic_source(sources,file.path);kaku ni=0;
+            aida(source>=0 && ni<len(file.ast.nodes)){
+                moshi(!progress.checkpoint(work)){kaesu;}
+                kaku node=file.ast.nodes[ni];kaku kind=parser.node_kind_code(node.kind);
+                moshi(kind==27 && len(node.children)==1){
+                    kaku receiver=node.children[0];kaku enum_type=iie;kaku bound=semantic_binding(package,fi,receiver);moshi(bound>=0 && bound<len(package.symbols)){enum_type=resolver.symbol_kind_code(package.symbols[bound].kind)==7;}kaku owner=semantic_named_owner(symbols,checked,semantic_node_type(checked,fi,receiver));
+                    // Enum constructor receivers are type names, for which the
+                    // checker deliberately does not record a value expression.
+                    moshi(owner=="" && enum_type){owner=semantic_key(analysis,package.symbols[bound]);}
+                    kaku member=semantic_member(symbols,owner,node.text);moshi(member!=mu){moshi(member.kind!=8 || enum_type){member_occurrence(occurrences,sources[source],node,member,hai);}}
+                }
+                moshi(kind==28){
+                    kaku owner=semantic_named_owner(symbols,checked,semantic_node_type(checked,fi,ni));kaku ci=node.integer;
+                    aida(ci<len(node.children)){kaku field=file.ast.nodes[node.children[ci]];kaku member=semantic_member(symbols,owner,field.text);moshi(member!=mu){member_occurrence(occurrences,sources[source],field,member,iie);}ci=ci+1;}
+                }
+                ni=ni+1;
+            }fi=fi+1;
+        }pi=pi+1;
+    }
+}
+
+// Expression details refine a field use's generic declaration without changing
+// the stable declaration identity used by navigation and references.
+koukai waza expression_type(index: SemanticIndex, path: string, offset: int64) -> string {
+    kaku result="";kaku width=9223372036854775807;kaku pi=0;
+    aida(pi<len(index.analysis.resolved) && pi<len(index.analysis.checked)){
+        kaku package=index.analysis.resolved[pi];kaku checked=index.analysis.checked[pi];kaku fi=0;
+        aida(fi<len(package.files)){
+            kaku file=package.files[fi];kaku at=0;
+            aida(file.path==path && at<len(file.ast.nodes)){
+                kaku node=file.ast.nodes[at];kaku kind=parser.node_kind_code(node.kind);kaku size=node.span.end.offset-node.span.start.offset;
+                moshi(((kind>=4 && kind<=13) || (kind>=22 && kind<=30) || kind==33) && offset>=node.span.start.offset && offset<node.span.end.offset && size<width){
+                    // An untyped innermost expression is an error, not evidence
+                    // for its enclosing (possibly unit-returning) call's type.
+                    width=size;result="";kaku id=semantic_node_type(checked,fi,at);moshi(id>0 && id<len(checked.types)){result=typecheck.type_name(checked,id);}
+                }at=at+1;
+            }fi=fi+1;
+        }pi=pi+1;
+    }kaesu result;
+}
+
+koukai waza builtin_at(index: SemanticIndex, path: string, offset: int64) -> string {
+    kaku pi=0;aida(pi<len(index.analysis.resolved)){
+        kaku package=index.analysis.resolved[pi];kaku at=0;
+        aida(at<len(package.bindings)){
+            kaku binding=package.bindings[at];kaku ref=binding.reference;
+            moshi(binding.symbol_id>=0 && binding.symbol_id<len(package.symbols) && ref.file_id>=0 && ref.file_id<len(package.files)){
+                kaku symbol=package.symbols[binding.symbol_id];kaku kind=resolver.symbol_kind_code(symbol.kind);kaku file=package.files[ref.file_id];
+                moshi((kind==11 || kind==12) && file.path==path && ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){kaku node=file.ast.nodes[ref.node_id];moshi(offset>=node.span.start.offset && offset<node.span.end.offset){kaesu symbol.name;}}
+            }at=at+1;
+        }pi=pi+1;
+    }kaesu "";
+}

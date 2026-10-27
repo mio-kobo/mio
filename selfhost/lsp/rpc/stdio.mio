@@ -1,0 +1,33 @@
+yobu "selfhost/progress";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+
+koukai kata ServeResult {status: int64; error: string;}
+koukai waza serve(state: Session, input: fs.File, output: fs.File) -> ServeResult {
+    kaku io=transport(input,output);
+    progress.install(state.work,waza () -> bool {kaesu pump_transport(state,io);});
+    kaku result=serve_cooperative(state,io);
+    progress.clear(state.work);
+    kaesu result;
+}
+
+koukai waza command(args: []string) -> int64 {
+    kaku at=2;
+    aida(at<len(args)){
+        kaku option=args[at];
+        moshi(option=="help" || option=="-h" || option=="--help"){chant("Usage: mio lsp [--stdio]");kaesu 0;}
+        moshi(option!="--stdio"){
+            fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: unknown argument ",string.concat(option,"\nUsage: mio lsp [--stdio]\n"))));kaesu 2;
+        }at=at+1;
+    }
+    kaku opened_input=fs.open_read("/dev/stdin");kaku input=opened_input.file;
+    moshi(input==mu){fs.write_all("/dev/stderr",string.to_bytes("mio lsp: cannot open stdin\n"));kaesu 1;}
+    kaku opened_output=fs.open_write("/dev/stdout");kaku output=opened_output.file;
+    moshi(output==mu){fs.close(input);fs.write_all("/dev/stderr",string.to_bytes("mio lsp: cannot open stdout\n"));kaesu 1;}
+    kaku result=serve(session(".",os.getenv("MIO_BUNKO")),input,output);
+    fs.close(input);fs.close(output);
+    moshi(result.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ",string.concat(result.error,"\n"))));}
+    kaesu result.status;
+}

@@ -131,7 +131,7 @@ func TestM19bPureMioNativeMetadata(t *testing.T) {
 	root, _ := filepath.Abs("../..")
 	var packageSource strings.Builder
 	imports := map[string]bool{}
-	for _, name := range []string{"lower.mio", "observation.mio", "generational.mio", "large_objects.mio", "memory_runtime.mio", "memory_policy.mio"} {
+	for _, name := range []string{"lower.mio", "observation.mio", "generational.mio", "large_objects.mio", "memory_runtime.mio", "memory_policy.mio", "map.mio", "float_output.mio", "specialize.mio", "testing.mio"} {
 		data, err := os.ReadFile(filepath.Join(root, "bunko/kiso/aot/lower", name))
 		if err != nil {
 			t.Fatal(err)

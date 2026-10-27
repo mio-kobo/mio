@@ -42,7 +42,7 @@ koukai waza plan(code_size: int64, const_size: int64, globals: int64) -> Layout 
     kaku text_end = entry_offset + code_size;
     moshi (const_size > 0) { text_end = const_offset + const_size; }
     kaku text_size = align(text_end, page_size);
-    kaku data_size = 0; moshi (globals > 0) { data_size = page_size; }
+    kaku data_size = 0; moshi (globals > 0) { data_size = align(globals * 8, page_size); }
     kaku sections = array.with_capacity[Section](3);
     array.push(sections, Section { segment: "__TEXT", name: "__text", file_offset: entry_offset, vm_offset: entry_offset, size: code_size, alignment: 2 });
     moshi (const_size > 0) { array.push(sections, Section { segment: "__TEXT", name: "__const", file_offset: const_offset, vm_offset: const_offset, size: const_size, alignment: 3 }); }
@@ -149,7 +149,9 @@ waza patch_words(spec: ImageSpec, layout: Layout) -> ImageResult {
 koukai waza executable(spec: ImageSpec) -> ImageResult {
     kaku empty_layout = plan(0, 0, 0);
     moshi (len(spec.words) == 0) { kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.EmptyText() }; }
-    moshi (spec.globals < 0 || spec.globals > 2048) { kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.TooManyGlobals() }; }
+    // The lowerer still enforces 2048 user globals. Four private ABI words
+    // preserve that capacity when assertion reporting and OS arguments coexist.
+    moshi (spec.globals < 0 || spec.globals > 2052) { kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.TooManyGlobals() }; }
     moshi (len(spec.words) > (maximum_image_size - entry_offset) / 4 || len(spec.constants) > maximum_image_size) {
         kaesu ImageResult { bytes: [], layout: empty_layout, error: MachOError.ImageTooLarge() };
     }
@@ -188,7 +190,7 @@ koukai waza executable(spec: ImageSpec) -> ImageResult {
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
     }
     moshi (has_data) {
-        failure = segment(output, [95,95,68,65,84,65], 1, layout.data_offset, 0, page_size, layout.data_offset, page_size, 3, 3, 1, 152);
+        failure = segment(output, [95,95,68,65,84,65], 1, layout.data_offset, 0, layout.linkedit_offset - layout.data_offset, layout.data_offset, layout.linkedit_offset - layout.data_offset, 3, 3, 1, 152);
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
         failure = section(output, [95,95,100,97,116,97], [95,95,68,65,84,65], layout.data_offset, spec.globals * 8, layout.data_offset, 3, 0);
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }

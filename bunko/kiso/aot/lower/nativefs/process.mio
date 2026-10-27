@@ -1,0 +1,136 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+
+// syscall-only process ABI, generated entirely by Mio. C strings and argv live
+// in anonymous OS mappings and never enter the managed collector's root set.
+waza emit_process_runtime(code: arm64.Assembler, patches: []macho.AddressPatch, state: int64) -> unit {
+    emit_real_path_runtime(code);
+    // Darwin poll(2), timed or nonblocking, one stack-local pollfd for stdin. The
+    // descriptor contains no managed references and cannot invoke a collector.
+    arm64.assembler_label(code,"nativeos_stdin_ready");bits(code,2,0);arm64.assembler_b(code,"nativeos_poll_common");
+    arm64.assembler_label(code,"nativeos_stdin_wait");mov(code,2,0);
+    emit(code,arm64.cmp_imm_x(2,0,iie));arm64.assembler_b_cond(code,10,"nativeos_poll_timeout_positive");
+    bits(code,9,1);emit(code,arm64.sub_x(9,31,9));emit(code,arm64.cmp_x(2,9));arm64.assembler_b_cond(code,0,"nativeos_poll_common");arm64.assembler_b(code,"nativeos_poll_bad_timeout");
+    arm64.assembler_label(code,"nativeos_poll_timeout_positive");bits(code,9,2147483647);emit(code,arm64.cmp_x(2,9));arm64.assembler_b_cond(code,9,"nativeos_poll_common");
+    arm64.assembler_label(code,"nativeos_poll_bad_timeout");bits(code,0,22);emit(code,arm64.sub_x(0,31,0));emit(code,arm64.ret());
+    arm64.assembler_label(code,"nativeos_poll_common");enter(code);
+    emit(code,arm64.sub_imm_x(31,31,16,iie));bits(code,9,4294967296);emit(code,arm64.str_x(9,31,0));
+    emit(code,arm64.add_imm_x(0,31,0,iie));bits(code,1,1);bits(code,16,230);emit(code,arm64.svc(128));
+    arm64.assembler_b_cond(code,3,"nativeos_poll_success");emit(code,arm64.sub_x(0,31,0));arm64.assembler_b(code,"nativeos_poll_return");
+    arm64.assembler_label(code,"nativeos_poll_success");arm64.assembler_cbz_x(code,0,"nativeos_poll_return");
+    emit(code,arm64.ldrh_w(10,31,6));bits(code,9,32);emit(code,arm64.and_x(10,10,9));arm64.assembler_cbz_x(code,10,"nativeos_poll_return");
+    bits(code,0,9);emit(code,arm64.sub_x(0,31,0));
+    arm64.assembler_label(code,"nativeos_poll_return");emit(code,arm64.add_imm_x(31,31,16,iie));leave(code);
+    // MRS CNTVCT_EL0 / CNTFRQ_EL0. Split quotient and remainder before
+    // multiplying by 1000 so long uptimes cannot overflow the counter product.
+    arm64.assembler_label(code, "nativeos_monotonic_ms");
+    emit(code, arm64.Instruction { word: uint32(3577471040), error: mu }); emit(code, arm64.Instruction { word: uint32(3577470985), error: mu });
+    arm64.assembler_cbz_x(code, 9, "runtime_error");
+    emit(code, arm64.udiv_x(10, 0, 9)); emit(code, arm64.msub_x(11, 10, 9, 0)); bits(code, 12, 1000);
+    emit(code, arm64.mul_x(10, 10, 12)); emit(code, arm64.mul_x(11, 11, 12)); emit(code, arm64.udiv_x(11, 11, 9));
+    emit(code, arm64.add_x(0, 10, 11)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativeos_env_size"); enter(code); arm64.assembler_bl(code, "nativeos_env_pointer"); arm64.assembler_b(code, "nativeos_arg_measure");
+    arm64.assembler_label(code, "nativeos_env_copy"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 16, iie)); emit(code, arm64.str_x(1, 31, 0)); arm64.assembler_bl(code, "nativeos_env_pointer"); arm64.assembler_b(code, "nativeos_arg_copy_pointer");
+    arm64.assembler_label(code, "nativeos_env_pointer"); enter(code); arm64.assembler_bl(code, "nativefs_string_ptr");
+    arm64.assembler_cbz_x(code, 1, "nativeos_env_missing"); bits(code, 9, 1048576); emit(code, arm64.cmp_x(1, 9)); arm64.assembler_b_cond(code, 8, "nativeos_env_missing");
+    mov(code, 10, 0); mov(code, 11, 1); os_state_address(code, patches, state); emit(code, arm64.ldr_x(12, 9, 16)); bits(code, 8, 0);
+    arm64.assembler_label(code, "nativeos_env_next"); bits(code, 9, 65535); emit(code, arm64.cmp_x(8, 9)); arm64.assembler_b_cond(code, 2, "nativeos_env_missing"); emit(code, arm64.ldr_x(13, 12, 0)); arm64.assembler_cbz_x(code, 13, "nativeos_env_missing"); bits(code, 14, 0);
+    arm64.assembler_label(code, "nativeos_env_compare"); emit(code, arm64.cmp_x(14, 11)); arm64.assembler_b_cond(code, 2, "nativeos_env_separator");
+    emit(code, arm64.add_x(9, 10, 14)); emit(code, arm64.ldrb_w(15, 9, 0)); arm64.assembler_cbz_x(code, 15, "nativeos_env_missing"); emit(code, arm64.cmp_imm_x(15, 61, iie)); arm64.assembler_b_cond(code, 0, "nativeos_env_missing");
+    emit(code, arm64.add_x(9, 13, 14)); emit(code, arm64.ldrb_w(16, 9, 0)); emit(code, arm64.cmp_x(15, 16)); arm64.assembler_b_cond(code, 1, "nativeos_env_advance"); emit(code, arm64.add_imm_x(14, 14, 1, iie)); arm64.assembler_b(code, "nativeos_env_compare");
+    arm64.assembler_label(code, "nativeos_env_separator"); emit(code, arm64.add_x(9, 13, 14)); emit(code, arm64.ldrb_w(15, 9, 0)); emit(code, arm64.cmp_imm_x(15, 61, iie)); arm64.assembler_b_cond(code, 1, "nativeos_env_advance"); emit(code, arm64.add_imm_x(0, 9, 1, iie)); leave(code);
+    arm64.assembler_label(code, "nativeos_env_advance"); emit(code, arm64.add_imm_x(12, 12, 8, iie)); emit(code, arm64.add_imm_x(8, 8, 1, iie)); arm64.assembler_b(code, "nativeos_env_next");
+    arm64.assembler_label(code, "nativeos_env_missing"); bits(code, 0, 0); leave(code);
+    arm64.assembler_label(code, "nativeos_pid"); bits(code, 16, 20); emit(code, arm64.svc(128)); emit(code, arm64.ret());
+    arm64.assembler_label(code, "nativeos_remove"); bits(code, 1, 10); arm64.assembler_b(code, "nativeos_unlink");
+    arm64.assembler_label(code, "nativeos_rmdir"); bits(code, 1, 137);
+    arm64.assembler_label(code, "nativeos_unlink"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(1, 31, 24)); arm64.assembler_bl(code, "nativefs_cpath");
+    arm64.assembler_cbz_x(code, 0, "nativeos_remove_bad"); emit(code, arm64.str_x(0, 31, 0)); emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.ldr_x(16, 31, 24)); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 3, "nativeos_remove_ok"); emit(code, arm64.sub_x(0, 31, 0)); arm64.assembler_b(code, "nativeos_remove_release");
+    arm64.assembler_label(code, "nativeos_remove_ok"); bits(code, 0, 0);
+    arm64.assembler_label(code, "nativeos_remove_release"); emit(code, arm64.str_x(0, 31, 16)); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.ldr_x(1, 31, 8)); bits(code, 16, 73); emit(code, arm64.svc(128)); emit(code, arm64.ldr_x(0, 31, 16)); arm64.assembler_b(code, "nativeos_remove_return");
+    arm64.assembler_label(code, "nativeos_remove_bad"); emit(code, arm64.movn_x(0, 21, 0));
+    arm64.assembler_label(code, "nativeos_remove_return"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); leave(code);
+
+    arm64.assembler_label(code, "nativeos_exec"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 96, iie));
+    emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.str_x(31, 31, 48)); emit(code, arm64.str_x(31, 31, 40)); arm64.assembler_bl(code, "nativefs_cpath");
+    arm64.assembler_cbz_x(code, 0, "nativeos_exec_badpath"); emit(code, arm64.str_x(0, 31, 16)); emit(code, arm64.str_x(1, 31, 24));
+    emit(code, arm64.ldr_x(9, 31, 8)); emit(code, arm64.ldr_x(10, 9, 8)); emit(code, arm64.str_x(10, 31, 32)); bits(code, 11, 65535); emit(code, arm64.cmp_x(10, 11)); arm64.assembler_b_cond(code, 8, "nativeos_exec_too_many");
+    emit(code, arm64.lsl_x(1, 10, 4)); emit(code, arm64.add_imm_x(1, 1, 8, iie)); emit(code, arm64.str_x(1, 31, 56)); bits(code, 0, 0); bits(code, 2, 3); bits(code, 3, 4098); emit(code, arm64.movn_x(4, 0, 0)); bits(code, 5, 0); bits(code, 16, 197); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 2, "nativeos_exec_nomemory"); emit(code, arm64.str_x(0, 31, 48));
+    arm64.assembler_label(code, "nativeos_exec_copy_loop"); emit(code, arm64.ldr_x(10, 31, 40)); emit(code, arm64.ldr_x(11, 31, 32)); emit(code, arm64.cmp_x(10, 11)); arm64.assembler_b_cond(code, 2, "nativeos_exec_invoke");
+    emit(code, arm64.ldr_x(9, 31, 8)); emit(code, arm64.ldr_x(9, 9, 40)); emit(code, arm64.add_imm_x(9, 9, 32, iie)); emit(code, arm64.lsl_x(10, 10, 3)); emit(code, arm64.add_x(9, 9, 10)); emit(code, arm64.ldr_x(0, 9, 0)); arm64.assembler_bl(code, "nativefs_cpath");
+    arm64.assembler_cbz_x(code, 0, "nativeos_exec_invalid_argument"); emit(code, arm64.ldr_x(9, 31, 48)); emit(code, arm64.ldr_x(10, 31, 40)); emit(code, arm64.lsl_x(11, 10, 3)); emit(code, arm64.add_x(12, 9, 11)); emit(code, arm64.str_x(0, 12, 0));
+    emit(code, arm64.ldr_x(12, 31, 32)); emit(code, arm64.add_imm_x(12, 12, 1, iie)); emit(code, arm64.lsl_x(12, 12, 3)); emit(code, arm64.add_x(12, 12, 11)); emit(code, arm64.add_x(12, 9, 12)); emit(code, arm64.str_x(1, 12, 0));
+    emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.str_x(10, 31, 40)); arm64.assembler_b(code, "nativeos_exec_copy_loop");
+    arm64.assembler_label(code, "nativeos_exec_invoke"); emit(code, arm64.ldr_x(0, 31, 16)); emit(code, arm64.ldr_x(1, 31, 48)); os_state_address(code, patches, state); emit(code, arm64.ldr_x(2, 9, 16)); bits(code, 16, 59); emit(code, arm64.svc(128)); emit(code, arm64.sub_x(0, 31, 0)); arm64.assembler_b(code, "nativeos_exec_failure");
+    arm64.assembler_label(code, "nativeos_exec_invalid_argument"); emit(code, arm64.movn_x(0, 21, 0)); arm64.assembler_b(code, "nativeos_exec_failure");
+    arm64.assembler_label(code, "nativeos_exec_nomemory"); emit(code, arm64.movn_x(0, 11, 0)); arm64.assembler_b(code, "nativeos_exec_failure");
+    arm64.assembler_label(code, "nativeos_exec_too_many"); emit(code, arm64.movn_x(0, 6, 0));
+    arm64.assembler_label(code, "nativeos_exec_failure"); emit(code, arm64.str_x(0, 31, 64)); emit(code, arm64.str_x(31, 31, 72));
+    arm64.assembler_label(code, "nativeos_exec_free_loop"); emit(code, arm64.ldr_x(9, 31, 72)); emit(code, arm64.ldr_x(10, 31, 40)); emit(code, arm64.cmp_x(9, 10)); arm64.assembler_b_cond(code, 2, "nativeos_exec_free_vector");
+    emit(code, arm64.lsl_x(10, 9, 3)); emit(code, arm64.ldr_x(11, 31, 48)); emit(code, arm64.add_x(12, 11, 10)); emit(code, arm64.ldr_x(0, 12, 0));
+    emit(code, arm64.ldr_x(12, 31, 32)); emit(code, arm64.add_imm_x(12, 12, 1, iie)); emit(code, arm64.lsl_x(12, 12, 3)); emit(code, arm64.add_x(12, 12, 10)); emit(code, arm64.add_x(12, 11, 12)); emit(code, arm64.ldr_x(1, 12, 0)); bits(code, 16, 73); emit(code, arm64.svc(128));
+    emit(code, arm64.ldr_x(9, 31, 72)); emit(code, arm64.add_imm_x(9, 9, 1, iie)); emit(code, arm64.str_x(9, 31, 72)); arm64.assembler_b(code, "nativeos_exec_free_loop");
+    arm64.assembler_label(code, "nativeos_exec_free_vector"); emit(code, arm64.ldr_x(0, 31, 48)); arm64.assembler_cbz_x(code, 0, "nativeos_exec_free_path"); emit(code, arm64.ldr_x(1, 31, 56)); bits(code, 16, 73); emit(code, arm64.svc(128));
+    arm64.assembler_label(code, "nativeos_exec_free_path"); emit(code, arm64.ldr_x(0, 31, 16)); emit(code, arm64.ldr_x(1, 31, 24)); bits(code, 16, 73); emit(code, arm64.svc(128)); emit(code, arm64.ldr_x(0, 31, 64)); arm64.assembler_b(code, "nativeos_exec_return");
+    arm64.assembler_label(code, "nativeos_exec_badpath"); emit(code, arm64.movn_x(0, 21, 0));
+    arm64.assembler_label(code, "nativeos_exec_return"); emit(code, arm64.add_imm_x(31, 31, 96, iie)); leave(code);
+
+    arm64.assembler_label(code, "nativeos_spawn_test"); bits(code, 6, 1); arm64.assembler_b(code, "nativeos_spawn_common");
+    arm64.assembler_label(code, "nativeos_spawn"); bits(code, 6, 0);
+    arm64.assembler_label(code, "nativeos_spawn_common"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 96, iie));
+    emit(code, arm64.str_x(0, 31, 0)); emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.str_x(31, 31, 16));
+    emit(code, arm64.str_x(2, 31, 32)); emit(code, arm64.str_x(3, 31, 40)); emit(code, arm64.str_x(4, 31, 48)); emit(code, arm64.str_x(5, 31, 56)); emit(code, arm64.str_x(6, 31, 64));
+    bits(code, 16, 2); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 2, "nativeos_spawn_error"); arm64.assembler_cbnz_x(code, 1, "nativeos_spawn_child"); emit(code, arm64.str_x(0, 31, 24));
+    arm64.assembler_label(code, "nativeos_spawn_wait"); emit(code, arm64.ldr_x(0, 31, 24)); emit(code, arm64.add_imm_x(1, 31, 16, iie)); bits(code, 2, 0); bits(code, 3, 0); bits(code, 16, 7); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 3, "nativeos_spawn_status"); emit(code, arm64.cmp_imm_x(0, 4, iie)); arm64.assembler_b_cond(code, 0, "nativeos_spawn_wait"); arm64.assembler_b(code, "nativeos_spawn_error");
+    arm64.assembler_label(code, "nativeos_spawn_status"); emit(code, arm64.ldr_x(9, 31, 16)); bits(code, 10, 127); emit(code, arm64.and_x(10, 9, 10)); arm64.assembler_cbnz_x(code, 10, "nativeos_spawn_signal"); emit(code, arm64.lsr_x(0, 9, 8)); bits(code, 10, 255); emit(code, arm64.and_x(0, 0, 10)); arm64.assembler_b(code, "nativeos_spawn_return");
+    arm64.assembler_label(code, "nativeos_spawn_signal"); emit(code, arm64.add_imm_x(0, 10, 128, iie)); arm64.assembler_b(code, "nativeos_spawn_return");
+    arm64.assembler_label(code, "nativeos_spawn_error"); emit(code, arm64.sub_x(0, 31, 0));
+    arm64.assembler_label(code, "nativeos_spawn_return"); emit(code, arm64.add_imm_x(31, 31, 96, iie)); leave(code);
+    arm64.assembler_label(code, "nativeos_spawn_child"); emit(code, arm64.ldr_x(9, 31, 64)); arm64.assembler_cbz_x(code, 9, "nativeos_spawn_execute");
+    emit(code, arm64.ldr_x(9, 31, 56)); emit(code, arm64.cmp_imm_x(9, 1, iie)); arm64.assembler_b_cond(code, 11, "nativeos_spawn_setup_error"); bits(code, 10, 3600); emit(code, arm64.cmp_x(9, 10)); arm64.assembler_b_cond(code, 8, "nativeos_spawn_setup_error");
+    emit(code, arm64.str_x(9, 31, 72)); emit(code, arm64.str_x(9, 31, 80)); bits(code, 0, 0); emit(code, arm64.add_imm_x(1, 31, 72, iie)); bits(code, 16, 195); emit(code, arm64.svc(128)); arm64.assembler_b_cond(code, 2, "nativeos_spawn_setup_error");
+    // Darwin setitimer(ITIMER_REAL): one-shot wall deadline also interrupts
+    // a test blocked in read/open. Four 8-byte timeval fields include padding.
+    emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(31, 31, 0)); emit(code, arm64.str_x(31, 31, 8));
+    emit(code, arm64.ldr_x(9, 31, 88)); emit(code, arm64.str_x(9, 31, 16)); emit(code, arm64.str_x(31, 31, 24));
+    bits(code, 0, 0); emit(code, arm64.add_imm_x(1, 31, 0, iie)); bits(code, 2, 0); bits(code, 16, 83); emit(code, arm64.svc(128));
+    emit(code, arm64.add_imm_x(31, 31, 32, iie)); arm64.assembler_b_cond(code, 2, "nativeos_spawn_setup_error");
+    emit(code, arm64.ldr_x(0, 31, 32)); bits(code, 1, 1); arm64.assembler_bl(code, "nativeos_redirect"); arm64.assembler_cbz_x(code, 0, "nativeos_spawn_setup_error");
+    emit(code, arm64.ldr_x(0, 31, 40)); bits(code, 1, 2); arm64.assembler_bl(code, "nativeos_redirect"); arm64.assembler_cbz_x(code, 0, "nativeos_spawn_setup_error");
+    emit(code, arm64.ldr_x(0, 31, 48)); bits(code, 1, 3); arm64.assembler_bl(code, "nativeos_redirect"); arm64.assembler_cbz_x(code, 0, "nativeos_spawn_setup_error");
+    arm64.assembler_label(code, "nativeos_spawn_execute"); emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.ldr_x(1, 31, 8)); arm64.assembler_bl(code, "nativeos_exec"); bits(code, 0, 127); bits(code, 16, 1); emit(code, arm64.svc(128)); arm64.assembler_b(code, "runtime_error");
+    arm64.assembler_label(code, "nativeos_spawn_setup_error"); bits(code, 0, 126); bits(code, 16, 1); emit(code, arm64.svc(128)); arm64.assembler_b(code, "runtime_error");
+    // redirect(path, fd) -> success; every C path mapping is released.
+    arm64.assembler_label(code, "nativeos_redirect"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 48, iie)); emit(code, arm64.str_x(1, 31, 0)); arm64.assembler_bl(code, "nativefs_cpath");
+    arm64.assembler_cbz_x(code, 0, "nativeos_redirect_badpath"); emit(code, arm64.str_x(0, 31, 8)); emit(code, arm64.str_x(1, 31, 16)); bits(code, 1, 1537); bits(code, 2, 384); bits(code, 16, 5); emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 2, "nativeos_redirect_failed"); emit(code, arm64.str_x(0, 31, 24)); emit(code, arm64.ldr_x(1, 31, 0)); bits(code, 16, 90); emit(code, arm64.svc(128));
+    bits(code, 9, 1); arm64.assembler_b_cond(code, 3, "nativeos_redirect_close"); bits(code, 9, 0);
+    arm64.assembler_label(code, "nativeos_redirect_close"); emit(code, arm64.str_x(9, 31, 32)); emit(code, arm64.ldr_x(0, 31, 24)); emit(code, arm64.ldr_x(1, 31, 0)); emit(code, arm64.cmp_x(0, 1)); arm64.assembler_b_cond(code, 0, "nativeos_redirect_release"); bits(code, 16, 6); emit(code, arm64.svc(128)); arm64.assembler_b(code, "nativeos_redirect_release");
+    arm64.assembler_label(code, "nativeos_redirect_failed"); emit(code, arm64.str_x(31, 31, 32));
+    arm64.assembler_label(code, "nativeos_redirect_release"); emit(code, arm64.ldr_x(0, 31, 8)); emit(code, arm64.ldr_x(1, 31, 16)); bits(code, 16, 73); emit(code, arm64.svc(128)); emit(code, arm64.ldr_x(0, 31, 32)); arm64.assembler_b(code, "nativeos_redirect_return");
+    arm64.assembler_label(code, "nativeos_redirect_badpath"); bits(code, 0, 0);
+    arm64.assembler_label(code, "nativeos_redirect_return"); emit(code, arm64.add_imm_x(31, 31, 48, iie)); leave(code);
+}
+
+// Resolve an existing path through O_EVTONLY/F_GETPATH without reading file
+// contents, opening a compiler process, or blocking on a FIFO. The caller's
+// precise-rooted byte buffer has at least Darwin PATH_MAX (1024) bytes.
+waza emit_real_path_runtime(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code,"nativeos_real_path");enter(code);emit(code,arm64.sub_imm_x(31,31,64,iie));emit(code,arm64.str_x(0,31,0));mov(code,0,1);arm64.assembler_bl(code,"nativefs_array_ptr");
+    emit(code,arm64.cmp_imm_x(1,1024,iie));arm64.assembler_b_cond(code,3,"nativeos_real_path_invalid");emit(code,arm64.str_x(0,31,8));emit(code,arm64.ldr_x(0,31,0));arm64.assembler_bl(code,"nativefs_cpath");arm64.assembler_cbz_x(code,0,"nativeos_real_path_invalid");
+    emit(code,arm64.str_x(0,31,16));emit(code,arm64.str_x(1,31,24));bits(code,1,32768);bits(code,2,0);bits(code,16,5);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"nativeos_real_path_open_error");emit(code,arm64.str_x(0,31,32));
+    bits(code,1,50);emit(code,arm64.ldr_x(2,31,8));bits(code,16,92);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"nativeos_real_path_fcntl_error");
+    emit(code,arm64.ldr_x(10,31,8));bits(code,9,0);
+    arm64.assembler_label(code,"nativeos_real_path_measure");emit(code,arm64.add_x(11,10,9));emit(code,arm64.ldrb_w(11,11,0));arm64.assembler_cbz_x(code,11,"nativeos_real_path_measured");emit(code,arm64.add_imm_x(9,9,1,iie));emit(code,arm64.cmp_imm_x(9,1024,iie));arm64.assembler_b_cond(code,3,"nativeos_real_path_measure");bits(code,0,5);emit(code,arm64.sub_x(0,31,0));arm64.assembler_b(code,"nativeos_real_path_close");
+    arm64.assembler_label(code,"nativeos_real_path_measured");mov(code,0,9);arm64.assembler_b(code,"nativeos_real_path_close");
+    arm64.assembler_label(code,"nativeos_real_path_fcntl_error");emit(code,arm64.sub_x(0,31,0));
+    arm64.assembler_label(code,"nativeos_real_path_close");emit(code,arm64.str_x(0,31,40));emit(code,arm64.ldr_x(0,31,32));bits(code,16,6);emit(code,arm64.svc(128));arm64.assembler_b(code,"nativeos_real_path_free");
+    arm64.assembler_label(code,"nativeos_real_path_open_error");emit(code,arm64.sub_x(0,31,0));emit(code,arm64.str_x(0,31,40));
+    arm64.assembler_label(code,"nativeos_real_path_free");emit(code,arm64.ldr_x(0,31,16));emit(code,arm64.ldr_x(1,31,24));bits(code,16,73);emit(code,arm64.svc(128));emit(code,arm64.ldr_x(0,31,40));arm64.assembler_b(code,"nativeos_real_path_return");
+    arm64.assembler_label(code,"nativeos_real_path_invalid");bits(code,0,22);emit(code,arm64.sub_x(0,31,0));
+    arm64.assembler_label(code,"nativeos_real_path_return");emit(code,arm64.add_imm_x(31,31,64,iie));leave(code);
+}

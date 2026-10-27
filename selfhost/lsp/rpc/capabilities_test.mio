@@ -1,0 +1,14 @@
+yobu "kiso/testing";
+yobu "kiso/encoding/json";
+
+waza test_rpc_capabilities_and_explicit_bunko_priority() -> unit {
+    kaku state=session("/","/explicit");
+    kaku reply=request(state,"{\"id\":0,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"bunkoRoot\":\"/extension\"}}}");
+    testing.expect(state.bunko[0]=="/explicit","explicit environment root takes priority over client extension");
+    kaku capabilities=json.member(reply,json.member(reply,reply.root,"result"),"capabilities");
+    kaku names: []string=["hoverProvider","definitionProvider","referencesProvider","documentSymbolProvider","completionProvider","signatureHelpProvider"];
+    kaku at=0;aida(at<len(names)){testing.expect(json.member(reply,capabilities,names[at])>=0,"native semantic provider advertised");at=at+1;}
+    testing.expect(json.member(reply,capabilities,"renameProvider")<0 && json.member(reply,capabilities,"documentFormattingProvider")<0,"unimplemented providers remain unadvertised");
+    state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\",\"params\":{\"initializationOptions\":{\"bunkoRoot\":\"/extension\"}}}");
+    testing.expect(state.bunko[0]=="/extension","client extension configures root when no environment root is present");
+}

@@ -1,0 +1,48 @@
+yobu "kiso/fs";
+yobu "kiso/path";
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata PackageList { paths: []string; error: string; }
+waza excluded(name: string) -> bool {
+    kaesu string.has_prefix(name, ".") || name == "build" || name == "dist" || name == "node_modules" || name == "vendor" || name == "cache" || name == "tmp";
+}
+waza ordered_before(a: string, b: string) -> bool {
+    kaku left = string.to_bytes(a); kaku right = string.to_bytes(b); kaku at = 0;
+    aida (at < len(left) && at < len(right)) { moshi (left[at] != right[at]) { kaesu left[at] < right[at]; } at = at + 1; }
+    kaesu len(left) < len(right);
+}
+waza ordered_push(items: []string, value: string) -> unit {
+    kaku at = 0; aida (at < len(items)) { moshi (items[at] == value) { kaesu; } at = at + 1; }
+    array.push(items, value); at = len(items) - 1;
+    aida (at > 0 && ordered_before(items[at], items[at - 1])) { kaku old = items[at - 1]; items[at - 1] = items[at]; items[at] = old; at = at - 1; }
+}
+waza walk(directory: string, packages: []string, error: []string, depth: int64) -> unit {
+    moshi (error[0] != "") { kaesu; }
+    moshi (depth > 128) { error[0] = "E_RESOURCE test directory nesting limit"; kaesu; }
+    kaku listing = fs.read_dir(directory);
+    moshi (listing.error != mu) { error[0] = string.concat("E_IO cannot discover tests: ", directory); kaesu; }
+    kaku directories: []string = []; kaku at = 0; kaku found = iie;
+    aida (at < len(listing.entries)) {
+        kaku entry = listing.entries[at];
+        moshi (!entry.is_dir && string.has_suffix(entry.name, "_test.mio")) { found = hai; }
+        // NativeFS reports directory-entry types without following symlinks.
+        moshi (entry.is_dir && !excluded(entry.name)) { ordered_push(directories, path.join(directory, entry.name)); }
+        at = at + 1;
+    }
+    moshi (found) { ordered_push(packages, directory); }
+    at = 0; aida (at < len(directories)) { walk(directories[at], packages, error, depth + 1); at = at + 1; }
+}
+
+koukai waza discover(target: string) -> PackageList {
+    kaku recursive = target == "..." || string.has_suffix(target, "/..."); kaku base = target;
+    moshi (target == "...") { base = "."; }
+    sore { moshi (recursive) {
+        kaku bytes = string.to_bytes(target); array.truncate(bytes, len(bytes) - 4); kaku text = string.from_utf8(bytes); base = "."; moshi (text != mu) { moshi (text != "") { base = text; } }
+    } }
+    base = path.clean(base);
+    moshi (!fs.is_dir(base)) { kaesu PackageList { paths: [], error: string.concat("E_IO test target is not a directory: ", base) }; }
+    kaku packages: []string = []; kaku error = [""];
+    moshi (recursive) { walk(base, packages, error, 0); } sore { array.push(packages, base); }
+    kaesu PackageList { paths: packages, error: error[0] };
+}

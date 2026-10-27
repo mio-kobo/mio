@@ -1,8 +1,12 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "selfhost/parser";
 yobu "selfhost/resolver";
 
 waza check_function_literal(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
+    kaku saved_facts = array.clone(env.facts); kaku saved_versions = array.clone(env.versions);
+    // A delayed body cannot inherit a proof valid only at its definition site.
+    array.truncate(env.facts, 0);
     kaku node = node_at(env, file_id, node_id);
     kaku parameters = array.with_capacity[int64](node.integer);
     kaku index = 0;
@@ -25,6 +29,10 @@ waza check_function_literal(env: TypeEnvironment, file_id: int64, node_id: int64
     moshi (return_type != builtin_type(env, "unit") && !block_always_returns(env, file_id, node.children[node.integer + 1])) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, return_type, builtin_type(env, "unit"), "function may exit without returning"); }
     env.loop_depth[0] = saved_loop; env.function_depth[0] = env.function_depth[0] - 1;
     array.truncate(env.return_types, len(env.return_types) - 1);
+    // Checking a function body does not execute its captured writes. Restore
+    // the enclosing flow state; retain the body's checked node/symbol types.
+    array.truncate(env.facts, 0); array.append_all(env.facts, saved_facts); index = 0;
+    aida (index < len(saved_versions)) { env.versions[index] = saved_versions[index]; index = index + 1; }
     kaesu set_node_type(env, file_id, node_id, function_type(env.result, parameters, return_type));
 }
 
@@ -33,6 +41,8 @@ waza check_function_statement(env: TypeEnvironment, file_id: int64, node_id: int
     kaku symbol_id = binding_of(env, file_id, node_id);
     kaku signature_index = signature_of(env, symbol_id);
     moshi (signature_index < 0) { kaesu; }
+    kaku saved_facts = array.clone(env.facts); kaku saved_versions = array.clone(env.versions);
+    array.truncate(env.facts, 0);
     kaku signature = env.result.signatures[signature_index];
     kaku old_constraints = len(env.constraints);
     kaku index = 0; aida (index < len(signature.type_parameters)) { array.push(env.constraints, signature.type_parameters[index]); index = index + 1; }
@@ -45,6 +55,8 @@ waza check_function_statement(env: TypeEnvironment, file_id: int64, node_id: int
     env.loop_depth[0] = saved_loop; env.function_depth[0] = env.function_depth[0] - 1;
     array.truncate(env.return_types, len(env.return_types) - 1);
     array.truncate(env.constraints, old_constraints);
+    array.truncate(env.facts, 0); array.append_all(env.facts, saved_facts); index = 0;
+    aida (index < len(saved_versions)) { env.versions[index] = saved_versions[index]; index = index + 1; }
 }
 
 waza check_match(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
@@ -82,6 +94,7 @@ waza check_match(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
 }
 
 waza check_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> unit {
+    moshi(!progress.checkpoint(env.work)){kaesu;}
     kaku node = node_at(env, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
     moshi (kind == 1 || kind == 34 || kind == 36) { kaesu; }
@@ -129,7 +142,7 @@ waza check_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> un
         check_block_with_fact(env, file_id, node.children[1], narrowing, narrowing.true_non_nil);
         moshi (len(node.children) > 2) { check_block_with_fact(env, file_id, node.children[2], narrowing, !narrowing.true_non_nil); }
         moshi (narrowing.valid && len(node.children) == 2 && !narrowing.true_non_nil && block_always_returns(env, file_id, node.children[1])) {
-            kaku declared = symbol_type(env, narrowing.symbol_id);
+            kaku declared = declared_symbol_type(env, narrowing.symbol_id);
             moshi (type_kind_code(env.result.types[declared].kind) == 16) { add_fact(env, narrowing.symbol_id, env.result.types[declared].element); }
         }
         kaesu;

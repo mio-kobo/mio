@@ -1,6 +1,6 @@
 # kiso/encoding/mochi
 
-这是 Mochi v1–v14 的纯 Mio Decoder，其中 v14 是当前写入格式。模块不调用 Go 的
+这是 Mochi v1–v15 的纯 Mio Decoder。原生前端写入 v15 字段类型约束，历史编码 API 保留 v14。模块不调用 Go 的
 `bytes.Buffer`、`encoding/binary` 或 `unsafe`，在 Mochi VM 与 Darwin ARM64 Native AOT
 中执行同一份 `.mio` 实现。
 

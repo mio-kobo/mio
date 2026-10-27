@@ -42,24 +42,31 @@ waza infer_type_argument(env: TypeEnvironment, template: int64, actual: int64, n
 }
 
 waza substitute_type(env: TypeEnvironment, type_id: int64, names: []string, types: []int64) -> int64 {
-    kaku info = env.result.types[type_id];
+    kaesu specialize_type(env.result, type_id, names, types);
+}
+
+// Native code generation uses the same checked substitution operation rather
+// than attempting to recover generic arguments from runtime values.
+koukai waza specialize_type(result: TypeCheckResult, type_id: int64, names: []string, types: []int64) -> int64 {
+    moshi(type_id<0 || type_id>=len(result.types)){kaesu 0;}
+    kaku info = result.types[type_id];
     kaku code = type_kind_code(info.kind);
     moshi (code == 19) {
         kaku index = substitution_index(names, info.name);
-        moshi (index >= 0) { kaesu types[index]; }
+        moshi (index >= 0 && index<len(types)) { kaesu types[index]; }
         kaesu type_id;
     }
-    moshi (code == 15) { kaesu array_type(env.result, substitute_type(env, info.element, names, types)); }
-    moshi (code == 16) { kaesu nullable_type(env.result, substitute_type(env, info.element, names, types)); }
+    moshi (code == 15) { kaesu array_type(result, specialize_type(result, info.element, names, types)); }
+    moshi (code == 16) { kaesu nullable_type(result, specialize_type(result, info.element, names, types)); }
     moshi (code == 17) {
         kaku arguments = array.with_capacity[int64](len(info.arguments)); kaku index = 0;
-        aida (index < len(info.arguments)) { array.push(arguments, substitute_type(env, info.arguments[index], names, types)); index = index + 1; }
-        kaesu named_type(env.result, info.name, arguments);
+        aida (index < len(info.arguments)) { array.push(arguments, specialize_type(result, info.arguments[index], names, types)); index = index + 1; }
+        kaesu named_type(result, info.name, arguments);
     }
     moshi (code == 18) {
         kaku parameters = array.with_capacity[int64](len(info.parameters)); kaku index = 0;
-        aida (index < len(info.parameters)) { array.push(parameters, substitute_type(env, info.parameters[index], names, types)); index = index + 1; }
-        kaesu function_type(env.result, parameters, substitute_type(env, info.result, names, types));
+        aida (index < len(info.parameters)) { array.push(parameters, specialize_type(result, info.parameters[index], names, types)); index = index + 1; }
+        kaesu function_type(result, parameters, specialize_type(result, info.result, names, types));
     }
     kaesu type_id;
 }

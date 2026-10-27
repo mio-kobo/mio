@@ -1,0 +1,146 @@
+yobu "kiso/os";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/fs";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+yobu "selfhost/diagnostic";
+yobu "selfhost/pipeline";
+yobu "selfhost/disasm";
+yobu "selfhost/testrunner";
+yobu "selfhost/lsp/rpc";
+
+// GF3 development CLI. The status file remains NOT_ACCEPTED until all command,
+// compatibility, embedded-resource and isolation gates are complete.
+waza fail(message: string, status: int64) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n"))); os.exit(status);
+}
+
+waza analysis_failed(analyzed: frontend.AnalysisResult, entry: string, opts: diagnostic.Options, cause: string) -> bool {
+    moshi(len(analyzed.diagnostics)>0){
+        kaku problem=analyzed.diagnostics[0];kaku source: []uint8=[];kaku at=0;
+        aida(at<len(analyzed.sources)){moshi(analyzed.sources[at].path==problem.path){source=analyzed.sources[at].bytes;nukeru;}at=at+1;}
+        fs.write_all("/dev/stderr",string.to_bytes(diagnostic.render(problem,source,opts,cause)));kaesu hai;
+    }
+    moshi(analyzed.error!=""){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(analyzed.error,entry,opts)));kaesu hai;}
+    kaesu iie;
+}
+waza source_failure(entry: string, bunko: string, opts: diagnostic.Options, cause: string) -> unit {
+    kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
+    moshi(!analysis_failed(analyzed,entry,opts,cause)){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(cause,entry,opts)));}
+    os.exit(1);
+}
+
+waza help() -> unit {
+    chant("mio v2 native development candidate");
+    chant("mio version | help [command]");
+    chant("mio run <source> [-- program arguments...]");
+    chant("mio exec <file.mochi> [-- program arguments...]");
+    chant("mio disasm <file.mochi>");
+    chant("mio test <directory[/...]> [--run=regexp] [--format=human|short|json] [--lang=locale] [--verbose]");
+    chant("mio lsp [--stdio]");
+    chant("mio check <source> [--bunko-root <directory>]");
+    chant("source diagnostics: --color=auto|always|never --format=human|short|json --verbose");
+    chant("mio build <source> [-o <output>] [--emit=mochi] [--bunko-root <directory>]");
+}
+waza run() -> unit {
+    kaku args = os.arguments();
+    moshi (len(args) < 2) { help(); kaesu; }
+    kaku command = args[1];
+    moshi (command == "test") { os.exit(testrunner.command(args)); kaesu; }
+    moshi (command == "lsp") { os.exit(rpc.command(args)); kaesu; }
+    moshi (command == "version" || command == "--version") {
+        moshi (len(args) != 2) { fail("E_OPTIONS version takes no arguments", 2); kaesu; }
+        chant("mio v2.0.0-dev (pure Mio Native AOT; GF3 candidate)"); kaesu;
+    }
+    moshi (command == "help" || command == "--help" || command == "-h") {
+        moshi (len(args) > 3) { fail("E_OPTIONS help takes at most one command", 2); kaesu; }
+        moshi (len(args) == 3 && args[2] != "build" && args[2] != "check" && args[2] != "run" && args[2] != "exec" && args[2] != "disasm" && args[2] != "version" && args[2] != "test" && args[2] != "lsp") { fail("E_COMMAND command migration is incomplete", 2); kaesu; }
+        help(); kaesu;
+    }
+    moshi (command != "build" && command != "check" && command != "run" && command != "exec" && command != "disasm") { fail("E_COMMAND native command migration is incomplete", 2); kaesu; }
+    kaku opts=diagnostic.options();
+    kaku entry = ""; kaku output = "a.out"; kaku bunko = os.getenv("MIO_BUNKO"); kaku emit_mochi = iie; kaku program_args: []string = []; kaku at = 2;
+    aida (at < len(args)) {
+        kaku option = args[at];
+        moshi (option == "--") {
+            moshi (command != "run" && command != "exec") { fail("E_OPTIONS program arguments require run or exec", 2); kaesu; }
+            at = at + 1;
+            aida (at < len(args)) { array.push(program_args, args[at]); at = at + 1; }
+            tsuzuku;
+        }
+        moshi(option=="--verbose"){opts=diagnostic.Options {format:opts.format,color:opts.color,verbose:hai};at=at+1;tsuzuku;}
+        moshi(option=="--format=human" || option=="--format=short" || option=="--format=json"){
+            kaku format="human";moshi(option=="--format=short"){format="short";}moshi(option=="--format=json"){format="json";}
+            opts=diagnostic.Options {format:format,color:opts.color,verbose:opts.verbose};at=at+1;tsuzuku;
+        }
+        moshi(option=="--color=auto" || option=="--color=always" || option=="--color=never"){
+            kaku color="auto";moshi(option=="--color=always"){color="always";}moshi(option=="--color=never"){color="never";}
+            opts=diagnostic.Options {format:opts.format,color:color,verbose:opts.verbose};at=at+1;tsuzuku;
+        }
+        moshi (option == "-o" || option == "--bunko-root") {
+            moshi (at + 1 >= len(args)) { fail("E_OPTIONS missing option value", 2); kaesu; }
+            at = at + 1;
+            moshi (option == "-o") { moshi ((command == "run" || command == "exec")) { fail("E_OPTIONS run/exec manages its native output", 2); kaesu; } output = args[at]; }
+            sore { bunko = args[at]; moshi (bunko == "") { fail("E_OPTIONS Bunko override must be explicit and nonempty", 2); kaesu; } }
+        }
+        sore { moshi (option == "--emit=mochi") { emit_mochi = hai; }
+        sore { moshi (string.has_prefix(option, "-")) { fail(string.concat("E_OPTIONS unknown option: ", option), 2); kaesu; }
+        sore { moshi (entry != "") { fail("E_OPTIONS multiple source entries", 2); kaesu; } entry = option; } } }
+        at = at + 1;
+    }
+    moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail("E_OPTIONS run requires native output", 2); kaesu; }
+    moshi (entry == "" || output == "") { fail("E_OPTIONS source and output must be nonempty", 2); kaesu; }
+    moshi(command=="check"){
+        kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
+        moshi(analysis_failed(analyzed,entry,opts,"source analysis failed")){os.exit(1);}kaesu;
+    }
+    moshi (emit_mochi) {
+        kaku checked = frontend.compile_source(".", entry, bunko);
+        moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error); kaesu; }
+        kaku written = fs.write_all(output, checked.bytes);
+        moshi (written.error != mu) { fail("E_IO cannot write Mochi output", 1); }
+        kaesu;
+    }
+    kaku compiled = pipeline.NativeBuildResult { bytes: [], error: "" };
+    moshi (command == "exec" || command == "disasm") {
+        kaku input = fs.read_all(entry);
+        moshi (input.error != mu) { fail("E_IO cannot read Mochi input", 1); kaesu; }
+        moshi (command == "disasm") {
+            kaku listing = disasm.render(input.data);
+            moshi (listing.error != "") { fail(listing.error, 1); kaesu; }
+            kaku written = fs.write_all("/dev/stdout", string.to_bytes(listing.text));
+            moshi (written.error != mu) { fail("E_IO cannot write disassembly", 1); }
+            kaesu;
+        }
+        compiled = pipeline.build_signed_mochi(input.data);
+    }
+    sore { compiled = pipeline.build_signed_source(".", entry, bunko); }
+    moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error);}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(compiled.error,entry,opts)));os.exit(1);}kaesu;}
+    kaku temporary = "";
+    moshi (command == "run" || command == "exec") {
+        temporary = string.concat("/tmp/mio-run-", convert.format_int(os.pid()));
+        kaku created = fs.create_dir(temporary);
+        moshi (created.error != mu) { fail("E_IO cannot create private run directory", 1); kaesu; }
+        moshi (os.chmod(temporary, 448) != 0) { os.remove_dir(temporary); fail("E_IO cannot protect run directory", 1); kaesu; }
+        output = string.concat(temporary, "/program");
+    }
+    kaku written = fs.write_all(output, compiled.bytes);
+    moshi (written.error != mu) {
+        moshi (temporary != "") { os.remove(output); os.remove_dir(temporary); }
+        fail("E_IO cannot write native output", 1); kaesu;
+    }
+    moshi (os.chmod(output, 493) != 0) {
+        moshi (temporary != "") { os.remove(output); os.remove_dir(temporary); }
+        fail("E_IO cannot make native output executable", 1); kaesu;
+    }
+    moshi (command == "run" || command == "exec") {
+        kaku launch: []string = [output]; array.append_all(launch, program_args);
+        kaku status = os.spawn(output, launch);
+        kaku removed = os.remove(output); kaku directory_removed = os.remove_dir(temporary);
+        moshi (removed != 0 || directory_removed != 0) { fs.write_all("/dev/stderr", string.to_bytes("E_IO run cleanup failed\n")); }
+        moshi (status < 0) { fail("E_RUN native process failed", 1); kaesu; }
+        os.exit(status);
+    }
+}
+run();

@@ -1,0 +1,24 @@
+yobu "kiso/testing";
+
+waza test_nested_values_and_exact_ids() -> unit {
+    kaku doc = parse(string.to_bytes("{\"id\":9223372036854775807,\"data\":[true,false,null,{\"x\":-1.25e+3}]}"));
+    testing.expect(doc.error == "", "nested JSON parses");
+    kaku id = member(doc, doc.root, "id");
+    testing.expect(text(doc, id) == "9223372036854775807", "integer request ID remains exact");
+    kaku again = parse(string.to_bytes(render(doc, doc.root)));
+    testing.expect(again.error == "", "rendered document parses");
+}
+waza test_unicode_escapes_and_nul_roundtrip() -> unit {
+    kaku doc = parse(string.to_bytes("\"\\uD83D\\uDE00\\u0000\\n\""));
+    testing.expect(doc.error == "", "Unicode surrogate pair and escaped NUL");
+    kaku expected = string.from_utf8([uint8(240),uint8(159),uint8(152),uint8(128),uint8(0),uint8(10)]);
+    moshi (expected != mu) { testing.expect(text(doc, doc.root) == expected, "Unicode and NUL bytes"); }
+}
+waza test_invalid_json_and_duplicate_member() -> unit {
+    testing.expect(parse(string.to_bytes("[1,]")).error != "", "trailing comma rejected");
+    testing.expect(parse(string.to_bytes("01")).error != "", "leading zero rejected");
+    testing.expect(parse(string.to_bytes("1e+")).error != "", "incomplete exponent rejected");
+    testing.expect(parse([uint8(34),uint8(0),uint8(34)]).error != "", "literal control rejected");
+    kaku doc = parse(string.to_bytes("{\"x\":1,\"x\":2}"));
+    testing.expect(text(doc, member(doc, doc.root, "x")) == "2", "last duplicate member matches JSON host semantics");
+}

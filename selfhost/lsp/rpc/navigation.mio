@@ -1,0 +1,65 @@
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/lsp";
+
+waza lsp_symbol_kind(kind: int64) -> int64 {
+    moshi(kind==13){kaesu 8;}moshi(kind==3){kaesu 14;}moshi(kind==4 || kind==5 || kind==12){kaesu 12;}
+    moshi(kind==6){kaesu 23;}moshi(kind==7){kaesu 10;}moshi(kind==8){kaesu 22;}moshi(kind==10){kaesu 2;}kaesu 13;
+}
+waza hover_header(symbol: lsp.SemanticSymbol) -> string {
+    moshi(symbol.kind==4 || symbol.kind==5 || symbol.kind==12){kaesu string.concat("waza ",symbol.detail);}
+    moshi(symbol.kind==6){kaesu string.concat("kata ",symbol.detail);}moshi(symbol.kind==7){kaesu string.concat("sentaku ",symbol.detail);}
+    kaku header=symbol.name;moshi(symbol.kind==0 || symbol.kind==2){header=string.concat("kaku ",header);}moshi(symbol.kind==3){header=string.concat("teisu ",header);}
+    moshi(symbol.detail!=""){header=string.concat(header,string.concat(": ",symbol.detail));}kaesu header;
+}
+waza symbol_json(analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol) -> string? {
+    kaku buffer=source_buffer(analysis,symbol.path);moshi(buffer==mu){kaesu mu;}
+    kaku output=string.new_builder();string.write_string(output,"{\"name\":");string.write_string(output,json.quote(symbol.name));
+    string.write_string(output,",\"detail\":");string.write_string(output,json.quote(symbol.detail));string.write_string(output,",\"kind\":");string.write_string(output,convert.format_int(lsp_symbol_kind(symbol.kind)));
+    string.write_string(output,",\"range\":");string.write_string(output,range_json(buffer,symbol.span.start.offset,symbol.span.end.offset));
+    string.write_string(output,",\"selectionRange\":");string.write_string(output,range_json(buffer,symbol.selection.start.offset,symbol.selection.end.offset));
+    kaku at=0;kaku first=hai;string.write_string(output,",\"children\":[");
+    aida(at<len(analysis.index.symbols)){
+        kaku child=analysis.index.symbols[at];
+        moshi(child.owner==symbol.key && (child.kind==1 || child.kind==13 || child.kind==8)){kaku encoded=symbol_json(analysis,child);moshi(encoded!=mu){moshi(!first){string.write_string(output,",");}string.write_string(output,encoded);first=iie;}}
+        at=at+1;
+    }
+    string.write_string(output,"]}");kaesu string.builder_string(output);
+}
+waza document_symbols(analysis: DocumentAnalysis) -> string {
+    kaku output=string.new_builder();string.write_string(output,"[");kaku at=0;kaku first=hai;
+    aida(at<len(analysis.index.symbols)){
+        kaku symbol=analysis.index.symbols[at];
+        moshi(symbol.path==analysis.path && symbol.owner=="" && symbol.kind!=1){
+            kaku encoded=symbol_json(analysis,symbol);moshi(encoded!=mu){moshi(!first){string.write_string(output,",");}string.write_string(output,encoded);first=iie;}
+        }at=at+1;
+    }
+    string.write_string(output,"]");kaesu string.builder_string(output);
+}
+waza navigation_request(state: Session, document: json.Document, params: int64, method: string, id: string, cancelled: bool) -> string? {
+    moshi(method!="textDocument/hover" && method!="textDocument/definition" && method!="textDocument/references" && method!="textDocument/documentSymbol" && method!="textDocument/signatureHelp" && method!="textDocument/completion"){kaesu mu;}
+    moshi(cancelled){kaesu error_response(id,-32800,"Request cancelled");}
+    kaku text_document=json.member(document,params,"textDocument");kaku uri_node=json.member(document,text_document,"uri");
+    moshi(uri_node<0 || document.values[uri_node].kind!=3 || json.text(document,uri_node)==""){kaesu error_response(id,-32602,"missing textDocument.uri");}
+    kaku uri=json.text(document,uri_node);kaku position=lsp.Position {line:0,character:0};
+    moshi(method!="textDocument/documentSymbol"){
+        kaku node=json.member(document,params,"position");moshi(node>=0){kaku parsed=position_field(document,node);moshi(parsed==mu){kaesu error_response(id,-32602,"invalid position");}position=parsed;}
+    }
+    kaku empty="null";moshi(method=="textDocument/references" || method=="textDocument/documentSymbol"){empty="[]";}
+    moshi(method=="textDocument/completion"){empty="{\"isIncomplete\":false,\"items\":[]}";}
+    kaku analyzed=analyze_document(state,uri);moshi(analyzed==mu){kaesu response(id,empty);}
+    moshi(method=="textDocument/signatureHelp"){kaesu response(id,signature_result(analyzed,position));}
+    moshi(method=="textDocument/completion"){kaesu response(id,completion_result(state,analyzed,position));}
+    moshi(method=="textDocument/documentSymbol"){kaesu response(id,document_symbols(analyzed));}
+    kaku buffer=source_buffer(analyzed,analyzed.path);moshi(buffer==mu){kaesu response(id,empty);}
+    kaku offset=lsp.offset_at(buffer,position);kaku symbol=lsp.symbol_at(analyzed.index,analyzed.path,offset);
+    moshi(method=="textDocument/hover"){kaesu response(id,hover_result(analyzed,offset,symbol,state.flags[4]));}
+    moshi(symbol==mu){kaesu response(id,empty);}
+    moshi(method=="textDocument/definition"){
+        kaku location=location_json(analyzed,symbol.path,symbol.selection.start.offset,symbol.selection.end.offset);moshi(location==mu){kaesu response(id,"null");}
+        kaesu response(id,string.concat("[",string.concat(location,"]")));
+    }
+    kaku context=json.member(document,params,"context");kaku include_node=json.member(document,context,"includeDeclaration");kaku include=include_node>=0 && document.values[include_node].kind==1 && json.text(document,include_node)=="true";
+    kaesu response(id,reference_result(state,analyzed,symbol,include));
+}

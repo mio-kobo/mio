@@ -16,6 +16,7 @@ waza test_opcode_table() -> unit {
     testing.expect(OP_CONSTANT == 1, "constant opcode");
     testing.expect(OP_CLOSURE == 46, "closure opcode");
     testing.expect(OP_DATA_CONVERT == 65, "data convert opcode");
+    testing.expect(OP_TYPE_CONSTRAINT == 66 && operand_count(OP_TYPE_CONSTRAINT) == 1, "typed IR constraint operand");
     testing.expect(operand_count(OP_MATH) == 2, "math operands");
 }
 
@@ -101,4 +102,49 @@ waza test_compile_modules() -> unit {
     kaku result = compile_modules(packages, checks);
     testing.expect(result.success, "multi-package program compiles");
     testing.expect(len(result.layout.functions) == 1, "dependency function linked once");
+}
+
+waza native_source(source: string) -> CompileResult {
+    kaku parsed=parser.parse(string.to_bytes(source));
+    kaku resolved=resolver.resolve_program("test",parsed);
+    kaku checked=typecheck.check_program(resolved);
+    kaku packages: []resolver.ResolvedPackage=[resolved];
+    kaku checks: []typecheck.TypeCheckResult=[checked];
+    kaku natives: []NativeFunctionLayout=[];
+    kaesu compile_native_modules(packages,checks,natives,iie);
+}
+
+waza instance_count(result: CompileResult) -> int64 {
+    kaku count=0;kaku at=0;
+    aida(at<len(result.layout.functions)){
+        moshi(string.has_prefix(result.layout.functions[at].name,"$instance::")){count=count+1;testing.expect(len(result.layout.functions[at].instructions)>0,"every reserved instance has an emitted body");}
+        at=at+1;
+    }
+    kaesu count;
+}
+
+waza test_native_value_free_generic_instances() -> unit {
+    kaku result=native_source("waza empty<T>() -> []T {kaku values: []T=[];kaesu values;} kaku ints=empty[int64](); kaku strings=empty[string](); kaku again=empty[int64]();");
+    testing.expect(result.success,"value-free generic functions compile in native mode");
+    testing.expect(instance_count(result)==2,"concrete types select distinct instances and identical calls reuse one");
+    testing.expect(result.bytes[6]==uint8(16),"native generic code uses checked native IR");
+    result=native_source("waza size<T>(n: int64) -> int64 {kaku values: []T=[]; moshi(n>0){kaesu size[T](n-1);}kaesu len(values);} chant(size[uint8](2));");
+    testing.expect(result.success,"recursive value-free generic instance compiles");
+    testing.expect(instance_count(result)==1,"recursive instantiation reuses its reserved function identity");
+    result=native_source("waza make<T>(value: T) -> () -> T {kaesu waza () -> T {kaesu value;};} kaku number=make[int64](7); kaku text=make[string](\"mio\");chant(number());chant(text());");
+    testing.expect(result.success,"generic closure captures concrete runtime values without capturing type parameters");
+    testing.expect(instance_count(result)==2,"returned closures are emitted under both concrete type contexts");
+}
+
+waza test_native_cross_package_generic_instances() -> unit {
+    kaku parsed=parser.parse(string.to_bytes("koukai waza empty<T>() -> []T {kaku values: []T=[];kaesu values;}"));
+    kaku library=resolver.resolve_program("sample/lib",parsed);kaku library_types=typecheck.check_program(library);
+    parsed=parser.parse(string.to_bytes("yobu \"sample/lib\"; kata Item {value: int64;} kaku records=lib.empty[Item](); kaku ints=lib.empty[int64]();"));
+    kaku files: []resolver.SourceFile=[resolver.SourceFile {file_id:0,path:"app",ast:parsed.ast,root:parsed.root}];
+    kaku dependencies: []resolver.ResolvedPackage=[library];kaku app=resolver.resolve_package("sample/app",files,dependencies);
+    kaku type_dependencies: []typecheck.TypeCheckResult=[library_types];kaku app_types=typecheck.check_package(app,type_dependencies);
+    kaku packages: []resolver.ResolvedPackage=[library,app];kaku checks: []typecheck.TypeCheckResult=[library_types,app_types];kaku natives: []NativeFunctionLayout=[];
+    kaku result=compile_native_modules(packages,checks,natives,iie);
+    testing.expect(result.success,"generic bodies copy caller-owned concrete types into their declaration package");
+    testing.expect(instance_count(result)==2,"cross-package instances retain both concrete identities");
 }

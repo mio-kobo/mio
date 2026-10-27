@@ -1,0 +1,41 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/utf8";
+
+koukai kata Position { line: int64; character: int64; }
+koukai kata TextBuffer { data: []uint8; starts: []int64; }
+koukai waza text_buffer(text: string) -> TextBuffer {
+    kaku bytes=string.to_bytes(text); kaku starts: []int64=[0]; kaku at=0;
+    aida(at<len(bytes)) {
+        moshi(bytes[at]==uint8(10)) { array.push(starts,at+1); }
+        sore { moshi(bytes[at]==uint8(13)) { kaku crlf=iie; moshi(at+1<len(bytes)){crlf=bytes[at+1]==uint8(10);} moshi(!crlf){array.push(starts,at+1);} } }
+        at=at+1;
+    }
+    kaesu TextBuffer { data: bytes, starts: starts };
+}
+koukai waza position_at(buffer: TextBuffer, offset: int64) -> Position {
+    kaku end=offset; moshi(end<0){end=0;} moshi(end>len(buffer.data)){end=len(buffer.data);}
+    kaku low=0; kaku high=len(buffer.starts);
+    aida(low<high){kaku mid=low+(high-low)/2;moshi(buffer.starts[mid]<=end){low=mid+1;}sore{high=mid;}}
+    kaku line=low-1;moshi(line<0){line=0;} kaku at=buffer.starts[line];
+    moshi(end>at){moshi(buffer.data[end-1]==uint8(13)){end=end-1;}}
+    kaku units=0;
+    aida(at<end){kaku rune=utf8.decode_one(buffer.data,at);kaku width=rune.width;kaku valid=rune.valid;moshi(width<=0 || at+width>end){width=1;valid=iie;}
+        moshi(valid && int64(rune.value)>65535){units=units+2;}sore{units=units+1;} at=at+width;
+    }
+    kaesu Position {line:line,character:units};
+}
+koukai waza offset_at(buffer: TextBuffer, position: Position) -> int64 {
+    moshi(position.line<0 || position.character<0){kaesu 0;}
+    moshi(position.line>=len(buffer.starts)){kaesu len(buffer.data);}
+    kaku start=buffer.starts[position.line]; kaku end=len(buffer.data);
+    moshi(position.line+1<len(buffer.starts)){end=buffer.starts[position.line+1]-1;}
+    moshi(end>start){moshi(buffer.data[end-1]==uint8(13)){end=end-1;}}
+    kaku units=0; kaku at=start;
+    aida(at<end && units<position.character){
+        kaku rune=utf8.decode_one(buffer.data,at);kaku size=rune.width;kaku valid=rune.valid;moshi(size<=0 || at+size>end){size=1;valid=iie;}
+        kaku width=1;moshi(valid && int64(rune.value)>65535){width=2;}
+        moshi(units+width>position.character){kaesu at;} units=units+width;at=at+size;
+    }
+    kaesu at;
+}

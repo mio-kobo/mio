@@ -151,9 +151,13 @@ waza append_function(output: []uint8, function: FunctionLayout) -> unit {
 }
 
 koukai waza encode_layout(layout: BytecodeLayout) -> []uint8 {
+    kaesu encode_layout_version(layout, 14);
+}
+
+koukai waza encode_layout_version(layout: BytecodeLayout, version: int64) -> []uint8 {
     kaku output = array.with_capacity[uint8](64 + len(layout.instructions));
     array.append_all(output, [uint8(77), uint8(79), uint8(67), uint8(72), uint8(73)]);
-    append_u16(output, 14);
+    append_u16(output, version);
     append_u32(output, uint32(len(layout.constants)));
     kaku index = 0;
     aida (index < len(layout.constants)) { append_constant(output, layout.constants[index]); index = index + 1; }

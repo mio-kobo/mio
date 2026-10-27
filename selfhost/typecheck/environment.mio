@@ -1,3 +1,4 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "selfhost/parser";
@@ -10,6 +11,7 @@ kata FlowFact {
 }
 
 kata TypeEnvironment {
+    work: progress.Context;
     resolved: resolver.ResolvedPackage;
     result: TypeCheckResult;
     current_file: []int64;
@@ -37,7 +39,8 @@ waza empty_result(path: string) -> TypeCheckResult {
     };
 }
 
-waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {
+waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {kaesu new_environment_with_progress(resolved,progress.context());}
+waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: progress.Context) -> TypeEnvironment {
     kaku result = empty_result(resolved.package_path);
     scalar_type(result, TypeKind.Invalid(), "invalid");
     scalar_type(result, TypeKind.Int8(), "int8");
@@ -56,6 +59,7 @@ waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {
     scalar_type(result, TypeKind.Resource(), "resource");
     kaku versions = array.make[int64](len(resolved.symbols), 0);
     kaesu TypeEnvironment {
+        work:work,
         resolved: resolved,
         result: result,
         current_file: [0],
@@ -167,7 +171,7 @@ waza struct_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
 waza struct_named(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.structs)) {
-        moshi (env.result.structs[index].name == name || string.concat(string.concat(env.result.structs[index].package_path, "."), env.result.structs[index].name) == name) { kaesu index; }
+        moshi ((env.result.structs[index].package_path == env.resolved.package_path && env.result.structs[index].name == name) || string.concat(string.concat(env.result.structs[index].package_path, "."), env.result.structs[index].name) == name) { kaesu index; }
         index = index + 1;
     }
     kaesu -1;
@@ -185,7 +189,7 @@ waza enum_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
 waza enum_named(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.enums)) {
-        moshi (env.result.enums[index].name == name || string.concat(string.concat(env.result.enums[index].package_path, "."), env.result.enums[index].name) == name) { kaesu index; }
+        moshi ((env.result.enums[index].package_path == env.resolved.package_path && env.result.enums[index].name == name) || string.concat(string.concat(env.result.enums[index].package_path, "."), env.result.enums[index].name) == name) { kaesu index; }
         index = index + 1;
     }
     kaesu -1;

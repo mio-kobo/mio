@@ -1,0 +1,23 @@
+yobu "kiso/testing";
+waza test_document_versions_and_sequential_utf16_changes() -> unit {
+    kaku docs=store();open_document(docs,Document {uri:"untitled:x",language:"mio",version:1,text:"a😀中\r\nx"});
+    kaku changes: []ContentChange=[ContentChange {ranged:hai,start:Position {line:0,character:1},end:Position {line:0,character:3},text:"b"},ContentChange {ranged:hai,start:Position {line:0,character:2},end:Position {line:0,character:3},text:"c"}];
+    kaku changed=change_document(docs,"untitled:x",2,changes);kaku document=changed.document;moshi(document==mu){testing.fail("updated document snapshot");kaesu;}
+    testing.expect(document.text=="abc\r\nx" && document.version==2,"incremental ranges use sequential current buffer");
+    kaku stale=change_document(docs,"untitled:x",1,[ContentChange {ranged:iie,start:Position {line:0,character:0},end:Position {line:0,character:0},text:"wrong"}]);testing.expect(stale.stale && stale.document==mu,"stale edit cannot publish a new document");
+    kaku current=snapshot(docs,"untitled:x");moshi(current==mu){testing.fail("retained document");}sore{testing.expect(current.text=="abc\r\nx","stale edit preserves text");}
+    replace_document(docs,"untitled:x","save");kaku saved=snapshot(docs,"untitled:x");moshi(saved==mu){testing.fail("saved snapshot");}sore{testing.expect(saved.text=="save" && saved.version==2,"didSave text replacement keeps version");}
+    kaku closed=close_document(docs,"untitled:x");testing.expect(closed!=mu && snapshot(docs,"untitled:x")==mu,"closed document removed");
+    testing.expect(len(change_document(docs,"missing",1,[]).warnings)>0,"unopened change reports warning");
+}
+waza test_inverted_ranges_swap_and_full_replacement() -> unit {
+    kaku docs=store();open_document(docs,Document {uri:"x",language:"mio",version:0,text:"abc"});
+    kaku changed=change_document(docs,"x",1,[ContentChange {ranged:hai,start:Position {line:0,character:2},end:Position {line:0,character:1},text:"X"}]);kaku document=changed.document;moshi(document==mu){testing.fail("range change");}sore{testing.expect(document.text=="aXc" && len(changed.warnings)==1,"inverted ranges swap with warning");}
+    kaku replaced=change_document(docs,"x",2,[ContentChange {ranged:iie,start:Position {line:0,character:0},end:Position {line:0,character:0},text:"entire"}]);kaku value=replaced.document;moshi(value==mu){testing.fail("full replacement");}sore{testing.expect(value.text=="entire","full text change replaces buffer");}
+}
+waza test_file_uri_unicode_and_reserved_roundtrip() -> unit {
+    kaku original="/tmp/目录 with space/a#?%.mio";kaku uri=file_uri(original);kaku parsed=path_from_uri(uri);testing.expect(parsed.valid && parsed.path==original,"Unicode and reserved path bytes roundtrip");
+    testing.expect(path_from_uri("file://localhost/tmp/a%20b.mio").path=="/tmp/a b.mio","local host and percent decoding");
+    testing.expect(!path_from_uri("file://remote-host/tmp/a.mio").valid && !path_from_uri("untitled:1").valid,"nonlocal and non-file URI not disk paths");
+    testing.expect(!path_from_uri("file:///tmp/%zz").valid && !path_from_uri("file:relative.mio").valid,"malformed escape and opaque relative URI rejected");
+}

@@ -1,0 +1,136 @@
+name: Mio Core CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Go Format and Vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check gofmt
+        shell: bash
+        run: |
+          git ls-files -z -- '*.go' | xargs -0 -r gofmt -l > /tmp/unformatted-go.txt
+          if [ -s /tmp/unformatted-go.txt ]; then
+            cat /tmp/unformatted-go.txt
+            exit 1
+          fi
+      - name: Go Vet
+        run: go vet ./...
+      - name: Check whitespace
+        run: git diff --check
+
+  go-linux:
+    name: Go Tests / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Full repository tests
+        run: go test ./... -count=1 -timeout 30m
+
+  native-aot:
+    name: Apple Silicon / ${{ matrix.suite }}
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [aot, aot-race, full, bootstrap, native-fixed-point]
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # Fixed-point verification checks the CI baseline ancestor.
+      - name: Check ARM64
+        run: test "$(uname -m)" = arm64
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Native AOT tests
+        if: matrix.suite == 'aot'
+        run: go test ./internal/aot/... -count=1 -timeout 30m
+      - name: Native AOT race tests
+        if: matrix.suite == 'aot-race'
+        run: go test -race ./internal/aot/... -count=1 -timeout 30m
+      - name: Mochi VM regression
+        if: matrix.suite == 'full'
+        run: go test ./internal/vm/... ./internal/mochi/... -count=1 -timeout 30m
+      - name: Full macOS regression
+        if: matrix.suite == 'full'
+        run: go test ./... -count=1 -timeout 30m
+      - name: Build tools
+        if: matrix.suite == 'full'
+        run: |
+          mkdir -p build
+          go build -o build/mio ./cmd/mio
+          go build -o build/mochi-aot ./cmd/mochi-aot
+          go build -o build/mochi-aot-audit ./cmd/mochi-aot-audit
+      - name: Native bootstrap B-C-D fixed point and M17 golden artifacts
+        if: matrix.suite == 'bootstrap'
+        run: bash scripts/check-native-bootstrap.sh
+      - name: M18 pure Mio Native AOT machine-code fixed point
+        if: matrix.suite == 'native-fixed-point'
+        run: |
+          set -euo pipefail
+          python3 scripts/check-native-aot-fixed-point.py --evidence build/m18-ci --gc-witness
+          MIO_M18_EVIDENCE_DIR="$PWD/build/m18-ci" go test ./internal/aot -run '^TestM18' -count=1 -v -timeout 30m | tee build/m18-ci/m18-tests.log
+      - name: Upload M18 provenance and native generations
+        if: always() && matrix.suite == 'native-fixed-point'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-machine-code-fixed-point
+          path: build/m18-ci/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload verified bootstrap artifacts
+        if: success() && matrix.suite == 'bootstrap'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-bootstrap-golden
+          path: |
+            build/compiler-A.mochi
+            build/compiler-B-native.mochi
+            build/native-bootstrap/compiler-C.mochi
+            build/native-bootstrap/compiler-D.mochi
+            build/native-bootstrap-check.*/SHA256SUMS
+            build/native-bootstrap-check.*/m17-golden.log
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-aot-diagnostics-${{ matrix.suite }}
+          path: |
+            build/*.telemetry
+            build/*audit.json
+            build/*.sample.txt
+          if-no-files-found: ignore
+          retention-days: 7

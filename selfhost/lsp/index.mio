@@ -1,0 +1,136 @@
+yobu "kiso/array";
+yobu "selfhost/progress";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/frontend";
+yobu "selfhost/resolver";
+yobu "selfhost/typecheck";
+yobu "selfhost/parser";
+yobu "selfhost/lexer";
+
+koukai kata SemanticSource { path: string; buffer: TextBuffer; tokens: []lexer.Token; }
+koukai kata SemanticSymbol { key: string; name: string; kind: int64; package_path: string; path: string; span: parser.SourceSpan; selection: parser.SourceSpan; detail: string; public: bool; owner: string; }
+koukai kata Occurrence { path: string; start: int64; end: int64; key: string; declaration: bool; }
+koukai kata SemanticIndex { analysis: frontend.AnalysisResult; sources: []SemanticSource; symbols: []SemanticSymbol; occurrences: []Occurrence; }
+koukai kata SymbolDeclaration { checked: typecheck.TypeCheckResult; file: resolver.SourceFile; symbol: resolver.Symbol; node: parser.Node; }
+koukai waza declaration(index: SemanticIndex, key: string) -> SymbolDeclaration? {
+    kaku pi=0;
+    aida(pi<len(index.analysis.resolved) && pi<len(index.analysis.checked)){
+        kaku package=index.analysis.resolved[pi];kaku at=0;
+        aida(at<len(package.symbols)){
+            kaku symbol=package.symbols[at];kaku ref=symbol.declaration;
+            moshi(symbol.package_path==package.package_path && semantic_key(index.analysis,symbol)==key && ref.file_id>=0 && ref.file_id<len(package.files)){
+                kaku file=package.files[ref.file_id];
+                moshi(ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){
+                    kaesu SymbolDeclaration {checked:index.analysis.checked[pi],file:file,symbol:symbol,node:file.ast.nodes[ref.node_id]};
+                }
+            }at=at+1;
+        }pi=pi+1;
+    }kaesu mu;
+}
+waza semantic_source(sources: []SemanticSource, path: string) -> int64 {
+    kaku at=0;aida(at<len(sources)){moshi(sources[at].path==path){kaesu at;}at=at+1;}kaesu -1;
+}
+waza semantic_package(result: frontend.AnalysisResult, package_path: string) -> int64 {
+    kaku at=0;aida(at<len(result.resolved)){moshi(result.resolved[at].package_path==package_path){kaesu at;}at=at+1;}kaesu -1;
+}
+waza semantic_key(result: frontend.AnalysisResult, symbol: resolver.Symbol) -> string {
+    kaku pi=semantic_package(result,symbol.package_path);moshi(pi<0){kaesu "";}
+    kaku files=result.resolved[pi].files;kaku ref=symbol.declaration;moshi(ref.file_id<0 || ref.file_id>=len(files)){kaesu "";}
+    kaesu string.concat(files[ref.file_id].path,string.concat("#",string.concat(convert.format_int(ref.node_id),string.concat(":",symbol.name))));
+}
+waza semantic_selection(source: SemanticSource, span: parser.SourceSpan, name: string, last: bool) -> parser.SourceSpan {
+    kaku selected=span;kaku found=iie;kaku at=0;
+    aida(at<len(source.tokens)){
+        kaku token=source.tokens[at];
+        moshi(token.start.offset>=span.start.offset && token.end.offset<=span.end.offset && token.literal==name){
+            selected=parser.SourceSpan {start:token.start,end:token.end};found=hai;moshi(!last){nukeru;}
+        }at=at+1;
+    }
+    moshi(!found){kaesu span;}kaesu selected;
+}
+waza semantic_signature(checked: typecheck.TypeCheckResult, source: resolver.SourceFile, node: parser.Node, symbol: resolver.Symbol) -> string {
+    kaku at=0;aida(at<len(checked.signatures)){
+        kaku signature=checked.signatures[at];
+        moshi(signature.symbol_id==symbol.id && signature.package_path==symbol.package_path){
+            kaku builder=string.new_builder();string.write_string(builder,symbol.name);
+            moshi(len(signature.type_parameters)>0){string.write_string(builder,"<");kaku ti=0;aida(ti<len(signature.type_parameters)){moshi(ti>0){string.write_string(builder,", ");}kaku param=signature.type_parameters[ti];string.write_string(builder,param.name);moshi(param.constraint!=""){string.write_string(builder,string.concat(": ",param.constraint));}ti=ti+1;}string.write_string(builder,">");}
+            string.write_string(builder,"(");kaku pi=0;
+            aida(pi<len(signature.parameters)){
+                moshi(pi>0){string.write_string(builder,", ");}kaku name="arg";kaku position=node.integer+pi;
+                moshi(position<len(node.children)){name=source.ast.nodes[node.children[position]].text;}
+                string.write_string(builder,string.concat(name,string.concat(": ",typecheck.type_name(checked,signature.parameters[pi]))));pi=pi+1;
+            }
+            string.write_string(builder,string.concat(") -> ",typecheck.type_name(checked,signature.result)));kaesu string.builder_string(builder);
+        }at=at+1;
+    }kaesu "";
+}
+waza semantic_detail(checked: typecheck.TypeCheckResult, source: resolver.SourceFile, symbol: resolver.Symbol) -> string {
+    kaku kind=resolver.symbol_kind_code(symbol.kind);kaku node=source.ast.nodes[symbol.declaration.node_id];
+    moshi(kind==4 || kind==5){kaesu semantic_signature(checked,source,node,symbol);}
+    kaku at=0;aida(at<len(checked.symbol_types)){kaku typed=checked.symbol_types[at];moshi(typed.symbol_id==symbol.id && typed.package_path==symbol.package_path){kaesu typecheck.type_name(checked,typed.type_id);}at=at+1;}kaesu "";
+}
+koukai waza semantic_index(analysis: frontend.AnalysisResult) -> SemanticIndex {kaesu semantic_index_with_progress(analysis,progress.context());}
+koukai waza semantic_index_with_progress(analysis: frontend.AnalysisResult, work: progress.Context) -> SemanticIndex {
+    kaku sources: []SemanticSource=[];kaku symbols: []SemanticSymbol=[];kaku occurrences: []Occurrence=[];kaku si=0;
+    aida(si<len(analysis.sources)){moshi(!progress.checkpoint(work)){nukeru;}kaku source=analysis.sources[si];moshi(semantic_source(sources,source.path)<0){kaku text=string.from_utf8(source.bytes);moshi(text!=mu){kaku scanned=lexer.lex_with_progress(source.bytes,work);array.push(sources,SemanticSource {path:source.path,buffer:text_buffer(text),tokens:scanned.tokens});}}si=si+1;}
+    kaku pi=0;
+    aida(pi<len(analysis.resolved)){
+        kaku package=analysis.resolved[pi];kaku checked=analysis.checked[pi];si=0;
+        aida(si<len(package.symbols)){moshi(!progress.checkpoint(work)){nukeru;}
+            kaku symbol=package.symbols[si];kaku ref=symbol.declaration;
+            moshi(symbol.package_path==package.package_path && ref.file_id>=0 && ref.file_id<len(package.files)){
+                kaku file=package.files[ref.file_id];kaku source=semantic_source(sources,file.path);
+                moshi(source>=0 && ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){
+                    kaku key=semantic_key(analysis,symbol);kaku selection=semantic_selection(sources[source],symbol.span,symbol.name,iie);kaku owner="";
+                    moshi(symbol.owner_function>=0 && symbol.owner_function<len(package.symbols)){owner=semantic_key(analysis,package.symbols[symbol.owner_function]);}
+                    array.push(symbols,SemanticSymbol {key:key,name:symbol.name,kind:resolver.symbol_kind_code(symbol.kind),package_path:symbol.package_path,path:file.path,span:symbol.span,selection:selection,detail:semantic_detail(checked,file,symbol),public:symbol.public,owner:owner});
+                    array.push(occurrences,Occurrence {path:file.path,start:selection.start.offset,end:selection.end.offset,key:key,declaration:hai});
+                }
+            }si=si+1;
+        }pi=pi+1;
+    }
+    pi=0;aida(pi<len(analysis.resolved)){
+        kaku package=analysis.resolved[pi];kaku bi=0;
+        aida(bi<len(package.bindings)){moshi(!progress.checkpoint(work)){nukeru;}
+            kaku binding=package.bindings[bi];kaku ref=binding.reference;
+            moshi(ref.file_id>=0 && ref.file_id<len(package.files) && binding.symbol_id>=0 && binding.symbol_id<len(package.symbols)){
+                kaku file=package.files[ref.file_id];kaku source=semantic_source(sources,file.path);
+                moshi(source>=0 && ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){
+                    kaku symbol=package.symbols[binding.symbol_id];kaku key=semantic_key(analysis,symbol);
+                    moshi(key!=""){
+                        kaku node=file.ast.nodes[ref.node_id];kaku selection=semantic_selection(sources[source],node.span,symbol.name,parser.node_kind_code(node.kind)==27);
+                        kaku declaration=symbol.package_path==package.package_path && symbol.declaration.file_id==ref.file_id && symbol.declaration.node_id==ref.node_id;
+                        moshi(!declaration){array.push(occurrences,Occurrence {path:file.path,start:selection.start.offset,end:selection.end.offset,key:key,declaration:iie});}
+                    }
+                }
+            }bi=bi+1;
+        }pi=pi+1;
+    }
+    semantic_members(analysis,sources,symbols,occurrences,work);
+    kaesu SemanticIndex {analysis:analysis,sources:sources,symbols:symbols,occurrences:occurrences};
+}
+koukai waza semantic_symbol(index: SemanticIndex, key: string) -> SemanticSymbol? {
+    kaku at=0;aida(at<len(index.symbols)){moshi(index.symbols[at].key==key){kaesu index.symbols[at];}at=at+1;}kaesu mu;
+}
+koukai waza occurrence_at(index: SemanticIndex, path: string, offset: int64) -> Occurrence? {
+    kaku best= -1;kaku at=0;kaku boundary=iie;
+    aida(at<len(index.occurrences)){
+        kaku current=index.occurrences[at];
+        moshi(current.path==path && current.start<=offset && offset<=current.end){
+            kaku touching=offset==current.end;
+            moshi(best<0){best=at;boundary=touching;}
+            sore { kaku previous=index.occurrences[best];moshi((boundary && !touching) || (boundary==touching && current.end-current.start<previous.end-previous.start)){best=at;boundary=touching;} }
+        }at=at+1;
+    }
+    moshi(best<0){kaesu mu;}kaesu index.occurrences[best];
+}
+koukai waza symbol_at(index: SemanticIndex, path: string, offset: int64) -> SemanticSymbol? {
+    kaku occurrence=occurrence_at(index,path,offset);moshi(occurrence==mu){kaesu mu;}kaesu semantic_symbol(index,occurrence.key);
+}
+koukai waza references(index: SemanticIndex, key: string, include_declaration: bool) -> []Occurrence {
+    kaku output: []Occurrence=[];kaku at=0;
+    aida(at<len(index.occurrences)){kaku current=index.occurrences[at];moshi(current.key==key && (include_declaration || !current.declaration)){
+        kaku found=iie;kaku prior=0;aida(prior<len(output)){moshi(output[prior].path==current.path && output[prior].start==current.start && output[prior].end==current.end){found=hai;}prior=prior+1;}moshi(!found){array.push(output,current);}
+    }at=at+1;}kaesu output;
+}

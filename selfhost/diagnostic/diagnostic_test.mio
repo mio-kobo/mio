@@ -1,0 +1,35 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+yobu "selfhost/frontend";
+yobu "selfhost/parser";
+yobu "selfhost/lexer";
+
+waza problem_at(first: int64, end: int64) -> frontend.AnalysisDiagnostic {
+    kaesu frontend.AnalysisDiagnostic {code:"E0301",path:"例.mio",span:parser.SourceSpan {start:lexer.Position {offset:first,line:1,column:first+1},end:lexer.Position {offset:end,line:1,column:end+1}},detail:"bad"};
+}
+waza test_short_diagnostic_unicode_tabs_combining_and_crlf() -> unit {
+    kaku source="\t日本語é = 1;\r\n";kaku first=string.index(source,"1;");
+    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"short",color:"always",verbose:iie},"");
+    testing.expect(output=="例.mio:1:15: error[E0301]: bad\n","short format uses terminal cells rather than UTF8 bytes and never ANSI");
+}
+waza test_json_diagnostic_is_structured_and_has_exact_byte_span() -> unit {
+    kaku source="\t日本語é = 1;\r\n";kaku first=string.index(source,"1;");
+    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"json",color:"always",verbose:hai},"internal cause");
+    kaku document=json.parse(string.to_bytes(output));testing.expect(document.error=="","JSON diagnostics are one valid document");
+    testing.expect(json.text(document,json.member(document,document.root,"code"))=="E0301" && json.text(document,json.member(document,document.root,"path"))=="例.mio","published code and path fields");
+    kaku location=json.member(document,document.root,"location");kaku column=json.integer(document,json.member(document,location,"column"));kaku offset=json.integer(document,json.member(document,location,"offset"));
+    testing.expect(column!=mu && offset!=mu,"location fields are integers");moshi(column!=mu){testing.expect(column==15,"display column");}moshi(offset!=mu){testing.expect(offset==first,"raw UTF8 byte offset");}
+    testing.expect(!string.contains(output,ansi()) && !string.contains(output,"internal cause"),"machine output has no ANSI or verbose text");
+}
+waza test_human_diagnostic_source_marker_and_verbose_cause() -> unit {
+    kaku source="kaku n: int64=\"wrong\";";kaku first=string.index(source,"\"wrong\"");
+    kaku output=render(problem_at(first,first+7),string.to_bytes(source),Options {format:"human",color:"never",verbose:hai},"detail for debugging");
+    testing.expect(string.contains(output,"error[E0301]: bad") && string.contains(output,"  --> 例.mio:1:15") && string.contains(output,"^^^^^^^") && string.contains(output,"cause: detail for debugging"),"human error keeps source, range and requested cause");
+    testing.expect(!string.contains(output,ansi()),"never color emits no ANSI");
+}
+waza test_non_source_error_has_no_fabricated_label() -> unit {
+    kaku output=failure("E_IO missing input","missing.mio",Options {format:"json",color:"auto",verbose:iie});
+    kaku document=json.parse(string.to_bytes(output));testing.expect(document.error=="" && json.member(document,document.root,"labels")<0,"missing source does not fabricate a span");
+    kaku location=json.member(document,document.root,"location");kaku line=json.integer(document,json.member(document,location,"line"));moshi(line!=mu){testing.expect(line==0,"unknown location remains unknown");}sore{testing.fail("generic diagnostic location");}
+}

@@ -1,0 +1,47 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "selfhost/lsp";
+
+waza test_rpc_cache_reopen_content_identity_and_bounded_retention() -> unit {
+    kaku state=session("/","");
+    kaku uri="untitled:cache-reopen";
+    open_source(state,uri,"kaku value=1;");
+    kaku first=analyze_document(state,uri);testing.expect(first!=mu && len(state.cache)==1,"valid document analysis retained");
+    first=analyze_document(state,uri);testing.expect(first!=mu && len(state.cache)==1,"repeated analysis reuses one cache entry");
+    open_source(state,uri,"kaku value=\"text\";");
+    kaku second=analyze_document(state,uri);testing.expect(second!=mu,"same-version reopen analyzed");
+    moshi(second!=mu){kaku symbol=lsp.symbol_at(second.index,second.path,5);moshi(symbol==mu){testing.fail("reopened symbol");}sore{testing.expect(symbol.detail=="string","same version with different text never reuses stale int type");}}
+    kaku at=0;
+    aida(at<10){kaku other=string.concat("untitled:cache-",convert.format_int(at));open_source(state,other,"kaku other=1;");analyze_document(state,other);at=at+1;}
+    testing.expect(len(state.cache)==8,"analysis retention bounded to eight entries");
+    request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku shutdown=dispatch(state,string.to_bytes("{\"id\":1,\"method\":\"shutdown\"}"));
+    testing.expect(len(shutdown.messages)==len(state.documents.documents)+1,"shutdown clears each open document before replying");
+    testing.expect(len(state.cache)==0,"shutdown releases cached syntax and semantic graphs");
+}
+
+waza test_rpc_cache_disk_dependency_content_and_sibling_invalidation() -> unit {
+    kaku root=string.concat("/tmp/mio-lsp-cache-",convert.format_int(os.pid()));
+    moshi(fs.create_dir(root).error!=mu){testing.fail("create private cache fixture");kaesu;}
+    moshi(os.chmod(root,448)!=0){os.remove_dir(root);testing.fail("protect fixture");kaesu;}
+    kaku dep=string.concat(root,"/dep");
+    moshi(fs.create_dir(dep).error!=mu){os.remove_dir(root);testing.fail("create dependency fixture");kaesu;}
+    kaku file=string.concat(dep,"/main.mio");kaku sibling=string.concat(dep,"/extra.mio");
+    fs.write_all(file,string.to_bytes("koukai waza old() -> int64 {kaesu 1;}"));
+    kaku state=session(root,"");kaku uri=lsp.file_uri(string.concat(root,"/main.mio"));
+    open_source(state,uri,"yobu \"./dep\"; chant(dep.old());");
+    kaku first=analyze_document(state,uri);
+    testing.expect(first!=mu && len(state.cache)==1,"valid imported analysis cached");
+    fs.write_all(file,string.to_bytes("koukai waza new() -> int64 {kaesu 1;}"));
+    kaku second=analyze_document(state,uri);
+    moshi(second==mu){testing.fail("edited dependency analysis");}sore{testing.expect(len(second.index.analysis.diagnostics)>0,"same-size dependency edit invalidates by content, without mtime delay");}
+    fs.write_all(file,string.to_bytes("koukai waza old() -> int64 {kaesu 1;}"));
+    analyze_document(state,uri);
+    fs.write_all(sibling,string.to_bytes("koukai waza old() -> int64 {kaesu 2;}"));
+    second=analyze_document(state,uri);
+    moshi(second==mu){testing.fail("new sibling analysis");}sore{testing.expect(len(second.index.analysis.diagnostics)>0,"new sibling source invalidates the cached package graph");}
+    os.remove(sibling);os.remove(file);os.remove_dir(dep);os.remove_dir(root);
+}

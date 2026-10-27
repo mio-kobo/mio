@@ -1,0 +1,64 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/fs";
+
+waza put(builder: string.StringBuilder, text: string) -> unit { string.write_string(builder, text); }
+koukai waza json_error(code: string, message: string) -> string {
+    kaesu string.concat("{\"code\":", string.concat(json.quote(code), string.concat(",\"message\":", string.concat(json.quote(message), "}"))));
+}
+koukai waza json_result(name: string, path: string, value: Result) -> string {
+    kaku builder = string.new_builder(); put(builder, "{\"name\":"); put(builder, json.quote(name)); put(builder, ",\"path\":"); put(builder, json.quote(path)); put(builder, ",\"status\":");
+    kaku status = "failed"; moshi (passed(value)) { status = "passed"; } put(builder, json.quote(status)); put(builder, ",\"duration_ms\":"); put(builder, convert.format_int(value.duration_ms));
+    moshi (len(value.failures) > 0) {
+        put(builder, ",\"failures\":["); kaku at = 0;
+        aida (at < len(value.failures)) { moshi (at > 0) { put(builder, ","); } put(builder, json_error("E0602", value.failures[at])); at = at + 1; } put(builder, "]");
+    }
+    moshi (value.error != "") { put(builder, ",\"error\":"); put(builder, json_error(value.error_code, value.error)); }
+    put(builder, "}"); kaesu string.builder_string(builder);
+}
+koukai waza seconds(milliseconds: int64) -> string {
+    kaku remainder = milliseconds - (milliseconds / 1000) * 1000; kaku fraction = convert.format_int(remainder);
+    moshi (remainder < 100) { fraction = string.concat("0", fraction); } moshi (remainder < 10) { fraction = string.concat("0", fraction); }
+    kaesu string.concat(convert.format_int(milliseconds / 1000), string.concat(".", fraction));
+}
+koukai waza language(value: string) -> int64 {
+    kaku raw = string.to_bytes(string.trim_space(value)); kaku first = 0; kaku end = len(raw);
+    kaku boundary = first; aida (boundary < end) { moshi (raw[boundary] == uint8(46) || raw[boundary] == uint8(64)) { end = boundary; nukeru; } boundary = boundary + 1; }
+    kaku bytes: []uint8 = []; kaku at = first; aida (at < end) { kaku byte = raw[at]; moshi (byte >= uint8(65) && byte <= uint8(90)) { byte = byte + uint8(32); } array.push(bytes, byte); at = at + 1; }
+    kaku decoded = string.from_utf8(bytes); kaku text = ""; moshi (decoded != mu) { text = decoded; }
+    moshi (text == "zh" || string.has_prefix(text, "zh-") || string.has_prefix(text, "zh_")) { kaesu 1; }
+    moshi (text == "ja" || string.has_prefix(text, "ja-") || string.has_prefix(text, "ja_")) { kaesu 2; } kaesu 0;
+}
+// Keys: starting, pass, fail, assertion, runtime, resource, none, duration.
+koukai waza message(lang: int64, key: int64) -> string {
+    moshi (lang == 1) {
+        moshi (key == 0) { kaesu "开始测试 "; } moshi (key == 1) { kaesu "通过"; } moshi (key == 2) { kaesu "失败"; } moshi (key == 3) { kaesu "断言失败"; }
+        moshi (key == 4) { kaesu "运行时错误"; } moshi (key == 5) { kaesu "超出资源限制"; } moshi (key == 6) { kaesu "没有发现测试"; } kaesu "总执行时间";
+    }
+    moshi (lang == 2) {
+        moshi (key == 0) { kaesu "テストを開始 "; } moshi (key == 1) { kaesu "成功"; } moshi (key == 2) { kaesu "失敗"; } moshi (key == 3) { kaesu "アサーション失敗"; }
+        moshi (key == 4) { kaesu "実行時エラー"; } moshi (key == 5) { kaesu "リソース制限を超えました"; } moshi (key == 6) { kaesu "テストが見つかりません"; } kaesu "合計実行時間";
+    }
+    moshi (key == 0) { kaesu "Starting tests "; } moshi (key == 1) { kaesu "PASS"; } moshi (key == 2) { kaesu "FAIL"; } moshi (key == 3) { kaesu "assertion failed"; }
+    moshi (key == 4) { kaesu "runtime error"; } moshi (key == 5) { kaesu "resource limit exceeded"; } moshi (key == 6) { kaesu "no tests found"; } kaesu "total duration";
+}
+koukai waza human_result(package: string, name: string, value: Result, lang: int64, short: bool, verbose: bool) -> unit {
+    moshi (len(value.stdout) > 0) { fs.write_all("/dev/stdout", value.stdout); }
+    moshi (verbose && len(value.stderr) > 0) { fs.write_all("/dev/stderr", value.stderr); }
+    kaku status = message(lang, 2); moshi (passed(value)) { status = message(lang, 1); }
+    kaku prefix = string.concat("--- ", string.concat(status, string.concat(": ", name)));
+    moshi (short) { prefix = string.concat(package, string.concat(":", string.concat(name, string.concat(": ", status)))); }
+    chant(string.concat(prefix, string.concat(" (", string.concat(seconds(value.duration_ms), "s)"))));
+    kaku at = 0;
+    aida (at < len(value.failures)) {
+        kaku lead = string.concat("    ", message(lang, 3)); moshi (short) { lead = string.concat(package, string.concat(":", string.concat(name, ": E0602"))); }
+        chant(string.concat(lead, string.concat(": ", value.failures[at]))); at = at + 1;
+    }
+    moshi (value.error != "") {
+        kaku key = 4; moshi (value.error_code == "E0604") { key = 5; }
+        kaku lead = string.concat("    ", message(lang, key)); moshi (short) { lead = string.concat(package, string.concat(":", string.concat(name, string.concat(": ", value.error_code)))); }
+        chant(string.concat(lead, string.concat(": ", value.error)));
+    }
+}

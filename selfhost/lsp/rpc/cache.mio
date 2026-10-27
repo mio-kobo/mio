@@ -1,0 +1,88 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/crypto/sha256";
+yobu "kiso/encoding/json";
+yobu "kiso/fs";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+
+kata SourceFingerprint {path: string; hash: string;}
+kata CachedAnalysis {key: string; value: DocumentAnalysis; files: []SourceFingerprint; directories: []SourceFingerprint;}
+
+waza content_hash(bytes: []uint8) -> string {
+    kaku sum=sha256.sum(bytes);kaku digits=string.to_bytes("0123456789abcdef");kaku output: []uint8=[];kaku at=0;
+    aida(at<len(sum)){kaku value=int64(sum[at]);array.push(output,digits[value/16]);array.push(output,digits[value-(value/16)*16]);at=at+1;}
+    kaku text=string.from_utf8(output);moshi(text==mu){kaesu "";}kaesu text;
+}
+waza cache_document_key(builder: string.StringBuilder, document: lsp.Document) -> unit {
+    string.write_string(builder,json.quote(document.uri));string.write_string(builder,":");
+    string.write_string(builder,convert.format_int(document.version));string.write_string(builder,":");
+    string.write_string(builder,json.quote(document.text));string.write_string(builder,";");
+}
+waza analysis_cache_key(state: Session, document: lsp.Document) -> string {
+    kaku builder=string.new_builder();cache_document_key(builder,document);kaku at=0;
+    aida(at<len(state.roots)){string.write_string(builder,json.quote(state.roots[at]));at=at+1;}
+    string.write_string(builder,json.quote(state.bunko[0]));
+    at=0;aida(at<len(state.documents.documents)){cache_document_key(builder,state.documents.documents[at]);at=at+1;}
+    // Exact immutable inputs are already unambiguous JSON strings. Retaining
+    // them avoids hashing a large open document twice before compiler service
+    // checkpoints, and does not introduce fingerprint collision assumptions.
+    kaesu string.builder_string(builder);
+}
+waza directory_hash(directory: string) -> string {
+    kaku result=fs.read_dir(directory);
+    moshi(result.error!=mu){kaku stat=fs.stat(directory);moshi(!stat.exists){kaesu "missing";}kaesu "";}
+    kaku names: []string=[];kaku at=0;
+    aida(at<len(result.entries)){kaku entry=result.entries[at];moshi(entry.is_file && string.has_suffix(entry.name,".mio")){array.push(names,entry.name);}at=at+1;}
+    at=1;aida(at<len(names)){kaku i=at;aida(i>0 && label_less(names[i],names[i-1])){kaku saved=names[i-1];names[i-1]=names[i];names[i]=saved;i=i-1;}at=at+1;}
+    kaku builder=string.new_builder();at=0;
+    aida(at<len(names)){string.write_string(builder,json.quote(names[at]));at=at+1;}
+    kaesu content_hash(string.to_bytes(string.builder_string(builder)));
+}
+waza cache_valid(value: CachedAnalysis) -> bool {
+    kaku at=0;
+    aida(at<len(value.files)){
+        kaku file=value.files[at];kaku current=fs.read_all(file.path);
+        moshi(current.error!=mu || len(current.data)>65536 || content_hash(current.data)!=file.hash){kaesu iie;}at=at+1;
+    }
+    at=0;aida(at<len(value.directories)){kaku directory=value.directories[at];moshi(directory_hash(directory.path)!=directory.hash){kaesu iie;}at=at+1;}
+    kaesu hai;
+}
+waza cached_analysis(state: Session, key: string) -> DocumentAnalysis? {
+    kaku at=0;
+    aida(at<len(state.cache)){
+        kaku value=state.cache[at];
+        moshi(value.key==key){
+            // Remove before validating so a failed dependency read cannot leave
+            // a stale entry available for another request.
+            kaku i=at;aida(i+1<len(state.cache)){state.cache[i]=state.cache[i+1];i=i+1;}array.truncate(state.cache,len(state.cache)-1);
+            moshi(!cache_valid(value)){kaesu mu;}
+            array.push(state.cache,value);kaesu value.value;
+        }
+        at=at+1;
+    }
+    kaesu mu;
+}
+waza remember_analysis(state: Session, key: string, value: DocumentAnalysis) -> unit {
+    // Failed analyses remain fresh rather than caching an incomplete dependency
+    // graph. Valid results use content hashes, never file size/mtime alone.
+    moshi(len(value.index.analysis.diagnostics)>0){kaesu;}
+    moshi(string.byte_len(key)>1048576){kaesu;}
+    kaku files: []SourceFingerprint=[];kaku directories: []SourceFingerprint=[];kaku at=0;
+    aida(at<len(value.index.analysis.sources)){
+        kaku source=value.index.analysis.sources[at];
+        moshi(!string.has_prefix(source.path,"<embedded>/")){
+            kaku overlay=iie;kaku di=0;
+            aida(di<len(value.preferred)){moshi(value.preferred[di].path==source.path){overlay=hai;}di=di+1;}
+            moshi(!overlay){moshi(len(source.bytes)>65536){kaesu;}array.push(files,SourceFingerprint {path:source.path,hash:content_hash(source.bytes)});}
+            kaku directory=path.dir(source.path);kaku found=iie;di=0;
+            aida(di<len(directories)){moshi(directories[di].path==directory){found=hai;}di=di+1;}
+            moshi(!found){kaku hash=directory_hash(directory);moshi(hash==""){kaesu;}array.push(directories,SourceFingerprint {path:directory,hash:hash});}
+        }
+        at=at+1;
+    }
+    kaku key_bytes=string.byte_len(key);at=0;aida(at<len(state.cache)){key_bytes=key_bytes+string.byte_len(state.cache[at].key);at=at+1;}
+    aida(len(state.cache)>0 && (len(state.cache)>=8 || key_bytes>8388608)){key_bytes=key_bytes-string.byte_len(state.cache[0].key);at=0;aida(at+1<len(state.cache)){state.cache[at]=state.cache[at+1];at=at+1;}array.truncate(state.cache,len(state.cache)-1);}
+    array.push(state.cache,CachedAnalysis {key:key,value:value,files:files,directories:directories});
+}

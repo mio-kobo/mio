@@ -1,3 +1,4 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "selfhost/parser";
@@ -136,6 +137,7 @@ waza resolve_type(state: ResolverState, file_id: int64, node_id: int64) -> unit 
 }
 
 waza predeclare_node(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    moshi(!progress.checkpoint(state.work)){kaesu;}
     kaku node = node_at(state, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
     kaku symbol_kind = SymbolKind.Function();
@@ -212,6 +214,7 @@ waza resolve_function(state: ResolverState, file_id: int64, node_id: int64, lite
 }
 
 waza resolve_expression(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    moshi(!progress.checkpoint(state.work)){kaesu;}
     moshi (node_id < 0) { kaesu; }
     kaku node = node_at(state, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
@@ -225,6 +228,10 @@ waza resolve_expression(state: ResolverState, file_id: int64, node_id: int64) ->
         kaku left = node_at(state, file_id, node.children[0]);
         moshi (parser.node_kind_code(left.kind) == 4) {
             kaku alias_index = find_alias(state, file_id, left.text);
+            // Lexical bindings shadow package aliases. A local record named
+            // like an import must retain normal field-selection semantics.
+            kaku lexical = resolve_name(state, state.current_scope[0], left.text);
+            moshi (lexical >= 0 && symbol_kind_code(symbol_at(state, lexical).kind) != 10) { alias_index = -1; }
             moshi (alias_index >= 0) {
                 kaku member = find_member(state, state.result.aliases[alias_index].package_path, node.text, hai);
                 moshi (member < 0 && native_package(state.result.aliases[alias_index].package_path)) {
@@ -268,9 +275,16 @@ waza resolve_block(state: ResolverState, file_id: int64, node_id: int64, kind: S
 }
 
 waza resolve_statement(state: ResolverState, file_id: int64, node_id: int64) -> unit {
+    moshi(!progress.checkpoint(state.work)){kaesu;}
     kaku node = node_at(state, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
     moshi (kind == 1) {
+        kaku binding_index = 0;
+        aida (binding_index < len(state.result.bindings)) {
+            kaku binding = state.result.bindings[binding_index];
+            moshi (binding.reference.file_id == file_id && binding.reference.node_id == node_id) { kaesu; }
+            binding_index = binding_index + 1;
+        }
         kaku symbol = resolve_local(state, state.current_scope[0], node.extra);
         moshi (symbol >= 0) {
             kaku old_alias = find_alias(state, file_id, node.extra);

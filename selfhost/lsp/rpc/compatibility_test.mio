@@ -1,0 +1,81 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza result_of(reply: json.Document) -> int64 {kaesu json.member(reply,reply.root,"result");}
+waza hover_text(reply: json.Document) -> string {kaku result=result_of(reply);kaesu json.text(reply,json.member(reply,json.member(reply,result,"contents"),"value"));}
+waza test_rpc_checked_fields_distinguish_record_owners_and_literal_uses() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:field-identity";
+    kaku text="kata Point {x: int64;} kata Other {x: string;} kaku point=Point {x:1}; kaku other=Other {x:\"a\"};chant(point.x);chant(other.x);";open_source(state,uri,text);kaku at=string.index(text,"point.x")+6;
+    kaku hover=query(state,uri,text,at,"textDocument/hover",iie);testing.expect(string.contains(hover_text(hover),"x: int64"),"field hover uses actual receiver type");
+    kaku definition=query(state,uri,text,at,"textDocument/definition",iie);kaku result=result_of(definition);testing.expect(result>=0 && len(definition.values[result].children)==1,"real field definition");
+    kaku refs=query(state,uri,text,at,"textDocument/references",hai);result=result_of(refs);testing.expect(result>=0 && len(refs.values[result].children)==3,"field declaration, literal key and read; unrelated record excluded");
+    refs=query(state,uri,text,at,"textDocument/references",iie);result=result_of(refs);testing.expect(result>=0 && len(refs.values[result].children)==2,"field declaration excluded by request");
+}
+waza test_rpc_reverse_open_document_references_are_merged_once() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku lib="file:///__mio_rpc_reverse__/dep/main.mio";kaku main="file:///__mio_rpc_reverse__/main.mio";
+    kaku declaration="koukai waza visible(value: int64) -> int64 {kaesu value;}";kaku text="yobu \"./dep\";chant(dep.visible(1));chant(dep.visible(2));";
+    open_source(state,lib,declaration);open_source(state,main,text);
+    kaku reply=query(state,lib,declaration,string.index(declaration,"visible"),"textDocument/references",hai);kaku result=result_of(reply);
+    testing.expect(result>=0 && len(reply.values[result].children)==3,"declaration-side request includes two importing document references without duplicate declaration");
+    reply=query(state,main,text,string.index(text,"dep.visible")+4,"textDocument/references",hai);result=result_of(reply);
+    testing.expect(result>=0 && len(reply.values[result].children)==3,"import-side graph and merged graph do not duplicate sites");
+}
+waza test_rpc_documentation_hover_and_fence_safety() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:docs";
+    kaku text="// Adds one to the input.\n// <script> ``` unsafe fence\nwaza add(value: int64) -> int64 {kaesu value+1;}chant(add(2));";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"chant(add")+6,"textDocument/hover",iie);kaku value=hover_text(reply);
+    testing.expect(string.contains(value,"```text\nAdds one to the input.") && string.contains(value,"` ` ` unsafe fence"),"contiguous docs are inert fenced text");
+    state.flags[4]=iie;reply=query(state,uri,text,string.index(text,"chant(add")+6,"textDocument/hover",iie);value=hover_text(reply);
+    testing.expect(string.contains(value,"Adds one to the input.") && string.contains(value,"``` unsafe fence") && !string.has_prefix(value,"```mio"),"plaintext keeps original docs and no code fence wrapper");
+}
+waza test_rpc_enum_constructor_navigation_and_signature() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:enum-constructor";
+    kaku text="sentaku Shape {Circle(float64);Empty();} waza main() -> Shape {kaesu Shape.Circle(1.0);}";open_source(state,uri,text);kaku at=string.index(text,"Shape.Circle")+6;
+    kaku reply=query(state,uri,text,at,"textDocument/hover",iie);testing.expect(string.contains(hover_text(reply),"Shape.Circle"),"enum constructor identity retains owner");
+    reply=query(state,uri,text,at,"textDocument/definition",iie);kaku result=result_of(reply);testing.expect(result>=0 && len(reply.values[result].children)==1,"constructor targets variant declaration");
+    reply=query(state,uri,text,string.index(text,"Circle(1.0")+7,"textDocument/signatureHelp",iie);
+    testing.expect(string.has_prefix(signature_label_from_reply(reply),"Circle(float64)") && signature_active(reply)==0,"enum payload signature and active parameter");
+}
+waza test_rpc_literal_completion_pending_fields_and_value_scope() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:literal-completion";
+    kaku text="kata Point {x: int64;y: int64;} waza main() -> int64 {kaku point=Point {x:1, };kaesu point.x;}";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"x:1, ")+5,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"y")>=0 && completion_named(reply,"x")<0 && completion_named(reply,"Point")<0,"only uninitialized real fields offered at key position");
+    text="kata Point {x: int64;y: int64;} waza main() -> int64 {kaku other=1;kaku point=Point {x:other,y:2};kaesu point.x;}";open_source(state,uri,text);
+    reply=query(state,uri,text,string.index(text,"x:other")+7,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"other")>=0 && completion_named(reply,"x")<0,"field values keep lexical completion");
+}
+waza test_rpc_builtin_and_expression_hover_have_no_fake_definition() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:builtin";kaku text="kaku values: []int64=[1,2];chant(len(values));";open_source(state,uri,text);kaku at=string.index(text,"len(values");
+    kaku reply=query(state,uri,text,at,"textDocument/hover",iie);testing.expect(string.contains(hover_text(reply),"len(value) -> int64"),"native builtin metadata hover");
+    reply=query(state,uri,text,at,"textDocument/definition",iie);kaku result=result_of(reply);testing.expect(result>=0 && reply.values[result].kind==0,"builtin has no fabricated source declaration");
+    text="chant(1+2);";open_source(state,uri,text);reply=query(state,uri,text,string.index(text,"1+"),"textDocument/hover",iie);testing.expect(string.contains(hover_text(reply),"int64"),"checked literal expression hover");
+}
+
+waza test_rpc_cross_open_field_references_and_generic_hover() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku lib="file:///__mio_rpc_field_refs__/dep/main.mio";kaku main="file:///__mio_rpc_field_refs__/main.mio";
+    kaku declaration="koukai kata Box<T> {value: T;}";kaku text="yobu \"./dep\";kaku box=dep.Box[int64] {value:7};chant(box.value);";
+    open_source(state,lib,declaration);open_source(state,main,text);
+    kaku reply=query(state,lib,declaration,string.index(declaration,"value:"),"textDocument/references",hai);kaku result=result_of(reply);
+    testing.expect(result>=0 && len(reply.values[result].children)==3,"field declaration side merges literal key and read in open importer");
+    reply=query(state,main,text,string.index(text,"box.value")+4,"textDocument/hover",iie);
+    testing.expect(string.contains(hover_text(reply),"value: int64"),"generic declaration identity retains concrete field use detail");
+}
+waza test_rpc_enum_instance_does_not_fabricate_constructor_navigation() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:enum-instance-navigation";
+    kaku text="sentaku Flag {On;Off;}kaku flag=Flag.On();chant(flag.On);";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"flag.On")+5,"textDocument/definition",iie);kaku result=result_of(reply);
+    testing.expect(result>=0 && reply.values[result].kind==0,"invalid enum instance selector never invents a constructor binding");
+}
+
+waza test_rpc_unknown_expression_does_not_inherit_enclosing_call_type() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:unknown-expression";
+    kaku text="waza main() -> int64 {kaesu 1;}chant(missing);";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"missing"),"textDocument/hover",iie);kaku result=result_of(reply);
+    testing.expect(result>=0 && reply.values[result].kind==0,"unknown identifier has no fake enclosing unit type");
+    reply=query(state,uri,text,string.index(text,"kaesu"),"textDocument/hover",iie);result=result_of(reply);
+    testing.expect(result>=0 && reply.values[result].kind==0,"control keyword is not an expression hover");
+}

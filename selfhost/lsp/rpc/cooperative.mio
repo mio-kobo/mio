@@ -1,0 +1,111 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+kata Transport {
+    input: fs.File; output: fs.File; frames: lsp.FrameBuffer; chunk: []uint8;
+    pending: [][]uint8; error: []string; ended: []bool;
+    current_id: []string; current_method: []string; generation: []int64;
+}
+waza transport(input: fs.File, output: fs.File) -> Transport {
+    kaesu Transport {input:input,output:output,frames:lsp.frame_buffer(),chunk:array.make[uint8](4096,uint8(0)),pending:[],error:[""],ended:[iie],current_id:[""],current_method:[""],generation:[0]};
+}
+waza semantic_method(method: string) -> bool {
+    kaesu method=="textDocument/hover" || method=="textDocument/definition" || method=="textDocument/references" || method=="textDocument/documentSymbol" || method=="textDocument/completion" || method=="textDocument/signatureHelp";
+}
+waza has_cancelled(state: Session, id: string) -> bool {
+    kaku at=0;aida(at<len(state.cancelled)){moshi(state.cancelled[at]==id){kaesu hai;}at=at+1;}kaesu iie;
+}
+waza send_messages(io: Transport, messages: []string) -> unit {
+    kaku at=0;
+    aida(at<len(messages) && io.error[0]==""){
+        io.error[0]=lsp.write_frame(io.output,string.to_bytes(messages[at]));at=at+1;
+    }
+}
+waza collect_frames(state: Session, io: Transport, service: bool) -> unit {
+    aida(io.error[0]=="" && !io.ended[0]){
+        kaku frame=lsp.next_buffered_frame(io.frames);moshi(frame==mu){kaesu;}
+        moshi(frame.error!=""){io.error[0]=frame.error;kaesu;}
+        moshi(frame.eof){io.ended[0]=hai;kaesu;}
+        kaku handled=iie;
+        moshi(service){
+            kaku document=json.parse(frame.bytes);kaku root=document.root;
+            kaku method=json.text(document,json.member(document,root,"method"));kaku id=json.member(document,root,"id");
+            kaku notification=id<0;moshi(id>=0){notification=document.values[id].kind==0;}
+            moshi(document.error=="" && notification && (method=="$/cancelRequest" || (len(io.pending)==0 && (method=="textDocument/didOpen" || method=="textDocument/didChange" || method=="textDocument/didSave" || method=="textDocument/didClose" || method=="workspace/didChangeConfiguration")))){
+                kaku reply=dispatch(state,frame.bytes);send_messages(io,reply.messages);handled=hai;
+            }
+        }
+        moshi(!handled){array.push(io.pending,frame.bytes);}
+    }
+}
+waza read_transport(state: Session, io: Transport, service: bool) -> unit {
+    kaku received=fs.read(io.input,io.chunk,0,len(io.chunk));
+    moshi(received.error!=mu || received.count<0 || received.count>len(io.chunk)){io.error[0]="lsp: stdin read failed";kaesu;}
+    moshi(!lsp.feed_frames(io.frames,io.chunk,0,received.count)){io.error[0]="lsp: invalid input buffer";kaesu;}
+    moshi(received.eof){lsp.finish_frames(io.frames);}
+    moshi(received.count==0 && !received.eof){io.error[0]="lsp: stdin made no progress";kaesu;}
+    collect_frames(state,io,service);
+}
+waza pump_transport(state: Session, io: Transport) -> bool {
+    collect_frames(state,io,hai);kaku at=0;
+    // Bound each checkpoint's I/O work so a continuously writing client cannot
+    // starve compiler work. Partial frames remain buffered without blocking.
+    aida(at<32 && !io.ended[0] && io.error[0]==""){
+        kaku ready=os.stdin_ready();
+        moshi(ready==0){nukeru;}
+        moshi(ready<0){moshi(ready== -4){at=at+1;tsuzuku;}io.error[0]="lsp: stdin poll failed";nukeru;}
+        read_transport(state,io,hai);at=at+1;
+    }
+    moshi(io.error[0]!=""){kaesu iie;}
+    moshi(semantic_method(io.current_method[0]) && has_cancelled(state,io.current_id[0])){kaesu iie;}
+    moshi(io.current_method[0]=="$diagnostics" && io.generation[0]!=state.schedule[2]){kaesu iie;}
+    kaesu hai;
+}
+waza take_pending(io: Transport) -> []uint8 {
+    kaku result=io.pending[0];kaku at=0;
+    aida(at+1<len(io.pending)){io.pending[at]=io.pending[at+1];at=at+1;}array.truncate(io.pending,len(io.pending)-1);kaesu result;
+}
+waza serve_cooperative(state: Session, io: Transport) -> ServeResult {
+    aida(hai){
+        progress.begin(state.work);io.current_id[0]="";io.current_method[0]="";
+        pump_transport(state,io);
+        moshi(io.error[0]!=""){kaesu ServeResult {status:1,error:io.error[0]};}
+        moshi(len(io.pending)>0){
+            kaku payload=take_pending(io);kaku document=json.parse(payload);
+            io.current_id[0]=json.render(document,json.member(document,document.root,"id"));
+            io.current_method[0]=json.text(document,json.member(document,document.root,"method"));
+            kaku reply=dispatch(state,payload);
+            // Also observe cancellation arriving after the final compiler
+            // checkpoint, before any semantic response is written.
+            pump_transport(state,io);
+            moshi(semantic_method(io.current_method[0]) && remove_cancelled(state,io.current_id[0])){
+                array.truncate(reply.messages,0);array.push(reply.messages,error_response(io.current_id[0],-32800,"Request cancelled"));
+            }
+            send_messages(io,reply.messages);
+            moshi(io.error[0]!=""){kaesu ServeResult {status:1,error:io.error[0]};}
+            moshi(reply.stop){kaesu ServeResult {status:reply.status,error:""};}
+            tsuzuku;
+        }
+        moshi(io.ended[0]){kaku status=1;moshi(state.flags[1]){status=0;}kaesu ServeResult {status:status,error:""};}
+        kaku waiting= -1;
+        moshi(state.flags[0] && !state.flags[1] && state.flags[3] && len(state.dirty)>0){
+            kaku now=os.monotonic_ms();
+            moshi(state.schedule[1]<=now){
+                io.current_method[0]="$diagnostics";io.generation[0]=state.schedule[2];progress.begin(state.work);
+                kaku messages=analyze_pending(state);send_messages(io,messages);
+                moshi(io.error[0]!=""){kaesu ServeResult {status:1,error:io.error[0]};}
+                tsuzuku;
+            }
+            waiting=state.schedule[1]-now;moshi(waiting>2147483647){waiting=2147483647;}
+        }
+        kaku ready=os.stdin_wait(waiting);
+        moshi(ready<0){moshi(ready== -4){tsuzuku;}kaesu ServeResult {status:1,error:"lsp: stdin wait failed"};}
+        moshi(ready>0){read_transport(state,io,iie);}
+    }
+    kaesu ServeResult {status:1,error:"lsp: stopped without exit"};
+}

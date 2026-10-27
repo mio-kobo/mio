@@ -1,0 +1,21 @@
+yobu "kiso/testing";
+waza test_thompson_matching_and_flags() -> unit {
+    kaku re=compile("^(?:ab|a){2,4}c+$");testing.expect(re.error=="","bounded repetition parses");testing.expect(matches(re,"aabcc") && !matches(re,"xabc"),"concatenation/alternation/repetition/anchors");
+    testing.expect(matches(compile("(?m)^abc$"),"x\nabc\ny"),"multiline anchors");testing.expect(matches(compile("(?s)a.b"),"a\nb"),"dotall");
+    testing.expect(matches(compile("\\bfoo\\b")," foo ") && !matches(compile("\\bfoo\\b"),"food"),"ASCII word boundaries");
+    testing.expect(matches(compile("\\Q.*+?\\E"),".*+?"),"quoted literal metacharacters");
+}
+waza test_unicode_properties_and_simple_fold_cycles() -> unit {
+    testing.expect(matches(compile("^\\p{Han}+$"),"漢字") && !matches(compile("^\\p{Han}+$"),"abc"),"Han script");
+    testing.expect(matches(compile("(?i)^Σ$"),"ς") && matches(compile("(?i)^Σ$"),"σ"),"three-member sigma simple-fold cycle");
+    testing.expect(matches(compile("(?i)^k$"),"K") && matches(compile("(?i)^s$"),"ſ"),"Unicode folds into ASCII");
+    testing.expect(matches(compile("(?i)^\\p{Lu}$"),"é"),"folded Unicode category includes lower-case equivalent");
+    testing.expect(!matches(compile("(?i)^\\P{Lu}$"),"é"),"negation occurs after fold closure");
+    testing.expect(matches(compile("^\\p{lowercase_letter}$"),"é"),"canonical category alias");
+}
+waza test_invalid_operators_and_literal_braces() -> unit {
+    testing.expect(compile("{1}").error!="" && compile("a{1}{2}").error!="","missing operand and nested repeat rejected");
+    testing.expect(compile("(?i-)a").error!="","dangling clear flag rejected");
+    testing.expect(matches(compile("^a{01}$"),"a{01}") && !matches(compile("^a{01}$"),"a"),"leading-zero count is literal");
+    testing.expect(compile("\\1").error!="" && compile("[z-a]").error!="" && compile("\\p{Missing}").error!="","invalid escape/range/property rejected");
+}

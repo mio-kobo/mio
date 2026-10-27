@@ -1,0 +1,57 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza test_rpc_member_completion_checked_generic_fields_and_chains() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="untitled:member-fields";
+    kaku text="kata Box<T> {value: T;} kata Outer {inner: Box<string>;} kaku item=Box[int64] {value: 7}; kaku outer=Outer {inner: Box[string] {value: \"text\"}}; chant(item.value);chant(outer.inner.value);";
+    open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"item.value")+5,"textDocument/completion",iie);
+    kaku field=completion_named(reply,"value");
+    testing.expect(field>=0,"checked structure field is offered after dot");
+    testing.expect(json.text(reply,json.member(reply,field,"detail"))=="int64","generic field detail uses checked concrete argument");
+    testing.expect(len(completion_items(reply))==1,"member completion excludes bare scope names");
+    reply=query(state,uri,text,string.index(text,"outer.inner.value")+13,"textDocument/completion",iie);
+    field=completion_named(reply,"value");
+    testing.expect(json.text(reply,json.member(reply,field,"detail"))=="string","field chain resolves its actual receiver type");
+}
+
+waza test_rpc_member_completion_incomplete_selector_and_prefix() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="untitled:incomplete-member";
+    kaku text="kata Item {first: int64; second: string;} kaku item=Item {first:1,second:\"two\"}; item.";
+    open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.byte_len(text),"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"first")>=0 && completion_named(reply,"second")>=0,"unfinished member uses visible checked receiver declaration");
+    text="kata Item {first: int64; second: string;} kaku item=Item {first:1,second:\"two\"}; chant(item.second);";
+    open_source(state,uri,text);
+    reply=query(state,uri,text,string.index(text,"item.second")+6,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"second")>=0 && completion_named(reply,"first")<0,"member prefix filters actual fields");
+}
+
+waza test_rpc_member_completion_enum_type_and_value_are_distinct() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="untitled:enum-member";
+    kaku text="sentaku Flag {On; Off;} kaku flag=Flag.On();";
+    open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"Flag.On")+5,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"On")>=0 && completion_named(reply,"Off")>=0,"enum type offers real constructors");
+    text=string.concat(text," flag.");open_source(state,uri,text);
+    reply=query(state,uri,text,string.byte_len(text),"textDocument/completion",iie);
+    testing.expect(len(completion_items(reply))==0,"enum instance does not expose constructors as value members");
+}
+
+waza test_rpc_member_completion_module_exports_and_lexical_shadowing() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    kaku uri="file:///__mio_rpc_members__/main.mio";
+    open_source(state,"file:///__mio_rpc_members__/dep/main.mio","koukai waza visible() -> int64 {kaesu 1;} waza hidden() -> int64 {kaesu 2;}");
+    kaku text="yobu \"./dep\"; chant(dep.visible());";
+    open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"dep.visible")+4,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"visible")>=0 && completion_named(reply,"hidden")<0,"module completion follows resolved public exports");
+    text="yobu \"./dep\"; kata Item {value: int64;} waza use() -> int64 {kaku dep=Item {value:7};kaesu dep.value;}";
+    open_source(state,uri,text);
+    reply=query(state,uri,text,string.index(text,"dep.value")+4,"textDocument/completion",iie);
+    testing.expect(completion_named(reply,"value")>=0 && completion_named(reply,"visible")<0,"local binding shadows import alias during member completion");
+}

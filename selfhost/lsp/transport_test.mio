@@ -1,0 +1,28 @@
+yobu "kiso/testing";
+yobu "kiso/os";
+yobu "kiso/fs";
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/convert";
+waza fixture(data: []uint8) -> Frame {
+    kaku path=string.concat("/tmp/mio-lsp-frame-",convert.format_int(os.pid()));kaku written=fs.write_all(path,data);moshi(written.error!=mu){testing.fail("write frame fixture");kaesu Frame {bytes:[],eof:iie,error:"fixture"};}
+    kaku opened=fs.open_read(path);kaku file=opened.file;moshi(file==mu){os.remove(path);testing.fail("open frame fixture");kaesu Frame {bytes:[],eof:iie,error:"fixture"};}
+    kaku frame=read_frame(reader(file));fs.close(file);os.remove(path);kaesu frame;
+}
+waza test_frame_header_compatibility() -> unit {
+    kaku frame=fixture(string.to_bytes("Other: ignored\r\ncOnTeNt-LeNgTh: 9\nContent-Length: +2\r\n\r\n{}"));
+    kaku text=string.from_utf8(frame.bytes); moshi(text==mu){testing.fail("frame body UTF8");} sore { testing.expect(frame.error=="" && !frame.eof && text=="{}","unknown headers, case, duplicate length, signed integer and LF/CRLF"); }
+    kaku unicode=fixture(string.to_bytes(" Content-Length : 2 \r\n\r\n{}"));testing.expect(unicode.error=="" && len(unicode.bytes)==2,"Unicode header whitespace matches reference");
+    kaku missing=fixture(string.to_bytes("Other: x\r\n\r\n{}"));testing.expect(missing.error!="","missing length rejected");
+    kaku negative=fixture(string.to_bytes("Content-Length: -1\r\n\r\n"));testing.expect(negative.error!="","negative length rejected");
+    kaku huge=fixture(string.to_bytes("Content-Length: 67108865\r\n\r\n"));testing.expect(huge.error!="","oversized body rejected before allocation");
+    kaku short=fixture(string.to_bytes("Content-Length: 4\r\n\r\n{}"));testing.expect(short.error!="","truncated body rejected");
+    kaku ended=fixture([]);testing.expect(ended.eof && ended.error=="","clean EOF");
+    kaku nul=string.to_bytes("Content-Length: ");array.push(nul,uint8(0));array.append_all(nul,string.to_bytes("2\r\n\r\n{}"));testing.expect(fixture(nul).error!="","NUL is not header whitespace");
+}
+waza test_buffered_frames_do_not_wait_for_EOF() -> unit {
+    kaku path=string.concat("/tmp/mio-lsp-frames-",convert.format_int(os.pid()));kaku source="Content-Length: 2\r\n\r\n{}Content-Length: 4\n\ntrue";
+    fs.write_all(path,string.to_bytes(source));kaku opened=fs.open_read(path);kaku file=opened.file;moshi(file==mu){testing.fail("open pipeline fixture");os.remove(path);kaesu;}
+    kaku input=reader(file);kaku first=read_frame(input);kaku second=read_frame(input);kaku third=read_frame(input);fs.close(file);os.remove(path);
+    testing.expect(first.error=="" && len(first.bytes)==2 && second.error=="" && len(second.bytes)==4 && third.eof,"buffered pipelined frames remain distinct");
+}

@@ -1,0 +1,113 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/lexer";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+yobu "selfhost/lsp";
+
+kata Completion {label: string; detail: string; insert: string; kind: int64; rank: int64; snippet: bool;}
+waza completion_kind(kind: int64) -> int64 {
+    moshi(kind==3){kaesu 21;}moshi(kind==4 || kind==5 || kind==12){kaesu 3;}moshi(kind==6){kaesu 22;}
+    moshi(kind==7){kaesu 13;}moshi(kind==8){kaesu 20;}moshi(kind==9){kaesu 25;}moshi(kind==10){kaesu 9;}moshi(kind==11){kaesu 7;}kaesu 6;
+}
+waza offer(items: []Completion, item: Completion) -> unit {
+    moshi(item.label=="" || string.has_prefix(item.label,"$") || string.has_prefix(item.label,"__")){kaesu;}
+    kaku at=0;aida(at<len(items)){moshi(items[at].label==item.label){moshi(item.rank>items[at].rank){items[at]=item;}kaesu;}at=at+1;}array.push(items,item);
+}
+waza current_package(analysis: DocumentAnalysis) -> string {
+    kaku at=0;aida(at<len(analysis.index.analysis.sources)){kaku source=analysis.index.analysis.sources[at];moshi(source.path==analysis.path){kaesu source.package_path;}at=at+1;}kaesu "";
+}
+waza completion_rank(analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol, offset: int64) -> int64 {
+    moshi(symbol.kind==13 || symbol.kind==8){kaesu -1;}
+    moshi(symbol.package_path!=current_package(analysis)){kaesu -1;}
+    moshi(symbol.owner==""){
+        moshi(symbol.kind==0 || symbol.kind==1 || symbol.kind==9){kaesu -1;}
+        moshi(symbol.kind==2 && symbol.path==analysis.path && symbol.selection.start.offset>offset){kaesu -1;}
+        kaesu 1;
+    }
+    moshi(symbol.path!=analysis.path){kaesu -1;}kaku owner=lsp.semantic_symbol(analysis.index,symbol.owner);moshi(owner==mu){kaesu -1;}
+    moshi(offset<owner.span.start.offset || offset>owner.span.end.offset){kaesu -1;}
+    kaku width=owner.span.end.offset-owner.span.start.offset;
+    moshi(symbol.kind==0){
+        moshi(symbol.selection.start.offset>offset){kaesu -1;}
+        kaku declared=lsp.declaration(analysis.index,symbol.key);moshi(declared==mu){kaesu -1;}
+        kaku at=0;kaku first=owner.span.start.offset;kaku end=owner.span.end.offset;
+        aida(at<len(declared.file.ast.nodes)){
+            kaku node=declared.file.ast.nodes[at];
+            moshi(parser.node_kind_code(node.kind)==17 && node.span.start.offset<=symbol.selection.start.offset && node.span.end.offset>=symbol.selection.start.offset && node.span.end.offset-node.span.start.offset<end-first){first=node.span.start.offset;end=node.span.end.offset;}
+            at=at+1;
+        }
+        moshi(offset<first || offset>end){kaesu -1;}width=end-first;
+    }
+    kaesu (1000000000-width)*1000000+symbol.selection.start.offset;
+}
+waza function_insert(symbol: lsp.SemanticSymbol) -> string {
+    kaku parameters=signature_parameters(symbol.detail);kaku output=string.new_builder();string.write_string(output,symbol.name);string.write_string(output,"(");kaku at=0;
+    aida(at<len(parameters)){
+        moshi(at>0){string.write_string(output,", ");}kaku parameter=parameters[at];kaku colon=string.index(parameter,":");
+        kaku name=string.concat("arg",convert.format_int(at+1));moshi(colon>=0){name=byte_text(string.to_bytes(parameter),0,colon);}
+        string.write_string(output,string.concat("${",string.concat(convert.format_int(at+1),string.concat(":",string.concat(name,"}")))));at=at+1;
+    }
+    string.write_string(output,")");kaesu string.builder_string(output);
+}
+waza label_less(a: string, b: string) -> bool {
+    kaku left=string.to_bytes(a);kaku right=string.to_bytes(b);kaku at=0;
+    aida(at<len(left) && at<len(right)){moshi(left[at]!=right[at]){kaesu left[at]<right[at];}at=at+1;}kaesu len(left)<len(right);
+}
+waza completion_json(items: []Completion, prefix: string, buffer: lsp.TextBuffer, start: int64, end: int64) -> string {
+    kaku at=1;aida(at<len(items)){kaku i=at;aida(i>0 && label_less(items[i].label,items[i-1].label)){kaku saved=items[i-1];items[i-1]=items[i];items[i]=saved;i=i-1;}at=at+1;}
+    kaku output=string.new_builder();string.write_string(output,"{\"isIncomplete\":false,\"items\":[");kaku first=hai;at=0;
+    aida(at<len(items)){
+        kaku item=items[at];
+        moshi(string.has_prefix(item.label,prefix)){
+            moshi(!first){string.write_string(output,",");}first=iie;
+            string.write_string(output,"{\"label\":");string.write_string(output,json.quote(item.label));string.write_string(output,",\"kind\":");string.write_string(output,convert.format_int(item.kind));
+            string.write_string(output,",\"detail\":");string.write_string(output,json.quote(item.detail));string.write_string(output,",\"insertText\":");string.write_string(output,json.quote(item.insert));
+            kaku format=1;moshi(item.snippet){format=2;}string.write_string(output,",\"insertTextFormat\":");string.write_string(output,convert.format_int(format));
+            string.write_string(output,",\"textEdit\":{\"range\":");string.write_string(output,range_json(buffer,start,end));string.write_string(output,",\"newText\":");string.write_string(output,json.quote(item.insert));string.write_string(output,"}}");
+        }at=at+1;
+    }
+    string.write_string(output,"]}");kaesu string.builder_string(output);
+}
+waza completion_result(state: Session, analysis: DocumentAnalysis, position: lsp.Position) -> string {
+    kaku empty="{\"isIncomplete\":false,\"items\":[]}";kaku buffer=source_buffer(analysis,analysis.path);moshi(buffer==mu){kaesu empty;}
+    kaku offset=lsp.offset_at(buffer,position);moshi(cursor_blocked(buffer.data,offset)){kaesu empty;}
+    kaku start=offset;kaku end=offset;kaku tokens: []lexer.Token=[];kaku at=0;
+    aida(at<len(analysis.index.sources)){moshi(analysis.index.sources[at].path==analysis.path){tokens=analysis.index.sources[at].tokens;nukeru;}at=at+1;}
+    at=0;aida(at<len(tokens)){
+        kaku token=tokens[at];moshi(lexer.token_kind_code(token.kind)==2 && token.start.offset<=offset && offset<=token.end.offset){start=token.start.offset;end=token.end.offset;nukeru;}at=at+1;
+    }
+    kaku previous= -1;at=0;aida(at<len(tokens) && tokens[at].end.offset<=start){moshi(lexer.token_kind_code(tokens[at].kind)!=1){previous=at;}at=at+1;}
+    // Member candidates come from checked receiver types or resolved module exports.
+    moshi(previous>=0){moshi(lexer.token_kind_code(tokens[previous].kind)==30){kaesu completion_json(member_completions(state,analysis,tokens,previous,offset),byte_text(buffer.data,start,offset),buffer,start,end);}}
+    kaku literal=literal_completions(analysis,offset);
+    moshi(literal!=mu){kaesu completion_json(literal.items,byte_text(buffer.data,start,offset),buffer,start,end);}
+    kaku items: []Completion=[];at=0;
+    aida(at<len(analysis.index.symbols)){
+        kaku symbol=analysis.index.symbols[at];kaku rank=completion_rank(analysis,symbol,offset);
+        moshi(rank>=0){
+            kaku insert=symbol.name;kaku snippet=iie;
+            moshi(state.flags[5] && (symbol.kind==4 || symbol.kind==5)){
+                kaku existing=end;aida(existing<len(buffer.data) && (buffer.data[existing]==uint8(32) || buffer.data[existing]==uint8(9))){existing=existing+1;}
+                kaku parenthesis=iie;moshi(existing<len(buffer.data)){parenthesis=buffer.data[existing]==uint8(40);}
+                moshi(!parenthesis){insert=function_insert(symbol);snippet=hai;}
+            }
+            offer(items,Completion {label:symbol.name,detail:symbol.detail,insert:insert,kind:completion_kind(symbol.kind),rank:rank,snippet:snippet});
+        }at=at+1;
+    }
+    kaku pi=0;kaku package=current_package(analysis);
+    aida(pi<len(analysis.index.analysis.resolved)){
+        kaku resolved=analysis.index.analysis.resolved[pi];
+        moshi(resolved.package_path==package){
+            at=0;aida(at<len(resolved.symbols)){
+                kaku symbol=resolved.symbols[at];kaku kind=resolver.symbol_kind_code(symbol.kind);
+                moshi(symbol.package_path=="" && (kind==11 || kind==12)){offer(items,Completion {label:symbol.name,detail:"",insert:symbol.name,kind:completion_kind(kind),rank:0,snippet:iie});}at=at+1;
+            }
+        }pi=pi+1;
+    }
+    kaku keywords=["kaku","waza","moshi","sore","kaesu","hai","iie","mu","aida","nukeru","tsuzuku","kata","sentaku","awase","baai","yobu","koukai","teisu"];at=0;
+    aida(at<len(keywords)){kaku name=keywords[at];offer(items,Completion {label:name,detail:"keyword",insert:name,kind:14,rank:0,snippet:iie});at=at+1;}
+    kaku prefix=byte_text(buffer.data,start,offset);kaesu completion_json(items,prefix,buffer,start,end);
+}

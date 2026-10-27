@@ -1,0 +1,112 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "kiso/encoding/mochi";
+yobu "kiso/aot/lower/types";
+
+koukai kata RenderResult { text: string; error: string; }
+waza names() -> []string {
+    kaesu ["", "OpConstant", "OpAdd", "OpPop", "OpSub", "OpMul", "OpDiv", "OpNeg", "OpTrue", "OpFalse", "OpNot", "OpEqual", "OpNotEqual", "OpLess", "OpLessEqual", "OpGreater", "OpGreaterEqual", "OpJump", "OpJumpIfFalse", "OpSetGlobal", "OpGetGlobal", "OpNil", "OpChant", "OpSetLocal", "OpGetLocal", "OpCall", "OpReturn", "OpReturnValue", "OpIntToFloat", "OpFloatToInt", "OpArray", "OpIndex", "OpLen", "OpSetIndex", "OpIsNil", "OpSetNullableIndex", "OpStruct", "OpGetField", "OpEnum", "OpEnumTag", "OpGetEnumValue", "OpMap", "OpMapGet", "OpMapSet", "OpFunction", "OpCallValue", "OpClosure", "OpGetUpvalue", "OpSetUpvalue", "OpDefineLocal", "OpIntToFloat32", "OpFloat32ToInt", "OpFloat32ToFloat64", "OpFloat64ToFloat32", "OpMath", "OpIntegerConvert", "OpArrayTyped", "OpArrayMake", "OpArrayWithCapacity", "OpArrayPush", "OpArrayCapacity", "OpArrayReserve", "OpArrayClone", "OpArrayTruncate", "OpArrayAppendAll", "OpDataConvert", "OpTypeConstraint", "OpCallTyped"];
+}
+waza instructions(output: string.StringBuilder, data: []uint8) -> bool {
+    kaku labels = names(); kaku at = 0;
+    aida (at < len(data)) {
+        kaku opcode = int64(data[at]); kaku width = types.type_instruction_width(opcode);
+        moshi (width == 0 || opcode >= len(labels) || at + width > len(data)) { kaesu iie; }
+        kaku offset = convert.format_int(at); kaku pad = 4 - string.byte_len(offset);
+        aida (pad > 0) { string.write_string(output, "0"); pad = pad - 1; }
+        string.write_string(output, string.concat(offset, string.concat(" ", labels[opcode])));
+        kaku index = 1;
+        aida (index < width) {
+            kaku narrow = opcode == 54 || opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65 || opcode == 66 || ((opcode == 56 || opcode == 67) && index == 3);
+            kaku operand = int64(data[at + index]); index = index + 1;
+            moshi (!narrow) { operand = operand * 256 + int64(data[at + index]); index = index + 1; }
+            string.write_string(output, string.concat(" ", convert.format_int(operand)));
+        }
+        string.write_string(output, "\n"); at = at + width;
+    }
+    kaesu hai;
+}
+waza quoted(data: []uint8) -> string {
+    kaku output: []uint8 = [uint8(34)]; kaku digits = string.to_bytes("0123456789abcdef"); kaku at = 0;
+    aida (at < len(data)) {
+        kaku byte = int64(data[at]); kaku escape = 0;
+        moshi (byte == 7) { escape = 97; } moshi (byte == 8) { escape = 98; } moshi (byte == 9) { escape = 116; }
+        moshi (byte == 10) { escape = 110; } moshi (byte == 11) { escape = 118; } moshi (byte == 12) { escape = 102; } moshi (byte == 13) { escape = 114; }
+        moshi (byte == 34 || byte == 92) { escape = byte; }
+        moshi (escape > 0) { array.push(output, uint8(92)); array.push(output, uint8(escape)); }
+        sore { moshi (byte < 32 || byte == 127) {
+            array.push(output, uint8(92)); array.push(output, uint8(120)); array.push(output, digits[byte / 16]); array.push(output, digits[byte - (byte / 16) * 16]);
+        } sore { array.push(output, uint8(byte)); } }
+        at = at + 1;
+    }
+    array.push(output, uint8(34)); kaku value = string.from_utf8(output); moshi (value == mu) { kaesu "\"<invalid UTF8>\""; } kaesu value;
+}
+waza floating(value: mochi.Constant) -> float64 {
+    kaku high = int64(value.bits.high); kaku low = int64(value.bits.low); kaku negative = high >= 2147483648;
+    moshi (negative) { high = high - 2147483648; }
+    kaku exponent = high / 1048576; kaku mantissa = float64(high - exponent * 1048576) * 4294967296.0 + float64(low);
+    kaku divisor: float64 = 4503599627370496.0; kaku bias = 1023; kaku maximum = 2047;
+    moshi (value.tag == uint8(4)) {
+        negative = low >= 2147483648; moshi (negative) { low = low - 2147483648; }
+        exponent = low / 8388608; mantissa = float64(low - exponent * 8388608); divisor = 8388608.0; bias = 127; maximum = 255;
+    }
+    kaku result = mantissa / divisor;
+    moshi (exponent == maximum) {
+        result = 1.0 / 0.0; moshi (mantissa != 0.0) { result = 0.0 / 0.0; }
+    }
+    sore {
+        moshi (exponent == 0) { exponent = 1; } sore { result = result + 1.0; }
+        exponent = exponent - bias;
+        aida (exponent > 0) { result = result * 2.0; exponent = exponent - 1; }
+        aida (exponent < 0) { result = result / 2.0; exponent = exponent + 1; }
+    }
+    moshi (negative) { result = -result; } kaesu result;
+}
+waza constant_text(value: mochi.Constant) -> string {
+    moshi (value.tag == uint8(2)) { kaesu string.concat("string ", quoted(value.data)); }
+    moshi (value.tag == uint8(3) || value.tag == uint8(4)) {
+        kaku text = ""; kaku prefix = "float64 "; kaku number = floating(value);
+        moshi (value.tag == uint8(4)) { prefix = "float32 "; text = convert.format_float32(float32(number)); }
+        sore { text = convert.format_float64(number); }
+        moshi (text == "Infinity") { text = "+Inf"; } moshi (text == "-Infinity") { text = "-Inf"; }
+        kaesu string.concat(prefix, text);
+    }
+    kaku kind = "int64"; kaku number = int64(value.bits.low); kaku tag = int64(value.tag);
+    moshi (tag == 1) {
+        kaku high = int64(value.bits.high); moshi (high >= 2147483648) { high = high - 4294967296; }
+        number = high * 4294967296 + number;
+    }
+    moshi (tag == 5) { kind = "int8"; moshi (number >= 128) { number = number - 256; } }
+    moshi (tag == 6) { kind = "int16"; moshi (number >= 32768) { number = number - 65536; } }
+    moshi (tag == 7) { kind = "int32"; moshi (number >= 2147483648) { number = number - 4294967296; } }
+    moshi (tag == 8) { kind = "uint8"; } moshi (tag == 9) { kind = "uint16"; } moshi (tag == 10) { kind = "uint32"; }
+    kaesu string.concat(kind, string.concat(" ", convert.format_int(number)));
+}
+
+koukai waza render(data: []uint8) -> RenderResult {
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu RenderResult { text: "", error: "E_IR invalid Mochi file" }; }
+    moshi (file == mu) { kaesu RenderResult { text: "", error: "E_IR missing Mochi module" }; }
+    kaku output = string.new_builder(); string.write_string(output, string.concat("Globals: ", string.concat(convert.format_int(file.global_count), "\nConstants (")));
+    string.write_string(output, string.concat(convert.format_int(len(file.constants)), "):\n")); kaku at = 0;
+    aida (at < len(file.constants)) {
+        string.write_string(output, string.concat("  [", string.concat(convert.format_int(at), "] "))); string.write_string(output, constant_text(file.constants[at])); string.write_string(output, "\n"); at = at + 1;
+    }
+    string.write_string(output, "Instructions:\n");
+    moshi (!instructions(output, file.instructions)) { kaesu RenderResult { text: "", error: "E_IR invalid main instructions" }; }
+    string.write_string(output, string.concat("Functions (", string.concat(convert.format_int(len(file.functions)), "):\n"))); at = 0;
+    aida (at < len(file.functions)) {
+        kaku fn = file.functions[at]; kaku result = "unit"; moshi (fn.returns_value) { result = "value"; }
+        string.write_string(output, string.concat("  Function ", string.concat(convert.format_int(fn.id), " "))); string.write_string(output, fn.name);
+        string.write_string(output, string.concat(" params=", convert.format_int(fn.parameter_count))); string.write_string(output, string.concat(" locals=", convert.format_int(fn.local_count))); string.write_string(output, string.concat(" returns=", string.concat(result, ":\n")));
+        kaku ci = 0;
+        aida (ci < len(fn.captures)) {
+            kaku capture = fn.captures[ci]; kaku origin = "upvalue"; moshi (capture.local) { origin = "local"; }
+            string.write_string(output, string.concat("    Capture ", string.concat(convert.format_int(ci), " "))); string.write_string(output, string.concat(origin, string.concat("=", string.concat(convert.format_int(capture.index), "\n")))); ci = ci + 1;
+        }
+        moshi (!instructions(output, fn.instructions)) { kaesu RenderResult { text: "", error: "E_IR invalid function instructions" }; }
+        at = at + 1;
+    }
+    kaesu RenderResult { text: string.builder_string(output), error: "" };
+}

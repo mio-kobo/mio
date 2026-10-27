@@ -1,0 +1,14 @@
+yobu "kiso/testing";
+waza test_utf16_positions_and_surrogate_boundaries() -> unit {
+    kaku buffer=text_buffer("a😀中\r\nx\ry\nz");
+    testing.expect(position_at(buffer,5).character==3,"supplementary scalar is two UTF16 units");
+    testing.expect(position_at(buffer,2).character==2,"partial UTF8 prefix counts invalid bytes independently");
+    testing.expect(position_at(buffer,9).line==0 && position_at(buffer,9).character==4,"CRLF CR excluded from content");
+    testing.expect(position_at(buffer,10).line==1 && position_at(buffer,10).character==0,"CRLF line start");
+    testing.expect(offset_at(buffer,Position {line:0,character:2})==1,"middle surrogate maps to beginning of rune");
+    testing.expect(offset_at(buffer,Position {line:0,character:3})==5,"whole surrogate pair advances four bytes");
+    testing.expect(offset_at(buffer,Position {line:0,character:99})==8,"line end clamps before CRLF");
+    testing.expect(offset_at(buffer,Position {line:1,character:99})==11,"lone CR line content ends before terminator");
+    testing.expect(offset_at(buffer,Position {line:99,character:0})==15,"line overflow maps to EOF");
+    testing.expect(offset_at(buffer,Position {line:-1,character:0})==0,"negative position maps to beginning");
+}

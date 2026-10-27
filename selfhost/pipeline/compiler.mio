@@ -1,0 +1,93 @@
+yobu "selfhost/frontend";
+yobu "kiso/encoding/mochi";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/convert";
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata NativeBuildResult { bytes: []uint8; error: string; }
+
+// Shared source-to-native core. The only IR handoff is this process's memory
+// buffer; no intermediate file, VM, compiler subprocess or linker is involved.
+// Ad-hoc signing is pure Mio; publication and process control are separate services.
+koukai waza build_source(root: string, entry: string, bunko_root: string) -> NativeBuildResult {
+    kaesu build_source_with_options(root, entry, bunko_root, 1073741824, iie);
+}
+
+koukai waza build_source_with_options(root: string, entry: string, bunko_root: string,
+    heap_capacity: int64, gc_stress: bool) -> NativeBuildResult {
+    kaku compiled = frontend.compile_source(root, entry, bunko_root);
+    moshi (compiled.error != "") { kaesu NativeBuildResult { bytes: [], error: compiled.error }; }
+    kaesu build_mochi_with_options(compiled.bytes, heap_capacity, gc_stress);
+}
+
+koukai waza build_mochi_with_options(data: []uint8, heap_capacity: int64, gc_stress: bool) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
+    kaesu build_file(file, heap_capacity, gc_stress);
+}
+
+waza build_file(file: mochi.File, heap_capacity: int64, gc_stress: bool) -> NativeBuildResult {
+    kaku lowered = lower.compile_with_heap(file, heap_capacity, gc_stress);
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
+        kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
+    }
+    kaku image = macho.executable(macho.ImageSpec { words: lowered.words, constants: lowered.constants,
+        globals: lowered.globals, patches: lowered.patches });
+    moshi (image.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_MACHO cannot encode native image" }; }
+    kaesu NativeBuildResult { bytes: image.bytes, error: "" };
+}
+
+// GF3 callers receive a locally ad-hoc signed image; the unsigned API remains
+// available for reproducible full-byte bootstrap comparisons and IR audits.
+koukai waza build_signed_source(root: string, entry: string, bunko_root: string) -> NativeBuildResult {
+    kaku compiled = build_source(root, entry, bunko_root);
+    moshi (compiled.error != "") { kaesu compiled; }
+    kaku signed = sign.adhoc(compiled.bytes);
+    moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}
+
+koukai waza build_signed_mochi(data: []uint8) -> NativeBuildResult {
+    kaku compiled = build_mochi_with_options(data, 1073741824, iie);
+    moshi (compiled.error != "") { kaesu compiled; }
+    kaku signed = sign.adhoc(compiled.bytes);
+    moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}
+
+// Test images use a private, length-prefixed assertion channel plus a normal
+// completion marker. Ordinary applications retain the standard report ABI.
+koukai waza build_signed_test(data: []uint8) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR invalid test module" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku functions: []mochi.Function = []; kaku at = 0; kaku found = iie;
+    kaku normal = "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
+    kaku packet = "$mma::mio/testing/runtime::report_packet::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
+    aida (at < len(file.functions)) {
+        kaku fn = file.functions[at];
+        moshi (fn.name == normal || fn.name == packet) {
+            found = hai;
+            fn = mochi.Function { id: fn.id, name: packet, name_bytes: string.to_bytes(packet), parameter_count: fn.parameter_count,
+                local_count: fn.local_count, returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
+        }
+        array.push(functions, fn); at = at + 1;
+    }
+    moshi (!found) {
+        array.push(functions, mochi.Function { id: len(functions), name: packet, name_bytes: string.to_bytes(packet), parameter_count: 2,
+            local_count: 2, returns_value: iie, captures: [], instructions: [] });
+    }
+    kaku linked = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count,
+        instructions: file.instructions, functions: functions };
+    kaku compiled = build_file(linked, 1073741824, iie);
+    moshi (compiled.error != "") { kaesu compiled; }
+    kaku signed = sign.adhoc(compiled.bytes);
+    moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}

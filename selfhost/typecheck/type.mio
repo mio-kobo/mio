@@ -280,10 +280,16 @@ waza scalar_type(result: TypeCheckResult, kind: TypeKind, name: string) -> int64
 }
 
 waza array_type(result: TypeCheckResult, element: int64) -> int64 {
+    moshi (element < 0 || element >= len(result.types)) { kaesu 0; }
+    kaku kind = type_kind_code(result.types[element].kind);
+    moshi (kind == 0 || kind == 12 || kind == 13 || kind == 14) { kaesu 0; }
     kaesu intern_type(result, TypeKind.Array(), "", element, -1, -1, empty_ids(), -1, empty_ids());
 }
 
 waza nullable_type(result: TypeCheckResult, element: int64) -> int64 {
+    moshi (element < 0 || element >= len(result.types)) { kaesu 0; }
+    kaku kind = type_kind_code(result.types[element].kind);
+    moshi (kind == 0 || kind == 12 || kind == 13 || kind == 16) { kaesu 0; }
     kaesu intern_type(result, TypeKind.Nullable(), "", element, -1, -1, empty_ids(), -1, empty_ids());
 }
 

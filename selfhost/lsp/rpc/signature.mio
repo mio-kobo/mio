@@ -1,0 +1,71 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/lsp";
+yobu "selfhost/typecheck";
+
+waza byte_text(bytes: []uint8, first: int64, end: int64) -> string {
+    kaku copied: []uint8=[];kaku at=first;aida(at<end){array.push(copied,bytes[at]);at=at+1;}kaku text=string.from_utf8(copied);moshi(text==mu){kaesu "";}kaesu string.trim_space(text);
+}
+waza signature_parameters(label: string) -> []string {
+    kaku bytes=string.to_bytes(label);kaku result: []string=[];kaku at=0;kaku angle=0;kaku first= -1;kaku parens=0;kaku square=0;
+    aida(at<len(bytes)){
+        kaku byte=int64(bytes[at]);
+        moshi(first<0){
+            moshi(byte==60){angle=angle+1;}moshi(byte==62 && angle>0){angle=angle-1;}
+            moshi(byte==40 && angle==0){first=at+1;parens=1;}
+        }sore{
+            moshi(byte==40){parens=parens+1;}moshi(byte==91){square=square+1;}moshi(byte==93){square=square-1;}
+            moshi(byte==60){angle=angle+1;}moshi(byte==62 && angle>0){angle=angle-1;}
+            moshi(byte==41){parens=parens-1;}
+            moshi((byte==44 && parens==1 && square==0 && angle==0) || parens==0){
+                kaku part=byte_text(bytes,first,at);moshi(part!=""){array.push(result,part);}first=at+1;moshi(parens==0){kaesu result;}
+            }
+        }at=at+1;
+    }kaesu result;
+}
+waza signature_label(analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol) -> string {
+    moshi(symbol.kind==4 || symbol.kind==5){kaesu symbol.detail;}
+    moshi(string.has_prefix(symbol.detail,"(")){kaesu string.concat(symbol.name,symbol.detail);}
+    // Enum constructor payload types come from the checker's enum definition.
+    moshi(symbol.kind==8){
+        kaku declared=lsp.declaration(analysis.index,symbol.key);moshi(declared==mu){kaesu "";}kaku ei=0;
+        aida(ei<len(declared.checked.enums)){
+            kaku definition=declared.checked.enums[ei];kaku vi=0;
+            aida(vi<len(definition.variants)){
+                kaku variant=definition.variants[vi];
+                moshi(variant.symbol_id==declared.symbol.id){
+                    kaku output=string.new_builder();string.write_string(output,variant.name);string.write_string(output,"(");kaku pi=0;
+                    aida(pi<len(variant.fields)){moshi(pi>0){string.write_string(output,", ");}string.write_string(output,typecheck.type_name(declared.checked,variant.fields[pi]));pi=pi+1;}
+                    string.write_string(output,string.concat(") -> ",definition.name));kaesu string.builder_string(output);
+                }vi=vi+1;
+            }ei=ei+1;
+        }
+    }kaesu "";
+}
+waza signature_result(analysis: DocumentAnalysis, position: lsp.Position) -> string {
+    kaku buffer=source_buffer(analysis,analysis.path);moshi(buffer==mu){kaesu "null";}
+    kaku offset=lsp.offset_at(buffer,position);moshi(cursor_blocked(buffer.data,offset)){kaesu "null";}
+    kaku source= -1;kaku at=0;aida(at<len(analysis.index.sources)){moshi(analysis.index.sources[at].path==analysis.path){source=at;nukeru;}at=at+1;}moshi(source<0){kaesu "null";}
+    kaku tokens=analysis.index.sources[source].tokens;kaku context=call_cursor(tokens,offset);moshi(context==mu){kaesu "null";}
+    kaku token=tokens[context.callee];kaku symbol=lsp.symbol_at(analysis.index,analysis.path,token.start.offset);
+    // In an incomplete call, a missing call node must not turn an arbitrary
+    // same-name declaration into a guessed target. Only a unique real
+    // top-level declaration in the same package is an eligible fallback.
+    moshi(symbol==mu){
+        kaku candidate: lsp.SemanticSymbol?=mu;at=0;kaku ambiguous=iie;
+        aida(at<len(analysis.index.symbols)){
+            kaku current=analysis.index.symbols[at];
+            moshi(current.path==analysis.path && current.owner=="" && current.name==token.literal && (current.kind==4 || current.kind==5)){
+                moshi(candidate!=mu){ambiguous=hai;}candidate=current;
+            }at=at+1;
+        }
+        moshi(!ambiguous){symbol=candidate;}
+    }
+    moshi(symbol==mu){kaesu "null";}kaku label=signature_label(analysis,symbol);moshi(label==""){kaesu "null";}
+    kaku parameters=signature_parameters(label);kaku active=context.argument;moshi(active>=len(parameters)){active=len(parameters)-1;}moshi(active<0){active=0;}
+    kaku output=string.new_builder();string.write_string(output,"{\"signatures\":[{\"label\":");string.write_string(output,json.quote(label));string.write_string(output,",\"parameters\":[");at=0;
+    aida(at<len(parameters)){moshi(at>0){string.write_string(output,",");}string.write_string(output,string.concat("{\"label\":",string.concat(json.quote(parameters[at]),"}")));at=at+1;}
+    string.write_string(output,"]}],\"activeSignature\":0,\"activeParameter\":");string.write_string(output,convert.format_int(active));string.write_string(output,"}");kaesu string.builder_string(output);
+}

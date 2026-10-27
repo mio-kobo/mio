@@ -217,3 +217,10 @@ koukai waza read_dir(path: string) -> DirResult {
     moshi (directory_error == mu) { directory_error = error_from(status[0], message); }
     kaesu DirResult { entries: entries, error: directory_error };
 }
+
+// Optional third status byte extends the existing NativeFS stat protocol.
+// The original existence/file/directory and error bytes remain unchanged.
+koukai waza is_character_device(path: string) -> bool {
+    kaku status: []uint8=[0,0,0];runtime.stat(path,status);
+    kaesu status[1]==uint8(0) && status[2]==uint8(1);
+}

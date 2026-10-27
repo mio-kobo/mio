@@ -32,14 +32,22 @@ waza test_nil_observation_and_numeric_base_constraints() -> unit {
 }
 
 waza test_nonnil_facts_intersect_and_invalidate() -> unit {
+    kaku leaf=mochi.Function {id:0,name:"touch",name_bytes:[],parameter_count:0,local_count:0,returns_value:iie,captures:[],instructions:[26]};
+    kaku file=mochi.File {version:14,constants:[],global_count:0,instructions:[],functions:[leaf]};
     // is_nil(local0) false edge reaches byte 8.
-    kaku facts = type_nonnil_entries([24,0,0,34,18,0,8,26,24,0,0,3,26], 1);
+    kaku facts = type_nonnil_entries(file,[24,0,0,34,18,0,8,26,24,0,0,3,26], 1);
     testing.expect(facts[8][0] && !facts[7][0], "only the non-nil edge narrows a local");
-    // !is_nil(local0) true edge reaches byte 8; call invalidates shared Cells.
-    facts = type_nonnil_entries([24,0,0,34,10,18,0,16,25,0,0,24,0,0,3,26,26], 1);
-    testing.expect(facts[8][0] && !facts[11][0], "a call invalidates a prior nil test");
-    facts = type_nonnil_entries([24,0,0,34,18,0,8,26,21,23,0,0,24,0,0,3,26], 1);
+    // A noncaptured local cannot be written by the called function.
+    facts = type_nonnil_entries(file,[24,0,0,34,10,18,0,16,25,0,0,24,0,0,3,26,26], 1);
+    testing.expect(facts[8][0] && facts[11][0], "unrelated call preserves a noncaptured local proof");
+    // Real closure capture of local0, saved in local1 and invoked through it.
+    kaku captured=mochi.Function {id:0,name:"clear",name_bytes:[],parameter_count:0,local_count:0,returns_value:iie,
+        captures:[mochi.Capture {local:hai,index:0}],instructions:[21,48,0,0,26]};
+    kaku shared=mochi.File {version:14,constants:[],global_count:0,instructions:[],functions:[captured]};
+    facts=type_nonnil_entries(shared,[46,0,0,49,0,1,24,0,0,34,10,18,0,25,24,0,1,45,0,0,24,0,0,3,26,26],2);
+    testing.expect(facts[14][0] && !facts[20][0],"closure call invalidates a captured shared Cell proof");
+    facts = type_nonnil_entries(file,[24,0,0,34,18,0,8,26,21,23,0,0,24,0,0,3,26], 1);
     testing.expect(facts[9][0] && !facts[12][0], "a store invalidates the local's non-nil fact");
-    facts = type_nonnil_entries([24,0,0,34,18,0,10,17,0,10,24,0,0,3,26], 1);
+    facts = type_nonnil_entries(file,[24,0,0,34,18,0,10,17,0,10,24,0,0,3,26], 1);
     testing.expect(!facts[10][0], "a nil path at the merge prevents narrowing");
 }

@@ -1,0 +1,440 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/utf8";
+yobu "kiso/regexp/unicode_data";
+
+// Thompson NFA boolean matching; no backtracking interpreter or host regex.
+// Unicode 15 properties and simple folding use generated Mio range tables.
+koukai kata State { op: int64; out: int64; other: int64; ranges: []int64; }
+koukai kata Program { states: []State; start: int64; error: string; }
+kata Node { op: int64; a: int64; b: int64; low: int64; high: int64; ranges: []int64; }
+kata Parser { input: []int64; at: []int64; flags: []int64; quoted: []bool; nodes: []Node; heights: []int64; folds: []int64; error: []string; }
+kata Term { ranges: []int64; scalar: int64; }
+kata Fragment { start: int64; ends: []int64; }
+kata Count { valid: bool; low: int64; high: int64; end: int64; }
+kata Frame { items: []int64; alternatives: []int64; flags: int64; capture: bool; }
+
+waza runes(text: string) -> []int64 {
+    kaku bytes = string.to_bytes(text); kaku output: []int64 = []; kaku at = 0;
+    aida (at < len(bytes)) { kaku decoded = utf8.decode_one(bytes, at); moshi (!decoded.valid) { kaesu []; } array.push(output, int64(decoded.value)); at = at + decoded.width; }
+    kaesu output;
+}
+waza current(p: Parser) -> int64 { moshi (p.at[0] >= len(p.input)) { kaesu -1; } kaesu p.input[p.at[0]]; }
+waza look(p: Parser, distance: int64) -> int64 { moshi (p.at[0] + distance >= len(p.input)) { kaesu -1; } kaesu p.input[p.at[0] + distance]; }
+waza fail(p: Parser, error: string) -> unit { moshi (p.error[0] == "") { p.error[0] = error; } }
+waza flag(flags: int64, power: int64) -> bool { kaku value = flags / power; kaesu value - (value / 2) * 2 == 1; }
+waza quotes(p: Parser) -> unit {
+    kaku changed = hai;
+    aida (changed) {
+        changed = iie;
+        moshi (current(p) == 92 && ((!p.quoted[0] && look(p, 1) == 81) || (p.quoted[0] && look(p, 1) == 69))) {
+            p.quoted[0] = !p.quoted[0]; p.at[0] = p.at[0] + 2; changed = hai;
+        }
+    }
+}
+waza node(p: Parser, op: int64, a: int64, b: int64, low: int64, high: int64, ranges: []int64) -> int64 {
+    moshi (len(p.nodes) >= 3355443) { fail(p, "regexp syntax size limit"); kaesu -1; }
+    kaku height = 1;
+    moshi ((op == 11 || op == 12 || op == 13 || op == 14) && a >= 0) { height = p.heights[a] + 1; }
+    moshi ((op == 11 || op == 12) && b >= 0) { moshi (height < p.heights[b] + 1) { height = p.heights[b] + 1; } }
+    moshi (height > 1000) { fail(p, "regexp tree nesting limit"); kaesu -1; }
+    array.push(p.heights, height);
+    kaku id = len(p.nodes); array.push(p.nodes, Node { op: op, a: a, b: b, low: low, high: high, ranges: ranges }); kaesu id;
+}
+waza clean(ranges: []int64) -> []int64 {
+    kaku sorted: []int64 = []; kaku at = 0;
+    aida (at < len(ranges)) {
+        kaku low = ranges[at]; kaku high = ranges[at + 1]; array.push(sorted, low); array.push(sorted, high); kaku i = len(sorted) - 2;
+        aida (i > 0 && sorted[i] < sorted[i - 2]) { kaku a = sorted[i - 2]; kaku b = sorted[i - 1]; sorted[i - 2] = sorted[i]; sorted[i - 1] = sorted[i + 1]; sorted[i] = a; sorted[i + 1] = b; i = i - 2; }
+        at = at + 2;
+    }
+    kaku result: []int64 = []; at = 0;
+    aida (at < len(sorted)) {
+        moshi (len(result) > 0 && sorted[at] <= result[len(result) - 1] + 1) { moshi (sorted[at + 1] > result[len(result) - 1]) { result[len(result) - 1] = sorted[at + 1]; } }
+        sore { array.push(result, sorted[at]); array.push(result, sorted[at + 1]); }
+        at = at + 2;
+    }
+    kaesu result;
+}
+waza contains(ranges: []int64, value: int64) -> bool {
+    kaku low = 0; kaku high = len(ranges) / 2;
+    aida (low < high) { kaku mid = low + (high - low) / 2; moshi (value < ranges[mid * 2]) { high = mid; } sore { moshi (value > ranges[mid * 2 + 1]) { low = mid + 1; } sore { kaesu hai; } } } kaesu iie;
+}
+waza invert(ranges: []int64) -> []int64 {
+    kaku ordered = clean(ranges); kaku output: []int64 = []; kaku next = 0; kaku at = 0;
+    aida (at < len(ordered)) { moshi (next < ordered[at]) { array.push(output, next); array.push(output, ordered[at] - 1); } next = ordered[at + 1] + 1; at = at + 2; }
+    moshi (next <= 1114111) { array.push(output, next); array.push(output, 1114111); } kaesu output;
+}
+waza folded(p: Parser, ranges: []int64) -> []int64 {
+    moshi (!flag(p.flags[0], 1)) { kaesu ranges; }
+    moshi (len(p.folds) == 0) { array.append_all(p.folds, unicode_data.lookup("fold")); }
+    kaku result = clean(ranges); kaku pass = 0; kaku changed = hai;
+    aida (changed && pass < 4) {
+        changed = iie; kaku next = array.clone(result); kaku at = 0;
+        aida (at < len(p.folds)) {
+            moshi (contains(result, p.folds[at]) && !contains(result, p.folds[at + 1])) { array.push(next, p.folds[at + 1]); array.push(next, p.folds[at + 1]); changed = hai; } at = at + 2;
+        }
+        result = clean(next); pass = pass + 1;
+    }
+    kaesu result;
+}
+waza unicode_name(value: []int64) -> string {
+    kaku bytes: []uint8 = []; kaku at = 0;
+    aida (at < len(value)) { kaku byte = value[at];
+        moshi (byte != 95 && byte != 45 && byte != 32) { moshi (byte >= 65 && byte <= 90) { byte = byte + 32; } moshi (byte < 0 || byte > 127) { kaesu ""; } array.push(bytes, uint8(byte)); } at = at + 1;
+    }
+    kaku decoded = string.from_utf8(bytes); moshi (decoded == mu) { kaesu ""; } kaesu decoded;
+}
+waza unicode_class(p: Parser, negative: bool) -> Term {
+    kaku name: []int64 = []; kaku inverse = negative;
+    moshi (current(p) == 123) {
+        p.at[0] = p.at[0] + 1;
+        moshi (current(p) == 94) { inverse = !inverse; p.at[0] = p.at[0] + 1; }
+        aida (current(p) >= 0 && current(p) != 125) { array.push(name, current(p)); p.at[0] = p.at[0] + 1; }
+        moshi (current(p) != 125) { fail(p, "unterminated Unicode class"); } sore { p.at[0] = p.at[0] + 1; }
+    } sore { moshi (current(p) >= 0) { array.push(name, current(p)); p.at[0] = p.at[0] + 1; } }
+    kaku key = unicode_name(name); kaku ranges: []int64 = [];
+    moshi (key == "any") { ranges = [0,1114111]; }
+    sore { moshi (key == "ascii") { ranges = [0,127]; }
+    sore {
+        moshi (key == "assigned") { key = "cn"; inverse = !inverse; }
+        kaku triples = unicode_data.lookup(key);
+        moshi (len(triples) == 0) { fail(p, "invalid Unicode character class"); kaesu Term { ranges: [], scalar: -1 }; }
+        kaku at = 0;
+        aida (at < len(triples)) {
+            kaku low = triples[at]; kaku high = triples[at + 1]; kaku stride = triples[at + 2];
+            moshi (stride == 1) { array.push(ranges, low); array.push(ranges, high); }
+            sore { aida (low <= high) { array.push(ranges, low); array.push(ranges, low); low = low + stride; } }
+            at = at + 3;
+        }
+    } }
+    ranges = folded(p, ranges); moshi (inverse) { ranges = invert(ranges); }
+    kaesu Term { ranges: ranges, scalar: -1 };
+}
+waza ascii(name: string) -> []int64 {
+    moshi (name == "alnum") { kaesu [48,57,65,90,97,122]; }
+    moshi (name == "alpha") { kaesu [65,90,97,122]; }
+    moshi (name == "ascii") { kaesu [0,127]; }
+    moshi (name == "blank") { kaesu [9,9,32,32]; }
+    moshi (name == "cntrl") { kaesu [0,31,127,127]; }
+    moshi (name == "digit") { kaesu [48,57]; }
+    moshi (name == "graph") { kaesu [33,126]; }
+    moshi (name == "lower") { kaesu [97,122]; }
+    moshi (name == "print") { kaesu [32,126]; }
+    moshi (name == "punct") { kaesu [33,47,58,64,91,96,123,126]; }
+    moshi (name == "space") { kaesu [9,13,32,32]; }
+    moshi (name == "upper") { kaesu [65,90]; }
+    moshi (name == "word") { kaesu [48,57,65,90,95,95,97,122]; }
+    moshi (name == "xdigit") { kaesu [48,57,65,70,97,102]; } kaesu [];
+}
+waza is_digit(value: int64) -> bool { kaesu value >= 48 && value <= 57; }
+waza hex(value: int64) -> int64 {
+    moshi (is_digit(value)) { kaesu value - 48; } moshi (value >= 65 && value <= 70) { kaesu value - 55; } moshi (value >= 97 && value <= 102) { kaesu value - 87; } kaesu -1;
+}
+waza escaped(p: Parser) -> Term {
+    p.at[0] = p.at[0] + 1; kaku value = current(p); p.at[0] = p.at[0] + 1;
+    kaku name = ""; kaku negative = iie;
+    moshi (value == 100 || value == 68) { name = "digit"; negative = value == 68; }
+    moshi (value == 119 || value == 87) { name = "word"; negative = value == 87; }
+    moshi (value == 115 || value == 83) { name = "space"; negative = value == 83; }
+    moshi (name != "") {
+        kaku ranges = ascii(name); moshi (name == "space") { ranges = [9,10,12,13,32,32]; } ranges = folded(p, ranges); moshi (negative) { ranges = invert(ranges); }
+        kaesu Term { ranges: ranges, scalar: -1 };
+    }
+    moshi (value == 112 || value == 80) { kaesu unicode_class(p, value == 80); }
+    moshi (value == 97) { value = 7; }
+    sore { moshi (value == 102) { value = 12; }
+    sore { moshi (value == 110) { value = 10; }
+    sore { moshi (value == 114) { value = 13; }
+    sore { moshi (value == 116) { value = 9; }
+    sore { moshi (value == 118) { value = 11; }
+    sore { moshi (value >= 48 && value <= 55) {
+        moshi (value != 48 && (current(p) < 48 || current(p) > 55)) { fail(p, "backreferences are not supported"); }
+        value = value - 48; kaku at = 1;
+        aida (at < 3 && current(p) >= 48 && current(p) <= 55) { value = value * 8 + current(p) - 48; p.at[0] = p.at[0] + 1; at = at + 1; }
+    }
+    sore { moshi (value == 120) {
+        value = 0; kaku count = 0; kaku braced = current(p) == 123; moshi (braced) { p.at[0] = p.at[0] + 1; }
+        aida (hex(current(p)) >= 0 && (braced || count < 2)) {
+            value = value * 16 + hex(current(p)); p.at[0] = p.at[0] + 1; count = count + 1;
+            moshi (value > 1114111) { fail(p, "hex escape exceeds Unicode range"); nukeru; }
+        }
+        moshi ((!braced && count != 2) || (braced && (count == 0 || current(p) != 125))) { fail(p, "invalid hex escape"); }
+        moshi (braced && current(p) == 125) { p.at[0] = p.at[0] + 1; }
+    }
+    sore { moshi (value < 0 || value >= 128 || (value >= 65 && value <= 90) || (value >= 97 && value <= 122) || is_digit(value)) { fail(p, "invalid regexp escape"); } } } } } } } } }
+    kaesu Term { ranges: [value,value], scalar: value };
+}
+waza balanced(p: Parser, items: []int64, op: int64) -> int64 {
+    moshi (len(items) == 0) { kaesu node(p, 0, -1, -1, 0, 0, []); }
+    kaku work = items;
+    aida (len(work) > 1) {
+        kaku next: []int64 = []; kaku at = 0;
+        aida (at < len(work)) { kaku id = work[at]; moshi (at + 1 < len(work)) { id = node(p, op, id, work[at + 1], 0, 0, []); } array.push(next, id); at = at + 2; }
+        work = next;
+    }
+    kaesu work[0];
+}
+waza bracket(p: Parser) -> int64 {
+    p.at[0] = p.at[0] + 1; kaku negative = current(p) == 94; moshi (negative) { p.at[0] = p.at[0] + 1; }
+    kaku ranges: []int64 = []; kaku first = hai;
+    aida (p.error[0] == "" && (current(p) != 93 || first)) {
+        moshi (current(p) < 0) { fail(p, "unterminated character class"); nukeru; } first = iie;
+        moshi (current(p) == 91 && look(p, 1) == 58) {
+            kaku end = p.at[0] + 2;
+            aida (end + 1 < len(p.input) && !(p.input[end] == 58 && p.input[end + 1] == 93)) { end = end + 1; }
+            moshi (end + 1 < len(p.input)) {
+                kaku bytes: []uint8 = []; kaku at = p.at[0] + 2; kaku neg = iie; moshi (p.input[at] == 94) { neg = hai; at = at + 1; }
+                aida (at < end) { utf8.append_rune(bytes, rune(p.input[at])); at = at + 1; }
+                kaku text = string.from_utf8(bytes); kaku named: []int64 = []; moshi (text != mu) { named = ascii(text); }
+                moshi (len(named) == 0) { fail(p, "invalid ASCII character class"); nukeru; }
+                named = folded(p, named); moshi (neg) { named = invert(named); } array.append_all(ranges, named); p.at[0] = end + 2; tsuzuku;
+            }
+        }
+        kaku term = Term { ranges: [], scalar: -1 };
+        moshi (current(p) == 92) { term = escaped(p); }
+        sore { kaku value = current(p); p.at[0] = p.at[0] + 1; term = Term { ranges: [value,value], scalar: value }; }
+        moshi (term.scalar < 0) { array.append_all(ranges, term.ranges); tsuzuku; }
+        kaku low = term.scalar; kaku high = low;
+        moshi (current(p) == 45 && look(p, 1) != 93 && look(p, 1) >= 0) {
+            p.at[0] = p.at[0] + 1;
+            moshi (current(p) == 92) { kaku last = escaped(p); high = last.scalar; }
+            sore { high = current(p); p.at[0] = p.at[0] + 1; }
+            moshi (high < low) { fail(p, "invalid character range"); nukeru; }
+        }
+        array.append_all(ranges, folded(p, [low,high]));
+    }
+    moshi (current(p) != 93) { fail(p, "unterminated character class"); } sore { p.at[0] = p.at[0] + 1; }
+    ranges = clean(ranges); moshi (negative) { ranges = invert(ranges); }
+    kaesu node(p, 1, -1, -1, 0, 0, ranges);
+}
+waza group_header(p: Parser) -> int64 {
+    kaku capturing = hai;
+    p.at[0] = p.at[0] + 1;
+    moshi (current(p) == 63) {
+        capturing = iie;
+        p.at[0] = p.at[0] + 1;
+        moshi (current(p) == 80 && look(p, 1) == 60) { p.at[0] = p.at[0] + 1; }
+        moshi (current(p) == 60) {
+            capturing = hai;
+            p.at[0] = p.at[0] + 1; kaku count = 0;
+            aida (current(p) != 62 && current(p) >= 0) {
+                kaku value = current(p); moshi (!(is_digit(value) || (value >= 65 && value <= 90) || (value >= 97 && value <= 122) || value == 95)) { fail(p, "invalid capture name"); nukeru; }
+                p.at[0] = p.at[0] + 1; count = count + 1;
+            }
+            moshi (count == 0 || current(p) != 62) { fail(p, "invalid capture name"); } sore { p.at[0] = p.at[0] + 1; }
+        }
+        sore {
+            kaku clear = iie; kaku count = 0; kaku hyphen = iie; kaku cleared = 0;
+            aida (current(p) != 58 && current(p) != 41 && p.error[0] == "") {
+                kaku value = current(p);
+                moshi (value == 45 && !hyphen) { clear = hai; hyphen = hai; p.at[0] = p.at[0] + 1; tsuzuku; }
+                kaku power = 0; moshi (value == 105) { power = 1; } moshi (value == 109) { power = 2; } moshi (value == 115) { power = 4; } moshi (value == 85) { power = 8; }
+                moshi (power == 0) { fail(p, "invalid regexp group or flags"); nukeru; }
+                moshi (flag(p.flags[0], power) != !clear) { moshi (clear) { p.flags[0] = p.flags[0] - power; } sore { p.flags[0] = p.flags[0] + power; } }
+                p.at[0] = p.at[0] + 1; count = count + 1; moshi (clear) { cleared = cleared + 1; }
+            }
+            moshi (hyphen && cleared == 0) { fail(p, "invalid regexp flags after hyphen"); }
+            moshi (current(p) == 41 && count > 0) { p.at[0] = p.at[0] + 1; kaesu -2; }
+            moshi (current(p) != 58) { fail(p, "invalid regexp group"); } sore { p.at[0] = p.at[0] + 1; }
+        }
+    }
+    moshi (capturing) { kaesu 1; } kaesu 0;
+}
+waza atom(p: Parser) -> int64 {
+    quotes(p); kaku value = current(p);
+    moshi (!p.quoted[0] && value == 123) { kaku count = repetition_count(p); moshi (count.valid) { fail(p, "repetition has no operand"); kaesu -1; } }
+    moshi (p.quoted[0]) { p.at[0] = p.at[0] + 1; kaesu node(p, 1, -1, -1, 0, 0, folded(p, [value,value])); }
+    moshi (value == 91) { kaesu bracket(p); }
+    p.at[0] = p.at[0] + 1;
+    moshi (value == 46) { kaku op = 2; moshi (flag(p.flags[0], 4)) { op = 3; } kaesu node(p, op, -1, -1, 0, 0, []); }
+    moshi (value == 94 || value == 36) { kaku op = 5; moshi (value == 36) { op = 6; } moshi (flag(p.flags[0], 2)) { op = op + 2; } kaesu node(p, op, -1, -1, 0, 0, []); }
+    moshi (value == 92) {
+        kaku escaped_value = current(p);
+        moshi (escaped_value == 65 || escaped_value == 122 || escaped_value == 98 || escaped_value == 66) {
+            p.at[0] = p.at[0] + 1; kaku op = 5;
+            moshi (escaped_value == 122) { op = 6; } moshi (escaped_value == 98) { op = 9; } moshi (escaped_value == 66) { op = 10; }
+            kaesu node(p, op, -1, -1, 0, 0, []);
+        }
+        p.at[0] = p.at[0] - 1; kaku term = escaped(p); kaku ranges = term.ranges;
+        moshi (term.scalar >= 0) { ranges = folded(p, ranges); }
+        kaesu node(p, 1, -1, -1, 0, 0, ranges);
+    }
+    moshi (value < 0 || value == 42 || value == 43 || value == 63) { fail(p, "repetition has no operand"); kaesu -1; }
+    kaesu node(p, 1, -1, -1, 0, 0, folded(p, [value,value]));
+}
+// A malformed count is a literal brace, including multi-digit leading zeros.
+waza repetition_count(p: Parser) -> Count {
+    kaku bad = Count { valid: iie, low: -1, high: -1, end: p.at[0] };
+    moshi (current(p) != 123) { kaesu bad; }
+    kaku at = p.at[0] + 1; kaku low = 0; kaku high = -1;
+    moshi (at >= len(p.input)) { kaesu bad; }
+    moshi (!is_digit(p.input[at])) { kaesu bad; }
+    moshi (p.input[at] == 48 && at + 1 < len(p.input)) { moshi (is_digit(p.input[at + 1])) { kaesu bad; } }
+    aida (at < len(p.input)) { moshi (!is_digit(p.input[at])) { nukeru; } moshi (low < 100000) { low = low * 10 + p.input[at] - 48; } at = at + 1; }
+    high = low;
+    moshi (at < len(p.input)) { moshi (p.input[at] == 44) {
+        at = at + 1; high = -1;
+        moshi (at < len(p.input)) { moshi (is_digit(p.input[at])) {
+            moshi (p.input[at] == 48 && at + 1 < len(p.input)) { moshi (is_digit(p.input[at + 1])) { kaesu bad; } }
+            high = 0;
+            aida (at < len(p.input)) { moshi (!is_digit(p.input[at])) { nukeru; } moshi (high < 100000) { high = high * 10 + p.input[at] - 48; } at = at + 1; }
+        } }
+    } }
+    moshi (at >= len(p.input)) { kaesu bad; }
+    moshi (p.input[at] != 125) { kaesu bad; }
+    kaesu Count { valid: hai, low: low, high: high, end: at + 1 };
+}
+waza repeat_valid(p: Parser, root: int64) -> bool {
+    kaku nodes: []int64 = [root]; kaku limits: []int64 = [1000];
+    aida (len(nodes) > 0) {
+        kaku last = len(nodes) - 1; kaku id = nodes[last]; kaku limit = limits[last]; array.truncate(nodes, last); array.truncate(limits, last);
+        kaku item = p.nodes[id];
+        moshi (item.op == 13 && item.b == 1) {
+            kaku count = item.high; moshi (count == 0) { tsuzuku; } moshi (count < 0) { count = item.low; }
+            moshi (count > limit) { kaesu iie; } moshi (count > 0) { limit = limit / count; }
+        }
+        moshi (item.op == 11 || item.op == 12 || item.op == 13 || item.op == 14) { array.push(nodes, item.a); array.push(limits, limit); }
+        moshi (item.op == 11 || item.op == 12) { array.push(nodes, item.b); array.push(limits, limit); }
+    }
+    kaesu hai;
+}
+waza repetition(p: Parser, child: int64) -> int64 {
+    quotes(p); moshi (p.quoted[0]) { kaesu child; }
+    kaku value = current(p); kaku low = -1; kaku high = -1; kaku first = p.at[0];
+    moshi (value == 42) { low = 0; }
+    moshi (value == 43) { low = 1; }
+    moshi (value == 63) { low = 0; high = 1; }
+    moshi (value == 42 || value == 43 || value == 63) { p.at[0] = p.at[0] + 1; }
+    sore { moshi (value == 123) {
+        kaku count = repetition_count(p);
+        moshi (count.valid) { low = count.low; high = count.high; p.at[0] = count.end;
+            moshi (low > 1000 || high > 1000 || (high >= 0 && high < low)) { fail(p, "invalid repetition count"); }
+        }
+    } }
+    moshi (low < 0) { kaesu child; }
+    moshi (current(p) == 63) { p.at[0] = p.at[0] + 1; }
+    moshi (current(p) == 42 || current(p) == 43 || current(p) == 63) { fail(p, "nested repetition operator"); }
+    moshi (current(p) == 123) { kaku count = repetition_count(p); moshi (count.valid) { fail(p, "nested repetition operator"); } }
+    kaku counted = 0; moshi (value == 123) { counted = 1; }
+    kaku result = node(p, 13, child, counted, low, high, []);
+    moshi (result >= 0 && counted == 1 && (low >= 2 || high >= 2)) { moshi (!repeat_valid(p, result)) { fail(p, "invalid nested repetition count"); } }
+    kaesu result;
+}
+// Explicit parse frames preserve scoped flags without consuming the native
+// call stack for nested parentheses. Concatenation and alternation stay balanced.
+waza parse_expression(p: Parser) -> int64 {
+    kaku frames: []Frame = [Frame { items: [], alternatives: [], flags: p.flags[0], capture: iie }];
+    aida (p.error[0] == "") {
+        quotes(p); kaku value = current(p); kaku index = len(frames) - 1; kaku frame = frames[index];
+        moshi (value < 0) {
+            moshi (len(frames) != 1) { fail(p, "missing closing parenthesis"); kaesu -1; }
+            array.push(frame.alternatives, balanced(p, frame.items, 11)); kaesu balanced(p, frame.alternatives, 12);
+        }
+        moshi (!p.quoted[0] && value == 124) {
+            array.push(frame.alternatives, balanced(p, frame.items, 11)); frames[index] = Frame { items: [], alternatives: frame.alternatives, flags: frame.flags, capture: frame.capture };
+            p.at[0] = p.at[0] + 1; tsuzuku;
+        }
+        moshi (!p.quoted[0] && value == 40) {
+            kaku saved = p.flags[0]; kaku header = group_header(p); moshi (header == -2) { tsuzuku; }
+            array.push(frames, Frame { items: [], alternatives: [], flags: saved, capture: header == 1 }); tsuzuku;
+        }
+        moshi (!p.quoted[0] && value == 41) {
+            moshi (len(frames) == 1) { fail(p, "unexpected closing parenthesis"); kaesu -1; }
+            array.push(frame.alternatives, balanced(p, frame.items, 11)); kaku child = balanced(p, frame.alternatives, 12);
+            moshi (frame.capture && child >= 0) { child = node(p, 14, child, -1, 0, 0, []); }
+            moshi (child < 0) { kaesu -1; }
+            p.flags[0] = frame.flags; array.truncate(frames, index); p.at[0] = p.at[0] + 1;
+            array.push(frames[index - 1].items, repetition(p, child)); tsuzuku;
+        }
+        kaku item = atom(p); moshi (item < 0) { kaesu -1; }
+        array.push(frame.items, repetition(p, item));
+    }
+    kaesu -1;
+}
+
+waza state(states: []State, op: int64, out: int64, other: int64, ranges: []int64) -> int64 {
+    kaku id = len(states); array.push(states, State { op: op, out: out, other: other, ranges: ranges }); kaesu id;
+}
+waza patch(states: []State, ends: []int64, target: int64) -> unit {
+    kaku at = 0;
+    aida (at < len(ends)) {
+        kaku id = ends[at] / 2; kaku port = ends[at] - id * 2; kaku old = states[id]; kaku out = old.out; kaku other = old.other;
+        moshi (port == 0) { out = target; } sore { other = target; }
+        states[id] = State { op: old.op, out: out, other: other, ranges: old.ranges }; at = at + 1;
+    }
+}
+waza compile_node(p: Parser, id: int64, states: []State) -> Fragment {
+    moshi (id < 0 || len(states) > 3355443) { fail(p, "regexp program size limit"); kaesu Fragment { start: -1, ends: [] }; }
+    kaku item = p.nodes[id];
+    moshi (item.op == 14) { kaesu compile_node(p, item.a, states); }
+    moshi (item.op <= 10) {
+        kaku op = item.op; moshi (op == 0) { op = 4; }
+        kaku start = state(states, op, -1, -1, item.ranges); kaesu Fragment { start: start, ends: [start * 2] };
+    }
+    moshi (item.op == 11 || item.op == 12) {
+        kaku left = compile_node(p, item.a, states); kaku right = compile_node(p, item.b, states);
+        moshi (item.op == 11) { patch(states, left.ends, right.start); kaesu Fragment { start: left.start, ends: right.ends }; }
+        kaku start = state(states, 11, left.start, right.start, []); kaku ends = array.clone(left.ends); array.append_all(ends, right.ends); kaesu Fragment { start: start, ends: ends };
+    }
+    kaku start = state(states, 4, -1, -1, []); kaku ends: []int64 = [start * 2]; kaku at = 0;
+    aida (at < item.low && p.error[0] == "") { kaku next = compile_node(p, item.a, states); patch(states, ends, next.start); ends = next.ends; at = at + 1; }
+    moshi (item.high < 0 && p.error[0] == "") {
+        kaku child = compile_node(p, item.a, states); kaku split = state(states, 11, child.start, -1, []); patch(states, ends, split); patch(states, child.ends, split); ends = [split * 2 + 1];
+    }
+    sore { aida (at < item.high && p.error[0] == "") {
+        kaku child = compile_node(p, item.a, states); kaku split = state(states, 11, child.start, -1, []); patch(states, ends, split); ends = array.clone(child.ends); array.push(ends, split * 2 + 1); at = at + 1;
+    } }
+    kaesu Fragment { start: start, ends: ends };
+}
+
+koukai waza compile(pattern: string) -> Program {
+    moshi (string.byte_len(pattern) > 33554432) { kaesu Program { states: [], start: -1, error: "regexp size limit" }; }
+    kaku p = Parser { input: runes(pattern), at: [0], flags: [0], quoted: [iie], nodes: [], heights: [], folds: [], error: [""] };
+    kaku root = parse_expression(p); moshi (p.at[0] != len(p.input)) { fail(p, "unexpected closing parenthesis"); }
+    kaku states: []State = []; kaku fragment = Fragment { start: -1, ends: [] };
+    moshi (p.error[0] == "") { fragment = compile_node(p, root, states); }
+    moshi (p.error[0] != "") { kaesu Program { states: [], start: -1, error: p.error[0] }; }
+    kaku accepted = state(states, 0, -1, -1, []); patch(states, fragment.ends, accepted);
+    kaesu Program { states: states, start: fragment.start, error: "" };
+}
+waza word(value: int64) -> bool { kaesu is_digit(value) || (value >= 65 && value <= 90) || (value >= 97 && value <= 122) || value == 95; }
+waza closure(program: Program, id: int64, position: int64, input: []int64, seen: []int64, epoch: int64, active: []int64) -> unit {
+    kaku stack: []int64 = [id];
+    aida (len(stack) > 0) {
+        kaku node = stack[len(stack) - 1]; array.truncate(stack, len(stack) - 1);
+        moshi (node < 0 || node >= len(program.states)) { tsuzuku; }
+        moshi (seen[node] == epoch) { tsuzuku; } seen[node] = epoch;
+        kaku item = program.states[node];
+        moshi (item.op == 4) { array.push(stack, item.out); tsuzuku; }
+        moshi (item.op == 11) { array.push(stack, item.out); array.push(stack, item.other); tsuzuku; }
+        moshi (item.op >= 5 && item.op <= 10) {
+            kaku before = -1; kaku after = -1; moshi (position > 0) { before = input[position - 1]; } moshi (position < len(input)) { after = input[position]; }
+            kaku valid = iie;
+            moshi (item.op == 5) { valid = position == 0; } moshi (item.op == 6) { valid = position == len(input); }
+            moshi (item.op == 7) { valid = position == 0 || before == 10; } moshi (item.op == 8) { valid = position == len(input) || after == 10; }
+            moshi (item.op == 9) { valid = word(before) != word(after); } moshi (item.op == 10) { valid = word(before) == word(after); }
+            moshi (valid) { array.push(stack, item.out); } tsuzuku;
+        }
+        array.push(active, node);
+    }
+}
+koukai waza matches(program: Program, text: string) -> bool {
+    moshi (program.error != "" || program.start < 0) { kaesu iie; }
+    kaku input = runes(text); kaku seen = array.make[int64](len(program.states), 0); kaku active: []int64 = []; kaku epoch = 1; kaku position = 0;
+    closure(program, program.start, 0, input, seen, epoch, active);
+    aida (position <= len(input)) {
+        kaku at = 0;
+        aida (at < len(active)) { moshi (program.states[active[at]].op == 0) { kaesu hai; } at = at + 1; }
+        moshi (position == len(input)) { kaesu iie; }
+        kaku next: []int64 = []; epoch = epoch + 1; at = 0;
+        aida (at < len(active)) {
+            kaku item = program.states[active[at]]; kaku valid = iie;
+            moshi (item.op == 1) { valid = contains(item.ranges, input[position]); }
+            moshi (item.op == 2) { valid = input[position] != 10; } moshi (item.op == 3) { valid = hai; }
+            moshi (valid) { closure(program, item.out, position + 1, input, seen, epoch, next); } at = at + 1;
+        }
+        position = position + 1; closure(program, program.start, position, input, seen, epoch, next); active = next;
+    }
+    kaesu iie;
+}

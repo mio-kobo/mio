@@ -3,7 +3,7 @@ yobu "kiso/encoding/binary";
 yobu "kiso/string";
 yobu "kiso/utf8";
 
-koukai teisu VERSION: int64 = 14;
+koukai teisu VERSION: int64 = 16;
 koukai teisu MAX_FILE_SIZE: int64 = 67108864;
 koukai teisu MAX_CONSTANTS: int64 = 65536;
 koukai teisu MAX_GLOBALS: int64 = 65536;
@@ -61,11 +61,11 @@ waza empty_file() -> File {
 waza instruction_width(opcode: int64) -> int64 {
     moshi (opcode == 38) { kaesu 5; }
     moshi (opcode == 54) { kaesu 3; }
-    moshi (opcode == 56) { kaesu 4; }
+    moshi (opcode == 56 || opcode == 67) { kaesu 4; }
     moshi ((opcode >= 1 && opcode <= 1) || (opcode >= 17 && opcode <= 20) ||
         (opcode >= 23 && opcode <= 25) || opcode == 30 || opcode == 36 || opcode == 37 ||
         opcode == 40 || (opcode >= 44 && opcode <= 49)) { kaesu 3; }
-    moshi (opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65) { kaesu 2; }
+    moshi (opcode == 55 || opcode == 57 || opcode == 58 || opcode == 65 || opcode == 66) { kaesu 2; }
     moshi (opcode >= 2 && opcode <= 16) { kaesu 1; }
     moshi (opcode >= 21 && opcode <= 22) { kaesu 1; }
     moshi (opcode >= 26 && opcode <= 29) { kaesu 1; }
@@ -77,6 +77,7 @@ waza instruction_width(opcode: int64) -> int64 {
 }
 
 waza version_allows(opcode: int64, version: int64) -> bool {
+    moshi(opcode==67 && version<16){kaesu iie;}
     moshi ((opcode == 28 || opcode == 29) && version < 4) { kaesu iie; }
     moshi ((opcode == 30 || opcode == 31) && version < 5) { kaesu iie; }
     moshi ((opcode == 32 || opcode == 33) && version < 6) { kaesu iie; }
@@ -88,6 +89,7 @@ waza version_allows(opcode: int64, version: int64) -> bool {
     moshi (opcode >= 56 && opcode <= 62 && version < 12) { kaesu iie; }
     moshi ((opcode == 63 || opcode == 64) && version < 13) { kaesu iie; }
     moshi (opcode == 65 && version < 14) { kaesu iie; }
+    moshi (opcode == 66 && version < 15) { kaesu iie; }
     kaesu hai;
 }
 
@@ -126,8 +128,12 @@ waza validate_instructions(file: File, data: []uint8, function_index: int64) -> 
         moshi (width >= 3 && opcode != 54) { first = read_operand_u16(data, offset + 1); }
         moshi (width == 2) { first = int64(data[offset + 1]); }
         moshi (opcode == 54) { first = int64(data[offset + 1]); second = int64(data[offset + 2]); }
-        moshi (opcode == 56) { first = read_operand_u16(data, offset + 1); second = int64(data[offset + 3]); }
+        moshi (opcode == 56 || opcode == 67) { first = read_operand_u16(data, offset + 1); second = int64(data[offset + 3]); }
         moshi (opcode == 38) { first = read_operand_u16(data, offset + 1); second = read_operand_u16(data, offset + 3); }
+        moshi(opcode==67 && second>1){kaesu DecodeError {kind:DecodeErrorKind.InvalidInstruction(),offset:offset,detail:second};}
+        moshi (opcode == 66 && (first == 0 || first >= 128 || !valid_descriptor(first))) {
+            kaesu DecodeError { kind: DecodeErrorKind.InvalidInstruction(), offset: offset, detail: first };
+        }
 
         moshi (opcode == 1 && first >= len(file.constants)) {
             kaesu DecodeError { kind: DecodeErrorKind.InvalidIndex(), offset: offset, detail: first };
@@ -146,7 +152,9 @@ waza validate_instructions(file: File, data: []uint8, function_index: int64) -> 
                 kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: first };
             }
             moshi (opcode == 46) {
-                moshi (function_index < 0) { kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: first }; }
+                // A capture-free closure may be constructed at module scope.
+                // Only actual captures require an enclosing function frame.
+                moshi (function_index < 0 && len(file.functions[first].captures) != 0) { kaesu DecodeError { kind: DecodeErrorKind.InvalidFunction(), offset: offset, detail: first }; }
                 kaku capture_index = 0;
                 aida (capture_index < len(file.functions[first].captures)) {
                     kaku capture = file.functions[first].captures[capture_index];

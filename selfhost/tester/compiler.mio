@@ -1,0 +1,37 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/encoding/mochi";
+yobu "selfhost/frontend";
+yobu "selfhost/pipeline";
+
+koukai kata TestPlan { bytes: []uint8; tests: []frontend.TestCase; error: string; entry: string; requested: string; }
+
+koukai waza plan(root: string, entry: string, bunko_root: string) -> TestPlan {
+    kaku compiled = frontend.compile_tests(root, entry, bunko_root);
+    kaku identity=frontend.package_identity(root,entry);
+    kaesu TestPlan { bytes: compiled.bytes, tests: compiled.tests, error: compiled.error, entry:identity, requested:entry };
+}
+
+// Resolve test entry by its package-qualified registry identity. No dependency
+// with the same test/helper name can accidentally become the selected entry.
+koukai waza image(plan: TestPlan, entry: string, name: string) -> pipeline.NativeBuildResult {
+    moshi (plan.error != "") { kaesu pipeline.NativeBuildResult { bytes: [], error: plan.error }; }
+    kaku decoded = mochi.decode(plan.bytes); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E_IR invalid test plan" }; }
+    moshi (file == mu) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E_IR empty test plan" }; }
+    moshi(entry!=plan.requested && entry!=plan.entry && frontend.source_identity(entry)!=plan.entry){kaesu pipeline.NativeBuildResult {bytes:[],error:"E0601 test package does not match compiled registry"};}
+    kaku key = string.concat(plan.entry, string.concat("::", name)); kaku selected = -1; kaku at = 0;
+    aida (at < len(file.functions)) {
+        kaku fn = file.functions[at];
+        moshi (fn.name == key) {
+            moshi (selected >= 0 || fn.parameter_count != 0 || fn.returns_value || len(fn.captures) != 0) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E0601 invalid or duplicate test entry" }; }
+            selected = at;
+        }
+        at = at + 1;
+    }
+    moshi (selected < 0) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E0601 test entry not found" }; }
+    kaku instructions = array.clone(file.instructions);
+    array.push(instructions, uint8(25)); array.push(instructions, uint8(selected / 256)); array.push(instructions, uint8(selected - (selected / 256) * 256));
+    kaku module = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count, instructions: instructions, functions: file.functions };
+    kaesu pipeline.build_signed_test(mochi.canonical_bytes(module));
+}

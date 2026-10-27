@@ -1,0 +1,40 @@
+yobu "kiso/string";
+yobu "kiso/array";
+yobu "kiso/path";
+
+koukai kata URIPath { path: string; valid: bool; }
+waza hex_byte(value: uint8) -> int64 {
+    moshi(value>=uint8(48) && value<=uint8(57)){kaesu int64(value)-48;}moshi(value>=uint8(65) && value<=uint8(70)){kaesu int64(value)-55;}moshi(value>=uint8(97) && value<=uint8(102)){kaesu int64(value)-87;}kaesu -1;
+}
+waza slice_text(bytes: []uint8, first: int64, end: int64) -> string {
+    kaku data: []uint8=[];kaku at=first;aida(at<end){array.push(data,bytes[at]);at=at+1;}kaku text=string.from_utf8(data);moshi(text==mu){kaesu "";}kaesu text;
+}
+koukai waza path_from_uri(uri: string) -> URIPath {
+    kaku invalid=URIPath {path:"",valid:iie};moshi(!string.has_prefix(uri,"file:")){kaesu invalid;}
+    kaku bytes=string.to_bytes(uri);kaku at=0;aida(at<len(bytes)){moshi(bytes[at]<uint8(32) || bytes[at]==uint8(127)){kaesu invalid;}at=at+1;}
+    at=5;
+    moshi(at+1<len(bytes)){moshi(bytes[at]==uint8(47) && bytes[at+1]==uint8(47)){
+        at=at+2;kaku first=at;
+        aida(at<len(bytes) && bytes[at]!=uint8(47) && bytes[at]!=uint8(63) && bytes[at]!=uint8(35)){at=at+1;}
+        kaku host=slice_text(bytes,first,at);moshi(host!="" && host!="localhost"){kaesu invalid;}
+    }}
+    moshi(at>=len(bytes)){kaesu invalid;}moshi(bytes[at]!=uint8(47)){kaesu invalid;}
+    kaku decoded: []uint8=[];
+    aida(at<len(bytes) && bytes[at]!=uint8(63) && bytes[at]!=uint8(35)){
+        kaku byte=bytes[at];
+        moshi(byte==uint8(37)){
+            moshi(at+2>=len(bytes)){kaesu invalid;}kaku high=hex_byte(bytes[at+1]);kaku low=hex_byte(bytes[at+2]);moshi(high<0 || low<0){kaesu invalid;}byte=uint8(high*16+low);at=at+2;
+        }
+        array.push(decoded,byte);at=at+1;
+    }
+    kaku text=string.from_utf8(decoded);moshi(text==mu){kaesu invalid;}kaesu URIPath {path:path.clean(text),valid:hai};
+}
+koukai waza file_uri(absolute: string) -> string {
+    moshi(!path.is_abs(absolute)){kaesu "";}kaku bytes=string.to_bytes(path.clean(absolute));kaku digits=string.to_bytes("0123456789ABCDEF");kaku output=string.to_bytes("file://");kaku at=0;
+    aida(at<len(bytes)){
+        kaku byte=bytes[at];kaku safe=(byte>=uint8(48) && byte<=uint8(57)) || (byte>=uint8(65) && byte<=uint8(90)) || (byte>=uint8(97) && byte<=uint8(122));
+        safe=safe || byte==uint8(45) || byte==uint8(95) || byte==uint8(46) || byte==uint8(126) || byte==uint8(36) || byte==uint8(38) || byte==uint8(43) || byte==uint8(44) || byte==uint8(47) || byte==uint8(58) || byte==uint8(59) || byte==uint8(61) || byte==uint8(64);
+        moshi(safe){array.push(output,byte);}sore{kaku value=int64(byte);array.push(output,uint8(37));array.push(output,digits[value/16]);array.push(output,digits[value-(value/16)*16]);}at=at+1;
+    }
+    kaku text=string.from_utf8(output);moshi(text==mu){kaesu "";}kaesu text;
+}

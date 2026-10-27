@@ -1,0 +1,94 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/regexp/unicode_data";
+yobu "kiso/string";
+yobu "kiso/utf8";
+yobu "selfhost/frontend";
+yobu "selfhost/parser";
+yobu "selfhost/lexer";
+
+koukai kata Options {format: string; color: string; verbose: bool;}
+koukai waza options() -> Options {kaesu Options {format:"human",color:"auto",verbose:iie};}
+kata Display {mn: []int64; me: []int64;}
+kata Location {offset: int64; line: int64; column: int64; first: int64; end: int64;}
+waza in_ranges(ranges: []int64, value: int64) -> bool {
+    kaku at=0;aida(at+2<len(ranges)){kaku low=ranges[at];kaku high=ranges[at+1];moshi(value<low){kaesu iie;}moshi(value<=high){kaku delta=value-low;kaku stride=ranges[at+2];kaesu delta-(delta/stride)*stride==0;}at=at+3;}kaesu iie;
+}
+waza wide(value: int64) -> bool {
+    kaesu value>=4352 && (value<=4447 || value==9001 || value==9002 || (value>=11904 && value<=42191 && value!=12351) || (value>=44032 && value<=55203) || (value>=63744 && value<=64255) || (value>=65040 && value<=65049) || (value>=65072 && value<=65135) || (value>=65280 && value<=65376) || (value>=65504 && value<=65510) || (value>=127744 && value<=129791) || (value>=131072 && value<=262141));
+}
+waza cell_width(display: Display, value: int64, column: int64) -> int64 {
+    moshi(value==9){kaesu 4-(column-(column/4)*4);}moshi(value==13 || (value>=768 && (in_ranges(display.mn,value) || in_ranges(display.me,value)))){kaesu 0;}moshi(wide(value)){kaesu 2;}kaesu 1;
+}
+waza locate(data: []uint8, requested: int64, display: Display) -> Location {
+    kaku offset=requested;moshi(offset<0){offset=0;}moshi(offset>len(data)){offset=len(data);}
+    kaku line=1;kaku first=0;kaku at=0;aida(at<offset){moshi(data[at]==uint8(10)){line=line+1;first=at+1;}at=at+1;}
+    kaku column=0;at=first;
+    aida(at<offset){kaku decoded=utf8.decode_one(data,at);moshi(at+decoded.width>offset){nukeru;}column=column+cell_width(display,int64(decoded.value),column);at=at+decoded.width;}
+    kaku end=first;aida(end<len(data) && data[end]!=uint8(10)){end=end+1;}moshi(end>first && data[end-1]==uint8(13)){end=end-1;}
+    kaesu Location {offset:offset,line:line,column:column+1,first:first,end:end};
+}
+waza location_json(location: Location) -> string {
+    kaesu string.concat("{\"offset\":",string.concat(convert.format_int(location.offset),string.concat(",\"line\":",string.concat(convert.format_int(location.line),string.concat(",\"column\":",string.concat(convert.format_int(location.column),"}"))))));
+}
+waza ansi() -> string {kaku value=string.from_utf8([uint8(27)]);moshi(value==mu){kaesu "";}kaesu value;}
+waza color_enabled(opts: Options) -> bool {
+    moshi(opts.color=="never" || os.getenv("NO_COLOR")!=""){kaesu iie;}moshi(opts.color=="always"){kaesu hai;}
+    moshi(os.getenv("CI")!="" || os.getenv("TERM")=="dumb"){kaesu iie;}kaesu fs.is_character_device("/dev/stderr");
+}
+waza spaces(output: string.StringBuilder, count: int64) -> unit {kaku at=0;aida(at<count){string.write_string(output," ");at=at+1;}}
+waza expanded_line(data: []uint8, first: int64, end: int64, display: Display) -> string {
+    kaku bytes: []uint8=[];kaku at=first;kaku column=0;
+    aida(at<end){
+        kaku decoded=utf8.decode_one(data,at);kaku value=int64(decoded.value);kaku width=cell_width(display,value,column);
+        moshi(value==9){kaku i=0;aida(i<width){array.push(bytes,uint8(32));i=i+1;}}
+        sore{utf8.append_rune(bytes,decoded.value);}column=column+width;at=at+decoded.width;
+    }
+    kaku result=string.from_utf8(bytes);moshi(result==mu){kaesu "";}kaesu result;
+}
+koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: Options, cause: string) -> string {
+    kaku display=Display {mn:unicode_data.lookup("mn"),me:unicode_data.lookup("me")};
+    kaku start=locate(source,problem.span.start.offset,display);kaku finish=locate(source,problem.span.end.offset,display);
+    kaku has_span=problem.span.start.line>0;
+    moshi(!has_span){start=Location {offset:0,line:0,column:0,first:0,end:0};finish=start;}
+    kaku output=string.new_builder();
+    moshi(opts.format=="json"){
+        string.write_string(output,"{\"code\":");string.write_string(output,json.quote(problem.code));string.write_string(output,",\"severity\":\"error\",\"message\":");string.write_string(output,json.quote(problem.detail));
+        string.write_string(output,",\"path\":");string.write_string(output,json.quote(problem.path));string.write_string(output,",\"location\":");string.write_string(output,location_json(start));
+        moshi(has_span){
+        string.write_string(output,",\"labels\":[{\"span\":{\"start\":");string.write_string(output,location_json(start));string.write_string(output,",\"end\":");string.write_string(output,location_json(finish));string.write_string(output,"},\"primary\":true}]");}string.write_string(output,"}\n");kaesu string.builder_string(output);
+    }
+    moshi(opts.format=="short"){
+        string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,": ");
+    }
+    kaku color=opts.format=="human" && color_enabled(opts);moshi(color){string.write_string(output,string.concat(ansi(),"[1;31m"));}
+    string.write_string(output,"error[");string.write_string(output,problem.code);string.write_string(output,"]");moshi(color){string.write_string(output,string.concat(ansi(),"[0m"));}
+    string.write_string(output,": ");string.write_string(output,problem.detail);string.write_string(output,"\n");
+    moshi(opts.format=="human"){
+        moshi(has_span){string.write_string(output,"  --> ");string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,"\n");}
+        moshi(has_span && len(source)>0){
+            kaku number=convert.format_int(start.line);kaku padding=string.byte_len(number)+3;
+            string.write_string(output,"   ");string.write_string(output,number);string.write_string(output," | ");string.write_string(output,expanded_line(source,start.first,start.end,display));string.write_string(output,"\n");
+            spaces(output,padding);string.write_string(output," | ");spaces(output,start.column-1);kaku count=finish.column-start.column;moshi(finish.line!=start.line){count=locate(source,start.end,display).column-start.column;}moshi(count<1){count=1;}moshi(color){string.write_string(output,string.concat(ansi(),"[1;31m"));}
+            kaku at=0;aida(at<count){string.write_string(output,"^");at=at+1;}moshi(color){string.write_string(output,string.concat(ansi(),"[0m"));}string.write_string(output,"\n");
+        }
+        moshi(opts.verbose && cause!=""){string.write_string(output,"  = cause: ");string.write_string(output,cause);string.write_string(output,"\n");}
+    }kaesu string.builder_string(output);
+}
+
+koukai waza failure(message: string, path: string, opts: Options) -> string {
+    kaku position=lexer.Position {offset:0,line:0,column:0};
+    kaesu render(frontend.AnalysisDiagnostic {code:"E0401",path:path,span:parser.SourceSpan {start:position,end:position},detail:message},[],opts,message);
+}
+
+// Test-command diagnostics keep their existing text/JSON schema while sharing
+// source-command color policy, including NO_COLOR and terminal detection.
+koukai waza decorate_error(message: string, opts: Options) -> string {
+    moshi(opts.format=="human" && color_enabled(opts)){
+        kaku output=string.new_builder();string.write_string(output,ansi());string.write_string(output,"[1;31m");string.write_string(output,message);string.write_string(output,ansi());string.write_string(output,"[0m");kaesu string.builder_string(output);
+    }
+    kaesu message;
+}

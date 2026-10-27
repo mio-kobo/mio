@@ -1,0 +1,71 @@
+yobu "kiso/array";
+yobu "kiso/aot/lower/types";
+yobu "kiso/encoding/mochi";
+
+kata Specialization { file: mochi.File; analysis: types.TypeAnalysis; }
+
+waza instance_function(source: mochi.Function, id: int64, data: []uint8) -> mochi.Function {
+    // Each specialization owns its mutable metadata arrays. Explicitly typed
+    // copies also retain the array representation when the input function list
+    // is empty and no reachable constructor supplies an element witness.
+    kaku name_bytes: []uint8 = [];
+    array.append_all(name_bytes, source.name_bytes);
+    kaku captures: []mochi.Capture = [];
+    array.append_all(captures, source.captures);
+    kaesu mochi.Function { id: id, name: source.name, name_bytes: name_bytes,
+        parameter_count: source.parameter_count, local_count: source.local_count,
+        returns_value: source.returns_value, captures: captures, instructions: data };
+}
+
+waza retarget_call(data: []uint8, at: int64, id: int64) -> unit {
+    data[at + 1] = uint8(id / 256); data[at + 2] = uint8(id - (id / 256) * 256);
+}
+
+// v14 erases generic type arguments. Recover separate representations only
+// when the unchanged strict solver rejects a direct call's shared signature.
+// The complete callee is cloned, retaining its control flow and GC analysis.
+// A call site is split at most once; an actual per-instance type/layout failure
+// stays a failure. Bounds prevent recursive specialization from running away.
+waza specialize(file: mochi.File) -> Specialization {
+    kaku work = mochi.File { version: file.version, constants: file.constants,
+        global_count: file.global_count, instructions: file.instructions,
+        functions: array.clone(file.functions) };
+    kaku attempted: []int64 = []; kaku count = 0;
+    kaku analysis = types.analyze_types(work);
+    aida (analysis.error_detail != 0 && count < 256 && len(work.functions) < 65536) {
+        kaku detail = analysis.error_detail;
+        moshi (detail - (detail / 100) * 100 != 25) { nukeru; }
+        kaku owner = detail / 1000000 - 1;
+        kaku offset = (detail - (owner + 1) * 1000000) / 100;
+        kaku repeated = iie; kaku index = 0;
+        aida (index < len(attempted)) { moshi (attempted[index] == detail) { repeated = hai; } index = index + 1; }
+        moshi (repeated || owner >= len(work.functions)) { nukeru; }
+        array.push(attempted, detail);
+        kaku caller = work.instructions; moshi (owner >= 0) { caller = work.functions[owner].instructions; }
+        moshi (offset < 0 || offset + 3 > len(caller) || caller[offset] != uint8(25)) { nukeru; }
+        kaku target = int64(caller[offset + 1]) * 256 + int64(caller[offset + 2]);
+        moshi (target >= len(work.functions)) { nukeru; }
+        kaku source = work.functions[target];
+        // Captured environments have separate identity/representation edges.
+        // Do not clone them without specializing those edges as well.
+        moshi (len(source.captures) != 0 || len(source.instructions) == 0) { nukeru; }
+        kaku id = len(work.functions); kaku body = array.clone(source.instructions);
+        kaku at = 0;
+        aida (at < len(body)) {
+            kaku opcode = int64(body[at]); kaku width = types.type_instruction_width(opcode);
+            moshi (width <= 0 || at + width > len(body)) { kaesu Specialization { file: work, analysis: analysis }; }
+            moshi (opcode == 25 && int64(body[at + 1]) * 256 + int64(body[at + 2]) == target) { retarget_call(body, at, id); }
+            at = at + width;
+        }
+        array.push(work.functions, instance_function(source, id, body));
+        kaku patched = array.clone(caller); retarget_call(patched, offset, id);
+        moshi (owner < 0) {
+            work = mochi.File { version: work.version, constants: work.constants,
+                global_count: work.global_count, instructions: patched, functions: work.functions };
+        }
+        sore { work.functions[owner] = instance_function(work.functions[owner], owner, patched); }
+        count = count + 1;
+        analysis = types.analyze_types(work);
+    }
+    kaesu Specialization { file: work, analysis: analysis };
+}

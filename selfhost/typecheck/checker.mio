@@ -1,3 +1,4 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "selfhost/parser";
@@ -25,7 +26,7 @@ waza resolve_type_node(env: TypeEnvironment, file_id: int64, node_id: int64, par
     kaku kind = parser.node_kind_code(node.kind);
     moshi (kind == 40) {
         kaku element = resolve_type_node(env, file_id, node.children[0], parameters);
-        moshi (element == 0 || element == builtin_type(env, "unit") || element == builtin_type(env, "mu")) {
+        moshi (element == 0 || element == builtin_type(env, "unit") || element == builtin_type(env, "mu") || element == builtin_type(env, "resource")) {
             add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, element, "invalid array element type");
             kaesu 0;
         }
@@ -189,22 +190,29 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
 }
 
 waza copy_type_from(env: TypeEnvironment, source: TypeCheckResult, id: int64) -> int64 {
+    kaesu copy_type_info(env.result, source, id);
+}
+
+koukai waza copy_type_info(result: TypeCheckResult, source: TypeCheckResult, id: int64) -> int64 {
+    moshi(id<0 || id>=len(source.types)){kaesu 0;}
     kaku info = source.types[id];
     kaku code = type_kind_code(info.kind);
-    moshi (code <= 14) { kaesu builtin_type(env, info.name); }
-    moshi (code == 15) { kaesu array_type(env.result, copy_type_from(env, source, info.element)); }
-    moshi (code == 16) { kaesu nullable_type(env.result, copy_type_from(env, source, info.element)); }
+    moshi (code <= 14) {
+        kaku at=0;aida(at<len(result.types)){moshi(type_kind_code(result.types[at].kind)==code && result.types[at].name==info.name){kaesu at;}at=at+1;}kaesu 0;
+    }
+    moshi (code == 15) { kaesu array_type(result, copy_type_info(result, source, info.element)); }
+    moshi (code == 16) { kaesu nullable_type(result, copy_type_info(result, source, info.element)); }
     moshi (code == 17) {
         kaku arguments = array.with_capacity[int64](len(info.arguments)); kaku index = 0;
-        aida (index < len(info.arguments)) { array.push(arguments, copy_type_from(env, source, info.arguments[index])); index = index + 1; }
-        kaesu named_type(env.result, info.name, arguments);
+        aida (index < len(info.arguments)) { array.push(arguments, copy_type_info(result, source, info.arguments[index])); index = index + 1; }
+        kaesu named_type(result, info.name, arguments);
     }
     moshi (code == 18) {
         kaku parameters = array.with_capacity[int64](len(info.parameters)); kaku index = 0;
-        aida (index < len(info.parameters)) { array.push(parameters, copy_type_from(env, source, info.parameters[index])); index = index + 1; }
-        kaesu function_type(env.result, parameters, copy_type_from(env, source, info.result));
+        aida (index < len(info.parameters)) { array.push(parameters, copy_type_info(result, source, info.parameters[index])); index = index + 1; }
+        kaesu function_type(result, parameters, copy_type_info(result, source, info.result));
     }
-    kaesu parameter_type(env.result, info.name);
+    kaesu parameter_type(result, info.name);
 }
 
 waza find_current_symbol(env: TypeEnvironment, package_path: string, name: string, kind: int64) -> int64 {
@@ -299,8 +307,9 @@ waza import_dependency_types(env: TypeEnvironment, dependencies: []TypeCheckResu
     }
 }
 
-koukai waza check_package(resolved: resolver.ResolvedPackage, dependencies: []TypeCheckResult) -> TypeCheckResult {
-    kaku env = new_environment(resolved);
+koukai waza check_package(resolved: resolver.ResolvedPackage, dependencies: []TypeCheckResult) -> TypeCheckResult {kaesu check_package_with_progress(resolved,dependencies,progress.context());}
+koukai waza check_package_with_progress(resolved: resolver.ResolvedPackage, dependencies: []TypeCheckResult, work: progress.Context) -> TypeCheckResult {
+    kaku env = new_environment_with_progress(resolved,work);
     import_dependency_types(env, dependencies);
     register_type_declarations(env);
     fill_type_declarations(env);

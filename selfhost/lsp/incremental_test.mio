@@ -1,0 +1,32 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "kiso/testing";
+
+waza incremental_payload(frame: Frame) -> string {
+    kaku text=string.from_utf8(frame.bytes);moshi(text==mu){testing.fail("payload UTF8");kaesu "";}kaesu text;
+}
+waza framed_text(text: string) -> []uint8 {
+    kaesu string.to_bytes(string.concat("Content-Length: ",string.concat(convert.format_int(string.byte_len(text)),string.concat("\r\n\r\n",text))));
+}
+waza test_incremental_frames_fragmented_utf8_and_pipeline() -> unit {
+    kaku input=frame_buffer();kaku text="{\"id\":\"😀日本語\"}";kaku bytes=framed_text(text);kaku at=0;
+    aida(at<len(bytes)-1){testing.expect(feed_frames(input,bytes,at,1),"accept single-byte input fragment");testing.expect(next_buffered_frame(input)==mu,"partial header or body never blocks or produces a premature frame");at=at+1;}
+    feed_frames(input,bytes,at,1);kaku frame=next_buffered_frame(input);
+    moshi(frame==mu){testing.fail("complete fragmented frame");}sore{testing.expect(frame.error=="" && incremental_payload(frame)==text,"exact UTF8 payload bytes retained");}
+    kaku combined=framed_text("one");kaku second=framed_text("two");at=0;aida(at<len(second)){array.push(combined,second[at]);at=at+1;}
+    feed_frames(input,combined,0,len(combined));frame=next_buffered_frame(input);
+    moshi(frame==mu){testing.fail("first pipelined frame");}sore{testing.expect(incremental_payload(frame)=="one","first pipeline payload");}
+    frame=next_buffered_frame(input);moshi(frame==mu){testing.fail("second pipelined frame");}sore{testing.expect(incremental_payload(frame)=="two","second pipeline payload");}
+    testing.expect(next_buffered_frame(input)==mu,"open empty stream needs more data");finish_frames(input);frame=next_buffered_frame(input);
+    moshi(frame==mu){testing.fail("closed stream EOF");}sore{testing.expect(frame.eof && frame.error=="","EOF follows consumed frames");}
+}
+waza test_incremental_frames_errors_limits_and_header_compatibility() -> unit {
+    kaku invalid: []string=["Broken\r\n\r\n","Content-Length: -1\r\n\r\n","Content-Length: 67108865\r\n\r\n","Other: x\r\n\r\n"];
+    kaku at=0;
+    aida(at<len(invalid)){kaku input=frame_buffer();kaku bytes=string.to_bytes(invalid[at]);feed_frames(input,bytes,0,len(bytes));kaku frame=next_buffered_frame(input);moshi(frame==mu){testing.fail("malformed complete header");}sore{testing.expect(frame.error!="","malformed header or oversized message fails");}at=at+1;}
+    kaku input=frame_buffer();kaku bytes=string.to_bytes("content-length: 1\nContent-Length: 2\n\nhi");feed_frames(input,bytes,0,len(bytes));kaku frame=next_buffered_frame(input);
+    moshi(frame==mu){testing.fail("LF duplicate header frame");}sore{testing.expect(frame.error=="" && incremental_payload(frame)=="hi","LF and last duplicate Content-Length preserve reference framing");}
+    input=frame_buffer();bytes=string.to_bytes("Content-Length: 2\r\n\r\nx");feed_frames(input,bytes,0,len(bytes));testing.expect(next_buffered_frame(input)==mu,"partial payload awaits data");finish_frames(input);frame=next_buffered_frame(input);
+    moshi(frame==mu){testing.fail("truncated closed payload");}sore{testing.expect(frame.error!="" && !frame.eof,"truncated body fails instead of normal EOF");}
+}

@@ -1,0 +1,29 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+
+waza notify(state: Session, payload: string) -> Reply {kaesu dispatch(state,string.to_bytes(payload));}
+waza test_rpc_document_notifications_preserve_utf16_versions_and_save() -> unit {
+    kaku state=session("/tmp","");
+    notify(state,"{\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"untitled:x\",\"languageId\":\"mio\",\"version\":1,\"text\":\"a😀中\"}}}");
+    testing.expect(!state.flags[0] && len(state.dirty)==1,"pre-initialize didOpen is retained for later analysis");
+    notify(state,"{\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"untitled:x\",\"version\":2},\"contentChanges\":[{\"range\":{\"start\":{\"line\":0,\"character\":1},\"end\":{\"line\":0,\"character\":3}},\"text\":\"b\"},{\"range\":{\"start\":{\"line\":0,\"character\":2},\"end\":{\"line\":0,\"character\":3}},\"text\":\"c\"}]}}");
+    kaku current=lsp.snapshot(state.documents,"untitled:x");moshi(current==mu){testing.fail("document retained");kaesu;}
+    testing.expect(current.text=="abc" && current.version==2,"RPC edits use sequential UTF16 positions");
+    notify(state,"{\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"untitled:x\",\"version\":1},\"contentChanges\":[{\"text\":\"stale\"}]}}");
+    notify(state,"{\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"untitled:x\"},\"text\":\"saved\"}}");
+    current=lsp.snapshot(state.documents,"untitled:x");moshi(current==mu){testing.fail("saved document retained");kaesu;}
+    testing.expect(current.text=="saved" && current.version==2 && len(state.dirty)==1,"stale edit ignored; save keeps version; dirty queue deduplicated");
+    kaku closed=notify(state,"{\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"untitled:x\"}}}");
+    testing.expect(lsp.snapshot(state.documents,"untitled:x")==mu && len(state.dirty)==0 && len(closed.messages)==1,"close removes buffer and pending analysis, clears diagnostics");
+}
+waza test_rpc_invalid_change_is_atomic_and_shutdown_ignores_edits() -> unit {
+    kaku state=session("/tmp","");
+    notify(state,"{\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"x\",\"version\":1,\"text\":\"original\"}}}");
+    notify(state,"{\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"x\",\"version\":2},\"contentChanges\":[{\"text\":\"partial\"},{\"text\":42}]}}");
+    kaku current=lsp.snapshot(state.documents,"x");moshi(current==mu){testing.fail("document snapshot");kaesu;}testing.expect(current.text=="original" && current.version==1,"malformed batch never partially edits document");
+    request(state,"{\"id\":1,\"method\":\"initialize\"}");
+    kaku shutdown=notify(state,"{\"id\":2,\"method\":\"shutdown\"}");testing.expect(len(shutdown.messages)==2 && len(state.dirty)==0,"shutdown publishes empty diagnostics and clears pending work");
+    notify(state,"{\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"x\",\"version\":3,\"text\":\"after shutdown\"}}}");
+    current=lsp.snapshot(state.documents,"x");moshi(current==mu){testing.fail("shutdown snapshot");kaesu;}testing.expect(current.text=="original" && current.version==1,"shutdown ignores subsequent document notifications");
+}

@@ -1,0 +1,77 @@
+yobu "kiso/array";
+yobu "kiso/crypto/sha256";
+
+koukai kata SignResult { bytes: []uint8; error: string; }
+waza failure(message: string) -> SignResult { kaesu SignResult { bytes: [], error: message }; }
+waza read32(data: []uint8, offset: int64) -> int64 {
+    kaesu int64(data[offset]) + int64(data[offset + 1]) * 256 + int64(data[offset + 2]) * 65536 + int64(data[offset + 3]) * 16777216;
+}
+waza write32(data: []uint8, offset: int64, value: int64, big: bool) -> unit {
+    kaku left = value; kaku at = 0;
+    aida (at < 4) {
+        kaku position = offset + at; moshi (big) { position = offset + 3 - at; }
+        data[position] = uint8(left - (left / 256) * 256); left = left / 256; at = at + 1;
+    }
+}
+waza align(value: int64, boundary: int64) -> int64 { kaesu ((value + boundary - 1) / boundary) * boundary; }
+
+// Deterministic local ad-hoc signature for our relocation-free ARM64 images.
+// No identity, certificate, entitlement or notarization is claimed. Every code
+// page hash covers the final header and final LC_CODE_SIGNATURE/__LINKEDIT.
+koukai waza adhoc(image: []uint8) -> SignResult {
+    moshi (len(image) < 768 || len(image) > 67108864 || len(image) != align(len(image), 16)) { kaesu failure("invalid unsigned image length"); }
+    moshi (read32(image, 0) != 4277009103 || read32(image, 4) != 16777228 || read32(image, 12) != 2) { kaesu failure("expected ARM64 Mach-O executable"); }
+    kaku count = read32(image, 16); kaku command_bytes = read32(image, 20);
+    moshi (count < 1 || count > 32 || command_bytes > 720 || 32 + command_bytes + 16 > 768) { kaesu failure("invalid load commands"); }
+    kaku linkedit = -1; kaku text_limit = 0; kaku at = 32; kaku index = 0;
+    aida (index < count) {
+        moshi (at + 8 > 32 + command_bytes) { kaesu failure("truncated load command"); }
+        kaku command = read32(image, at); kaku size = read32(image, at + 4);
+        moshi (size < 8 || at + size > 32 + command_bytes || size != align(size, 8)) { kaesu failure("invalid load command size"); }
+        moshi (command == 29) { kaesu failure("image is already signed"); }
+        moshi (command == 25 && size >= 72) {
+            // Exact segment names, including the NUL padding.
+            kaku name: []uint8 = [95,95,76,73,78,75,69,68,73,84,0,0,0,0,0,0]; kaku equal = hai; kaku ni = 0;
+            aida (ni < 16) { moshi (image[at + 8 + ni] != name[ni]) { equal = iie; } ni = ni + 1; }
+            moshi (equal) {
+                moshi (linkedit >= 0 || read32(image, at + 40) != len(image) || read32(image, at + 44) != 0 || read32(image, at + 48) != 0 || read32(image, at + 52) != 0) { kaesu failure("unexpected LINKEDIT layout"); }
+                linkedit = at;
+            }
+            moshi (image[at + 8] == uint8(95) && image[at + 9] == uint8(95) && image[at + 10] == uint8(84) && image[at + 11] == uint8(69) && image[at + 12] == uint8(88) && image[at + 13] == uint8(84) && image[at + 14] == uint8(0)) {
+                text_limit = read32(image, at + 48);
+            }
+        }
+        at = at + size; index = index + 1;
+    }
+    moshi (at != 32 + command_bytes || linkedit < 0 || text_limit < 768 || text_limit > len(image)) { kaesu failure("missing canonical image segments"); }
+    // SuperBlob(20), CodeDirectory v0x20400(88), identifier "mio\0"(4),
+    // SHA256 code slots. No special slots or CMS are needed for ad-hoc.
+    kaku slots = (len(image) + 4095) / 4096;
+    kaku directory_size = 92 + slots * 32; kaku blob_size = 20 + directory_size; kaku signature_size = align(blob_size, 16);
+    kaku output = array.with_capacity[uint8](len(image) + signature_size);
+    array.append_all(output, image); kaku pad = 0;
+    aida (pad < signature_size) { array.push(output, uint8(0)); pad = pad + 1; }
+    write32(output, 16, count + 1, iie); write32(output, 20, command_bytes + 16, iie);
+    write32(output, at, 29, iie); write32(output, at + 4, 16, iie); write32(output, at + 8, len(image), iie); write32(output, at + 12, signature_size, iie);
+    write32(output, linkedit + 32, align(signature_size, 16384), iie); write32(output, linkedit + 36, 0, iie);
+    write32(output, linkedit + 48, signature_size, iie); write32(output, linkedit + 52, 0, iie);
+    kaku base = len(image);
+    write32(output, base, 4208856256, hai); write32(output, base + 4, blob_size, hai); write32(output, base + 8, 1, hai);
+    write32(output, base + 12, 0, hai); write32(output, base + 16, 20, hai);
+    kaku cd = base + 20;
+    write32(output, cd, 4208856066, hai); write32(output, cd + 4, directory_size, hai); write32(output, cd + 8, 132096, hai); write32(output, cd + 12, 2, hai);
+    write32(output, cd + 16, 92, hai); write32(output, cd + 20, 88, hai); write32(output, cd + 28, slots, hai); write32(output, cd + 32, len(image), hai);
+    output[cd + 36] = uint8(32); output[cd + 37] = uint8(2); output[cd + 39] = uint8(12);
+    write32(output, cd + 76, text_limit, hai); write32(output, cd + 84, 1, hai);
+    output[cd + 88] = uint8(109); output[cd + 89] = uint8(105); output[cd + 90] = uint8(111);
+    kaku ctx = sha256.context(); index = 0;
+    aida (index < slots) {
+        kaku length = 4096; moshi ((index + 1) * 4096 > len(image)) { length = len(image) - index * 4096; }
+        kaku hash = sha256.sum_range(ctx, output, index * 4096, length);
+        moshi (len(hash) != 32) { kaesu failure("page hashing failed"); }
+        kaku hi = 0;
+        aida (hi < 32) { output[cd + 92 + index * 32 + hi] = hash[hi]; hi = hi + 1; }
+        index = index + 1;
+    }
+    kaesu SignResult { bytes: output, error: "" };
+}

@@ -40,6 +40,19 @@ waza test_nullable_narrowing() -> unit {
     testing.expect(len(invalid.errors) > 0, "nullable value requires narrowing");
 }
 
+waza test_invalid_instantiated_container_types() -> unit {
+    kaku arrays = check_source("waza empty<T>() -> []T { kaku values: []T=[]; kaesu values; } kaku values=empty[unit]();");
+    testing.expect(len(arrays.errors)>0, "generic substitution cannot construct an array of unit");
+    kaku resources = check_source("waza empty<T>() -> []T { kaku values: []T=[]; kaesu values; } kaku values=empty[resource]();");
+    testing.expect(len(resources.errors)>0, "generic substitution cannot construct an array of resource");
+    kaku nullable = check_source("waza none<T>() -> T? { kaesu mu; } kaku value=none[unit]();");
+    testing.expect(len(nullable.errors)>0, "generic substitution cannot construct nullable unit");
+    kaku nested = check_source("waza none<T>() -> T? { kaesu mu; } kaku value=none[int64?]();");
+    testing.expect(len(nested.errors)>0, "generic substitution cannot construct nested nullable types");
+    kaku valid = check_source("waza empty<T>() -> []T { kaku values: []T=[]; kaesu values; } kaku ints=empty[int64](); kaku strings=empty[string]();");
+    testing.expect(len(valid.errors)==0, "valid value-free generic arrays retain their checked types");
+}
+
 waza test_enum_match_exhaustiveness() -> unit {
     kaku valid = check_source("sentaku Option<T> { Some(T); None; } waza read(value: Option<int64>) -> int64 { awase (value) { baai Some(item) { kaesu item; } baai None { kaesu 0; } } }");
     testing.expect(len(valid.errors) == 0, "exhaustive enum match checks");
@@ -119,4 +132,30 @@ waza test_cross_file_and_package_constants() -> unit {
     kaku checked_dependencies: []TypeCheckResult = []; array.push(checked_dependencies, library);
     kaku app = check_package(resolver.resolve_package("app", app_files, resolved_dependencies), checked_dependencies);
     testing.expect(len(app.errors) == 0 && has_integer_constant(app, 42), "cross-package constant evaluates");
+}
+
+waza test_nullable_recheck_and_function_fact_isolation() -> unit {
+    kaku repeated=check_source("waza main(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} moshi(value==mu){kaesu 0;} kaesu value; }");
+    testing.expect(len(repeated.errors)==0,"nullable declaration remains comparable to mu after narrowing");
+    kaku nonnullable=check_source("kaku value: int64=1; chant(value==mu);");testing.expect(len(nonnullable.errors)>0,"non-nullable scalar cannot compare to mu");
+    kaku closure=check_source("kaku value: int64?=mu; kaku setter=waza () -> unit { value=1; }; chant(value+1);");
+    testing.expect(len(closure.errors)>0,"unexecuted closure assignment cannot prove an outer value non-nil");
+    kaku function=check_source("kaku value: int64?=mu; waza setter() -> unit { value=1; } chant(value+1);");
+    testing.expect(len(function.errors)>0,"unexecuted function assignment cannot leak a non-nil proof");
+    kaku preserved_closure=check_source("waza f(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} kaku setter=waza () -> unit {value=mu;}; kaesu value+1; }");
+    testing.expect(len(preserved_closure.errors)==0,"closure definition preserves an existing outer non-nil proof");
+    kaku preserved_function=check_source("kaku value: int64?=mu; value=1; waza setter() -> unit {value=mu;} chant(value+1);");
+    testing.expect(len(preserved_function.errors)==0,"function definition preserves an existing outer non-nil proof");
+    kaku delayed_closure=check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { kaesu value+1; };");
+    testing.expect(len(delayed_closure.errors)>0,"delayed closure cannot inherit a temporary outer non-nil proof");
+    kaku delayed_function=check_source("kaku value: int64?=mu; value=1; waza getter() -> int64 { kaesu value+1; }");
+    testing.expect(len(delayed_function.errors)>0,"function body requires its own proof for captured nullable state");
+    kaku guarded_closure=check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { moshi(value==mu){kaesu 0;} kaesu value+1; };");
+    testing.expect(len(guarded_closure.errors)==0,"a closure may establish its own non-nil proof");
+}
+waza test_captured_record_replacement_and_recheck_typecheck() -> unit {
+    kaku rechecked=check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku clear=waza () -> unit {item=mu;}; moshi(item==mu){kaesu;} apply(clear); moshi(item==mu){kaesu;} chant(item.key); }");
+    testing.expect(len(rechecked.errors)==0,"captured nullable record can be rechecked after a call");
+    kaku replaced=check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku replace=waza () -> unit {item=Item {key: \"changed\"};}; moshi(item==mu){kaesu;} apply(replace); chant(item.key); }");
+    testing.expect(len(replaced.errors)==0,"checking a closure replacement cannot narrow the surrounding declaration");
 }

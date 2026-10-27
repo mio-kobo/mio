@@ -1,0 +1,62 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/math";
+yobu "mio/os/runtime";
+
+koukai waza argument(index: int64) -> string? {
+    kaku size = runtime.arg_size(index);
+    moshi (size < 0) { kaesu mu; }
+    kaku bytes = array.make[uint8](size, uint8(0));
+    moshi (runtime.arg_copy(index, bytes) != size) { kaesu mu; }
+    kaesu string.from_utf8(bytes);
+}
+koukai waza arguments() -> []string {
+    kaku result: []string = []; kaku count = runtime.argc(); kaku index = 0;
+    aida (index < count) {
+        kaku value = argument(index); moshi (value == mu) { math.fail("invalid OS argument encoding"); kaesu []; }
+        array.push(result, value); index = index + 1;
+    }
+    kaesu result;
+}
+koukai waza chmod(path: string, mode: int64) -> int64 { kaesu runtime.chmod(path, mode); }
+koukai waza exit(status: int64) -> unit { runtime.exit(status); }
+
+// Arguments include argv[0], matching the OS ABI. Negative values report a
+// system errno; spawned child exits and signals become shell-compatible codes.
+koukai waza spawn(path: string, arguments: []string) -> int64 { kaesu runtime.spawn(path, arguments); }
+koukai waza exec(path: string, arguments: []string) -> int64 { kaesu runtime.exec(path, arguments); }
+koukai waza pid() -> int64 { kaesu runtime.pid(); }
+koukai waza remove(path: string) -> int64 { kaesu runtime.remove(path); }
+
+koukai waza remove_dir(path: string) -> int64 { kaesu runtime.rmdir(path); }
+
+// Test-only child isolation: capture stdout, stderr and assertion packets into
+// private files; the positive CPU and wall budgets terminate only the child process.
+koukai waza spawn_test(path: string, arguments: []string, stdout: string, stderr: string, records: string, cpu_seconds: int64) -> int64 {
+    kaesu runtime.spawn_test(path, arguments, stdout, stderr, records, cpu_seconds);
+}
+
+// Milliseconds from the OS-accessible ARM64 virtual counter; not wall time.
+koukai waza monotonic_ms() -> int64 { kaesu runtime.monotonic_ms(); }
+
+// Missing, malformed or non-UTF8 environment values return mu; an existing
+// empty value remains an empty string. No ambient compiler/Bunko path fallback.
+koukai waza environment(name: string) -> string? {
+    kaku size=runtime.env_size(name);moshi(size<0){kaesu mu;}
+    kaku bytes=array.make[uint8](size,uint8(0));moshi(runtime.env_copy(name,bytes)!=size){kaesu mu;}kaesu string.from_utf8(bytes);
+}
+koukai waza getenv(name: string) -> string { kaku value=environment(name);moshi(value==mu){kaesu "";}kaesu value; }
+
+// Nonblocking stdin readiness: positive for data/EOF, zero while idle, negative errno.
+koukai waza stdin_ready() -> int64 { kaesu runtime.stdin_ready(); }
+
+// Millisecond timeout, or -1 to wait without a deadline. Other negative values
+// and values above INT32_MAX return -EINVAL without blocking.
+koukai waza stdin_wait(timeout_ms: int64) -> int64 { kaesu runtime.stdin_wait(timeout_ms); }
+
+// Physical absolute identity for existing paths. Unresolvable/non-UTF8 paths
+// return mu; callers retain memory-only source identities separately.
+koukai waza canonical_path(path: string) -> string? {
+    kaku bytes=array.make[uint8](1024,uint8(0));kaku size=runtime.real_path(path,bytes);
+    moshi(size<0 || size>=len(bytes)){kaesu mu;}array.truncate(bytes,size);kaesu string.from_utf8(bytes);
+}

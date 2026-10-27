@@ -73,6 +73,21 @@ waza test_generics_and_type_bindings() -> unit {
     testing.expect(symbol_named(result, "T", 9) >= 0, "type parameter symbol");
 }
 
+waza test_generic_closure_captures_only_runtime_values() -> unit {
+    kaku source="waza make<T>(value: T) -> () -> T {kaesu waza () -> T {kaesu value;};}";
+    kaku result=resolve_program("main",parse_source(source));
+    testing.expect(len(result.errors)==0,"generic closure resolves its outer type parameter");
+    testing.expect(len(result.captures)==1,"type parameter adds no runtime capture");
+    moshi(len(result.captures)==1){testing.expect(result.symbols[result.captures[0].symbol_id].name=="value","actual generic value still captured");}
+    kaku type_bindings=0;kaku at=0;
+    aida(at<len(result.bindings)){
+        kaku binding=result.bindings[at];
+        moshi(symbol_kind_code(result.symbols[binding.symbol_id].kind)==9){type_bindings=type_bindings+1;testing.expect(!binding.capture,"type references keep bindings without becoming captured cells");}
+        at=at+1;
+    }
+    testing.expect(type_bindings>=3,"generic annotations retain semantic bindings");
+}
+
 waza test_multi_file_identity() -> unit {
     kaku first = parse_source("waza call() -> int64 { kaesu shared(); }");
     kaku second = parse_source("waza shared() -> int64 { kaesu 42; }");
@@ -102,6 +117,22 @@ waza test_package_exports() -> unit {
     result = resolve_package("app", files, dependencies);
     testing.expect(len(result.errors) == 1, "private package member count");
     testing.expect(resolve_error_kind_code(result.errors[0].kind) == 4, "private package member kind");
+}
+
+waza test_local_and_parameter_shadow_import_alias_for_field_selection() -> unit {
+    kaku dependency=resolve_program("library",parse_source("koukai waza visible() -> int64 {kaesu 1;}"));
+    kaku source=parse_source("yobu \"library\"; kata Record {value: int64;} waza local() -> int64 { kaku library=Record {value:7}; kaesu library.value; } waza parameter(library: Record) -> int64 {kaesu library.value;} waza imported() -> int64 {kaesu library.visible();}");
+    kaku files: []SourceFile=[SourceFile {file_id:0,path:"main.mio",ast:source.ast,root:source.root}];
+    kaku resolved=resolve_package("app",files,[dependency]);
+    testing.expect(len(resolved.errors)==0,"local and parameter fields take precedence over a same-name package alias");
+    kaku local=symbol_named(resolved,"library",0);kaku parameter=symbol_named(resolved,"library",1);kaku imported=symbol_named(resolved,"library",10);
+    testing.expect(local>=0 && parameter>=0 && imported>=0 && local!=parameter && local!=imported,"shadowed and package bindings remain distinct");
+    kaku saw_local=iie;kaku saw_parameter=iie;kaku saw_import=iie;kaku at=0;
+    aida(at<len(resolved.bindings)){
+        kaku binding=resolved.bindings[at];
+        moshi(binding.symbol_id==local){saw_local=hai;}moshi(binding.symbol_id==parameter){saw_parameter=hai;}moshi(binding.symbol_id==imported){saw_import=hai;}at=at+1;
+    }
+    testing.expect(saw_local && saw_parameter && saw_import,"both lexical selectors and unshadowed qualified call bind correctly");
 }
 
 waza test_duplicate_and_match_scope() -> unit {

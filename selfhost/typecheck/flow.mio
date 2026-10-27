@@ -12,6 +12,14 @@ waza unwrap_group(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64
     kaesu current;
 }
 
+waza declared_nullable_operand(env: TypeEnvironment, file_id: int64, node_id: int64) -> bool {
+    kaku id = unwrap_group(env, file_id, node_id);
+    moshi (parser.node_kind_code(node_at(env, file_id, id).kind) != 4) { kaesu iie; }
+    kaku symbol = binding_of(env, file_id, id); moshi (symbol < 0) { kaesu iie; }
+    kaku declared = declared_symbol_type(env, symbol);
+    kaesu declared > 0 && type_kind_code(env.result.types[declared].kind) == 16;
+}
+
 waza condition_narrowing(env: TypeEnvironment, file_id: int64, node_id: int64) -> NarrowingCondition {
     kaku invalid = NarrowingCondition { symbol_id: -1, true_non_nil: iie, valid: iie };
     kaku condition_id = unwrap_group(env, file_id, node_id);
@@ -26,7 +34,7 @@ waza condition_narrowing(env: TypeEnvironment, file_id: int64, node_id: int64) -
     moshi (parser.node_kind_code(right.kind) == 4 && parser.node_kind_code(left.kind) == 10) { identifier_id = right_id; }
     moshi (identifier_id < 0) { kaesu invalid; }
     kaku symbol_id = binding_of(env, file_id, identifier_id);
-    kaku declared = symbol_type(env, symbol_id);
+    kaku declared = declared_symbol_type(env, symbol_id);
     moshi (declared == 0 || type_kind_code(env.result.types[declared].kind) != 16) { kaesu invalid; }
     kaesu NarrowingCondition { symbol_id: symbol_id, true_non_nil: condition.operator == 15, valid: hai };
 }
@@ -34,7 +42,7 @@ waza condition_narrowing(env: TypeEnvironment, file_id: int64, node_id: int64) -
 waza check_block_with_fact(env: TypeEnvironment, file_id: int64, block_id: int64, condition: NarrowingCondition, apply: bool) -> unit {
     kaku saved = len(env.facts);
     moshi (condition.valid && apply) {
-        kaku declared = symbol_type(env, condition.symbol_id);
+        kaku declared = declared_symbol_type(env, condition.symbol_id);
         moshi (type_kind_code(env.result.types[declared].kind) == 16) { add_fact(env, condition.symbol_id, env.result.types[declared].element); }
     }
     check_block(env, file_id, block_id);

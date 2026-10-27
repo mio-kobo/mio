@@ -1,7 +1,9 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 
 kata ResolverState {
+    work: progress.Context;
     result: ResolvedPackage;
     current_scope: []int64;
     current_function: []int64;
@@ -140,7 +142,8 @@ waza define_symbol(state: ResolverState, file_id: int64, node_id: int64, name: s
 waza bind_symbol(state: ResolverState, file_id: int64, node_id: int64, symbol_id: int64) -> unit {
     kaku captured = iie;
     kaku symbol = symbol_at(state, symbol_id);
-    moshi (state.current_function[0] >= 0 && symbol.owner_function >= 0 && symbol.owner_function != state.current_function[0]) {
+    // Type parameters retain lexical bindings, but have no runtime cell.
+    moshi (symbol_kind_code(symbol.kind) != 9 && state.current_function[0] >= 0 && symbol.owner_function >= 0 && symbol.owner_function != state.current_function[0]) {
         captured = hai;
         kaku owner = state.current_function[0];
         kaku depth = 1;

@@ -1,0 +1,45 @@
+yobu "kiso/fs";
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata PacketResult { failures: []string; complete: bool; error: string; }
+koukai kata Captured { data: []uint8; error: string; }
+
+// Bound parent memory independently of what the tested program writes.
+koukai waza read_capture(path: string, maximum: int64) -> Captured {
+    kaku opened = fs.open_read(path); kaku file = opened.file;
+    moshi (opened.error != mu) { kaesu Captured { data: [], error: "E_IO cannot read test capture" }; }
+    moshi (file == mu) { kaesu Captured { data: [], error: "E_IO missing test capture handle" }; }
+    kaku data: []uint8 = []; kaku buffer = array.make[uint8](32768, uint8(0));
+    aida (hai) {
+        kaku read = fs.read(file, buffer, 0, len(buffer));
+        moshi (read.error != mu || read.count < 0 || read.count > len(buffer)) { fs.close(file); kaesu Captured { data: [], error: "E_IO cannot read test capture bytes" }; }
+        moshi (read.count > maximum - len(data)) { fs.close(file); kaesu Captured { data: [], error: "E_RESOURCE test capture size limit" }; }
+        kaku at = 0; aida (at < read.count) { array.push(data, buffer[at]); at = at + 1; }
+        moshi (read.eof) { nukeru; }
+        moshi (read.count == 0) { fs.close(file); kaesu Captured { data: [], error: "E_IO stalled test capture" }; }
+    }
+    kaku closed = fs.close(file); moshi (closed.error != mu) { kaesu Captured { data: [], error: "E_IO cannot close test capture" }; }
+    kaesu Captured { data: data, error: "" };
+}
+waza word32(data: []uint8, at: int64) -> int64 {
+    kaesu int64(data[at]) + int64(data[at + 1]) * 256 + int64(data[at + 2]) * 65536 + int64(data[at + 3]) * 16777216;
+}
+koukai waza packets(data: []uint8) -> PacketResult {
+    kaku failures: []string = []; kaku at = 0;
+    aida (at < len(data)) {
+        moshi (len(data) - at < 8) { kaesu PacketResult { failures: failures, complete: iie, error: "E_PROTOCOL truncated assertion header" }; }
+        kaku low = word32(data, at); kaku high = word32(data, at + 4); at = at + 8;
+        moshi (high == 4294967295 && low == 4294967295) {
+            moshi (at != len(data)) { kaesu PacketResult { failures: failures, complete: iie, error: "E_PROTOCOL bytes after test completion" }; }
+            kaesu PacketResult { failures: failures, complete: hai, error: "" };
+        }
+        moshi (high != 0 || low > len(data) - at || len(failures) >= 100000) { kaesu PacketResult { failures: failures, complete: iie, error: "E_PROTOCOL invalid assertion packet size" }; }
+        kaku bytes: []uint8 = []; kaku end = at + low;
+        aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+        kaku message = string.from_utf8(bytes);
+        moshi (message == mu) { kaesu PacketResult { failures: failures, complete: iie, error: "E_PROTOCOL invalid assertion UTF8" }; }
+        array.push(failures, message);
+    }
+    kaesu PacketResult { failures: failures, complete: iie, error: "" };
+}

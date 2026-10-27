@@ -1,0 +1,71 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "selfhost/typecheck";
+yobu "selfhost/resolver";
+
+waza known_enum(state: CompilerState, name: string) -> bool {
+    kaku at=0;aida(at<len(state.enum_names)){moshi(state.enum_names[at]==name){kaesu hai;}at=at+1;}kaesu iie;
+}
+waza open_type(result: typecheck.TypeCheckResult, id: int64) -> bool {
+    moshi(id<0 || id>=len(result.types)){kaesu hai;}kaku info=result.types[id];kaku kind=typecheck.type_kind_code(info.kind);
+    moshi(kind==0 || kind==19){kaesu hai;}
+    moshi(kind==15 || kind==16){kaesu open_type(result,info.element);}
+    kaku at=0;aida(at<len(info.arguments)){moshi(open_type(result,info.arguments[at])){kaesu hai;}at=at+1;}
+    at=0;aida(at<len(info.parameters)){moshi(open_type(result,info.parameters[at])){kaesu hai;}at=at+1;}
+    moshi(kind==18){kaesu open_type(result,info.result);}kaesu iie;
+}
+waza key_part(value: string) -> string {kaesu string.concat(convert.format_int(string.byte_len(value)),string.concat(":",value));}
+
+waza request_instance(state: CompilerState, file_id: int64, node_id: int64, symbol_id: int64) -> int64 {
+    kaku symbol=state.resolved.symbols[symbol_id];kaku signature= -1;kaku at=0;
+    aida(at<len(state.checked.signatures)){moshi(state.checked.signatures[at].symbol_id==symbol_id){signature=at;nukeru;}at=at+1;}
+    moshi(signature<0){add_error(state,CompileErrorKind.InternalError(),file_id,node_id,"generic function signature is absent");kaesu -1;}
+    kaku substitution= -1;at=0;
+    aida(at<len(state.checked.substitutions)){kaku item=state.checked.substitutions[at];moshi(item.node.file_id==file_id && item.node.node_id==node_id){substitution=at;nukeru;}at=at+1;}
+    moshi(substitution<0){add_error(state,CompileErrorKind.InternalError(),file_id,node_id,"checked generic call has no type substitution");kaesu -1;}
+    kaku checked=state.checked.substitutions[substitution];kaku names: []string=[];kaku types: []int64=[];
+    kaku key=string.concat(key_part(symbol.package_path),key_part(symbol.name));at=0;
+    aida(at<len(state.checked.signatures[signature].type_parameters)){
+        kaku name=state.checked.signatures[signature].type_parameters[at].name;kaku found= -1;kaku i=0;
+        aida(i<len(checked.parameters)){moshi(checked.parameters[i]==name){found=i;nukeru;}i=i+1;}
+        moshi(found<0 || found>=len(checked.types)){add_error(state,CompileErrorKind.InternalError(),file_id,node_id,"checked generic argument binding is incomplete");kaesu -1;}
+        kaku concrete=materialized_type(state,checked.types[found]);
+        moshi(open_type(state.checked,concrete)){add_error(state,CompileErrorKind.InvalidLayout(),file_id,node_id,"generic argument remains unresolved during native instantiation");kaesu -1;}
+        array.push(names,name);array.push(types,concrete);key=string.concat(key,key_part(typecheck.type_name(state.checked,concrete)));at=at+1;
+    }
+    at=0;aida(at<len(state.instances)){moshi(state.instances[at].key==key){kaesu state.instances[at].function_id;}at=at+1;}
+    kaku id=len(state.layout.functions);moshi(id>=65536){add_error(state,CompileErrorKind.LimitExceeded(),file_id,node_id,"native function table exceeds uint16 capacity");kaesu -1;}
+    kaku name=string.concat("$instance::",string.concat(convert.format_int(id),string.concat("::",symbol.name)));
+    moshi(string.byte_len(name)>65535){add_error(state,CompileErrorKind.LimitExceeded(),file_id,node_id,"instantiated function name exceeds Mochi capacity");kaesu -1;}
+    kaku returns_value=typecheck.type_kind_code(state.checked.types[node_type(state,file_id,node_id)].kind)!=13;
+    array.push(state.layout.functions,FunctionLayout {id:id,name:name,parameter_count:len(state.checked.signatures[signature].parameters),local_count:len(state.checked.signatures[signature].parameters),returns_value:returns_value,captures:[],instructions:[]});
+    array.push(state.instances,GenericInstance {key:key,package_path:symbol.package_path,name:symbol.name,function_id:id,caller:state.checked,names:names,types:types});
+    kaesu id;
+}
+
+// Checked argument identities, not data-flow witnesses, determine instances.
+// Appending before compiling a body permits recursive instances to reuse IDs.
+waza compile_instances(states: []CompilerState, instances: []GenericInstance, errors: []CompileError) -> unit {
+    kaku at=0;
+    aida(at<len(instances) && len(errors)==0){
+        kaku instance=instances[at];kaku si=0;
+        aida(si<len(states) && states[si].resolved.package_path!=instance.package_path){si=si+1;}
+        moshi(si>=len(states)){
+            array.push(errors,CompileError {kind:CompileErrorKind.InternalError(),node:resolver.NodeRef {file_id:-1,node_id:-1},span:empty_span(),detail:"generic declaration package is absent"});kaesu;
+        }
+        kaku state=states[si];kaku symbol= -1;kaku i=0;
+        aida(i<len(state.resolved.symbols)){
+            kaku candidate=state.resolved.symbols[i];
+            moshi(candidate.package_path==instance.package_path && candidate.name==instance.name && resolver.symbol_kind_code(candidate.kind)==5){symbol=i;nukeru;}i=i+1;
+        }
+        moshi(symbol<0){array.push(errors,CompileError {kind:CompileErrorKind.InternalError(),node:resolver.NodeRef {file_id:-1,node_id:-1},span:empty_span(),detail:"generic declaration is absent"});kaesu;}
+        array.truncate(state.active_names,0);array.truncate(state.active_types,0);i=0;
+        aida(i<len(instance.names)){
+            array.push(state.active_names,instance.names[i]);array.push(state.active_types,typecheck.copy_type_info(state.checked,instance.caller,instance.types[i]));i=i+1;
+        }
+        kaku reference=state.resolved.symbols[symbol].declaration;kaku name=state.layout.functions[instance.function_id].name;
+        compile_function_body(state,reference,instance.function_id,name,iie);
+        array.truncate(state.active_names,0);array.truncate(state.active_types,0);at=at+1;
+    }
+}

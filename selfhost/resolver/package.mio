@@ -1,3 +1,4 @@
+yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "selfhost/parser";
@@ -125,10 +126,11 @@ waza sorted_files(files: []SourceFile) -> []SourceFile {
     kaesu result;
 }
 
-koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []ResolvedPackage) -> ResolvedPackage {
+koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []ResolvedPackage) -> ResolvedPackage {kaesu resolve_package_with_progress(path,files,dependencies,progress.context());}
+koukai waza resolve_package_with_progress(path: string, files: []SourceFile, dependencies: []ResolvedPackage, work: progress.Context) -> ResolvedPackage {
     kaku ordered = sorted_files(files);
     kaku result = empty_resolved_package(path, ordered);
-    kaku state = ResolverState { result: result, current_scope: [-1], current_function: [-1], function_depth: [0], loop_depth: [0] };
+    kaku state = ResolverState { work:work, result: result, current_scope: [-1], current_function: [-1], function_depth: [0], loop_depth: [0] };
     state.current_scope[0] = add_scope(state, ScopeKind.Builtin(), -1, -1);
     install_builtins(state);
     kaku builtin_scope = state.current_scope[0];
@@ -136,6 +138,18 @@ koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []R
     kaku package_scope = state.current_scope[0];
     kaku index = 0;
     aida (index < len(dependencies)) { copy_dependency(result, dependencies[index]); index = index + 1; }
+    // Imports are package declarations. Register every file's aliases before
+    // resolving any body, including files that sort before the import itself.
+    index = 0;
+    aida (index < len(ordered)) {
+        kaku root = ordered[index].ast.nodes[ordered[index].root]; kaku child = 0;
+        aida (child < len(root.children)) {
+            kaku node_id = root.children[child];
+            moshi (parser.node_kind_code(ordered[index].ast.nodes[node_id].kind) == 1) { resolve_statement(state, index, node_id); }
+            child = child + 1;
+        }
+        index = index + 1;
+    }
     index = 0;
     aida (index < len(ordered)) {
         kaku root = ordered[index].ast.nodes[ordered[index].root];

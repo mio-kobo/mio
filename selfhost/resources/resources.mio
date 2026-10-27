@@ -1,0 +1,13 @@
+yobu "kiso/array"; yobu "kiso/path"; yobu "kiso/string";
+koukai kata File { path: string; version: string; length: int64; sha256: string; source: string; }
+koukai waza files() -> []File { kaesu data_files(); }
+koukai waza names(package_path: string) -> []string {
+    kaku result: []string = []; kaku entries = data_files(); kaku at = 0;
+    aida (at < len(entries)) { moshi (path.dir(entries[at].path) == package_path) { array.push(result, path.base(entries[at].path)); } at = at + 1; }
+    kaesu result;
+}
+koukai waza source(package_path: string, name: string) -> string? {
+    kaku key = path.join(package_path, name); kaku entries = data_files(); kaku at = 0;
+    aida (at < len(entries)) { moshi (entries[at].path == key) { kaesu entries[at].source; } at = at + 1; }
+    kaesu mu;
+}

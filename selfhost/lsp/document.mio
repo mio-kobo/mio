@@ -1,0 +1,41 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata Document { uri: string; language: string; version: int64; text: string; }
+koukai kata Store { documents: []Document; }
+koukai kata ContentChange { ranged: bool; start: Position; end: Position; text: string; }
+koukai kata ChangeResult { document: Document?; stale: bool; warnings: []string; }
+koukai waza store() -> Store { kaesu Store {documents:[]}; }
+waza document_index(store: Store, uri: string) -> int64 {
+    kaku at=0;aida(at<len(store.documents)){moshi(store.documents[at].uri==uri){kaesu at;}at=at+1;}kaesu -1;
+}
+koukai waza snapshot(store: Store, uri: string) -> Document? { kaku at=document_index(store,uri);moshi(at<0){kaesu mu;}kaesu store.documents[at]; }
+koukai waza open_document(store: Store, document: Document) -> unit {
+    kaku at=document_index(store,document.uri);moshi(at<0){array.push(store.documents,document);}sore{store.documents[at]=document;}
+}
+koukai waza close_document(store: Store, uri: string) -> Document? {
+    kaku at=document_index(store,uri);moshi(at<0){kaesu mu;}kaku document=store.documents[at];
+    aida(at+1<len(store.documents)){store.documents[at]=store.documents[at+1];at=at+1;}array.truncate(store.documents,len(store.documents)-1);kaesu document;
+}
+koukai waza replace_document(store: Store, uri: string, text: string) -> unit {
+    kaku at=document_index(store,uri);moshi(at<0){kaesu;}kaku old=store.documents[at];store.documents[at]=Document {uri:old.uri,language:old.language,version:old.version,text:text};
+}
+koukai waza change_document(store: Store, uri: string, version: int64, changes: []ContentChange) -> ChangeResult {
+    kaku at=document_index(store,uri);moshi(at<0){kaesu ChangeResult {document:mu,stale:iie,warnings:["didChange for unopened document"]};}
+    kaku old=store.documents[at];moshi(version<=old.version){kaesu ChangeResult {document:mu,stale:hai,warnings:["ignored out-of-order didChange"]};}
+    kaku text=old.text;kaku warnings: []string=[];kaku ci=0;
+    aida(ci<len(changes)){
+        kaku change=changes[ci];
+        moshi(!change.ranged){text=change.text;}
+        sore {
+            kaku buffer=text_buffer(text);kaku start=offset_at(buffer,change.start);kaku end=offset_at(buffer,change.end);
+            moshi(end<start){array.push(warnings,"inverted change range; swapped start and end");kaku saved=start;start=end;end=saved;}
+            kaku bytes: []uint8=[];kaku i=0;aida(i<start){array.push(bytes,buffer.data[i]);i=i+1;}
+                array.append_all(bytes,string.to_bytes(change.text));i=end;aida(i<len(buffer.data)){array.push(bytes,buffer.data[i]);i=i+1;}
+                kaku replaced=string.from_utf8(bytes);moshi(replaced==mu){array.push(warnings,"invalid UTF8 after content change");}sore{text=replaced;}
+        }
+        ci=ci+1;
+    }
+    kaku document=Document {uri:old.uri,language:old.language,version:version,text:text};store.documents[at]=document;
+    kaesu ChangeResult {document:document,stale:iie,warnings:warnings};
+}

@@ -1,0 +1,57 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "selfhost/lsp";
+yobu "selfhost/lexer";
+
+waza declaration_documentation(analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol) -> string {
+    moshi(symbol.kind==13 || symbol.kind==8){kaku owner=lsp.semantic_symbol(analysis.index,symbol.owner);moshi(owner!=mu){moshi(owner.span.start.line>=symbol.span.start.line){kaesu "";}}}
+    kaku buffer=source_buffer(analysis,symbol.path);moshi(buffer==mu){kaesu "";}
+    kaku end=symbol.span.start.offset;moshi(end>len(buffer.data)){kaesu "";}
+    // Start at the declaration line, excluding modifiers on that line. Only
+    // contiguous preceding // lines are documentation, matching the protocol.
+    aida(end>0 && buffer.data[end-1]!=uint8(10)){end=end-1;}
+    kaku lines: []string=[];
+    aida(end>0){
+        end=end-1;kaku first=end;aida(first>0 && buffer.data[first-1]!=uint8(10)){first=first-1;}
+        kaku line=byte_text(buffer.data,first,end);moshi(!string.has_prefix(line,"//")){nukeru;}
+        kaku raw=string.to_bytes(line);array.push(lines,byte_text(raw,2,len(raw)));end=first;
+    }
+    kaku output=string.new_builder();kaku at=len(lines)-1;
+    aida(at>=0){moshi(at<len(lines)-1){string.write_string(output,"\n");}string.write_string(output,lines[at]);at=at-1;}
+    kaesu string.builder_string(output);
+}
+waza fenced_documentation(text: string) -> string {
+    kaku bytes=string.to_bytes(text);kaku output=string.new_builder();kaku at=0;kaku first=0;
+    aida(at+2<len(bytes)){
+        moshi(bytes[at]==uint8(96) && bytes[at+1]==uint8(96) && bytes[at+2]==uint8(96)){
+            kaku part: []uint8=[];kaku i=first;aida(i<at){array.push(part,bytes[i]);i=i+1;}kaku value=string.from_utf8(part);moshi(value!=mu){string.write_string(output,value);}string.write_string(output,"` ` `");at=at+3;first=at;
+        }sore{at=at+1;}
+    }
+    kaku part: []uint8=[];at=first;aida(at<len(bytes)){array.push(part,bytes[at]);at=at+1;}kaku value=string.from_utf8(part);moshi(value!=mu){string.write_string(output,value);}
+    kaesu string.concat("```text\n",string.concat(string.builder_string(output),"\n```"));
+}
+waza hover_result(analysis: DocumentAnalysis, offset: int64, symbol: lsp.SemanticSymbol?, markdown: bool) -> string {
+    kaku buffer=source_buffer(analysis,analysis.path);moshi(buffer==mu){kaesu "null";}
+
+    kaku detail="";kaku documentation="";kaku start=offset;kaku end=offset;
+    moshi(symbol!=mu){
+        detail=hover_header(symbol);documentation=declaration_documentation(analysis,symbol);
+        moshi(symbol.kind==13){kaku actual=lsp.expression_type(analysis.index,analysis.path,offset);moshi(actual!=""){detail=string.concat(symbol.name,string.concat(": ",actual));}}
+        moshi(symbol.kind==8){detail=symbol.detail;}
+        kaku occurrence=lsp.occurrence_at(analysis.index,analysis.path,offset);moshi(occurrence!=mu){start=occurrence.start;end=occurrence.end;}
+    }sore{
+        kaku builtin=lsp.builtin_at(analysis.index,analysis.path,offset);
+        moshi(builtin!=""){
+            detail=builtin;
+            moshi(builtin=="len"){detail="waza len(value) -> int64";}
+            moshi(builtin=="chant"){detail="waza chant(value) -> unit";}
+        }sore{detail=lsp.expression_type(analysis.index,analysis.path,offset);}
+        kaku expression=iie;kaku si=0;aida(si<len(analysis.index.sources)){moshi(analysis.index.sources[si].path==analysis.path){kaku tokens=analysis.index.sources[si].tokens;kaku ti=0;aida(ti<len(tokens)){kaku token=tokens[ti];moshi(offset>=token.start.offset && offset<token.end.offset){start=token.start.offset;end=token.end.offset;kaku kind=lexer.token_kind_code(token.kind);expression=(kind>=3 && kind<=6) || (kind>=8 && kind<=21) || kind==32 || (kind>=36 && kind<=38);nukeru;}ti=ti+1;}}si=si+1;}
+        moshi(builtin=="" && !expression){kaesu "null";}
+    }
+    moshi(detail==""){kaesu "null";}
+    kaku kind="plaintext";moshi(markdown){kind="markdown";detail=string.concat("```mio\n",string.concat(detail,"\n```"));}
+    moshi(documentation!=""){moshi(markdown){documentation=fenced_documentation(documentation);}detail=string.concat(detail,string.concat("\n\n",documentation));}
+    kaesu string.concat("{\"contents\":{\"kind\":",string.concat(json.quote(kind),string.concat(",\"value\":",string.concat(json.quote(detail),string.concat("},\"range\":",string.concat(range_json(buffer,start,end),"}"))))));
+}

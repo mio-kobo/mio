@@ -1,0 +1,49 @@
+yobu "kiso/array";
+yobu "selfhost/lexer";
+
+// Source lexical state is needed for gaps not represented by lexer tokens,
+// especially comments and half-written strings in the editor.
+waza cursor_blocked(bytes: []uint8, offset: int64) -> bool {
+    kaku at=0;kaku state=0;kaku depth=0;
+    aida(at<offset && at<len(bytes)){
+        kaku byte=int64(bytes[at]);kaku next= -1;moshi(at+1<len(bytes)){next=int64(bytes[at+1]);}
+        moshi(state==3){moshi(byte==10 || byte==13){state=0;}at=at+1;tsuzuku;}
+        moshi(state==4){
+            moshi(byte==47 && next==42){depth=depth+1;at=at+2;tsuzuku;}
+            moshi(byte==42 && next==47){depth=depth-1;moshi(depth==0){state=0;}at=at+2;tsuzuku;}
+            at=at+1;tsuzuku;
+        }
+        moshi(state==1 || state==2){
+            moshi(byte==92){at=at+2;tsuzuku;}
+            moshi((state==1 && byte==34) || (state==2 && byte==39) || byte==10 || byte==13){state=0;}
+            at=at+1;tsuzuku;
+        }
+        moshi(byte==47 && next==47){state=3;at=at+2;tsuzuku;}
+        moshi(byte==47 && next==42){state=4;depth=1;at=at+2;tsuzuku;}
+        moshi(byte==34){state=1;}moshi(byte==39){state=2;}at=at+1;
+    }
+    kaesu state!=0;
+}
+kata CallCursor { callee: int64; argument: int64; }
+waza call_cursor(tokens: []lexer.Token, offset: int64) -> CallCursor? {
+    kaku opens: []int64=[];kaku arguments: []int64=[];kaku brackets: []int64=[];kaku braces: []int64=[];
+    kaku square=0;kaku brace=0;kaku at=0;
+    aida(at<len(tokens) && tokens[at].start.offset<offset){
+        kaku code=lexer.token_kind_code(tokens[at].kind);
+        moshi(code==24){array.push(opens,at);array.push(arguments,0);array.push(brackets,square);array.push(braces,brace);}
+        moshi(code==25 && len(opens)>0){array.truncate(opens,len(opens)-1);array.truncate(arguments,len(arguments)-1);array.truncate(brackets,len(brackets)-1);array.truncate(braces,len(braces)-1);}
+        moshi(code==28){square=square+1;}moshi(code==29){square=square-1;}
+        moshi(code==26){brace=brace+1;}moshi(code==27){brace=brace-1;}
+        moshi(code==22 && len(opens)>0){kaku last=len(opens)-1;moshi(square==brackets[last] && brace==braces[last]){arguments[last]=arguments[last]+1;}}
+        at=at+1;
+    }
+    moshi(len(opens)==0){kaesu mu;}kaku opening=opens[len(opens)-1];kaku callee=opening-1;
+    // Generic type applications end in a bracket before the call's parenthesis.
+    moshi(callee>=0 && lexer.token_kind_code(tokens[callee].kind)==29){
+        kaku depth=1;callee=callee-1;
+        aida(callee>=0 && depth>0){kaku code=lexer.token_kind_code(tokens[callee].kind);moshi(code==29){depth=depth+1;}moshi(code==28){depth=depth-1;}callee=callee-1;}
+    }
+    moshi(callee<0 || lexer.token_kind_code(tokens[callee].kind)!=2){kaesu mu;}
+    moshi(callee>0){moshi(lexer.token_kind_code(tokens[callee-1].kind)==32){kaesu mu;}}
+    kaesu CallCursor {callee:callee,argument:arguments[len(arguments)-1]};
+}

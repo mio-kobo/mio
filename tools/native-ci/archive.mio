@@ -1,0 +1,54 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/string";
+yobu "kiso/crypto/sha256";
+
+kata Payload { name: string; data: []uint8; mode: int64; }
+kata ArchiveResult { files: []Payload; error: string; }
+waza xor_word(ctx: sha256.Context, first: int64, second: int64) -> int64 {
+ kaku left=first;kaku right=second;kaku result=0;kaku power=1;kaku at=0;
+ aida(at<8){kaku a=left-(left/16)*16;kaku b=right-(right/16)*16;result=result+ctx.xor_nibbles[a+b*16]*power;left=left/16;right=right/16;power=power*16;at=at+1;}kaesu result;
+}
+waza crc32(data: []uint8) -> int64 {
+ kaku ctx=sha256.context();kaku table: []int64=[];kaku at=0;
+ aida(at<256){kaku value=at;kaku bit=0;aida(bit<8){kaku low=value-(value/2)*2;value=value/2;moshi(low==1){value=xor_word(ctx,value,3988292384);}bit=bit+1;}array.push(table,value);at=at+1;}
+ kaku crc=4294967295;at=0;aida(at<len(data)){kaku low=crc-(crc/256)*256;kaku byte=int64(data[at]);kaku index=ctx.xor_nibbles[low-(low/16)*16+(byte-(byte/16)*16)*16]+ctx.xor_nibbles[low/16+(byte/16)*16]*16;crc=xor_word(ctx,crc/256,table[index]);at=at+1;}kaesu 4294967295-crc;
+}
+waza append_number(output: []uint8, value: int64, width: int64) -> unit {kaku left=value;kaku at=0;aida(at<width){array.push(output,uint8(left-(left/256)*256));left=left/256;at=at+1;}}
+waza little(data: []uint8, at: int64, width: int64) -> int64 {kaku result=0;kaku power=1;kaku index=0;aida(index<width){result=result+int64(data[at+index])*power;power=power*256;index=index+1;}kaesu result;}
+waza copy_range(output: []uint8, data: []uint8, start: int64, count: int64) -> unit {kaku at=0;aida(at<count){array.push(output,data[start+at]);at=at+1;}}
+waza slice(data: []uint8, first: int64, count: int64) -> []uint8 {kaku result=array.with_capacity[uint8](count);copy_range(result,data,first,count);kaesu result;}
+waza gzip_store(data: []uint8) -> []uint8 {
+ kaku output=array.with_capacity[uint8](len(data)+4096);kaku header: []uint8=[31,139,8,0,0,0,0,0,0,255];array.append_all(output,header);kaku at=0;
+ aida(hai){kaku count=len(data)-at;moshi(count>65535){count=65535;}kaku last=at+count==len(data);kaku flag=uint8(0);moshi(last){flag=uint8(1);}array.push(output,flag);append_number(output,count,2);append_number(output,65535-count,2);copy_range(output,data,at,count);at=at+count;moshi(last){nukeru;}}
+ append_number(output,crc32(data),4);append_number(output,len(data),4);kaesu output;
+}
+waza gzip_open(data: []uint8) -> ArchiveResult {
+ kaku header: []uint8=[31,139,8,0,0,0,0,0,0,255];moshi(len(data)<23 || len(data)>67108864 || !bytes.equal(slice(data,0,10),header)){kaesu ArchiveResult {files:[],error:"unsupported or malformed deterministic gzip header"};}
+ kaku output: []uint8=[];kaku at=10;kaku ended=iie;
+ aida(!ended){moshi(at+5>len(data)-8){kaesu ArchiveResult {files:[],error:"truncated stored block"};}kaku flag=data[at];moshi(flag!=uint8(0) && flag!=uint8(1)){kaesu ArchiveResult {files:[],error:"expected stored DEFLATE block"};}ended=flag==uint8(1);kaku count=little(data,at+1,2);moshi(count+little(data,at+3,2)!=65535 || at+5+count>len(data)-8 || len(output)+count>67108864){kaesu ArchiveResult {files:[],error:"invalid stored block length"};}copy_range(output,data,at+5,count);at=at+5+count;}
+ moshi(at+8!=len(data) || little(data,at,4)!=crc32(output) || little(data,at+4,4)!=len(output)){kaesu ArchiveResult {files:[],error:"gzip checksum or size mismatch"};}
+ kaesu ArchiveResult {files:[Payload {name:"tar",data:output,mode:0}],error:""};
+}
+waza write_octal(output: []uint8, first: int64, width: int64, value: int64) -> unit {kaku at=0;aida(at<width-1){output[first+at]=uint8(48);at=at+1;}kaku left=value;at=width-2;aida(at>=0){output[first+at]=uint8(48+left-(left/8)*8);left=left/8;at=at-1;}output[first+width-1]=uint8(0);}
+waza read_octal(data: []uint8, first: int64, count: int64) -> int64 {kaku value=0;kaku at=0;kaku ended=iie;aida(at<count){kaku b=int64(data[first+at]);moshi(b==0 || b==32){ended=hai;}sore{moshi(ended || b<48 || b>55 || value>8388608){kaesu -1;}value=value*8+b-48;}at=at+1;}kaesu value;}
+waza tar_store(files: []Payload) -> []uint8 {
+ kaku output: []uint8=[];kaku at=0;
+ aida(at<len(files)){kaku file=files[at];kaku header=array.make[uint8](512,uint8(0));kaku name=string.to_bytes(file.name);kaku ni=0;aida(ni<len(name) && ni<100){header[ni]=name[ni];ni=ni+1;}
+  write_octal(header,100,8,file.mode);write_octal(header,108,8,0);write_octal(header,116,8,0);write_octal(header,124,12,len(file.data));write_octal(header,136,12,0);header[156]=uint8(48);kaku magic: []uint8=[117,115,116,97,114,0,48,48];ni=0;aida(ni<8){header[257+ni]=magic[ni];ni=ni+1;}ni=148;aida(ni<156){header[ni]=uint8(32);ni=ni+1;}kaku sum=0;ni=0;aida(ni<512){sum=sum+int64(header[ni]);ni=ni+1;}write_octal(header,148,7,sum);header[155]=uint8(32);array.append_all(output,header);array.append_all(output,file.data);aida(len(output)-(len(output)/512)*512!=0){array.push(output,uint8(0));}at=at+1;
+ }at=0;aida(at<1024){array.push(output,uint8(0));at=at+1;}kaesu output;
+}
+waza tar_open(data: []uint8) -> ArchiveResult {
+ kaku files: []Payload=[];kaku at=0;moshi(len(data)<1024 || len(data)-(len(data)/512)*512!=0){kaesu ArchiveResult {files:[],error:"invalid tar size"};}
+ aida(at+512<=len(data)){kaku zero=hai;kaku i=0;aida(i<512){moshi(data[at+i]!=uint8(0)){zero=iie;}i=i+1;}
+  moshi(zero){moshi(at+1024!=len(data)){kaesu ArchiveResult {files:[],error:"invalid tar end blocks"};}i=at;aida(i<len(data)){moshi(data[i]!=uint8(0)){kaesu ArchiveResult {files:[],error:"nonzero tar trailer"};}i=i+1;}kaesu ArchiveResult {files:files,error:""};}
+  kaku sum=0;i=0;aida(i<512){moshi(i>=148 && i<156){sum=sum+32;}sore{sum=sum+int64(data[at+i]);}i=i+1;}
+  kaku magic: []uint8=[117,115,116,97,114,0,48,48];moshi(sum!=read_octal(data,at+148,7) || !bytes.equal(slice(data,at+257,8),magic) || data[at+156]!=uint8(48)){kaesu ArchiveResult {files:[],error:"invalid ustar header/checksum/type"};}
+  i=157;aida(i<257){moshi(data[at+i]!=uint8(0)){kaesu ArchiveResult {files:[],error:"unexpected tar link target"};}i=i+1;}i=265;aida(i<512){moshi(data[at+i]!=uint8(0)){kaesu ArchiveResult {files:[],error:"unexpected tar extended header"};}i=i+1;}
+  kaku name_bytes: []uint8=[];i=0;aida(i<100 && data[at+i]!=uint8(0)){array.push(name_bytes,data[at+i]);i=i+1;}kaku name=string.from_utf8(name_bytes);moshi(name==mu){kaesu ArchiveResult {files:[],error:"invalid tar name encoding"};}
+  moshi(name!="mio" && name!="LICENSE" && name!="README.txt"){kaesu ArchiveResult {files:[],error:"unexpected archive path"};}i=0;aida(i<len(files)){moshi(files[i].name==name){kaesu ArchiveResult {files:[],error:"duplicate archive path"};}i=i+1;}
+  kaku size=read_octal(data,at+124,12);kaku mode=read_octal(data,at+100,8);kaku expected=420;moshi(name=="mio"){expected=493;}moshi(size<0 || size>67108864 || at+512+size>len(data) || mode!=expected || read_octal(data,at+108,8)!=0 || read_octal(data,at+116,8)!=0 || read_octal(data,at+136,12)!=0){kaesu ArchiveResult {files:[],error:"invalid archive size/mode/ownership/time"};}
+  array.push(files,Payload {name:name,data:slice(data,at+512,size),mode:mode});kaku next=at+512+((size+511)/512)*512;i=at+512+size;aida(i<next){moshi(data[i]!=uint8(0)){kaesu ArchiveResult {files:[],error:"nonzero tar padding"};}i=i+1;}at=next;
+ }kaesu ArchiveResult {files:[],error:"missing tar terminator"};
+}
+waza archive_open(data: []uint8) -> ArchiveResult {kaku unpacked=gzip_open(data);moshi(unpacked.error!=""){kaesu unpacked;}kaesu tar_open(unpacked.files[0].data);}

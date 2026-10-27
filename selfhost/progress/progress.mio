@@ -1,0 +1,18 @@
+// An explicit work context belongs to one compiler invocation or LSP session.
+// Disabled contexts perform no I/O and hold no service callback captures.
+koukai kata Callback {run: () -> bool;}
+koukai kata Context {callbacks: []Callback; control: []int64;}
+koukai waza context() -> Context {kaesu Context {callbacks:[Callback {run:waza () -> bool {kaesu hai;}}],control:[0,0,0]};}
+koukai waza install(work: Context, next: () -> bool) -> unit {work.callbacks[0]=Callback {run:next};work.control[0]=1;work.control[1]=0;work.control[2]=0;}
+koukai waza begin(work: Context) -> unit {work.control[1]=0;work.control[2]=0;}
+koukai waza clear(work: Context) -> unit {work.control[0]=0;work.control[1]=0;work.control[2]=0;work.callbacks[0]=Callback {run:waza () -> bool {kaesu hai;}};}
+koukai waza cancelled(work: Context) -> bool {kaesu work.control[1]!=0;}
+koukai waza pump(work: Context) -> bool {
+    moshi(work.control[1]!=0){kaesu iie;}moshi(work.control[0]==0){kaesu hai;}
+    kaku keep_going=work.callbacks[0].run();
+    moshi(!keep_going){work.control[1]=1;kaesu iie;}kaesu hai;
+}
+koukai waza checkpoint(work: Context) -> bool {
+    moshi(work.control[1]!=0){kaesu iie;}moshi(work.control[0]==0){kaesu hai;}
+    work.control[2]=work.control[2]+1;moshi(work.control[2]<256){kaesu hai;}work.control[2]=0;kaesu pump(work);
+}

@@ -1,0 +1,165 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/utf8";
+yobu "kiso/convert";
+
+// Numbers retain their exact JSON token so request IDs never lose precision.
+// kind: null=0, bool=1, number=2, string=3, array=4, object=5.
+koukai kata Value { kind: int64; text: string; children: []int64; keys: []string; }
+koukai kata Document { values: []Value; root: int64; error: string; offset: int64; }
+kata State { data: []uint8; at: []int64; values: []Value; error: []string; }
+waza byte(state: State) -> int64 { moshi (state.at[0] >= len(state.data)) { kaesu -1; } kaesu int64(state.data[state.at[0]]); }
+waza fail(state: State, message: string) -> unit { moshi (state.error[0] == "") { state.error[0] = message; } }
+waza whitespace(state: State) -> unit {
+    kaku value = byte(state);
+    aida (value == 32 || value == 9 || value == 10 || value == 13) { state.at[0] = state.at[0] + 1; value = byte(state); }
+}
+waza text_range(data: []uint8, first: int64, end: int64) -> string {
+    kaku bytes: []uint8 = []; kaku at = first;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku text = string.from_utf8(bytes); moshi (text == mu) { kaesu ""; } kaesu text;
+}
+waza hex(value: int64) -> int64 {
+    moshi (value >= 48 && value <= 57) { kaesu value - 48; }
+    moshi (value >= 65 && value <= 70) { kaesu value - 55; }
+    moshi (value >= 97 && value <= 102) { kaesu value - 87; } kaesu -1;
+}
+waza hex4(data: []uint8, at: int64) -> int64 {
+    moshi (at < 0 || at + 4 > len(data)) { kaesu -1; }
+    kaku result = 0; kaku index = 0;
+    aida (index < 4) { kaku digit = hex(int64(data[at + index])); moshi (digit < 0) { kaesu -1; } result = result * 16 + digit; index = index + 1; }
+    kaesu result;
+}
+waza parse_string(state: State) -> string {
+    moshi (byte(state) != 34) { fail(state, "expected JSON string"); kaesu ""; }
+    state.at[0] = state.at[0] + 1; kaku output: []uint8 = [];
+    aida (state.at[0] < len(state.data) && state.error[0] == "") {
+        kaku value = byte(state); state.at[0] = state.at[0] + 1;
+        moshi (value == 34) { kaku text = string.from_utf8(output); moshi (text == mu) { fail(state, "invalid string UTF8"); kaesu ""; } kaesu text; }
+        moshi (value < 32) { fail(state, "unescaped string control byte"); kaesu ""; }
+        moshi (value != 92) { array.push(output, uint8(value)); tsuzuku; }
+        kaku escaped = byte(state); state.at[0] = state.at[0] + 1;
+        moshi (escaped == 34 || escaped == 92 || escaped == 47) { array.push(output, uint8(escaped)); tsuzuku; }
+        kaku control = -1;
+        moshi (escaped == 98) { control = 8; } moshi (escaped == 102) { control = 12; } moshi (escaped == 110) { control = 10; }
+        moshi (escaped == 114) { control = 13; } moshi (escaped == 116) { control = 9; }
+        moshi (control >= 0) { array.push(output, uint8(control)); tsuzuku; }
+        moshi (escaped != 117) { fail(state, "invalid JSON escape"); kaesu ""; }
+        kaku scalar = hex4(state.data, state.at[0]);
+        moshi (scalar < 0) { fail(state, "invalid Unicode escape"); kaesu ""; }
+        state.at[0] = state.at[0] + 4;
+        moshi (scalar >= 55296 && scalar <= 56319) {
+            kaku low = -1;
+            moshi (state.at[0] + 6 <= len(state.data) && state.data[state.at[0]] == uint8(92) && state.data[state.at[0] + 1] == uint8(117)) { low = hex4(state.data, state.at[0] + 2); }
+            moshi (low >= 56320 && low <= 57343) { scalar = 65536 + (scalar - 55296) * 1024 + low - 56320; state.at[0] = state.at[0] + 6; }
+            sore { scalar = 65533; }
+        }
+        sore { moshi (scalar >= 56320 && scalar <= 57343) { scalar = 65533; } }
+        utf8.append_rune(output, rune(scalar));
+    }
+    fail(state, "unterminated JSON string"); kaesu "";
+}
+waza push(state: State, kind: int64, text: string, children: []int64, keys: []string) -> int64 {
+    kaku id = len(state.values); array.push(state.values, Value { kind: kind, text: text, children: children, keys: keys }); kaesu id;
+}
+waza keyword(state: State, expected: string, kind: int64) -> int64 {
+    kaku bytes = string.to_bytes(expected); kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (byte(state) != int64(bytes[at])) { fail(state, "invalid JSON keyword"); kaesu -1; }
+        state.at[0] = state.at[0] + 1; at = at + 1;
+    }
+    kaesu push(state, kind, expected, [], []);
+}
+waza digit(value: int64) -> bool { kaesu value >= 48 && value <= 57; }
+waza number(state: State) -> int64 {
+    kaku first = state.at[0]; moshi (byte(state) == 45) { state.at[0] = state.at[0] + 1; }
+    moshi (byte(state) == 48) { state.at[0] = state.at[0] + 1; }
+    sore { moshi (byte(state) < 49 || byte(state) > 57) { fail(state, "invalid JSON number"); kaesu -1; }
+        aida (digit(byte(state))) { state.at[0] = state.at[0] + 1; }
+    }
+    moshi (byte(state) == 46) {
+        state.at[0] = state.at[0] + 1; moshi (!digit(byte(state))) { fail(state, "missing fraction digits"); kaesu -1; }
+        aida (digit(byte(state))) { state.at[0] = state.at[0] + 1; }
+    }
+    moshi (byte(state) == 101 || byte(state) == 69) {
+        state.at[0] = state.at[0] + 1; moshi (byte(state) == 43 || byte(state) == 45) { state.at[0] = state.at[0] + 1; }
+        moshi (!digit(byte(state))) { fail(state, "missing exponent digits"); kaesu -1; }
+        aida (digit(byte(state))) { state.at[0] = state.at[0] + 1; }
+    }
+    kaesu push(state, 2, text_range(state.data, first, state.at[0]), [], []);
+}
+waza value(state: State, depth: int64) -> int64 {
+    whitespace(state);
+    moshi (depth > 256 || len(state.values) >= 1000000) { fail(state, "JSON structure limit exceeded"); kaesu -1; }
+    kaku current = byte(state);
+    moshi (current == 34) { kaku text = parse_string(state); moshi (state.error[0] != "") { kaesu -1; } kaesu push(state, 3, text, [], []); }
+    moshi (current == 110) { kaesu keyword(state, "null", 0); }
+    moshi (current == 116) { kaesu keyword(state, "true", 1); }
+    moshi (current == 102) { kaesu keyword(state, "false", 1); }
+    moshi (current == 45 || digit(current)) { kaesu number(state); }
+    moshi (current != 91 && current != 123) { fail(state, "expected JSON value"); kaesu -1; }
+    kaku object = current == 123; kaku end = 93; kaku kind = 4; moshi (object) { end = 125; kind = 5; }
+    state.at[0] = state.at[0] + 1; whitespace(state); kaku children: []int64 = []; kaku keys: []string = [];
+    moshi (byte(state) == end) { state.at[0] = state.at[0] + 1; kaesu push(state, kind, "", children, keys); }
+    aida (state.error[0] == "") {
+        moshi (object) {
+            kaku key = parse_string(state); moshi (state.error[0] != "") { kaesu -1; }
+            array.push(keys, key); whitespace(state); moshi (byte(state) != 58) { fail(state, "expected object colon"); kaesu -1; }
+            state.at[0] = state.at[0] + 1;
+        }
+        kaku child = value(state, depth + 1); moshi (child < 0) { kaesu -1; } array.push(children, child); whitespace(state);
+        moshi (byte(state) == end) { state.at[0] = state.at[0] + 1; kaesu push(state, kind, "", children, keys); }
+        moshi (byte(state) != 44) { fail(state, "expected comma or closing delimiter"); kaesu -1; }
+        state.at[0] = state.at[0] + 1; whitespace(state);
+    }
+    kaesu -1;
+}
+
+koukai waza parse(data: []uint8) -> Document {
+    kaku state = State { data: data, at: [0], values: [], error: [""] };
+    moshi (len(data) > 67108864 || !utf8.valid(data)) { kaesu Document { values: [], root: -1, error: "invalid JSON size or UTF8", offset: 0 }; }
+    kaku root = value(state, 0); whitespace(state);
+    moshi (state.at[0] != len(data)) { fail(state, "trailing JSON data"); }
+    kaesu Document { values: state.values, root: root, error: state.error[0], offset: state.at[0] };
+}
+koukai waza member(document: Document, object: int64, key: string) -> int64 {
+    moshi (object < 0 || object >= len(document.values) || document.values[object].kind != 5) { kaesu -1; }
+    kaku node = document.values[object]; kaku at = len(node.keys) - 1;
+    aida (at >= 0) { moshi (node.keys[at] == key) { kaesu node.children[at]; } at = at - 1; } kaesu -1;
+}
+koukai waza text(document: Document, node: int64) -> string {
+    moshi (node < 0 || node >= len(document.values)) { kaesu ""; } kaesu document.values[node].text;
+}
+koukai waza integer(document: Document, node: int64) -> int64? {
+    moshi (node < 0 || node >= len(document.values) || document.values[node].kind != 2) { kaesu mu; }
+    kaesu convert.parse_int(document.values[node].text);
+}
+koukai waza quote(text: string) -> string {
+    kaku bytes = string.to_bytes(text); kaku output: []uint8 = [uint8(34)]; kaku digits = string.to_bytes("0123456789abcdef"); kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku byte = int64(bytes[at]); kaku escaped = 0;
+        moshi (byte == 34 || byte == 92) { escaped = byte; }
+        moshi (byte == 8) { escaped = 98; } moshi (byte == 9) { escaped = 116; } moshi (byte == 10) { escaped = 110; } moshi (byte == 12) { escaped = 102; } moshi (byte == 13) { escaped = 114; }
+        moshi (escaped > 0) { array.push(output, uint8(92)); array.push(output, uint8(escaped)); }
+        sore { moshi (byte < 32) {
+            array.push(output, uint8(92)); array.push(output, uint8(117)); array.push(output, uint8(48)); array.push(output, uint8(48)); array.push(output, digits[byte / 16]); array.push(output, digits[byte - (byte / 16) * 16]);
+        } sore { array.push(output, uint8(byte)); } }
+        at = at + 1;
+    }
+    array.push(output, uint8(34)); kaku result = string.from_utf8(output); moshi (result == mu) { kaesu "\"\""; } kaesu result;
+}
+koukai waza render(document: Document, node: int64) -> string {
+    moshi (node < 0 || node >= len(document.values)) { kaesu "null"; }
+    kaku item = document.values[node];
+    moshi (item.kind == 0) { kaesu "null"; }
+    moshi (item.kind == 1 || item.kind == 2) { kaesu item.text; }
+    moshi (item.kind == 3) { kaesu quote(item.text); }
+    kaku output = string.new_builder(); kaku object = item.kind == 5; kaku open = "["; kaku close = "]";
+    moshi (object) { open = "{"; close = "}"; } string.write_string(output, open); kaku at = 0;
+    aida (at < len(item.children)) {
+        moshi (at > 0) { string.write_string(output, ","); }
+        moshi (object) { string.write_string(output, string.concat(quote(item.keys[at]), ":")); }
+        string.write_string(output, render(document, item.children[at])); at = at + 1;
+    }
+    string.write_string(output, close); kaesu string.builder_string(output);
+}

@@ -1,0 +1,47 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza request(state: Session, text: string) -> json.Document {
+    kaku reply=dispatch(state,string.to_bytes(text));testing.expect(len(reply.messages)==1,"one RPC reply");
+    moshi(len(reply.messages)!=1){kaesu json.parse([]);}kaesu json.parse(string.to_bytes(reply.messages[0]));
+}
+waza rpc_code(document: json.Document) -> int64 {
+    kaku error=json.member(document,document.root,"error");kaku code=json.integer(document,json.member(document,error,"code"));moshi(code==mu){kaesu 0;}kaesu code;
+}
+waza test_native_rpc_lifecycle_and_exact_ids() -> unit {
+    kaku state=session("/tmp","");
+    testing.expect(rpc_code(request(state,"{\"id\":1,\"method\":\"shutdown\"}"))== -32002,"shutdown before initialization rejected");
+    kaku initialized=request(state,"{\"id\":9007199254740993,\"method\":\"initialize\",\"params\":{\"rootUri\":\"file:///tmp/space%20root\"}}");
+    testing.expect(initialized.error=="" && json.text(initialized,json.member(initialized,initialized.root,"id"))=="9007199254740993","number ID never passes through floating point");
+    testing.expect(state.roots[0]=="/tmp/space root","workspace URI decoded");
+    testing.expect(rpc_code(request(state,"{\"id\":2,\"method\":\"initialize\"}"))== -32600,"second initialize rejected");
+    testing.expect(rpc_code(request(state,"{\"id\":3,\"method\":\"unknown\"}"))== -32601,"unknown request rejected");
+    kaku stopped=request(state,"{\"id\":\"日本語\",\"method\":\"shutdown\"}");
+    testing.expect(json.text(stopped,json.member(stopped,stopped.root,"id"))=="日本語" && json.render(stopped,json.member(stopped,stopped.root,"result"))=="null","Unicode ID and null shutdown result");
+    testing.expect(rpc_code(request(state,"{\"id\":4,\"method\":\"unknown\"}"))== -32600,"request after shutdown rejected");
+    kaku exited=dispatch(state,string.to_bytes("{\"method\":\"exit\"}"));testing.expect(exited.stop && exited.status==0,"exit after shutdown succeeds");
+}
+waza test_native_rpc_invalid_payloads_and_notifications() -> unit {
+    kaku state=session("/tmp","");
+    testing.expect(rpc_code(request(state,"{"))== -32700,"invalid JSON parse error");
+    testing.expect(rpc_code(request(state,"[]"))== -32600,"batch is not an LSP request");
+    testing.expect(rpc_code(request(state,"{\"id\":true,\"method\":\"initialize\"}"))== -32600,"invalid ID rejected");
+    testing.expect(rpc_code(request(state,"{\"id\":1,\"method\":\"initialize\",\"params\":[]}"))== -32602,"invalid initialize params rejected");
+    testing.expect(!state.flags[0],"failed initialize does not change lifecycle");
+    testing.expect(len(dispatch(state,string.to_bytes("{\"method\":\"unknown\"}")).messages)==0,"unknown notification ignored");
+    testing.expect(len(dispatch(state,string.to_bytes("{\"id\":9,\"result\":null}")).messages)==0,"client response ignored");
+    kaku exited=dispatch(state,string.to_bytes("{\"method\":\"exit\"}"));testing.expect(exited.stop && exited.status==1,"exit without shutdown fails");
+}
+waza test_native_rpc_precancel_is_bounded_and_consumed() -> unit {
+    kaku state=session("/tmp","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
+    dispatch(state,string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":\"request\"}}"));
+    testing.expect(rpc_code(request(state,"{\"id\":\"request\",\"method\":\"unknown\"}"))== -32601 && len(state.cancelled)==0,"unknown method still rejects and consumes queued cancellation");
+    testing.expect(rpc_code(request(state,"{\"id\":\"request\",\"method\":\"unknown\"}"))== -32601,"cancelled ID can be reused");
+    kaku at=0;aida(at<300){add_cancelled(state,string.concat("id-",convert.format_int(at)));at=at+1;}
+    testing.expect(len(state.cancelled)==256,"pre-cancel memory is bounded");
+    request(state,"{\"id\":1,\"method\":\"shutdown\"}");testing.expect(len(state.cancelled)==0,"shutdown clears cancellation state");
+    kaku cancelled_shutdown=session("/tmp","");request(cancelled_shutdown,"{\"id\":0,\"method\":\"initialize\"}");
+    dispatch(cancelled_shutdown,string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":\"close\"}}"));
+    testing.expect(rpc_code(request(cancelled_shutdown,"{\"id\":\"close\",\"method\":\"shutdown\"}"))== -32800 && cancelled_shutdown.flags[1],"shutdown completes lifecycle even when its response is cancelled");
+}

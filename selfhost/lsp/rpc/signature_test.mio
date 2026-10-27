@@ -1,0 +1,37 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza signature_label_from_reply(reply: json.Document) -> string {
+    kaku result=json.member(reply,reply.root,"result");kaku signatures=json.member(reply,result,"signatures");
+    moshi(signatures<0 || len(reply.values[signatures].children)!=1){kaesu "";}
+    kaesu json.text(reply,json.member(reply,reply.values[signatures].children[0],"label"));
+}
+waza signature_active(reply: json.Document) -> int64 {
+    kaku result=json.member(reply,reply.root,"result");kaku active=json.integer(reply,json.member(reply,result,"activeParameter"));moshi(active==mu){kaesu -1;}kaesu active;
+}
+waza test_rpc_signature_real_function_and_nested_argument_delimiters() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:signature";
+    kaku text="waza add(a: int64, b: int64) -> int64 {kaesu a+b;} waza consume(values: []int64, extra: int64) -> int64 {kaesu len(values)+extra;} chant(add(1, add(2,3))); chant(consume([1,2],3));";
+    open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"add(2,")+6,"textDocument/signatureHelp",iie);
+    testing.expect(signature_label_from_reply(reply)=="add(a: int64, b: int64) -> int64" && signature_active(reply)==1,"innermost real function call and second parameter");
+    reply=query(state,uri,text,string.index(text,"[1,2],")+6,"textDocument/signatureHelp",iie);
+    testing.expect(signature_label_from_reply(reply)=="consume(values: []int64, extra: int64) -> int64" && signature_active(reply)==1,"array commas do not advance outer argument index");
+}
+waza test_rpc_signature_unfinished_call_uses_unique_real_declaration() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:unfinished";
+    kaku text="waza add(a: int64, b: int64) -> int64 {kaesu a+b;} waza main() -> int64 {kaesu add(1, ";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.byte_len(text),"textDocument/signatureHelp",iie);
+    testing.expect(signature_label_from_reply(reply)=="add(a: int64, b: int64) -> int64" && signature_active(reply)==1,"unfinished call retains declared signature and active parameter");
+}
+waza test_rpc_signature_function_value_and_noncall_suppression() -> unit {
+    kaku state=session("/","");request(state,"{\"id\":0,\"method\":\"initialize\"}");kaku uri="untitled:function-value";
+    kaku text="kaku increment=waza (value: int64) -> int64 {kaesu value+1;}; chant(increment(1));";open_source(state,uri,text);
+    kaku reply=query(state,uri,text,string.index(text,"increment(1")+10,"textDocument/signatureHelp",iie);
+    testing.expect(signature_label_from_reply(reply)=="increment(int64) -> int64" && signature_active(reply)==0,"function-value signature uses checked function type");
+    text="waza main() -> int64 {moshi (hai) {kaesu 1;}kaesu 0;}";open_source(state,uri,text);
+    reply=query(state,uri,text,string.index(text,"(hai")+1,"textDocument/signatureHelp",iie);kaku result=json.member(reply,reply.root,"result");testing.expect(result>=0 && reply.values[result].kind==0,"condition parentheses are not calls");
+    text="waza add(a: int64, b: int64) -> int64 {kaesu a+b;} // add(1, comment\n";open_source(state,uri,text);
+    reply=query(state,uri,text,string.index(text,"comment"),"textDocument/signatureHelp",iie);result=json.member(reply,reply.root,"result");testing.expect(result>=0 && reply.values[result].kind==0,"comments cannot trigger signature help");
+}

@@ -1,0 +1,46 @@
+yobu "kiso/array";
+yobu "selfhost/lsp";
+yobu "selfhost/parser";
+yobu "selfhost/typecheck";
+
+kata LiteralCompletions {items: []Completion;}
+
+// Only key positions in a checked structure literal offer pending fields.
+// Values retain ordinary lexical completion, including nested expressions.
+waza literal_completions(analysis: DocumentAnalysis, offset: int64) -> LiteralCompletions? {
+    kaku selected: MemberReceiver?=mu;kaku chosen: parser.Node?=mu;kaku nodes: []parser.Node=[];kaku width=9223372036854775807;kaku pi=0;
+    aida(pi<len(analysis.index.analysis.resolved) && pi<len(analysis.index.analysis.checked)){
+        kaku package=analysis.index.analysis.resolved[pi];kaku checked=analysis.index.analysis.checked[pi];kaku at=0;
+        aida(at<len(checked.node_types)){
+            kaku typed=checked.node_types[at];kaku ref=typed.node;
+            moshi(ref.file_id>=0 && ref.file_id<len(package.files) && typed.type_id>0){
+                kaku file=package.files[ref.file_id];
+                moshi(file.path==analysis.path && ref.node_id>=0 && ref.node_id<len(file.ast.nodes)){
+                    kaku node=file.ast.nodes[ref.node_id];kaku size=node.span.end.offset-node.span.start.offset;
+                    moshi(parser.node_kind_code(node.kind)==28 && node.span.start.offset<offset && node.span.end.offset>offset && size<width){
+                        selected=MemberReceiver {checked:checked,type_id:typed.type_id,is_type:iie};chosen=node;nodes=file.ast.nodes;width=size;
+                    }
+                }
+            }at=at+1;
+        }pi=pi+1;
+    }
+    moshi(selected==mu){kaesu mu;}moshi(chosen==mu){kaesu mu;}
+    // A type argument or the type name itself is outside the literal's keys.
+    kaku buffer=source_buffer(analysis,analysis.path);moshi(buffer==mu){kaesu mu;}kaku brace=chosen.span.start.offset;
+    aida(brace<len(buffer.data) && buffer.data[brace]!=uint8(123)){brace=brace+1;}moshi(offset<=brace){kaesu mu;}
+    kaku used: []string=[];kaku at=chosen.integer;
+    aida(at<len(chosen.children)){
+        kaku field=nodes[chosen.children[at]];
+        moshi(len(field.children)>0){
+            kaku value=nodes[field.children[0]];
+            moshi(offset>=value.span.start.offset && offset<=value.span.end.offset){kaesu mu;}
+            moshi(offset<field.span.start.offset || offset>=value.span.start.offset){array.push(used,field.text);}
+        }
+        at=at+1;
+    }
+    kaku fields: []Completion=[];typed_members(fields,selected,iie);kaku result: []Completion=[];at=0;
+    aida(at<len(fields)){
+        kaku found=iie;kaku ui=0;aida(ui<len(used)){moshi(used[ui]==fields[at].label){found=hai;}ui=ui+1;}
+        moshi(!found){array.push(result,fields[at]);}at=at+1;
+    }kaesu LiteralCompletions {items:result};
+}

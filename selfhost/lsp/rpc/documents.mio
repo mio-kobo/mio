@@ -1,0 +1,69 @@
+yobu "kiso/array";
+yobu "kiso/encoding/json";
+yobu "kiso/os";
+yobu "selfhost/lsp";
+
+waza mark_dirty(state: Session, uri: string) -> unit {
+    kaku now=os.monotonic_ms();state.schedule[1]=9223372036854775807;
+    moshi(state.schedule[0]<=9223372036854775807-now){state.schedule[1]=now+state.schedule[0];}
+    state.schedule[2]=state.schedule[2]+1;
+    kaku at=0;aida(at<len(state.dirty)){moshi(state.dirty[at]==uri){kaesu;}at=at+1;}array.push(state.dirty,uri);
+}
+waza remove_dirty(state: Session, uri: string) -> unit {
+    kaku at=0;aida(at<len(state.dirty)){
+        moshi(state.dirty[at]==uri){aida(at+1<len(state.dirty)){state.dirty[at]=state.dirty[at+1];at=at+1;}array.truncate(state.dirty,len(state.dirty)-1);kaesu;}
+        at=at+1;
+    }
+}
+waza mark_affected(state: Session, uri: string) -> unit {
+    mark_dirty(state,uri);kaku at=0;
+    aida(at<len(state.documents.documents)){kaku other=state.documents.documents[at].uri;moshi(other!=uri){mark_dirty(state,other);}at=at+1;}
+}
+waza integer_field(document: json.Document, object: int64, name: string) -> int64? {
+    kaku node=json.member(document,object,name);moshi(node<0 || document.values[node].kind==0){kaesu 0;}kaesu json.integer(document,node);
+}
+waza position_field(document: json.Document, node: int64) -> lsp.Position? {
+    moshi(node<0 || document.values[node].kind!=5){kaesu mu;}
+    kaku line=integer_field(document,node,"line");kaku character=integer_field(document,node,"character");
+    moshi(line==mu){kaesu mu;}moshi(character==mu){kaesu mu;}kaesu lsp.Position {line:line,character:character};
+}
+waza document_notification(state: Session, document: json.Document, params: int64, method: string, messages: []string) -> unit {
+    moshi(method!="textDocument/didOpen" && method!="textDocument/didChange" && method!="textDocument/didSave" && method!="textDocument/didClose"){kaesu;}
+    kaku item=json.member(document,params,"textDocument");moshi(item<0 || document.values[item].kind!=5){kaesu;}
+    kaku uri_node=json.member(document,item,"uri");moshi(uri_node<0 || document.values[uri_node].kind!=3){kaesu;}
+    kaku uri=json.text(document,uri_node);moshi(uri==""){kaesu;}
+    moshi(method=="textDocument/didClose"){
+        kaku closed=lsp.close_document(state.documents,uri);remove_dirty(state,uri);
+        moshi(closed!=mu){state.schedule[2]=state.schedule[2]+1;kaku at=0;aida(at<len(state.documents.documents)){mark_dirty(state,state.documents.documents[at].uri);at=at+1;}array.push(messages,clear_diagnostics(uri));}kaesu;
+    }
+    moshi(method=="textDocument/didSave"){
+        moshi(lsp.snapshot(state.documents,uri)==mu){kaesu;}
+        kaku text=json.member(document,params,"text");
+        moshi(text>=0 && document.values[text].kind!=0){moshi(document.values[text].kind!=3){kaesu;}lsp.replace_document(state.documents,uri,json.text(document,text));}
+        mark_affected(state,uri);state.schedule[1]=0;kaesu;
+    }
+    kaku version=integer_field(document,item,"version");moshi(version==mu){kaesu;}
+    moshi(method=="textDocument/didOpen"){
+        kaku text=json.member(document,item,"text");moshi(text>=0 && document.values[text].kind!=3){kaesu;}
+        kaku language=json.text(document,json.member(document,item,"languageId"));
+        lsp.open_document(state.documents,lsp.Document {uri:uri,language:language,version:version,text:json.text(document,text)});
+        mark_affected(state,uri);kaesu;
+    }
+    kaku changes_node=json.member(document,params,"contentChanges");
+    moshi(changes_node<0 || document.values[changes_node].kind!=4 || len(document.values[changes_node].children)==0){kaesu;}
+    kaku changes: []lsp.ContentChange=[];kaku at=0;
+    aida(at<len(document.values[changes_node].children)){
+        kaku change=document.values[changes_node].children[at];kaku text=json.member(document,change,"text");
+        moshi(text<0 || document.values[text].kind!=3){kaesu;}
+        kaku range=json.member(document,change,"range");kaku ranged=range>=0 && document.values[range].kind!=0;
+        kaku start=lsp.Position {line:0,character:0};kaku end=start;
+        moshi(ranged){
+            moshi(document.values[range].kind!=5){kaesu;}
+            kaku first=position_field(document,json.member(document,range,"start"));kaku last=position_field(document,json.member(document,range,"end"));
+            moshi(first==mu){kaesu;}moshi(last==mu){kaesu;}start=first;end=last;
+        }
+        array.push(changes,lsp.ContentChange {ranged:ranged,start:start,end:end,text:json.text(document,text)});at=at+1;
+    }
+    kaku changed=lsp.change_document(state.documents,uri,version,changes);
+    moshi(changed.document!=mu && !changed.stale){mark_affected(state,uri);}
+}

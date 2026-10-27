@@ -1,0 +1,78 @@
+yobu "selfhost/progress";
+yobu "kiso/array";
+yobu "kiso/crypto/sha256";
+yobu "kiso/fs";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "selfhost/frontend";
+yobu "selfhost/lsp";
+
+kata SourceURI {path: string; uri: string;}
+kata DocumentAnalysis {index: lsp.SemanticIndex; path: string; uri: string; version: int64; preferred: []SourceURI;}
+waza document_path(uri: string) -> string {
+    kaku parsed=lsp.path_from_uri(uri);moshi(parsed.valid){kaesu parsed.path;}
+    // Stable memory-only package identity for non-file documents. No temporary
+    // source file or compiler subprocess is needed to analyze an unsaved buffer.
+    kaku sum=sha256.sum(string.to_bytes(uri));kaku digits=string.to_bytes("0123456789abcdef");kaku hex: []uint8=[];kaku at=0;
+    aida(at<len(sum)){kaku value=int64(sum[at]);array.push(hex,digits[value/16]);array.push(hex,digits[value-(value/16)*16]);at=at+1;}
+    kaku key=string.from_utf8(hex);moshi(key==mu){kaesu "";}
+    kaesu string.concat("/__mio_unsaved__/",string.concat(key,"/main.mio"));
+}
+waza analysis_root(state: Session, file: string) -> string {
+    kaku selected=".";kaku longest= -1;kaku at=0;
+    aida(at<len(state.roots)){
+        kaku root=frontend.source_identity(state.roots[at]);
+        moshi((root=="/" || file==root || string.has_prefix(file,string.concat(root,"/"))) && string.byte_len(root)>longest){selected=root;longest=string.byte_len(root);}
+        at=at+1;
+    }
+    moshi(longest<0 && len(state.roots)>0){selected=state.roots[0];}kaesu selected;
+}
+waza analyze_document(state: Session, uri: string) -> DocumentAnalysis? {
+    kaku document=lsp.snapshot(state.documents,uri);kaku selected=analysis_path(state,uri);moshi(selected==""){kaesu mu;}
+    moshi(document==mu){
+        kaku parsed=lsp.path_from_uri(uri);moshi(!parsed.valid){kaesu mu;}
+        kaku source=fs.read_all(parsed.path);moshi(source.error!=mu){kaesu mu;}
+        kaku text=string.from_utf8(source.data);moshi(text==mu){kaesu mu;}
+        document=lsp.Document {uri:uri,language:"mio",version:0,text:text};
+    }
+    moshi(document==mu){kaesu mu;}
+    kaku cache_key=analysis_cache_key(state,document);
+    kaku cached=cached_analysis(state,cache_key);
+    moshi(cached!=mu){materialize_sources(state,cached);moshi(progress.cancelled(state.work)){kaesu mu;}kaesu cached;}
+    kaku overlays: []frontend.SourceOverlay=[];kaku preferred: []SourceURI=[];kaku at=0;kaku found=iie;
+    aida(at<len(state.documents.documents)){
+        kaku current=state.documents.documents[at];kaku file=analysis_path(state,current.uri);
+        moshi(file!=""){
+            array.push(overlays,frontend.SourceOverlay {path:file,bytes:string.to_bytes(current.text)});
+            array.push(preferred,SourceURI {path:file,uri:current.uri});moshi(current.uri==uri){found=hai;}
+        }at=at+1;
+    }
+    moshi(!found){array.push(overlays,frontend.SourceOverlay {path:selected,bytes:string.to_bytes(document.text)});array.push(preferred,SourceURI {path:selected,uri:uri});}
+    kaku entry=path.dir(selected);moshi(string.has_prefix(selected,"<embedded>/")){entry=embedded_package(selected);}
+    kaku analyzed=frontend.analyze_source_with_progress(analysis_root(state,selected),entry,state.bunko[0],overlays,string.has_suffix(selected,"_test.mio"),state.work);
+    moshi(progress.cancelled(state.work)){kaesu mu;}
+    kaku result=DocumentAnalysis {index:lsp.semantic_index_with_progress(analyzed,state.work),path:selected,uri:uri,version:document.version,preferred:preferred};
+    materialize_sources(state,result);moshi(progress.cancelled(state.work)){kaesu mu;}
+    remember_analysis(state,cache_key,result);
+    kaesu result;
+}
+waza source_buffer(analysis: DocumentAnalysis, path: string) -> lsp.TextBuffer? {
+    kaku at=0;aida(at<len(analysis.index.sources)){moshi(analysis.index.sources[at].path==path){kaesu analysis.index.sources[at].buffer;}at=at+1;}kaesu mu;
+}
+waza source_uri(analysis: DocumentAnalysis, file: string) -> string {
+    kaku at=0;aida(at<len(analysis.preferred)){moshi(analysis.preferred[at].path==file){kaesu analysis.preferred[at].uri;}at=at+1;}
+    // Embedded library locations require native materialization before becoming
+    // file URIs. Never invent an on-disk location that the client cannot read.
+    kaesu lsp.file_uri(file);
+}
+waza position_json(position: lsp.Position) -> string {
+    kaesu string.concat("{\"line\":",string.concat(convert.format_int(position.line),string.concat(",\"character\":",string.concat(convert.format_int(position.character),"}"))));
+}
+waza range_json(buffer: lsp.TextBuffer, start: int64, end: int64) -> string {
+    kaesu string.concat("{\"start\":",string.concat(position_json(lsp.position_at(buffer,start)),string.concat(",\"end\":",string.concat(position_json(lsp.position_at(buffer,end)),"}"))));
+}
+waza location_json(analysis: DocumentAnalysis, file: string, start: int64, end: int64) -> string? {
+    kaku uri=source_uri(analysis,file);moshi(uri==""){kaesu mu;}kaku buffer=source_buffer(analysis,file);moshi(buffer==mu){kaesu mu;}
+    kaesu string.concat("{\"uri\":",string.concat(json.quote(uri),string.concat(",\"range\":",string.concat(range_json(buffer,start,end),"}"))));
+}
