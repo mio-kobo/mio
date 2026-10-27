@@ -43,41 +43,6 @@ Mio 与 Mochi 也是项目中的两位角色：Mio 是上方的少女，Mochi �
 
 预编译发行包**不要求安装 Go**；从源码重新构建工具链和生成首次自举 Seed 仍需要 Go。目前发行候选采用 **ad-hoc 签名，未经过 Apple notarization**，安装时可能受到 Gatekeeper 限制。
 
-### Hello, Mio!
-
-创建 `hello.mio`：
-
-```mio
-chant("Hello, Mio!");
-```
-
-安装 CLI 后，在包含该文件的目录中执行：
-
-```bash
-mio version
-mio check hello.mio
-mio run hello.mio
-```
-
-### 使用 Bunko
-
-```mio
-yobu "kiso/math";
-
-kaku value: float64 = 144.0;
-chant(math.sqrt(value));
-```
-
-`bunko/` 是标准库的物理目录；源码中的导入路径使用 `kiso/math`，**不是** `bunko/kiso/math`。
-
-## 原生自举
-
-在 **M18** 验收中，Mio 完成了 `Seed → Stage 1 → 2 → 3 → 4 → 5` 的原生编译链。Stage 1–4 均已实际执行，Stage 2/3/4 的未签名 Mach-O 产物逐字节一致；Stage 5 已生成并签名。
-
-正式自举链中，**Go AOT 只负责生成初始 Seed**，此后的核心原生代码生成由纯 Mio 实现。256 MiB 受限堆自编译还验证了真实 GC 触发后，输出仍与固定点一致。
-
-这证明了 Mio 原生 AOT 后端的自托管能力，**不代表从 `.mio` 源码开始的完整工具链已完全摆脱 Go**。
-
 ## 平台与规划
 
 | 平台或能力 | 当前状态 |
