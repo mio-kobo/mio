@@ -1,0 +1,168 @@
+yobu "kiso/testing";
+
+waza same(actual: []uint8, expected: []int64) -> bool {
+    moshi (len(actual) != len(expected)) { kaesu iie; }
+    kaku i = 0;
+    aida (i < len(expected)) { moshi (int64(actual[i]) != expected[i]) { kaesu iie; } i = i + 1; }
+    kaesu hai;
+}
+waza bytes_of(a: Assembler) -> []uint8 { kaesu assemble(a).bytes; }
+
+// Golden encodings produced by GNU as / objdump (Intel syntax shown).
+waza test_register_and_memory_golden() -> unit {
+    kaku a = assembler(); mov_rr(a, rax, rdi);
+    testing.expect(same(bytes_of(a), [72, 137, 248]), "mov rax,rdi");
+    a = assembler(); mov_rr(a, r8, rcx);
+    testing.expect(same(bytes_of(a), [73, 137, 200]), "mov r8,rcx");
+    a = assembler(); mov_rr(a, rdx, r9);
+    testing.expect(same(bytes_of(a), [76, 137, 202]), "mov rdx,r9");
+    a = assembler(); add_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 1, 200]), "add rax,rcx");
+    a = assembler(); sub_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 41, 200]), "sub rax,rcx");
+    a = assembler(); imul_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 15, 175, 193]), "imul rax,rcx");
+    a = assembler(); cmp_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 57, 200]), "cmp rax,rcx");
+    a = assembler(); div_r(a, rcx);
+    testing.expect(same(bytes_of(a), [72, 247, 241]), "div rcx");
+    a = assembler(); mov_load(a, rax, rbp, -8);
+    testing.expect(same(bytes_of(a), [72, 139, 133, 248, 255, 255, 255]), "mov rax,[rbp-8]");
+    a = assembler(); mov_store(a, rsp, 16, rdi);
+    testing.expect(same(bytes_of(a), [72, 137, 188, 36, 16, 0, 0, 0]), "mov [rsp+16],rdi (SIB)");
+    a = assembler(); mov_load(a, r9, r12, 8);
+    testing.expect(same(bytes_of(a), [77, 139, 140, 36, 8, 0, 0, 0]), "mov r9,[r12+8] (SIB)");
+    a = assembler(); lea(a, rsi, rsp, 256);
+    testing.expect(same(bytes_of(a), [72, 141, 180, 36, 0, 1, 0, 0]), "lea rsi,[rsp+256]");
+    a = assembler(); sub_ri(a, rsp, 320);
+    testing.expect(same(bytes_of(a), [72, 129, 236, 64, 1, 0, 0]), "sub rsp,320");
+    a = assembler(); push_r(a, rbx); push_r(a, r12); pop_r(a, r12); pop_r(a, rbx);
+    testing.expect(same(bytes_of(a), [83, 65, 84, 65, 92, 91]), "push/pop incl. r12");
+}
+
+waza test_immediates_and_atomics_golden() -> unit {
+    kaku a = assembler(); mov_ri(a, rax, 1);
+    testing.expect(same(bytes_of(a), [72, 184, 1, 0, 0, 0, 0, 0, 0, 0]), "movabs rax,1");
+    a = assembler(); mov_ri(a, rdi, -1);
+    testing.expect(same(bytes_of(a), [72, 191, 255, 255, 255, 255, 255, 255, 255, 255]), "movabs rdi,-1");
+    a = assembler(); mov_ri(a, r10, 9223372036854775807);
+    testing.expect(same(bytes_of(a), [73, 186, 255, 255, 255, 255, 255, 255, 255, 127]), "movabs r10,INT64_MAX");
+    a = assembler(); mov_ri(a, rax, -9223372036854775807 - 1);
+    testing.expect(same(bytes_of(a), [72, 184, 0, 0, 0, 0, 0, 0, 0, 128]), "movabs rax,INT64_MIN");
+    a = assembler(); lock_xadd(a, rdi, rsi);
+    testing.expect(same(bytes_of(a), [240, 72, 15, 193, 183, 0, 0, 0, 0]), "lock xadd [rdi],rsi");
+    a = assembler(); lock_cmpxchg(a, rdi, rsi);
+    testing.expect(same(bytes_of(a), [240, 72, 15, 177, 183, 0, 0, 0, 0]), "lock cmpxchg [rdi],rsi");
+    a = assembler(); mfence(a); syscall(a); ret(a);
+    testing.expect(same(bytes_of(a), [15, 174, 240, 15, 5, 195]), "mfence; syscall; ret");
+    a = assembler(); setcc_rax(a, cc_b);
+    testing.expect(same(bytes_of(a), [15, 146, 192, 15, 182, 192]), "setb al; movzx eax,al");
+    a = assembler(); call_r(a, r11); call_memory(a, rbx, 8);
+    testing.expect(same(bytes_of(a), [65, 255, 211, 255, 147, 8, 0, 0, 0]), "call r11; call [rbx+8]");
+}
+
+waza test_labels_fixups_and_errors() -> unit {
+    kaku a = assembler(); jmp(a, "end"); byte(a, 144); label(a, "end"); jcc(a, cc_e, "end");
+    kaku out = assemble(a);
+    testing.expect(out.error == "" && same(out.bytes, [233, 1, 0, 0, 0, 144, 15, 132, 250, 255, 255, 255]), "forward jmp and backward jcc");
+    a = assembler(); lea_label(a, rdi, "data"); label(a, "data");
+    testing.expect(same(assemble(a).bytes, [72, 141, 61, 0, 0, 0, 0]), "lea rdi,[rip+0]");
+    a = assembler(); jmp(a, "missing");
+    testing.expect(assemble(a).error == "UNDEFINED_LABEL", "undefined label");
+    a = assembler(); label(a, "x"); label(a, "x");
+    testing.expect(assemble(a).error == "DUPLICATE_LABEL", "duplicate label");
+    a = assembler(); mov_rr(a, 16, 0);
+    testing.expect(assemble(a).error == "INVALID_REGISTER", "register range");
+    a = assembler(); sub_ri(a, rsp, 2147483648);
+    testing.expect(assemble(a).error == "INVALID_IMMEDIATE", "imm32 range");
+}
+
+// Remaining public encoders. Each expectation was decoded with objdump (Intel syntax) to the
+// instruction named in the assertion message.
+waza test_logic_exchange_and_immediate_forms() -> unit {
+    kaku a = assembler(); and_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 33, 200]), "and rax,rcx");
+    a = assembler(); or_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 9, 200]), "or rax,rcx");
+    a = assembler(); xor_rr(a, rax, rax);
+    testing.expect(same(bytes_of(a), [72, 49, 192]), "xor rax,rax");
+    a = assembler(); test_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 133, 200]), "test rax,rcx");
+    a = assembler(); xchg_rr(a, rax, rcx);
+    testing.expect(same(bytes_of(a), [72, 135, 200]), "xchg rax,rcx");
+    a = assembler(); add_ri(a, rsp, 320);
+    testing.expect(same(bytes_of(a), [72, 129, 196, 64, 1, 0, 0]), "add rsp,320");
+    a = assembler(); mov_eax_imm(a, 231);
+    testing.expect(same(bytes_of(a), [184, 231, 0, 0, 0]), "mov eax,231");
+    a = assembler(); zero_extend_eax(a);
+    testing.expect(same(bytes_of(a), [137, 192]), "mov eax,eax");
+    a = assembler(); xchg_store(a, rdi, rsi);
+    testing.expect(same(bytes_of(a), [72, 135, 183, 0, 0, 0, 0]), "xchg [rdi+0],rsi");
+    a = assembler(); setcc_rcx(a, cc_e);
+    testing.expect(same(bytes_of(a), [15, 148, 193, 15, 182, 201]), "sete cl; movzx ecx,cl");
+}
+
+waza test_call_label_offsets_and_range_checks() -> unit {
+    kaku a = assembler(); call(a, "f"); ret(a); label(a, "f"); ret(a);
+    kaku out = assemble(a);
+    testing.expect(out.error == "" && same(out.bytes, [232, 1, 0, 0, 0, 195, 195]), "call rel32 to a later label");
+    testing.expect(label_offset(a, "f") == 6 && label_offset(a, "missing") == -1, "label offsets");
+    a = assembler(); mov_eax_imm(a, -1);
+    testing.expect(assemble(a).error == "INVALID_IMMEDIATE", "mov eax rejects negative immediates");
+    a = assembler(); setcc_rcx(a, 16);
+    testing.expect(assemble(a).error == "INVALID_CONDITION", "condition code range");
+    a = assembler(); jcc(a, 16, "x");
+    testing.expect(assemble(a).error == "INVALID_CONDITION", "jcc condition range");
+}
+
+// Extended registers (r8-r15) in asymmetric positions: the REX.R / REX.B bits are set independently for the
+// reg and rm operands, and r12/r13 as base registers need a SIB byte / cannot use mod=00.
+waza test_extended_registers_in_asymmetric_positions() -> unit {
+    kaku a = assembler(); imul_rr(a, r8, rax);
+    testing.expect(same(bytes_of(a), [76, 15, 175, 192]), "imul r8,rax");
+    a = assembler(); imul_rr(a, rax, r8);
+    testing.expect(same(bytes_of(a), [73, 15, 175, 192]), "imul rax,r8");
+    a = assembler(); imul_rr(a, r9, r10);
+    testing.expect(same(bytes_of(a), [77, 15, 175, 202]), "imul r9,r10");
+    a = assembler(); div_r(a, r9);
+    testing.expect(same(bytes_of(a), [73, 247, 241]), "div r9");
+    a = assembler(); lea_label(a, r8, "x"); label(a, "x");
+    testing.expect(same(bytes_of(a), [76, 141, 5, 0, 0, 0, 0]), "lea r8,[rip+0]");
+    a = assembler(); lock_xadd(a, r12, r8);
+    testing.expect(same(bytes_of(a), [240, 77, 15, 193, 132, 36, 0, 0, 0, 0]), "lock xadd [r12+0],r8");
+    a = assembler(); lock_cmpxchg(a, rdi, r9);
+    testing.expect(same(bytes_of(a), [240, 76, 15, 177, 143, 0, 0, 0, 0]), "lock cmpxchg [rdi+0],r9");
+    a = assembler(); xchg_store(a, r13, r10);
+    testing.expect(same(bytes_of(a), [77, 135, 149, 0, 0, 0, 0]), "xchg [r13+0],r10");
+    a = assembler(); xchg_store(a, r12, rax);
+    testing.expect(same(bytes_of(a), [73, 135, 132, 36, 0, 0, 0, 0]), "xchg [r12+0],rax");
+    a = assembler(); call_memory(a, r12, 8);
+    testing.expect(same(bytes_of(a), [65, 255, 148, 36, 8, 0, 0, 0]), "call [r12+8]");
+    a = assembler(); call_memory(a, r13, 16);
+    testing.expect(same(bytes_of(a), [65, 255, 149, 16, 0, 0, 0]), "call [r13+16]");
+    a = assembler(); call_r(a, r12); call_r(a, r13);
+    testing.expect(same(bytes_of(a), [65, 255, 212, 65, 255, 213]), "call r12; call r13");
+    a = assembler(); push_r(a, r8); push_r(a, r15); pop_r(a, r15); pop_r(a, r8);
+    testing.expect(same(bytes_of(a), [65, 80, 65, 87, 65, 95, 65, 88]), "push r8; push r15; pop r15; pop r8");
+    a = assembler(); mov_load(a, rax, r13, 8);
+    testing.expect(same(bytes_of(a), [73, 139, 133, 8, 0, 0, 0]), "mov rax,[r13+8]");
+    a = assembler(); mov_load(a, r8, rbp, -2147483648);
+    testing.expect(same(bytes_of(a), [76, 139, 133, 0, 0, 0, 128]), "mov r8,[rbp-0x80000000]");
+    a = assembler(); mov_store(a, r12, -16, r9);
+    testing.expect(same(bytes_of(a), [77, 137, 140, 36, 240, 255, 255, 255]), "mov [r12-16],r9");
+}
+
+waza test_immediate_boundaries_and_negative_immediates() -> unit {
+    kaku a = assembler(); add_ri(a, rax, -2147483648);
+    testing.expect(same(bytes_of(a), [72, 129, 192, 0, 0, 0, 128]), "add rax,-0x80000000");
+    a = assembler(); add_ri(a, rax, 2147483647);
+    testing.expect(same(bytes_of(a), [72, 129, 192, 255, 255, 255, 127]), "add rax,0x7fffffff");
+    a = assembler(); add_ri(a, r9, -1);
+    testing.expect(same(bytes_of(a), [73, 129, 193, 255, 255, 255, 255]), "add r9,-1");
+    a = assembler(); sub_ri(a, r10, -5);
+    testing.expect(same(bytes_of(a), [73, 129, 234, 251, 255, 255, 255]), "sub r10,-5");
+    a = assembler(); add_ri(a, rax, 2147483648);
+    testing.expect(assemble(a).error == "INVALID_IMMEDIATE", "imm32 upper bound");
+    a = assembler(); add_ri(a, rax, -2147483649);
+    testing.expect(assemble(a).error == "INVALID_IMMEDIATE", "imm32 lower bound");
+}

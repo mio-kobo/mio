@@ -1,0 +1,83 @@
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0; kaku scale = 1; kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+// exit_group(0): xor edi,edi; mov eax,231; syscall
+waza exit_code() -> []uint8 {
+    kaesu [uint8(49), uint8(255), uint8(184), uint8(231), uint8(0), uint8(0), uint8(0), uint8(15), uint8(5)];
+}
+
+waza test_header_segments_and_entry() -> unit {
+    kaku image = executable(ImageSpec { code: exit_code(), entry_offset: 0, bss_size: 4104 });
+    testing.expect(image.error == "", "image built");
+    kaku b = image.bytes;
+    testing.expect(b[0] == uint8(127) && b[1] == uint8(69) && b[2] == uint8(76) && b[3] == uint8(70), "ELF magic");
+    testing.expect(b[4] == uint8(2) && b[5] == uint8(1), "ELF64 little endian");
+    testing.expect(word(b, 16, 2) == 2 && word(b, 18, 2) == 62, "ET_EXEC EM_X86_64");
+    testing.expect(word(b, 24, 8) == 4198400, "entry = 0x401000");
+    testing.expect(word(b, 56, 2) == 3, "three program headers");
+    testing.expect(word(b, 64, 4) == 1 && word(b, 68, 4) == 5, "PT_LOAD R+X");
+    testing.expect(word(b, 64 + 56 + 4, 4) == 6 && word(b, 64 + 56 + 16, 8) == 268435456 && word(b, 64 + 56 + 32, 8) == 0 && word(b, 64 + 56 + 40, 8) == 4104, "PT_LOAD RW zero-filled bss");
+    testing.expect(word(b, 64 + 112, 4) == 1685382481 && word(b, 64 + 112 + 4, 4) == 6, "PT_GNU_STACK non-executable");
+    testing.expect(word(b, 4096, 1) == 49 && word(b, 4096 + 8, 1) == 5, "code placed at 0x1000");
+}
+
+// Every field of the two PT_LOAD headers and of the section table, for a non-trivial entry offset.
+waza test_complete_layout_program_and_section_headers() -> unit {
+    kaku image = executable(ImageSpec { code: exit_code(), entry_offset: 3, bss_size: 4104 });
+    testing.expect(image.error == "", "image built");
+    kaku b = image.bytes;
+    // text_end = 4096 + 9 = 4105; .shstrtab at align(4105, 8) = 4112 (22 bytes); section headers at align(4134, 8) = 4136
+    testing.expect(word(b, 24, 8) == 4198403, "entry = 0x401000 + entry_offset");
+    testing.expect(word(b, 40, 8) == 4136 && word(b, 52, 2) == 64 && word(b, 54, 2) == 56 && word(b, 58, 2) == 64, "e_shoff, e_ehsize, e_phentsize, e_shentsize");
+    testing.expect(word(b, 60, 2) == 4 && word(b, 62, 2) == 3, "four sections, .shstrtab is index 3");
+    testing.expect(len(b) == 4136 + 4 * 64, "file ends with the section header table");
+    // first PT_LOAD: offset, vaddr, paddr, filesz, memsz, align
+    testing.expect(word(b, 64 + 8, 8) == 0 && word(b, 64 + 16, 8) == 4194304 && word(b, 64 + 24, 8) == 4194304, "RX segment offset/vaddr/paddr");
+    testing.expect(word(b, 64 + 32, 8) == 4105 && word(b, 64 + 40, 8) == 4105 && word(b, 64 + 48, 8) == 4096, "RX segment filesz == memsz == text_end, align 4096");
+    // second PT_LOAD
+    testing.expect(word(b, 120 + 8, 8) == 0 && word(b, 120 + 24, 8) == 268435456 && word(b, 120 + 48, 8) == 4096, "RW segment offset/paddr/align");
+    // section 0 is the null section
+    testing.expect(word(b, 4136, 4) == 0 && word(b, 4136 + 4, 4) == 0 && word(b, 4136 + 32, 8) == 0, "null section");
+    // .text: name 1, PROGBITS, ALLOC|EXEC, addr, offset, size, align 16
+    kaku t = 4136 + 64;
+    testing.expect(word(b, t, 4) == 1 && word(b, t + 4, 4) == 1 && word(b, t + 8, 8) == 6, ".text name/type/flags");
+    testing.expect(word(b, t + 16, 8) == 4198400 && word(b, t + 24, 8) == 4096 && word(b, t + 32, 8) == 9 && word(b, t + 48, 8) == 16, ".text addr/offset/size/align");
+    // .bss: name 7, NOBITS, ALLOC|WRITE, addr == data_base, size == bss_size, occupies no file bytes
+    kaku s = 4136 + 128;
+    testing.expect(word(b, s, 4) == 7 && word(b, s + 4, 4) == 8 && word(b, s + 8, 8) == 3, ".bss name/type(NOBITS)/flags");
+    testing.expect(word(b, s + 16, 8) == 268435456 && word(b, s + 32, 8) == 4104, ".bss addr/size");
+    // .shstrtab: STRTAB, offset 4112, size 22
+    kaku r = 4136 + 192;
+    testing.expect(word(b, r, 4) == 12 && word(b, r + 4, 4) == 3 && word(b, r + 8, 8) == 0, ".shstrtab name/type/flags");
+    testing.expect(word(b, r + 24, 8) == 4112 && word(b, r + 32, 8) == 22 && word(b, r + 48, 8) == 1, ".shstrtab offset/size/align");
+    // string table contents: "\0.text\0.bss\0.shstrtab\0"
+    kaku expected: []int64 = [0, 46, 116, 101, 120, 116, 0, 46, 98, 115, 115, 0, 46, 115, 104, 115, 116, 114, 116, 97, 98, 0];
+    kaku i = 0; kaku same = hai;
+    aida (i < len(expected)) { moshi (int64(b[4112 + i]) != expected[i]) { same = iie; } i = i + 1; }
+    testing.expect(same, ".shstrtab holds \"\\0.text\\0.bss\\0.shstrtab\\0\"");
+    testing.expect(word(b, 4096 + 1, 1) == 255 && word(b, 4096 + 3, 1) == 231 && word(b, 4096 + 8, 1) == 5, "code bytes unchanged");
+}
+
+// A program without data has no data segment at all (no zero-length PT_LOAD).
+waza test_zero_bss_omits_the_data_segment() -> unit {
+    kaku image = executable(ImageSpec { code: exit_code(), entry_offset: 0, bss_size: 0 });
+    testing.expect(image.error == "", "bss_size 0 is accepted");
+    kaku b = image.bytes;
+    testing.expect(word(b, 56, 2) == 2, "two program headers");
+    testing.expect(word(b, 64, 4) == 1 && word(b, 64 + 56, 4) == 1685382481, "PT_LOAD then PT_GNU_STACK");
+    testing.expect(word(b, 40, 8) - (word(b, 40, 8) / 8) * 8 == 0, "section headers stay 8-byte aligned");
+}
+
+waza test_invalid_specs_fail_closed() -> unit {
+    testing.expect(executable(ImageSpec { code: [], entry_offset: 0, bss_size: 0 }).error == "EMPTY_TEXT", "empty text");
+    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 1, bss_size: 0 }).error == "INVALID_ENTRY", "entry at the end of the code");
+    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: -1, bss_size: 0 }).error == "INVALID_ENTRY", "negative entry");
+    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: -1 }).error == "INVALID_BSS", "negative bss");
+    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "bss above maximum_bss_size");
+    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435456 }).error == "", "bss exactly at maximum_bss_size is accepted");
+}

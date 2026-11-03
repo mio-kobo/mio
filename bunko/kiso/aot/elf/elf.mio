@@ -1,0 +1,82 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// Pure Mio Linux x86-64 ELF64 (ET_EXEC) writer. Layout:
+//   0x0000 ELF header + program headers (inside the RX segment)
+//   0x1000 code; entry = image_base + 0x1000 + entry_offset
+//   after  .shstrtab + section headers (.text/.bss/.shstrtab), not loaded
+//   data   one RW PT_LOAD at the fixed address data_base with filesz 0 (zero-filled bss);
+//          it is omitted when bss_size is 0 (a zero-length PT_LOAD is pointless and
+//          loaders are not required to accept it)
+//   PT_GNU_STACK is RW and non-executable.
+koukai kata ImageSpec { code: []uint8; entry_offset: int64; bss_size: int64; }
+koukai kata ImageResult { bytes: []uint8; error: string; }
+
+koukai teisu image_base = 4194304;
+koukai teisu code_offset = 4096;
+koukai teisu data_base = 268435456;
+teisu header_size = 64;
+teisu program_header_size = 56;
+teisu section_header_size = 64;
+teisu maximum_bss_size = 268435456;
+// The RX segment maps file bytes [0, text_end) at image_base, so it ends at image_base + text_end.
+// The RW segment starts at data_base. To keep the two mappings from overlapping, text_end must satisfy
+// image_base + text_end <= data_base, i.e. text_end <= data_base - image_base (252 MiB).
+teisu maximum_text_end = 264241152;
+
+waza put(out: []uint8, value: int64, width: int64) -> unit {
+    kaku x = value; kaku i = 0;
+    aida (i < width) { array.push(out, uint8(x - (x / 256) * 256)); x = x / 256; i = i + 1; }
+}
+waza align(value: int64, boundary: int64) -> int64 {
+    kaku r = value - (value / boundary) * boundary;
+    moshi (r == 0) { kaesu value; }
+    kaesu value + boundary - r;
+}
+waza program_header(out: []uint8, kind: int64, flags: int64, offset: int64, address: int64, file_size: int64, memory_size: int64, alignment: int64) -> unit {
+    put(out, kind, 4); put(out, flags, 4); put(out, offset, 8); put(out, address, 8); put(out, address, 8);
+    put(out, file_size, 8); put(out, memory_size, 8); put(out, alignment, 8);
+}
+waza section_header(out: []uint8, name: int64, kind: int64, flags: int64, address: int64, offset: int64, size: int64, alignment: int64) -> unit {
+    put(out, name, 4); put(out, kind, 4); put(out, flags, 8); put(out, address, 8); put(out, offset, 8);
+    put(out, size, 8); put(out, 0, 4); put(out, 0, 4); put(out, alignment, 8); put(out, 0, 8);
+}
+
+koukai waza executable(spec: ImageSpec) -> ImageResult {
+    moshi (len(spec.code) == 0) { kaesu ImageResult { bytes: [], error: "EMPTY_TEXT" }; }
+    moshi (spec.entry_offset < 0 || spec.entry_offset >= len(spec.code)) { kaesu ImageResult { bytes: [], error: "INVALID_ENTRY" }; }
+    moshi (spec.bss_size < 0 || spec.bss_size > maximum_bss_size) { kaesu ImageResult { bytes: [], error: "INVALID_BSS" }; }
+    kaku phnum = 3; moshi (spec.bss_size == 0) { phnum = 2; }
+    kaku text_end = code_offset + len(spec.code);
+    moshi (text_end > maximum_text_end) { kaesu ImageResult { bytes: [], error: "IMAGE_TOO_LARGE" }; }
+    // .shstrtab: "\0.text\0.bss\0.shstrtab\0"
+    kaku names: []uint8 = [uint8(0)];
+    array.append_all(names, string.to_bytes(".text")); array.push(names, uint8(0));
+    array.append_all(names, string.to_bytes(".bss")); array.push(names, uint8(0));
+    array.append_all(names, string.to_bytes(".shstrtab")); array.push(names, uint8(0));
+    kaku names_offset = align(text_end, 8);
+    kaku sections_offset = align(names_offset + len(names), 8);
+    kaku out: []uint8 = array.with_capacity[uint8](sections_offset + 4 * section_header_size);
+    // ELF header
+    array.push(out, uint8(127)); array.push(out, uint8(69)); array.push(out, uint8(76)); array.push(out, uint8(70));
+    array.push(out, uint8(2)); array.push(out, uint8(1)); array.push(out, uint8(1)); array.push(out, uint8(0));
+    put(out, 0, 8);
+    put(out, 2, 2); put(out, 62, 2); put(out, 1, 4);
+    put(out, image_base + code_offset + spec.entry_offset, 8);
+    put(out, header_size, 8); put(out, sections_offset, 8);
+    put(out, 0, 4); put(out, header_size, 2); put(out, program_header_size, 2); put(out, phnum, 2);
+    put(out, section_header_size, 2); put(out, 4, 2); put(out, 3, 2);
+    program_header(out, 1, 5, 0, image_base, text_end, text_end, 4096);
+    moshi (spec.bss_size > 0) { program_header(out, 1, 6, 0, data_base, 0, spec.bss_size, 4096); }
+    program_header(out, 1685382481, 6, 0, 0, 0, 0, 16);
+    aida (len(out) < code_offset) { array.push(out, uint8(0)); }
+    array.append_all(out, spec.code);
+    aida (len(out) < names_offset) { array.push(out, uint8(0)); }
+    array.append_all(out, names);
+    aida (len(out) < sections_offset) { array.push(out, uint8(0)); }
+    section_header(out, 0, 0, 0, 0, 0, 0, 0);
+    section_header(out, 1, 1, 6, image_base + code_offset, code_offset, len(spec.code), 16);
+    section_header(out, 7, 8, 3, data_base, text_end, spec.bss_size, 8);
+    section_header(out, 12, 3, 0, 0, names_offset, len(names), 1);
+    kaesu ImageResult { bytes: out, error: "" };
+}

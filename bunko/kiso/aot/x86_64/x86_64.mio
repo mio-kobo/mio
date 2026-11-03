@@ -1,0 +1,223 @@
+yobu "kiso/array";
+
+// Pure Mio x86-64 (AMD64, 64-bit mode) encoder for the instruction subset that
+// will be used by the Linux runtime-IR lowering. The language has no bit operators, so every
+// field is composed with checked integer arithmetic. Registers are numbered as
+// in the ISA: rax=0 rcx=1 rdx=2 rbx=3 rsp=4 rbp=5 rsi=6 rdi=7 r8..r15=8..15.
+// Mutation is append-only through an Assembler; control flow uses 32-bit
+// relative fixups resolved by assemble(). Failures are recorded, never truncated.
+koukai kata Label { name: string; offset: int64; }
+koukai kata Fixup { at: int64; target: string; }
+koukai kata Assembler { bytes: []uint8; labels: []Label; fixups: []Fixup; errors: []string; }
+koukai kata AssembleResult { bytes: []uint8; error: string; }
+
+koukai teisu rax = 0;
+koukai teisu rcx = 1;
+koukai teisu rdx = 2;
+koukai teisu rbx = 3;
+koukai teisu rsp = 4;
+koukai teisu rbp = 5;
+koukai teisu rsi = 6;
+koukai teisu rdi = 7;
+koukai teisu r8 = 8;
+koukai teisu r9 = 9;
+koukai teisu r10 = 10;
+koukai teisu r11 = 11;
+koukai teisu r12 = 12;
+koukai teisu r13 = 13;
+koukai teisu r14 = 14;
+koukai teisu r15 = 15;
+// Condition codes (low nibble of Jcc/SETcc opcodes).
+koukai teisu cc_b = 2;
+koukai teisu cc_ae = 3;
+koukai teisu cc_e = 4;
+koukai teisu cc_ne = 5;
+koukai teisu cc_be = 6;
+koukai teisu cc_a = 7;
+koukai teisu cc_l = 12;
+koukai teisu cc_ge = 13;
+koukai teisu cc_le = 14;
+koukai teisu cc_g = 15;
+
+koukai waza assembler() -> Assembler {
+    kaesu Assembler { bytes: array.with_capacity[uint8](256), labels: array.with_capacity[Label](16), fixups: array.with_capacity[Fixup](16), errors: array.with_capacity[string](1) };
+}
+
+waza fail(a: Assembler, message: string) -> unit { array.push(a.errors, message); }
+waza low3(x: int64) -> int64 { kaesu x - (x / 8) * 8; }
+waza high(x: int64) -> int64 { moshi (x >= 8) { kaesu 1; } kaesu 0; }
+waza valid_register(a: Assembler, r: int64) -> bool {
+    moshi (r < 0 || r > 15) { fail(a, "INVALID_REGISTER"); kaesu iie; }
+    kaesu hai;
+}
+koukai waza byte(a: Assembler, value: int64) -> unit {
+    moshi (value < 0 || value > 255) { fail(a, "INVALID_BYTE"); kaesu; }
+    array.push(a.bytes, uint8(value));
+}
+waza imm32(a: Assembler, value: int64) -> unit {
+    moshi (value < -2147483648 || value > 2147483647) { fail(a, "INVALID_IMMEDIATE"); kaesu; }
+    kaku x = value; moshi (x < 0) { x = x + 4294967296; }
+    kaku i = 0; aida (i < 4) { byte(a, x - (x / 256) * 256); x = x / 256; i = i + 1; }
+}
+// Two's-complement 64-bit little-endian; negative values use ~(-(v+1)).
+waza imm64(a: Assembler, value: int64) -> unit {
+    kaku negative = value < 0; kaku x = value; moshi (negative) { x = -(value + 1); }
+    kaku i = 0;
+    aida (i < 8) {
+        kaku b = x - (x / 256) * 256; x = x / 256;
+        moshi (negative) { b = 255 - b; }
+        byte(a, b); i = i + 1;
+    }
+}
+// REX.W prefix with R (reg field) and B (rm/base field) extensions.
+waza rex(a: Assembler, reg: int64, rm: int64) -> unit { byte(a, 72 + high(reg) * 4 + high(rm)); }
+waza modrm(a: Assembler, mode: int64, reg: int64, rm: int64) -> unit { byte(a, mode * 64 + low3(reg) * 8 + low3(rm)); }
+// [base + disp32]; rsp/r12 bases require a SIB byte.
+waza memory(a: Assembler, reg: int64, base: int64, disp: int64) -> unit {
+    modrm(a, 2, reg, base);
+    moshi (low3(base) == 4) { byte(a, 36); }
+    imm32(a, disp);
+}
+koukai waza op_rr(a: Assembler, opcode: int64, rm: int64, reg: int64) -> unit {
+    moshi (!valid_register(a, rm) || !valid_register(a, reg)) { kaesu; }
+    rex(a, reg, rm); byte(a, opcode); modrm(a, 3, reg, rm);
+}
+koukai waza mov_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 137, dst, src); }
+koukai waza add_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 1, dst, src); }
+koukai waza sub_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 41, dst, src); }
+koukai waza and_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 33, dst, src); }
+koukai waza or_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 9, dst, src); }
+koukai waza xor_rr(a: Assembler, dst: int64, src: int64) -> unit { op_rr(a, 49, dst, src); }
+koukai waza cmp_rr(a: Assembler, left: int64, right: int64) -> unit { op_rr(a, 57, left, right); }
+koukai waza test_rr(a: Assembler, left: int64, right: int64) -> unit { op_rr(a, 133, left, right); }
+koukai waza xchg_rr(a: Assembler, left: int64, right: int64) -> unit { op_rr(a, 135, left, right); }
+koukai waza imul_rr(a: Assembler, dst: int64, src: int64) -> unit {
+    moshi (!valid_register(a, dst) || !valid_register(a, src)) { kaesu; }
+    rex(a, dst, src); byte(a, 15); byte(a, 175); modrm(a, 3, dst, src);
+}
+// Unsigned divide rdx:rax by src (callers zero rdx).
+koukai waza div_r(a: Assembler, src: int64) -> unit {
+    moshi (!valid_register(a, src)) { kaesu; }
+    rex(a, 0, src); byte(a, 247); modrm(a, 3, 6, src);
+}
+koukai waza mov_ri(a: Assembler, dst: int64, value: int64) -> unit {
+    moshi (!valid_register(a, dst)) { kaesu; }
+    rex(a, 0, dst); byte(a, 184 + low3(dst)); imm64(a, value);
+}
+koukai waza mov_load(a: Assembler, dst: int64, base: int64, disp: int64) -> unit {
+    moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
+    rex(a, dst, base); byte(a, 139); memory(a, dst, base, disp);
+}
+koukai waza mov_store(a: Assembler, base: int64, disp: int64, src: int64) -> unit {
+    moshi (!valid_register(a, src) || !valid_register(a, base)) { kaesu; }
+    rex(a, src, base); byte(a, 137); memory(a, src, base, disp);
+}
+koukai waza lea(a: Assembler, dst: int64, base: int64, disp: int64) -> unit {
+    moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
+    rex(a, dst, base); byte(a, 141); memory(a, dst, base, disp);
+}
+koukai waza add_ri(a: Assembler, dst: int64, value: int64) -> unit {
+    moshi (!valid_register(a, dst)) { kaesu; }
+    rex(a, 0, dst); byte(a, 129); modrm(a, 3, 0, dst); imm32(a, value);
+}
+koukai waza sub_ri(a: Assembler, dst: int64, value: int64) -> unit {
+    moshi (!valid_register(a, dst)) { kaesu; }
+    rex(a, 0, dst); byte(a, 129); modrm(a, 3, 5, dst); imm32(a, value);
+}
+koukai waza push_r(a: Assembler, r: int64) -> unit {
+    moshi (!valid_register(a, r)) { kaesu; }
+    moshi (r >= 8) { byte(a, 65); } byte(a, 80 + low3(r));
+}
+koukai waza pop_r(a: Assembler, r: int64) -> unit {
+    moshi (!valid_register(a, r)) { kaesu; }
+    moshi (r >= 8) { byte(a, 65); } byte(a, 88 + low3(r));
+}
+// SETcc into the low byte of rax, zero-extended (the runtime IR's boolean).
+koukai waza setcc_rax(a: Assembler, cc: int64) -> unit {
+    moshi (cc < 0 || cc > 15) { fail(a, "INVALID_CONDITION"); kaesu; }
+    byte(a, 15); byte(a, 144 + cc); byte(a, 192);
+    byte(a, 15); byte(a, 182); byte(a, 192);
+}
+koukai waza ret(a: Assembler) -> unit { byte(a, 195); }
+// mov eax, imm32 (zero-extends into rax).
+koukai waza mov_eax_imm(a: Assembler, value: int64) -> unit {
+    moshi (value < 0 || value > 2147483647) { fail(a, "INVALID_IMMEDIATE"); kaesu; }
+    byte(a, 184); imm32(a, value);
+}
+// mov eax,eax: zero-extends a 32-bit native result into rax.
+koukai waza zero_extend_eax(a: Assembler) -> unit { byte(a, 137); byte(a, 192); }
+koukai waza syscall(a: Assembler) -> unit { byte(a, 15); byte(a, 5); }
+koukai waza mfence(a: Assembler) -> unit { byte(a, 15); byte(a, 174); byte(a, 240); }
+// xchg [base], reg (implicitly locked): sequentially consistent store.
+koukai waza xchg_store(a: Assembler, base: int64, reg: int64) -> unit {
+    moshi (!valid_register(a, reg) || !valid_register(a, base)) { kaesu; }
+    rex(a, reg, base); byte(a, 135); memory(a, reg, base, 0);
+}
+// SETcc into cl, zero-extended into rcx.
+koukai waza setcc_rcx(a: Assembler, cc: int64) -> unit {
+    moshi (cc < 0 || cc > 15) { fail(a, "INVALID_CONDITION"); kaesu; }
+    byte(a, 15); byte(a, 144 + cc); byte(a, 193);
+    byte(a, 15); byte(a, 182); byte(a, 201);
+}
+// lock xadd [base], reg : reg receives the previous value.
+koukai waza lock_xadd(a: Assembler, base: int64, reg: int64) -> unit {
+    moshi (!valid_register(a, reg) || !valid_register(a, base)) { kaesu; }
+    byte(a, 240); rex(a, reg, base); byte(a, 15); byte(a, 193); memory(a, reg, base, 0);
+}
+// lock cmpxchg [base], desired : compares with rax, ZF=1 on success, rax=observed.
+koukai waza lock_cmpxchg(a: Assembler, base: int64, desired: int64) -> unit {
+    moshi (!valid_register(a, desired) || !valid_register(a, base)) { kaesu; }
+    byte(a, 240); rex(a, desired, base); byte(a, 15); byte(a, 177); memory(a, desired, base, 0);
+}
+koukai waza call_r(a: Assembler, r: int64) -> unit {
+    moshi (!valid_register(a, r)) { kaesu; }
+    moshi (r >= 8) { byte(a, 65); } byte(a, 255); modrm(a, 3, 2, r);
+}
+koukai waza call_memory(a: Assembler, base: int64, disp: int64) -> unit {
+    moshi (!valid_register(a, base)) { kaesu; }
+    moshi (base >= 8) { byte(a, 65); } byte(a, 255); memory(a, 2, base, disp);
+}
+
+waza find_label(a: Assembler, name: string) -> int64 {
+    kaku i = 0;
+    aida (i < len(a.labels)) { moshi (a.labels[i].name == name) { kaesu a.labels[i].offset; } i = i + 1; }
+    kaesu -1;
+}
+koukai waza label(a: Assembler, name: string) -> unit {
+    moshi (find_label(a, name) >= 0) { fail(a, "DUPLICATE_LABEL"); kaesu; }
+    array.push(a.labels, Label { name: name, offset: len(a.bytes) });
+}
+koukai waza label_offset(a: Assembler, name: string) -> int64 { kaesu find_label(a, name); }
+waza branch(a: Assembler, target: string) -> unit {
+    array.push(a.fixups, Fixup { at: len(a.bytes), target: target });
+    imm32(a, 0);
+}
+koukai waza jmp(a: Assembler, target: string) -> unit { byte(a, 233); branch(a, target); }
+koukai waza call(a: Assembler, target: string) -> unit { byte(a, 232); branch(a, target); }
+koukai waza jcc(a: Assembler, cc: int64, target: string) -> unit {
+    moshi (cc < 0 || cc > 15) { fail(a, "INVALID_CONDITION"); kaesu; }
+    byte(a, 15); byte(a, 128 + cc); branch(a, target);
+}
+// lea dst, [rip + label]
+koukai waza lea_label(a: Assembler, dst: int64, target: string) -> unit {
+    moshi (!valid_register(a, dst)) { kaesu; }
+    rex(a, dst, 0); byte(a, 141); modrm(a, 0, dst, 5); branch(a, target);
+}
+
+koukai waza assemble(a: Assembler) -> AssembleResult {
+    moshi (len(a.errors) > 0) { kaesu AssembleResult { bytes: [], error: a.errors[0] }; }
+    kaku output = array.clone(a.bytes);
+    kaku i = 0;
+    aida (i < len(a.fixups)) {
+        kaku f = a.fixups[i];
+        kaku target = find_label(a, f.target);
+        moshi (target < 0) { kaesu AssembleResult { bytes: [], error: "UNDEFINED_LABEL" }; }
+        kaku delta = target - (f.at + 4);
+        moshi (delta < -2147483648 || delta > 2147483647) { kaesu AssembleResult { bytes: [], error: "BRANCH_OUT_OF_RANGE" }; }
+        kaku x = delta; moshi (x < 0) { x = x + 4294967296; }
+        kaku k = 0;
+        aida (k < 4) { output[f.at + k] = uint8(x - (x / 256) * 256); x = x / 256; k = k + 1; }
+        i = i + 1;
+    }
+    kaesu AssembleResult { bytes: output, error: "" };
+}
