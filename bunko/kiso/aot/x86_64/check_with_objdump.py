@@ -25,8 +25,11 @@ What it does NOT check:
 
 It is a reviewer aid: it is not run by the Mio test runner or by any workflow.
 
-Usage: python3 check_with_objdump.py [path/to/x86_64_test.mio]
+Usage: python3 check_with_objdump.py [--probe] [path/to/x86_64_test.mio]
+  --probe  only look for a GNU objdump: exit 0 if one is available, 3 if not; checks nothing.
 Requires: python3 and GNU binutils (objdump). Nothing is installed or modified.
+The tool is searched as $MIO_OBJDUMP, then objdump, gobjdump (Homebrew binutils), x86_64-linux-gnu-objdump;
+the first one that identifies itself as GNU objdump is used. Apple's objdump is LLVM's and is not accepted.
 Exit status: 0 all sequences decode and match; 1 at least one failure; 2 usage / no assertions
 found; 3 GNU objdump is not available (not found, or not GNU objdump) - nothing was checked.
 """
@@ -41,20 +44,24 @@ EXIT_UNAVAILABLE = 3
 
 
 def find_gnu_objdump():
-    """Return the objdump path, or exit with EXIT_UNAVAILABLE and a clear message."""
-    path = shutil.which("objdump")
-    if path is None:
-        print("check_with_objdump.py: GNU objdump not found on PATH; nothing was checked", file=sys.stderr)
-        sys.exit(EXIT_UNAVAILABLE)
-    try:
-        first = subprocess.run([path, "--version"], capture_output=True, text=True, check=True).stdout.splitlines()[0]
-    except (OSError, subprocess.CalledProcessError, IndexError) as error:
-        print(f"check_with_objdump.py: cannot run '{path} --version' ({error}); nothing was checked", file=sys.stderr)
-        sys.exit(EXIT_UNAVAILABLE)
-    if "GNU objdump" not in first:
-        print(f"check_with_objdump.py: {path} is not GNU objdump ('{first}'); nothing was checked", file=sys.stderr)
-        sys.exit(EXIT_UNAVAILABLE)
-    return path
+    """Return the path of a GNU objdump, or exit with EXIT_UNAVAILABLE and a clear message."""
+    candidates = [os.environ.get("MIO_OBJDUMP"), "objdump", "gobjdump", "x86_64-linux-gnu-objdump"]
+    problems = []
+    for name in filter(None, candidates):
+        path = shutil.which(name)
+        if path is None:
+            problems.append(f"{name}: not found")
+            continue
+        try:
+            first = subprocess.run([path, "--version"], capture_output=True, text=True, check=True).stdout.splitlines()[0]
+        except (OSError, subprocess.CalledProcessError, IndexError) as error:
+            problems.append(f"{path}: cannot run --version ({error})")
+            continue
+        if "GNU objdump" in first:
+            return path
+        problems.append(f"{path}: not GNU objdump ('{first}')")
+    print("check_with_objdump.py: GNU objdump is not available; nothing was checked (" + "; ".join(problems) + ")", file=sys.stderr)
+    sys.exit(EXIT_UNAVAILABLE)
 
 
 # Assertion message -> exact objdump text of the bytes (binutils 2.44, Intel syntax).
@@ -118,8 +125,12 @@ EXPECTED = {
 }
 
 
+args = sys.argv[1:]
+if args[:1] == ["--probe"]:
+    print("GNU objdump: " + find_gnu_objdump())
+    sys.exit(0)
 default = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x86_64_test.mio")
-path = sys.argv[1] if len(sys.argv) > 1 else default
+path = args[0] if args else default
 try:
     text = open(path, encoding="utf-8").read()
 except OSError as error:

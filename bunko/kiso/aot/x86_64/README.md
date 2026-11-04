@@ -29,3 +29,10 @@ cleanly but to a different instruction than its message is reported). It does no
 execute anything and does not check assertions of other shapes. Exit status: 0 ok,
 1 mismatch or undecodable, 2 usage, 3 GNU objdump not available (nothing checked). It is
 a reviewer aid and is not run by the Mio test runner or any workflow.
+
+## CI module
+
+`test.sh` and `ci-module.json` register this package as the CI module `kiso/aot/x86-64`
+(module IDs may not contain `_`). `bash bunko/kiso/aot/x86_64/test.sh macos-arm64 quick` runs the
+native Mio tests and then the objdump cross-check; the second layer is reported as NOT_RUN (exit 2)
+when no GNU objdump (`objdump`, Homebrew's `gobjdump`, or `$MIO_OBJDUMP`) is available.
