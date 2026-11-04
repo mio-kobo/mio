@@ -16,14 +16,16 @@ condition codes are recorded as errors on the assembler and reported by
 
 ## Tests
 
-`x86_64_test.mio` compares the assembler output with golden byte sequences. To
-check that those sequences really are the instructions named in the assertion
-messages, run
+`x86_64_test.mio` compares the assembler output with golden byte sequences. As an
+independent cross-check, run
 
     python3 bunko/kiso/aot/x86_64/check_with_objdump.py
 
 It extracts every `same(..., [bytes])` assertion, disassembles the bytes with
-`objdump -D -b binary -m i386:x86-64 -M intel` (GNU binutils), prints the decoded
-instruction next to the assertion message, and exits non-zero if any sequence does
-not decode as a complete instruction. It is a reviewer aid and is not run by the
-Mio test runner.
+`objdump -D -b binary -m i386:x86-64 -M intel` (GNU binutils), and fails if a sequence
+does not decode as complete instructions or if the decoded text differs from the entry
+for that assertion in the script's `EXPECTED` table (so a byte sequence that decodes
+cleanly but to a different instruction than its message is reported). It does not
+execute anything and does not check assertions of other shapes. Exit status: 0 ok,
+1 mismatch or undecodable, 2 usage, 3 GNU objdump not available (nothing checked). It is
+a reviewer aid and is not run by the Mio test runner or any workflow.
