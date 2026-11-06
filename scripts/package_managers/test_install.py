@@ -155,7 +155,8 @@ def install(assets, target):
                     relocated = base / ('relocated-' + flavor)
                     shutil.copytree(installed, relocated)
                     smoke(relocated, target, flavor)
-                    run('winget', 'uninstall', '--id', ident, '--exact', '--silent', '--disable-interactivity')
+                    # A local-only manifest has no community source ID to correlate.
+                    run('winget', 'uninstall', '--manifest', manifests, '--silent', '--accept-source-agreements', '--disable-interactivity')
                     assert not (installed / 'bin/mio.exe').exists()
                     assert not alias_command.exists()
                     assert not location.exists() or not list(location.rglob('mio.exe'))
