@@ -107,6 +107,28 @@ class ChocolateyTests(unittest.TestCase):
                 else:
                     self.assertEqual(select('1')['run_id'], 1)
 
+    def test_actual_yaml_gate_compiles_and_requires_executed_checks(self):
+        import yaml
+        workflow = Path(__file__).resolve().parents[2] / '.github/workflows/distribution-pr.yml'
+        step = yaml.safe_load(workflow.read_text())['jobs']['required']['steps'][0]['run']
+        script = step.split("python - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        code = compile(script, 'distribution-required', 'exec')
+        results = {name: dict(result='skipped') for name in ('summary', 'candidates', 'docker-full-offline', 'candidate-linux', 'apt-distributions')}
+        results.update({name: dict(result='success') for name in ('scope', 'packaging-tests', 'wrapper-regression')})
+        def gate(data):
+            with patch.dict('os.environ', RESULTS=json.dumps(data)):
+                exec(code, {})
+        gate(results)
+        for status in ('failure', 'skipped', 'cancelled', 'NOT_RUN'):
+            with self.assertRaises(AssertionError):
+                gate(dict(results, **{'wrapper-regression': dict(result=status)}))
+        native = {name: dict(result='success') for name in results}
+        native['wrapper-regression'] = dict(result='skipped')
+        gate(native)
+        for status in ('failure', 'skipped', 'NOT_RUN'):
+            with self.assertRaises(AssertionError):
+                gate(dict(native, summary=dict(result=status)))
+
 
 if __name__ == '__main__':
     unittest.main()
