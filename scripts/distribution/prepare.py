@@ -5,6 +5,7 @@ Legacy resources and tools/native-ci stay untouched in the real source checkout.
 Every native generation in this checkout consumes the same generated input.
 """
 import argparse
+import os
 import hashlib
 import json
 import re
@@ -42,9 +43,12 @@ def prepare(root, revision, stable_version=None):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--stable-version', help='Release builds only; never promotes an existing candidate binary')
+    parser.add_argument('--stable-version', default=os.environ.get('MIO_DISTRIBUTION_STABLE_VERSION') or None, help='Release builds only; never promotes an existing candidate binary')
     parser.add_argument('--disposable-checkout', required=True, type=Path)
     args = parser.parse_args()
+    if args.stable_version and os.environ.get('GITHUB_ACTIONS') == 'true':
+        if os.environ.get('GITHUB_EVENT_NAME') != 'workflow_dispatch' or os.environ.get('GITHUB_REF') != 'refs/tags/v' + args.stable_version:
+            parser.error('stable native build requires dispatch on its exact pre-existing stable tag')
     destination = args.disposable_checkout.resolve()
     if destination == ROOT:
         parser.error('refusing to prepare the source checkout; copy it first')

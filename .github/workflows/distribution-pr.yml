@@ -2,8 +2,10 @@ name: Mio Core / Full PR candidates
 permissions:
   contents: read
 concurrency:
-  group: distribution-pr-${{ github.event.pull_request.number }}
+  group: distribution-pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+env:
+  MIO_DISTRIBUTION_STABLE_VERSION: ${{ inputs.stable_version || '' }}
 jobs:
   packaging-tests:
     runs-on: ubuntu-24.04
@@ -57,7 +59,7 @@ jobs:
       shell: pwsh
       run: |
         Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-        Repair-WinGetPackageManager -AllUsers -Latest
+        Repair-WinGetPackageManager -Force -Latest
         winget --version
     - name: Install package manager test dependencies
       shell: bash
@@ -340,7 +342,7 @@ jobs:
       shell: pwsh
       run: |
         Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-        Repair-WinGetPackageManager -AllUsers -Latest
+        Repair-WinGetPackageManager -Force -Latest
         winget --version
     - name: Install package manager test dependencies
       shell: bash
@@ -378,6 +380,12 @@ jobs:
         if-no-files-found: warn
         retention-days: 14
 'on':
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: Optional stable version; dispatch only on its existing v-prefixed tag
+        required: false
+        type: string
   pull_request:
     branches:
     - Mio-2.1
