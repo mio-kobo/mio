@@ -88,7 +88,7 @@ def install(assets, target):
                             if not (relocated / filename).exists():
                                 shutil.copyfile(installed.parent / filename, relocated / filename)
                         smoke(relocated, target, flavor)
-                        brew('uninstall', name)
+                        brew('uninstall', '--force', name)
                         assert not installed.exists()
                     finally:
                         shutil.rmtree(taproot)
@@ -135,7 +135,7 @@ def install(assets, target):
                         manifests = base / (flavor + v)
                         manifests.mkdir()
                         for suffix, data in files.items():
-                            (manifests / (ident + '.' + suffix)).write_text(manifest_yaml(data))
+                            (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
                         run('winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--location', location, '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
                         installed = location / root.name
