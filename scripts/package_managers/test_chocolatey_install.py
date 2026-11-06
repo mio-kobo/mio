@@ -7,6 +7,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,13 +28,24 @@ def offline():
     # Windows firewall program rules do not accept wildcards. Use actual files.
     programs = list((Path(os.environ['ChocolateyInstall']) / 'lib').glob('mio*/tools/payload/bin/mio.exe'))
     assert programs, program
+    previous = {}
     try:
+        for profile in ('domainprofile', 'privateprofile', 'publicprofile'):
+            state = subprocess.check_output(['netsh', 'advfirewall', 'show', profile, 'state'], text=True)
+            match = re.search(r'State\s+(ON|OFF)', state)
+            assert match, state
+            previous[profile] = match[1].lower()
+            if match[1] == 'OFF':
+                run('netsh', 'advfirewall', 'set', profile, 'state', 'on')
         for i, exe in enumerate(programs):
             run('netsh', 'advfirewall', 'firewall', 'add', 'rule', f'name={rule}{i}', 'dir=out', 'action=block', f'program={exe}', 'enable=yes', 'profile=any')
         yield
     finally:
         for i, _ in enumerate(programs):
             run('netsh', 'advfirewall', 'firewall', 'delete', 'rule', f'name={rule}{i}')
+        for profile, state in previous.items():
+            if state == 'off':
+                run('netsh', 'advfirewall', 'set', profile, 'state', state)
 
 
 def install(assets, stable_packages=None):
