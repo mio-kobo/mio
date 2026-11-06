@@ -163,11 +163,27 @@ func compileMioProgram(t testing.TB, harness string) (*miolang.Environment, *mio
 
 func runMioLexer(t testing.TB, paths []string) []wireResult {
 	t.Helper()
+	// One VM run scans and serializes every input in the batch. Bound that work
+	// by corpus size so adding Bunko sources does not exhaust a fixed batch cap.
+	const lexerInstructionOverhead uint64 = 50_000_000
+	const lexerInstructionsPerByte uint64 = 1_000
+	instructionLimit := lexerInstructionOverhead
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instructionLimit += uint64(info.Size()) * lexerInstructionsPerByte
+	}
 	environment, program := compileMioProgram(t, harnessSource(paths))
 	var output bytes.Buffer
-	if err := environment.RunWithOptions(program, &output, miolang.ExecutionOptions{InstructionLimit: 1_000_000_000}); err != nil {
+	var instructions uint64
+	if err := environment.RunWithOptions(program, &output, miolang.ExecutionOptions{
+		InstructionLimit: instructionLimit, InstructionCount: &instructions,
+	}); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("Mio lexer used %d of %d instructions for %d files", instructions, instructionLimit, len(paths))
 	reader := bufio.NewReader(&output)
 	results := make([]wireResult, 0, len(paths))
 	readInt := func() int {
