@@ -153,8 +153,12 @@ The existing Inno installer uses `PrivilegesRequired=lowest`, HKCU PATH and
 `{localappdata}`. Elevated Chocolatey may run under another administrator's
 identity; using that installer would install for the wrong user. Chocolatey
 instead owns a ZIP payload under its package directory. `Install-BinFile` creates
-process shims for `mio` and `mio-core`; `.exe.ignore` prevents automatic alias
-collisions. Unlike the rejected WinGet ZIP link, a process shim launches the
+process shims for `mio` and `mio-core`. Core renames only its executable to
+`mio-core.exe` and updates the installed manifest key, preserving every compiler
+byte (the same layout used by Inno). This is necessary because Chocolatey
+automatically removes shims by executable basename on uninstall even with an
+`.ignore` file. Distinct basenames protect Full when Core is removed; `.exe.ignore`
+prevents automatic alias generation. Unlike the rejected WinGet ZIP link, a process shim launches the
 real image and preserves executable-relative Bunko lookup. No user PATH registry
 entries, user profiles or language/compiler bytes are changed. User projects
 must live outside the replaceable package directory. Both uninstall scripts

@@ -28,10 +28,18 @@ try {
         $expected = $manifest.files.PSObject.Properties[$relative].Value
         if (-not $expected -or $file.Length -ne $expected.size -or (Get-MioSha256 $file.FullName) -ne $expected.sha256) { throw "Mio installed file mismatch: $relative" }
     }
+    if ($record.flavor -eq 'core') {
+        # Chocolatey's automatic uninstall cleanup uses executable basenames
+        # even with .ignore files. A Core mio.exe would remove Full's mio shim.
+        Move-Item (Join-Path $root 'bin\mio.exe') (Join-Path $root 'bin\mio-core.exe')
+        $manifest.files | Add-Member -MemberType NoteProperty -Name 'bin/mio-core.exe' -Value $manifest.files.'bin/mio.exe'
+        $manifest.files.PSObject.Properties.Remove('bin/mio.exe')
+        [System.IO.File]::WriteAllText((Join-Path $root 'manifest.json'), ($manifest | ConvertTo-Json -Depth 50), (New-Object System.Text.UTF8Encoding($false)))
+    }
     # Only this manager-owned payload is replaced; projects/config belong outside it.
     if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }
     Move-Item $root $payload
-    $exe = Join-Path $payload 'bin\mio.exe'
+    $exe = Join-Path $payload ('bin\' + $record.command + '.exe')
     # Prevent auto-shimming Core as mio, or accidentally shimming future tools.
     Get-ChildItem $payload -Recurse -Filter '*.exe' | ForEach-Object { New-Item ($_.FullName + '.ignore') -ItemType File -Force | Out-Null }
     Install-BinFile -Name $record.command -Path $exe
