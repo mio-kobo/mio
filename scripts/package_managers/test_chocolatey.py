@@ -88,7 +88,7 @@ class ChocolateyTests(unittest.TestCase):
     def test_fixture_matching_cannot_reuse_changed_native_inputs(self):
         from fixture import compatible, wrapper, select
         self.assertTrue(wrapper('scripts/package_managers/chocolatey/tools/chocolateyInstall.ps1'))
-        for path in ('selfhost/cli/main.mio', 'scripts/distribution/package.py', 'scripts/ci/native_platforms.py', 'VERSION', '.github/workflows/native.yml'):
+        for path in ('selfhost/cli/main.mio', 'scripts/distribution/package.py', 'scripts/ci/native_platforms.py', 'VERSION', '.github/workflows/native.yml', 'scripts/package_managers/windows.py', 'scripts/package_managers/release.py', 'scripts/package_managers/test_install.py'):
             self.assertFalse(wrapper(path), path)
             with patch('fixture.subprocess.check_output', return_value=path + '\n'):
                 self.assertFalse(compatible('fixture-sha'))

@@ -11,7 +11,10 @@ import subprocess
 
 
 def wrapper(path):
-    return (path.startswith('scripts/package_managers/') or path.startswith('docs/installation/') or
+    return (path.startswith('scripts/package_managers/chocolatey') or
+            path.startswith('scripts/package_managers/test_chocolatey') or
+            path in ('scripts/package_managers/fixture.py', 'scripts/package_managers/smoke.py',
+                     'scripts/package_managers/README.md') or path.startswith('docs/installation/') or
             path in ('.github/workflows/package-manager-tests.yml', '.github/workflows/package-managers.yml',
                      '.github/workflows/distribution-pr.yml'))
 
