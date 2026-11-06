@@ -33,7 +33,8 @@ mio-core version
 
 Full 使用 `mio` 命令，Core 使用 `mio-core`，安装目录相互独立。
 升级和卸载 Core 时请使用 `MioKobo.Mio.Core`。
-ZIP Portable 必须保留完整 Bunko 目录，并通过 Windows Runner 文件清单验证。
+自包含 Inno 安装程序保留完整 Bunko 目录，将真实 bin 目录加入用户 PATH。
+Windows Runner 验证安装后的文件清单及命令行为；卸载时移除自身的 PATH 项。
 首次向微软社区仓库提交清单仍需人工审核。
 
 ## Linux AMD64：APT

@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 
 def run(*argv, **kw):
     print('+', *map(str, argv), flush=True)
-    return subprocess.run(list(map(str, argv)), check=True, **kw)
+    return subprocess.run(list(map(str, argv)), check=True, timeout=900, **kw)
 
 
 def install(assets, target):
@@ -145,11 +145,15 @@ def install(assets, target):
                         for suffix, data in files.items():
                             (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
-                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
                         if v == '0.0.1':
                             command += ['--location', location]
                         run(*command)
                         installed = location
+                        expected_manifest = json.loads((root / 'manifest.json').read_text())
+                        if flavor == 'core':
+                            expected_manifest['files']['bin/mio-core.exe'] = expected_manifest['files'].pop('bin/mio.exe')
+                        assert json.loads((installed / 'manifest.json').read_text()) == expected_manifest, 'installer must contain the verified native archive payload'
                         import winreg
                         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
                             user_path = winreg.QueryValueEx(key, 'Path')[0]
@@ -164,6 +168,9 @@ def install(assets, target):
                     run('winget', 'uninstall', '--manifest', manifests, '--silent', '--accept-source-agreements', '--disable-interactivity')
                     assert not (installed / 'bin' / (name + '.exe')).exists()
                     assert not alias_command.exists()
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                        remaining_path = winreg.QueryValueEx(key, 'Path')[0]
+                    assert str(alias_command.parent).casefold() not in [p.casefold() for p in remaining_path.split(';')]
                     assert not location.exists() or not list(location.rglob('mio.exe'))
                 passed(flavor + ' install, upgrade, offline payload, uninstall')
         finally:

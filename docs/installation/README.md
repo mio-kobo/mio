@@ -39,10 +39,10 @@ winget install --id MioKobo.Mio.Core --exact
 mio-core version
 ```
 
-ZIP Portable retains the full archive tree, including `bunko/kiso`. Full uses the
-`mio` alias; Core uses `mio-core`. They have separate install directories and can
-coexist without overwriting files. Use the same package ID for upgrades/removal.
-The Windows runner must verify the complete installed inventory before manifests
+Self-contained Inno installers retain `bunko/kiso` and add the real `bin` directory
+to the user PATH. Full provides `mio`; Core provides `mio-core`. Separate install
+directories allow both packages to coexist without overwriting files. Use the same package ID for upgrades/removal.
+The Windows runner verifies the complete installed payload before manifests
 are submitted. These manifests are prepared for human review; automation does not
 submit to `microsoft/winget-pkgs`.
 

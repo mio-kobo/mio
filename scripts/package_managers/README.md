@@ -9,7 +9,7 @@ versions solely to exercise manager upgrades; shipped compiler bytes are unchang
 ## Stable inputs and review boundary
 
 `package-managers.yml` reads an **already published** stable `v2.1+` GitHub Release.
-Manual dispatch is always dry run. The gate requires all six native archives,
+Manual dispatch is always dry run. The gate requires all six native archives and both self-contained Windows installers,
 `SHA256SUMS`, `<target>-native-report.json`, `<target>-verification.json`,
 `docker-verification.json` bound to the Linux Full archive, exact
 inventories, identical Core/Full compiler hashes, native B=C=D and every required
@@ -35,7 +35,7 @@ lowering checks. This change does not create that evidence, stable tags or Relea
 The existing self-hosted production pipeline remains unchanged.
 
 Generated output includes both Formulae with real archive hashes, both WinGet
-multi-file manifests, and both AMD64 Debian packages. No fake stable Formula or
+Inno multi-file manifests, and both AMD64 Debian packages. No fake stable Formula or
 placeholder SHA is committed. Actual manager install tests must pass for each
 platform before cross-repository proposal jobs run. All generated files and real
 manager reports are downloadable Actions artifacts.
@@ -81,7 +81,8 @@ compiles and executes Bunko math. Linux uses a signed local APT repository and
 `unshare --net` for offline execution. Relocated payloads are checked again.
 Homebrew runs `brew audit` and `brew test`; installed LICENSE/README are
 verified in Homebrew’s standard prefix location after its document normalization; Windows runs `winget validate` and
-installs the actual ZIP, retaining the full directory tree. Core's separate
+installs and upgrades the actual self-contained Inno installer, retaining the
+full directory tree and checking the real command on user PATH. Core's separate
 `mio-core` alias avoids collision; Homebrew/APT declare explicit conflicts. Clean Debian 12/13 and Ubuntu 22.04
 containers also exercise signed APT upgrades. Regression fixtures are pinned
 to the last successful native distribution run and are never release inputs.
@@ -105,3 +106,24 @@ Official references:
 Package ID check: GitHub Contents API returned 404 for
 `microsoft/winget-pkgs/manifests/m/MioKobo` on 2026-11-06. No existing publisher
 path was found; recheck immediately before the first upstream submission.
+
+## Windows ZIP Portable finding
+
+A real Windows Actions install confirmed ZIP Portable retained every Bunko file,
+but invoking the WinGet-created `mio.exe` link made GetModuleFileNameW identify
+the Links directory. Full then failed with E_BUNKO_MISSING. Direct invocation of
+the installed compiler passed, so checking only the extracted ZIP was insufficient.
+
+`windows.py` instead wraps the verified native ZIP in an Inno Setup installer. It
+never recompiles Mio. Full preserves bin/mio.exe and bunko; Core installs the same
+compiler bytes as bin/mio-core.exe and updates its installed file inventory. Both
+use separate stable AppIds and per-user install directories. Their actual bin
+directories are appended to user PATH; uninstall removes only its own entry. The
+installer owns its normal uninstall executable/data files in addition to the Mio
+payload. Inno Setup and Python are build-host tools, never runtime dependencies.
+
+The lifecycle test installs synthetic metadata versions 0.0.1 and 0.0.2, then
+upgrades to the actual candidate/Release installer bytes. It validates each manifest
+with the current official WinGet client, tests direct and PATH invocation including
+Bunko, and uninstalls using the local manifest before the ID has a community source
+entry. Production users use the documented package ID after upstream publication.

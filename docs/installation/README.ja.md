@@ -36,7 +36,9 @@ mio-core version
 
 Full のコマンドは `mio`、Core は `mio-core` です。インストール先は独立しています。
 Core の更新・削除には `MioKobo.Mio.Core` を指定します。
-ZIP Portable による Bunko ディレクトリー全体の保持を Windows Runner で検証します。
+自己完結型の Inno インストーラーで Bunko 全体を保持し、実際の bin をユーザー PATH
+に追加します。Windows Runner でファイル一覧とコマンドを検証します。
+アンインストール時はこの PATH 項目を削除します。
 Microsoft のコミュニティーリポジトリへの初回提出は手動レビューが必要です。
 
 ## Linux AMD64：APT

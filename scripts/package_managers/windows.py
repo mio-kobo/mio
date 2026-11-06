@@ -26,6 +26,7 @@ def installer_script(payload, output, version, flavor, filename):
     return rf'''[Setup]
 AppId={{{{{appid}}}
 AppName=Mio{' Core' if flavor == 'core' else ''}
+UninstallDisplayName=Mio{' Core' if flavor == 'core' else ''}
 AppVersion={version}
 VersionInfoVersion={numeric}
 AppPublisher=Mio Kobo
