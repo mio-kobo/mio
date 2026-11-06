@@ -218,9 +218,9 @@ def install(assets, target):
                         for suffix, data in files.items():
                             (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
-                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--verbose-logs', '--log', assets / (flavor+'-'+v+'-installer.log'), '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--verbose-logs', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
                         if v == '0.0.1':
-                            command += ['--location', location]
+                            command += ['--location', location, '--log', assets / (flavor+'-'+v+'-installer.log')]
                         run(*command)
                         installed = location
                         expected_manifest = json.loads((root / 'manifest.json').read_text())
@@ -255,6 +255,8 @@ def install(assets, target):
     output.write_text(json.dumps(results, indent=2)+'\n')
 
 if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--assets', type=Path, required=True)
     p.add_argument('--target', choices=TARGETS, required=True)
@@ -264,7 +266,7 @@ if __name__ == '__main__':
     except Exception as error:
         for log in a.assets.glob('*-installer.log'):
             print('INSTALLER LOG:', log, flush=True)
-            print(log.read_text(encoding='utf-8', errors='replace')[-20000:], flush=True)
+            print(log.read_text(encoding='utf-8-sig', errors='replace')[-20000:], flush=True)
         output = a.assets / 'package-manager-verification.json'
         result = json.loads(output.read_text()) if output.exists() else dict(target=a.target, checks=[])
         result.update(status='FAIL', error=str(error))
