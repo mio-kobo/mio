@@ -37,6 +37,17 @@ koukai teisu import_remove_directory = 18;
 koukai teisu import_process_id = 19;
 koukai teisu import_tick_count = 20;
 koukai teisu import_full_path = 21;
+// 22 GetModuleFileNameW (executable path). Process layer (winprocess.mio): 23 CreateProcessW, 24 WaitForSingleObject,
+// 25 GetExitCodeProcess, 26 TerminateProcess, 27 GetStartupInfoW, 28 PeekNamedPipe, 29 GetFileType, 30 Sleep.
+koukai teisu import_module_file = 22;
+koukai teisu import_create_process = 23;
+koukai teisu import_wait_object = 24;
+koukai teisu import_exit_code = 25;
+koukai teisu import_terminate_process = 26;
+koukai teisu import_startup_info = 27;
+koukai teisu import_peek_pipe = 28;
+koukai teisu import_file_type = 29;
+koukai teisu import_sleep = 30;
 koukai teisu io_failure_exit = 111;
 koukai teisu heap_reserve = 8589934592;
 koukai teisu heap_first_commit = 16777216;
@@ -413,7 +424,20 @@ waza emit_win_syscall(code: x86_64.Assembler, ctx: WinContext) -> unit {
     x86_64.call(code, "rt.syscall.dev");
     x86_64.cmp_ri(code, x86_64.rax, 0);
     x86_64.jcc(code, x86_64.cc_ge, "rt.syscall.out");
+    // "/dev/null" is the Windows NUL device, opened with the requested access like any file
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsp, 64);
+    x86_64.lea_label(code, x86_64.rdi, "rt.text.dev_null");
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.call(code, "rt.syscall.dev");
+    x86_64.cmp_ri(code, x86_64.rax, 0);
+    x86_64.jcc(code, x86_64.cc_l, "rt.syscall.open_convert");
+    x86_64.mov_ri(code, x86_64.rcx, scratch_path());
+    kaku nul: []int64 = [78, 0, 85, 0, 76, 0, 0, 0];
+    kaku k = 0;
+    aida (k < len(nul)) { x86_64.mov_ri(code, x86_64.rdx, nul[k]); x86_64.mov_store8(code, x86_64.rcx, k, x86_64.rdx); k = k + 1; }
+    x86_64.jmp(code, "rt.syscall.open_flags");
     // UTF-8 -> UTF-16 into the scratch buffer
+    x86_64.label(code, "rt.syscall.open_convert");
     x86_64.mov_ri(code, x86_64.rcx, 65001);
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.mov_load(code, x86_64.r8, x86_64.rsp, 64);
@@ -427,6 +451,7 @@ waza emit_win_syscall(code: x86_64.Assembler, ctx: WinContext) -> unit {
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_e, "rt.syscall.einval");
     // access, disposition from the Linux flags (rsi was saved at +72)
+    x86_64.label(code, "rt.syscall.open_flags");
     x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 72);
     x86_64.cmp_ri(code, x86_64.rax, 65536);
     x86_64.jcc(code, x86_64.cc_e, "rt.syscall.opendir");
@@ -832,6 +857,9 @@ waza emit_win_syscall(code: x86_64.Assembler, ctx: WinContext) -> unit {
     x86_64.label(code, "rt.text.dev_stdout");
     x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
     x86_64.byte(code, 115); x86_64.byte(code, 116); x86_64.byte(code, 100); x86_64.byte(code, 111); x86_64.byte(code, 117); x86_64.byte(code, 116); x86_64.byte(code, 0);
+    x86_64.label(code, "rt.text.dev_null");
+    x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
+    x86_64.byte(code, 110); x86_64.byte(code, 117); x86_64.byte(code, 108); x86_64.byte(code, 108); x86_64.byte(code, 0);
     x86_64.label(code, "rt.text.dev_stderr");
     x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
     x86_64.byte(code, 115); x86_64.byte(code, 116); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 114); x86_64.byte(code, 114); x86_64.byte(code, 0);
@@ -1085,6 +1113,8 @@ waza emit_win_runtime(code: x86_64.Assembler, ctx: WinContext) -> unit {
     emit_win_commit(code, ctx);
     emit_win_init(code, ctx);
     emit_win_heap_grow(code, ctx);
+    emit_win_process(code, ctx);
+    emit_win_testing(code, ctx);
     // Body-less native functions without a Windows implementation yet stop with an explicit runtime error.
     x86_64.label(code, "rt.os_exit");
     x86_64.mov_rr(code, x86_64.rcx, x86_64.rdi);
@@ -1109,6 +1139,11 @@ waza os_routine(operation: string) -> string {
     moshi (operation == "env_size") { kaesu "rt.os_env_size"; }
     moshi (operation == "env_copy") { kaesu "rt.os_env_copy"; }
     moshi (operation == "monotonic_ms") { kaesu "rt.os_monotonic_ms"; }
+    moshi (operation == "spawn") { kaesu "rt.os_spawn"; }
+    moshi (operation == "exec") { kaesu "rt.os_exec"; }
+    moshi (operation == "spawn_test") { kaesu "rt.os_spawn_test"; }
+    moshi (operation == "stdin_ready") { kaesu "rt.os_stdin_ready"; }
+    moshi (operation == "stdin_wait") { kaesu "rt.os_stdin_wait"; }
     kaesu "";
 }
 waza initial_sp_cell() -> int64 { kaesu gc_state() + 72; }

@@ -416,6 +416,9 @@ waza emit_os_spawn(code: x86_64.Assembler) -> unit {
     x86_64.mov_eax_imm(code, 59);
     x86_64.syscall(code);
     x86_64.ret(code);
+    x86_64.label(code, "rt.os_spawn.not_started");
+    x86_64.mov_ri(code, x86_64.rax, 127);
+    x86_64.ret(code);
     x86_64.label(code, "rt.os_exec.invalid");
     x86_64.mov_ri(code, x86_64.rax, -22);
     x86_64.ret(code);
@@ -423,7 +426,7 @@ waza emit_os_spawn(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.os_spawn");
     x86_64.call(code, "rt.os_prepare_exec");
     x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
-    x86_64.jcc(code, x86_64.cc_e, "rt.os_exec.invalid");
+    x86_64.jcc(code, x86_64.cc_e, "rt.os_spawn.not_started");
     x86_64.push_r(code, x86_64.rdi);
     x86_64.push_r(code, x86_64.rsi);
     x86_64.push_r(code, x86_64.rdx);
@@ -531,12 +534,12 @@ waza emit_os_spawn_test(code: x86_64.Assembler) -> unit {
     x86_64.mov_store(code, x86_64.rbp, -24, x86_64.r8);
     x86_64.mov_store(code, x86_64.rbp, -32, x86_64.r9);
     x86_64.cmp_ri(code, x86_64.r9, 1);
-    x86_64.jcc(code, x86_64.cc_l, "rt.os_spawn_test.invalid");
+    x86_64.jcc(code, x86_64.cc_l, "rt.os_spawn_test.setup_invalid");
     x86_64.cmp_ri(code, x86_64.r9, 3600);
-    x86_64.jcc(code, x86_64.cc_g, "rt.os_spawn_test.invalid");
+    x86_64.jcc(code, x86_64.cc_g, "rt.os_spawn_test.setup_invalid");
     x86_64.call(code, "rt.os_prepare_exec");
     x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
-    x86_64.jcc(code, x86_64.cc_e, "rt.os_spawn_test.invalid");
+    x86_64.jcc(code, x86_64.cc_e, "rt.os_spawn_test.not_started");
     x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rdi);
     x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rsi);
     x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rdx);
@@ -572,8 +575,13 @@ waza emit_os_spawn_test(code: x86_64.Assembler) -> unit {
     x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
     x86_64.pop_r(code, x86_64.rbp);
     x86_64.ret(code);
-    x86_64.label(code, "rt.os_spawn_test.invalid");
-    x86_64.mov_ri(code, x86_64.rax, -22);
+    // Same statuses as the darwin-arm64 runtime, which validates in the child: a budget outside 1..3600 is a setup
+    // failure (126) and a path or argument that cannot be passed to execve (NUL) means the program cannot start (127).
+    x86_64.label(code, "rt.os_spawn_test.setup_invalid");
+    x86_64.mov_ri(code, x86_64.rax, 126);
+    x86_64.jmp(code, "rt.os_spawn_test.done");
+    x86_64.label(code, "rt.os_spawn_test.not_started");
+    x86_64.mov_ri(code, x86_64.rax, 127);
     x86_64.jmp(code, "rt.os_spawn_test.done");
     // child
     x86_64.label(code, "rt.os_spawn_test.child");

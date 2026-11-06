@@ -85,9 +85,27 @@ koukai waza source_file_identity(file: string) -> string {
     physical=os.canonical_path(path.dir(file));moshi(physical!=mu){kaesu path.join(physical,path.base(file));}kaesu path.clean(file);
 }
 
+// Windows host: SystemRoot names an existing directory (neither Unix host has one). Physical identities on Windows are
+// drive-absolute ("C:/dir/file.mio", '/' separators, from os.canonical_path).
+koukai waza host_is_windows() -> bool {
+    kaku system=os.environment("SystemRoot");moshi(system==mu){kaesu iie;}
+    kaesu system!="" && fs.is_dir(system) && !fs.is_dir("/proc/self");
+}
+// True for "X:/..." or "X:" with an ASCII drive letter.
+koukai waza drive_absolute(value: string) -> bool {
+    kaku bytes=string.to_bytes(value);moshi(len(bytes)<2 || bytes[1]!=uint8(58)){kaesu iie;}
+    kaku letter=(bytes[0]>=uint8(65) && bytes[0]<=uint8(90)) || (bytes[0]>=uint8(97) && bytes[0]<=uint8(122));
+    kaesu letter && (len(bytes)==2 || bytes[2]==uint8(47));
+}
+// Absolute identity: a POSIX absolute path on every host; on a Windows host also a drive-absolute path. kiso/path
+// keeps its host-independent POSIX semantics, so "C:/x" stays relative there and on Unix hosts.
+koukai waza absolute_identity(value: string) -> bool {
+    moshi(path.is_abs(value)){kaesu hai;}
+    kaesu drive_absolute(value) && host_is_windows();
+}
 koukai waza package_identity(root: string, requested: string) -> string {
     moshi(string.has_prefix(requested,"kiso/") || string.has_prefix(requested,"mio/")){kaesu path.clean(requested);}
-    moshi(path.is_abs(requested)){kaesu source_identity(requested);}kaesu source_identity(path.join(root,requested));
+    moshi(absolute_identity(requested)){kaesu source_identity(requested);}kaesu source_identity(path.join(root,requested));
 }
 waza source_directory(state: PackageState, root: string, package_path: string) -> string {
     moshi(string.has_prefix(package_path,"kiso/")){
@@ -96,7 +114,7 @@ waza source_directory(state: PackageState, root: string, package_path: string) -
         moshi(physical!=mu){moshi(base!=mu){moshi(physical!=base && !string.has_prefix(physical,string.concat(base,"/"))){state.failed[0]=hai;state.diagnostic[0]=string.concat("E_IMPORT Bunko package escapes explicit root: ",package_path);}}kaesu physical;}
         kaesu raw;
     }
-    moshi(path.is_abs(package_path)){kaesu path.clean(package_path);}kaesu path.join(root,package_path);
+    moshi(absolute_identity(package_path)){kaesu path.clean(package_path);}kaesu path.join(root,package_path);
 }
 
 waza add_socket_layouts(result: []codegen.NativeFunctionLayout, packages: []resolver.ResolvedPackage) -> unit {

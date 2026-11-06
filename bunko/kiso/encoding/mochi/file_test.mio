@@ -1,0 +1,29 @@
+yobu "kiso/testing";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+yobu "kiso/convert";
+
+waza scratch_file(name: string) -> string {
+    kaku root = "/tmp";
+    moshi (!fs.is_dir(root)) { kaku temp = os.environment("TEMP"); moshi (temp != mu) { root = temp; } }
+    kaesu string.concat(root, string.concat("/mio-mochi-test-", string.concat(convert.format_int(os.pid()), string.concat("-", name))));
+}
+
+waza test_summarize_and_decode_file() -> unit {
+    kaku decoded = decode(minimal(uint16(14)));
+    kaku file = decoded.value;
+    moshi (file == mu) { testing.fail("minimal v14 should decode"); kaesu; }
+    kaku summary = summarize(file);
+    testing.expect(summary.version == 14 && summary.constants == 0 && summary.functions == 0 && summary.globals == 0, "summary counts");
+    testing.expect(summary.instruction_bytes == 1 && summary.canonical_size == len(canonical_bytes(file)), "summary sizes");
+    kaku path = scratch_file("minimal.mochi");
+    testing.expect(fs.write_all(path, canonical_bytes(file)).error == mu, "write the canonical file");
+    kaku again = decode_file(path);
+    kaku again_file = again.value;
+    testing.expect(again.error == mu && again_file != mu, "decode_file reads the file");
+    moshi (again_file != mu) { testing.expect(summarize(again_file).canonical_size == summary.canonical_size, "decode_file round trip"); }
+    testing.expect(os.remove(path) == 0, "cleanup");
+    kaku missing = decode_file(path).error;
+    moshi (missing != mu) { testing.expect(error_code(missing) == 12, "a missing file is IoFailure"); } sore { testing.fail("a missing file must fail"); }
+}

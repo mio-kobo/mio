@@ -1,0 +1,52 @@
+yobu "kiso/testing";
+
+waza test_make_and_with_capacity() -> unit {
+    kaku filled = make[int64](3, 7);
+    testing.expect(len(filled) == 3 && filled[0] == 7 && filled[2] == 7, "make should fill every element");
+    kaku empty = make[string](0, "x");
+    testing.expect(len(empty) == 0, "make with length 0 should be empty");
+    kaku reserved = with_capacity[uint8](64);
+    testing.expect(len(reserved) == 0 && capacity(reserved) >= 64, "with_capacity should reserve without length");
+}
+
+waza test_push_capacity_reserve() -> unit {
+    kaku values = with_capacity[int64](0);
+    kaku index = 0;
+    aida (index < 1000) { push(values, index * 3); index = index + 1; }
+    testing.expect(len(values) == 1000 && values[999] == 2997, "push should grow the array");
+    testing.expect(capacity(values) >= len(values), "capacity should cover the length");
+    kaku before = capacity(values);
+    reserve(values, 5000);
+    testing.expect(capacity(values) >= 6000 && capacity(values) >= before, "reserve should guarantee room for more");
+    testing.expect(len(values) == 1000 && values[500] == 1500, "reserve should keep the contents");
+}
+
+waza test_clone_is_independent_and_shallow() -> unit {
+    kaku original: []int64 = [1, 2, 3];
+    kaku copy = clone(original);
+    copy[0] = 99;
+    testing.expect(original[0] == 1 && copy[0] == 99 && len(copy) == 3, "clone should create an independent array");
+    kaku shared = original;
+    shared[1] = 42;
+    testing.expect(original[1] == 42, "assignment should share the array");
+    kaku nested: [][]int64 = [[5]];
+    kaku shallow = clone(nested);
+    shallow[0][0] = 6;
+    testing.expect(nested[0][0] == 6, "clone should copy elements shallowly");
+}
+
+waza test_truncate_and_append_all() -> unit {
+    kaku values: []string = ["a", "b", "c", "d"];
+    kaku before = capacity(values);
+    truncate(values, 2);
+    testing.expect(len(values) == 2 && values[1] == "b", "truncate should shorten in place");
+    testing.expect(capacity(values) == before, "truncate should keep the capacity");
+    truncate(values, 2);
+    testing.expect(len(values) == 2, "truncate to the same length should be a no-op");
+    append_all(values, ["x", "y"]);
+    testing.expect(len(values) == 4 && values[2] == "x" && values[3] == "y", "append_all should append in order");
+    append_all(values, values);
+    testing.expect(len(values) == 8 && values[4] == "a" && values[7] == "y", "append_all should copy the current source when it aliases the destination");
+    append_all(values, []);
+    testing.expect(len(values) == 8, "appending an empty array should not change the length");
+}

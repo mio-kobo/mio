@@ -21,6 +21,16 @@ allocation, fixed data base), `runtime_fs.mio` (`syscall` -> `call rt.syscall`; 
   returns -ENOSYS. `/dev/stdin|stdout|stderr` map to the standard handles. Directory order is the OS enumeration order.
 * Unwind info: program functions and Win64 boundary routines are frame-pointer functions with RUNTIME_FUNCTION/UNWIND_INFO; the
   ported Linux runtime routines (allocator, collector, object helpers, fs layer) are not covered.
-* Not implemented (explicit runtime error "unsupported operation"): os arguments/environment/spawn/exec/pid/chmod/remove/rmdir/
-  real_path/monotonic_ms/stdin readiness, sockets, testing runtime. Threads, TLS and concurrent GC are not enabled. No crash
-  handler: a fault ends the process with the Windows exception code.
+* OS layer (`runtime_os.mio`, `winprocess.mio`): arguments and environment (GetCommandLineW / GetEnvironmentStringsW,
+  CommandLineToArgvW rules), exit, pid, monotonic_ms (GetTickCount64), remove/rmdir, real_path (GetFullPathNameW, `/`
+  separators), chmod (successful no-op: Windows has no POSIX mode bits), spawn (CreateProcessW; the argument array is
+  quoted so the child sees the same strings; a program that cannot be started returns 127 like the Linux child), exec
+  (no exec on Windows: start, wait, exit with the child's status), spawn_test (stdout/stderr redirected to files, the
+  records file is the child's "fd 3" through the C runtime's STARTUPINFO lpReserved2 table, wall deadline = cpu_seconds,
+  stopped child = 142, unopenable file = 126), stdin_ready/stdin_wait (pipes via PeekNamedPipe, files always ready,
+  console via its input handle; stdin_wait polls every 10 ms).
+* kiso/testing report channel (`winprocess.mio`): same protocol as `kiso/aot/lowerlinux/runtime_testing.mio`, so
+  `mio test` runs natively on Windows.
+* Not implemented (explicit runtime error "unsupported operation"): sockets (`kiso/net/tcp`). Threads, TLS and
+  concurrent GC are not enabled (the Linux backend does not enable them either). No crash handler: a fault ends the
+  process with the Windows exception code.

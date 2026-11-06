@@ -1,0 +1,76 @@
+yobu "kiso/testing";
+yobu "kiso/fs";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/bytes";
+
+waza scratch(name: string) -> string {
+    kaku root = "/tmp";
+    moshi (!fs.is_dir(root)) {
+        kaku temp = environment("TEMP");
+        moshi (temp != mu) { root = temp; }
+    }
+    kaesu string.concat(root, string.concat("/mio-os-test-", string.concat(convert.format_int(pid()), string.concat("-", name))));
+}
+
+waza test_arguments() -> unit {
+    kaku first = argument(0);
+    testing.expect(first != mu, "argument 0 is the program");
+    kaku all = arguments();
+    testing.expect(len(all) >= 1, "arguments include argv[0]");
+    moshi (first != mu) { testing.expect(all[0] == first, "arguments()[0] equals argument(0)"); }
+    testing.expect(argument(-1) == mu && argument(len(all)) == mu, "out-of-range arguments are mu");
+}
+
+waza test_environment() -> unit {
+    testing.expect(environment("PATH") != mu, "PATH is visible (case-insensitive on Windows, where it is named Path)");
+    testing.expect(environment("MIO_TEST_SURELY_MISSING_VARIABLE_7319") == mu, "a missing variable is mu");
+    testing.expect(getenv("MIO_TEST_SURELY_MISSING_VARIABLE_7319") == "", "getenv of a missing variable is empty");
+    kaku path = environment("PATH");
+    moshi (path != mu) { testing.expect(getenv("PATH") == path, "getenv returns the same value"); }
+}
+
+waza test_process_identity_and_clock() -> unit {
+    testing.expect(pid() > 0, "pid is positive");
+    testing.expect(pid() == pid(), "pid is stable");
+    kaku before = monotonic_ms();
+    kaku spin = 0; aida (spin < 100000) { spin = spin + 1; }
+    kaku after = monotonic_ms();
+    testing.expect(before >= 0 && after >= before, "monotonic_ms never goes backwards");
+}
+
+waza test_files_and_canonical_paths() -> unit {
+    kaku directory = scratch("files");
+    testing.expect(fs.create_dir(directory).error == mu, "create the scratch directory");
+    kaku file = string.concat(directory, "/x.txt");
+    testing.expect(fs.write_all(file, [65]).error == mu, "create a file");
+    testing.expect(chmod(file, 420) == 0, "chmod of an existing file succeeds (no-op on Windows)");
+    kaku canonical = canonical_path(file);
+    testing.expect(canonical != mu, "canonical_path of an existing file");
+    moshi (canonical != mu) {
+        testing.expect(string.has_suffix(canonical, "/x.txt"), "canonical paths use / separators");
+        testing.expect(!bytes.contains(string.to_bytes(canonical), uint8(92)), "no backslashes in canonical paths");
+        kaku again = canonical_path(canonical);
+        moshi (again != mu) { testing.expect(again == canonical, "canonical_path is idempotent"); }
+    }
+    testing.expect(canonical_path(string.concat(directory, "/missing")) == mu, "canonical_path of a missing path is mu");
+    testing.expect(remove_dir(directory) < 0, "remove_dir of a non-empty directory fails");
+    testing.expect(remove(file) == 0, "remove an existing file");
+    testing.expect(remove(file) < 0, "remove of a missing file reports a negative errno");
+    testing.expect(remove_dir(directory) == 0, "remove an empty directory");
+    testing.expect(remove_dir(directory) < 0, "remove_dir of a missing directory reports a negative errno");
+}
+
+waza test_process_errors() -> unit {
+    kaku missing = scratch("no-such-program");
+    testing.expect(spawn(missing, [missing]) == 127, "a program that cannot be started reports 127");
+    kaku nul = string.from_utf8([98, 0, 99]);
+    moshi (nul != mu) {
+        testing.expect(spawn(nul, ["x"]) == 127, "a path with NUL cannot start a program (127)");
+        testing.expect(spawn(missing, [missing, nul]) == 127, "an argument with NUL cannot start a program (127)");
+        testing.expect(exec(nul, ["x"]) == -22, "exec of a path with NUL is -EINVAL and returns");
+    }
+    testing.expect(spawn_test(missing, [missing], "a", "b", "c", 0) == 126, "a zero CPU budget is a setup failure (126)");
+    testing.expect(spawn_test(missing, [missing], "a", "b", "c", 3601) == 126, "more than 3600 seconds is a setup failure (126)");
+    testing.expect(stdin_wait(-2) == -22 && stdin_wait(2147483648) == -22, "invalid stdin timeouts are -EINVAL");
+}

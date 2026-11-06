@@ -51,9 +51,10 @@ Mio 与 Mochi 也是项目中的两位角色：Mio 是上方的少女，Mochi �
 
 | 平台或能力 | 当前状态 |
 | --- | --- |
-| macOS ARM64 原生 AOT | 已通过 M18 与发行候选验证；`Mio-2.1` 的原生 CI 在 `macos-15` 上运行（结果见 Actions） |
-| Linux x86-64 原生（纯 Mio，静态 ELF） | 实验性：CI 中编译器/CLI 原生固定点、`mio test`、Runtime ABI 契约通过 |
-| Windows x86-64 原生（纯 Mio，PE32+） | 实验性：CI 中 CLI 原生固定点与 Runtime ABI 契约通过；`mio test`、线程等尚未支持 |
+| macOS ARM64 原生 AOT | 已通过 M18 与发行候选验证；`Mio-2.1` 的原生 CI 在 `macos-15` 上运行：CLI 原生固定点、`mio run` 与进程协议、全部包的 `mio test`、Runtime ABI 契约与差分（结果见 Actions） |
+| Linux x86-64 原生（纯 Mio，静态 ELF） | 实验性：CI 中编译器/CLI 原生固定点、`mio run` 与进程协议、全部包的 `mio test`、Runtime ABI 契约与差分通过；`chant` 浮点值尚不支持（编译期报错，`convert.format_float64/32` 给出与各平台一致的文本） |
+| Windows x86-64 原生（纯 Mio，PE32+） | 实验性：CI 中 CLI 原生固定点、`mio run` 与进程协议（CreateProcessW）、全部包的 `mio test`、Runtime ABI 契约与差分通过；`kiso/net/tcp`（尚无 Winsock 层）与 `chant` 浮点值尚不支持 |
+| Bunko 标准库 | 全部库公开函数都有原生测试（PR CI 的 bunko-coverage 检查）；逐函数、逐平台结果见 [Bunko 测试矩阵](../tests/bunko-matrix/bunko-test-matrix.md) |
 | Linux ARM64 | 规划中 |
 | 分代 GC | darwin-arm64 已实现（Object ABI v1）；x86-64 为非分代精确标记清除。两者满足同一 [Runtime ABI 契约 RA-1](runtime-abi.md) |
 | High / Balanced / Low GC 策略、并发 GC | 规划中 |

@@ -49,9 +49,10 @@ Mio と Mochi はプロジェクトのマスコットでもあります。上の
 
 | プラットフォーム・機能 | 現在の状況 |
 | --- | --- |
-| macOS ARM64 Native AOT | M18 とリリース候補の検証を通過。`Mio-2.1` のネイティブ CI は `macos-15` で実行（結果は Actions を参照）。 |
-| Linux x86-64 ネイティブ（Mio、静的 ELF） | 実験段階。コンパイラ／CLI のネイティブ固定点、`mio test`、Runtime ABI 契約が CI で通過。 |
-| Windows x86-64 ネイティブ（Mio、PE32+） | 実験段階。CLI のネイティブ固定点と Runtime ABI 契約が CI で通過。`mio test` やスレッドは未対応。 |
+| macOS ARM64 Native AOT | M18 とリリース候補の検証を通過。`Mio-2.1` のネイティブ CI（`macos-15`）で CLI のネイティブ固定点、`mio run` とプロセスプロトコル、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスを実行（結果は Actions を参照）。 |
+| Linux x86-64 ネイティブ（Mio、静的 ELF） | 実験段階。コンパイラ／CLI のネイティブ固定点、`mio run` とプロセスプロトコル、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスが CI で通過。浮動小数点値の `chant` は未対応（コンパイル時エラー。`convert.format_float64/32` は全プラットフォームで同じ文字列を返す）。 |
+| Windows x86-64 ネイティブ（Mio、PE32+） | 実験段階。CLI のネイティブ固定点、`mio run` とプロセスプロトコル（CreateProcessW）、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスが CI で通過。`kiso/net/tcp`（Winsock 層なし）と浮動小数点値の `chant` は未対応。 |
+| Bunko 標準ライブラリ | すべてのライブラリ公開関数にネイティブテストあり（PR CI の bunko-coverage チェック）。関数別・プラットフォーム別の結果は [Bunko テストマトリクス](../tests/bunko-matrix/bunko-test-matrix.md)。 |
 | Linux ARM64 | 計画中。 |
 | 世代別 GC | darwin-arm64 では実装済み（Object ABI v1）。x86-64 では非世代型の正確な mark-and-sweep GC を使用。双方が [Runtime ABI 契約 RA-1](runtime-abi.md) に準拠。 |
 | High / Balanced / Low GC モード、並行 GC | 計画中。 |

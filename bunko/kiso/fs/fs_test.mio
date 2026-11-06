@@ -1,0 +1,133 @@
+yobu "kiso/testing";
+yobu "kiso/os";
+yobu "kiso/io";
+yobu "kiso/bytes";
+yobu "kiso/string";
+yobu "kiso/convert";
+yobu "kiso/array";
+
+// A private scratch directory: /tmp on Unix hosts, the TEMP directory on Windows (where /tmp is not a system path).
+waza scratch(name: string) -> string {
+    kaku root = "/tmp";
+    moshi (!is_dir(root)) {
+        kaku temp = os.environment("TEMP");
+        moshi (temp != mu) { root = temp; }
+    }
+    kaku directory = string.concat(root, string.concat("/mio-fs-test-", string.concat(convert.format_int(os.pid()), string.concat("-", name))));
+    create_dir(directory);
+    kaesu directory;
+}
+
+waza file_in(directory: string, name: string) -> string { kaesu string.concat(directory, string.concat("/", name)); }
+
+waza is_not_found(error: FsError?) -> bool {
+    moshi (error == mu) { kaesu iie; }
+    awase (error) {
+        baai NotFound(message) { kaesu hai; }
+        baai PermissionDenied(message) { kaesu iie; }
+        baai Closed(message) { kaesu iie; }
+        baai InvalidArgument(message) { kaesu iie; }
+        baai NoSpace(message) { kaesu iie; }
+        baai InvalidPath(message) { kaesu iie; }
+        baai IOFailure(message) { kaesu iie; }
+    }
+    kaesu iie;
+}
+
+waza is_closed(error: FsError?) -> bool {
+    moshi (error == mu) { kaesu iie; }
+    awase (error) {
+        baai Closed(message) { kaesu hai; }
+        baai NotFound(message) { kaesu iie; }
+        baai PermissionDenied(message) { kaesu iie; }
+        baai InvalidArgument(message) { kaesu iie; }
+        baai NoSpace(message) { kaesu iie; }
+        baai InvalidPath(message) { kaesu iie; }
+        baai IOFailure(message) { kaesu iie; }
+    }
+    kaesu iie;
+}
+
+waza test_write_all_and_read_all_are_byte_exact() -> unit {
+    kaku directory = scratch("bytes");
+    kaku path = file_in(directory, "data.bin");
+    // CR, LF, NUL and 0xFF must survive unchanged: no newline translation on any platform.
+    kaku data: []uint8 = [0, 13, 10, 255, 10, 65, 13];
+    testing.expect(write_all(path, data).error == mu, "write_all should succeed");
+    kaku back = read_all(path);
+    testing.expect(back.error == mu && bytes.equal(back.data, data), "read_all should return exactly the written bytes");
+    testing.expect(write_all(path, [1]).error == mu, "write_all should overwrite");
+    kaku shorter = read_all(path);
+    testing.expect(bytes.equal(shorter.data, [1]), "write_all should truncate the previous content");
+    testing.expect(write_all(path, []).error == mu && len(read_all(path).data) == 0, "an empty file round-trips");
+    kaku large = bytes.new_buffer();
+    kaku index = 0;
+    aida (index < 100000) { bytes.write_byte(large, uint8(index - (index / 251) * 251)); index = index + 1; }
+    testing.expect(write_all(path, bytes.buffer_bytes(large)).error == mu, "a file larger than one read chunk is written");
+    kaku big = read_all(path);
+    testing.expect(len(big.data) == 100000 && big.data[99999] == uint8(99999 - (99999 / 251) * 251), "a large file is read completely");
+    testing.expect(os.remove(path) == 0 && os.remove_dir(directory) == 0, "cleanup");
+}
+
+waza test_streams_append_and_close() -> unit {
+    kaku directory = scratch("streams");
+    kaku path = file_in(directory, "log.txt");
+    kaku created = open_write(path);
+    kaku file = created.file;
+    testing.expect(created.error == mu && file != mu, "open_write should create the file");
+    moshi (file == mu) { kaesu; }
+    kaku written = io.write_all(writer(file), string.to_bytes("one\n"), 0, 4);
+    testing.expect(written.count == 4 && written.error == mu, "writer should write through the file");
+    testing.expect(close(file).error == mu, "first close should succeed");
+    testing.expect(is_closed(close(file).error), "a second close reports Closed");
+    kaku after = write(file, [1], 0, 1);
+    testing.expect(after.error != mu, "writing after close fails");
+    kaku appended = open_append(path);
+    kaku tail = appended.file;
+    moshi (tail == mu) { testing.fail("open_append should open the file"); kaesu; }
+    testing.expect(write(tail, string.to_bytes("two\n"), 0, 4).count == 4, "append write");
+    close(tail);
+    kaku opened = open_read(path);
+    kaku reading = opened.file;
+    moshi (reading == mu) { testing.fail("open_read should open the file"); kaesu; }
+    kaku destination = array.make[uint8](8, uint8(0));
+    kaku full = io.read_full(reader(reading), destination, 0, 8);
+    testing.expect(full.count == 8 && bytes.equal(destination, string.to_bytes("one\ntwo\n")), "append should keep earlier content");
+    kaku invalid = read(reading, destination, 7, 2);
+    testing.expect(invalid.error != mu && invalid.count == 0, "an out-of-range read is InvalidArgument");
+    kaku end = read(reading, destination, 0, 1);
+    testing.expect(end.count == 0 && end.eof, "reading at the end reports EOF");
+    close(reading);
+    testing.expect(os.remove(path) == 0 && os.remove_dir(directory) == 0, "cleanup");
+}
+
+waza test_stat_directories_and_unicode_names() -> unit {
+    kaku directory = scratch("unicode");
+    testing.expect(is_dir(directory) && !is_file(directory) && exists(directory), "scratch directory");
+    kaku child = file_in(directory, "中文目录");
+    testing.expect(create_dir(child).error == mu, "create_dir with a Chinese name");
+    testing.expect(create_dir(child).error != mu, "create_dir on an existing directory fails");
+    kaku name = "日本語-ファイル.txt";
+    kaku path = file_in(directory, name);
+    testing.expect(write_all(path, string.to_bytes("みお")).error == mu, "write a file with a Japanese name");
+    kaku info = stat(path);
+    testing.expect(info.exists && info.is_file && !info.is_dir && info.error == mu, "stat of a file");
+    testing.expect(!is_character_device(path) && !is_character_device(directory), "files and directories are not character devices");
+    kaku listing = read_dir(directory);
+    testing.expect(listing.error == mu && len(listing.entries) == 2, "read_dir lists exactly the two entries (no . or ..)");
+    kaku found_file = iie; kaku found_dir = iie; kaku index = 0;
+    aida (index < len(listing.entries)) {
+        kaku entry = listing.entries[index];
+        moshi (entry.name == name && entry.is_file && !entry.is_dir) { found_file = hai; }
+        moshi (entry.name == "中文目录" && entry.is_dir && !entry.is_file) { found_dir = hai; }
+        index = index + 1;
+    }
+    testing.expect(found_file && found_dir, "entry names are returned as the same UTF-8 strings");
+    kaku missing = stat(file_in(directory, "missing"));
+    testing.expect(!missing.exists && !missing.is_file && !missing.is_dir && missing.error == mu, "stat of a missing path");
+    testing.expect(is_not_found(read_all(file_in(directory, "missing")).error), "read_all of a missing file is NotFound");
+    testing.expect(is_not_found(open_read(file_in(directory, "missing")).error), "open_read of a missing file is NotFound");
+    testing.expect(read_dir(file_in(directory, "missing")).error != mu, "read_dir of a missing directory fails");
+    testing.expect(os.remove(path) == 0 && os.remove_dir(child) == 0 && os.remove_dir(directory) == 0, "cleanup");
+    testing.expect(!exists(directory), "the scratch directory is gone");
+}

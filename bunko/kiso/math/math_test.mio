@@ -1,6 +1,50 @@
 yobu "kiso/testing";
 
+waza int_is(value: int64?, expected: int64) -> bool { moshi (value == mu) { kaesu iie; } kaesu value == expected; }
+
 waza test_integer_helpers() -> unit {
     testing.expect(gcd(42, 30) == 6, "gcd should find the greatest common divisor");
     testing.expect(lcm(6, 8) == 24, "lcm should find the least common multiple");
+    testing.expect(gcd(-12, 18) == 6 && gcd(0, 0) == 0 && gcd(0, -5) == 5, "gcd signs and zero");
+    testing.expect(lcm(-4, 6) == 12 && lcm(0, 9) == 0, "lcm signs and zero");
+    kaku minimum = -9223372036854775807 - 1;
+    testing.expect(checked_gcd(minimum, 0) == mu && checked_gcd(minimum, minimum) == mu, "gcd that does not fit int64 is mu");
+    testing.expect(int_is(checked_gcd(minimum, 2), 2), "checked_gcd with the minimum value");
+    testing.expect(checked_lcm(9223372036854775807, 2) == mu, "lcm overflow is mu");
+    testing.expect(int_is(checked_lcm(21, 6), 42), "checked_lcm");
+}
+
+waza test_compare_helpers() -> unit {
+    testing.expect(min(3, -2) == -2 && max(3, -2) == 3 && min(7, 7) == 7, "integer min and max");
+    testing.expect(min(1.5, 2.5) == 1.5 && max(float32(1.5), float32(-1.0)) == float32(1.5), "float min and max");
+    testing.expect(is_negative_zero_text(min(0.0, -0.0)) && !is_negative_zero_text(max(0.0, -0.0)), "min/max order signed zeros");
+    kaku nan = 0.0 / 0.0;
+    testing.expect(is_nan(min(nan, 1.0)) && is_nan(max(1.0, nan)), "NaN propagates through min and max");
+    testing.expect(abs(-5) == 5 && abs(5) == 5 && abs(-2.5) == 2.5, "abs");
+    testing.expect(checked_abs(-9223372036854775807 - 1) == mu && int_is(checked_abs(-9), 9), "checked_abs overflow");
+    testing.expect(clamp(15, 0, 10) == 10 && clamp(-3, 0, 10) == 0 && clamp(4, 0, 10) == 4, "clamp");
+    testing.expect(clamp(float32(2.5), float32(0.0), float32(1.0)) == float32(1.0), "clamp float32");
+}
+
+waza is_negative_zero_text(value: float64) -> bool { kaesu value == 0.0 && 1.0 / value < 0.0; }
+
+waza test_float_functions_float64() -> unit {
+    testing.expect(sqrt(2.0) * sqrt(2.0) > 1.9999999 && sqrt(16.0) == 4.0 && is_nan(sqrt(-1.0)), "sqrt");
+    testing.expect(floor(-1.5) == -2.0 && ceil(-1.5) == -1.0 && trunc(-1.5) == -1.0, "floor, ceil, trunc");
+    testing.expect(round(2.5) == 2.0 && round(3.5) == 4.0 && round(-2.5) == -2.0, "round is ties-to-even");
+    kaku inf = 1.0 / 0.0; kaku nan = 0.0 / 0.0;
+    testing.expect(is_inf(inf) && is_inf(-inf) && !is_inf(nan) && !is_inf(1.0), "is_inf float64");
+    testing.expect(is_nan(nan) && !is_nan(inf) && !is_nan(0.0), "is_nan float64");
+    testing.expect(is_finite(1.0) && !is_finite(inf) && !is_finite(nan), "is_finite float64");
+}
+
+// Regression: the x86-64 backends evaluated the width-polymorphic predicates on float32 arguments as float64.
+waza test_float_functions_float32() -> unit {
+    kaku inf = float32(1.0) / float32(0.0); kaku nan = float32(0.0) / float32(0.0);
+    testing.expect(is_inf(inf) && is_inf(-inf) && !is_inf(nan) && !is_inf(float32(3.0e38)), "is_inf float32");
+    testing.expect(is_nan(nan) && !is_nan(inf) && !is_nan(float32(0.0)), "is_nan float32");
+    testing.expect(is_finite(float32(1.0)) && !is_finite(inf) && !is_finite(nan), "is_finite float32");
+    testing.expect(is_inf(float32(3.0e38) * float32(2.0)), "float32 overflow is infinite");
+    testing.expect(sqrt(float32(16.0)) == float32(4.0) && floor(float32(-0.5)) == float32(-1.0), "sqrt and floor float32");
+    testing.expect(ceil(float32(0.25)) == float32(1.0) && trunc(float32(-3.75)) == float32(-3.0) && round(float32(0.5)) == float32(0.0), "ceil, trunc, round float32");
 }

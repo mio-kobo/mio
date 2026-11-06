@@ -4,8 +4,15 @@ yobu "kiso/fs";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "kiso/convert";
+
+// Fixture root: "/tmp". The analysis paths here are rooted at "/" (Unix-style), so the same spelling is kept on every
+// host; on Windows "/tmp" is \tmp of the current drive, created when missing.
+waza scratch_root_for_fixtures() -> string {
+    moshi (!fs.is_dir("/tmp")) { fs.create_dir("/tmp"); }
+    kaesu "/tmp";
+}
 waza fixture(data: []uint8) -> Frame {
-    kaku path=string.concat("/tmp/mio-lsp-frame-",convert.format_int(os.pid()));kaku written=fs.write_all(path,data);moshi(written.error!=mu){testing.fail("write frame fixture");kaesu Frame {bytes:[],eof:iie,error:"fixture"};}
+    kaku path=string.concat(string.concat(scratch_root_for_fixtures(),"/mio-lsp-frame-"),convert.format_int(os.pid()));kaku written=fs.write_all(path,data);moshi(written.error!=mu){testing.fail("write frame fixture");kaesu Frame {bytes:[],eof:iie,error:"fixture"};}
     kaku opened=fs.open_read(path);kaku file=opened.file;moshi(file==mu){os.remove(path);testing.fail("open frame fixture");kaesu Frame {bytes:[],eof:iie,error:"fixture"};}
     kaku frame=read_frame(reader(file));fs.close(file);os.remove(path);kaesu frame;
 }
@@ -21,7 +28,7 @@ waza test_frame_header_compatibility() -> unit {
     kaku nul=string.to_bytes("Content-Length: ");array.push(nul,uint8(0));array.append_all(nul,string.to_bytes("2\r\n\r\n{}"));testing.expect(fixture(nul).error!="","NUL is not header whitespace");
 }
 waza test_buffered_frames_do_not_wait_for_EOF() -> unit {
-    kaku path=string.concat("/tmp/mio-lsp-frames-",convert.format_int(os.pid()));kaku source="Content-Length: 2\r\n\r\n{}Content-Length: 4\n\ntrue";
+    kaku path=string.concat(string.concat(scratch_root_for_fixtures(),"/mio-lsp-frames-"),convert.format_int(os.pid()));kaku source="Content-Length: 2\r\n\r\n{}Content-Length: 4\n\ntrue";
     fs.write_all(path,string.to_bytes(source));kaku opened=fs.open_read(path);kaku file=opened.file;moshi(file==mu){testing.fail("open pipeline fixture");os.remove(path);kaesu;}
     kaku input=reader(file);kaku first=read_frame(input);kaku second=read_frame(input);kaku third=read_frame(input);fs.close(file);os.remove(path);
     testing.expect(first.error=="" && len(first.bytes)==2 && second.error=="" && len(second.bytes)==4 && third.eof,"buffered pipelined frames remain distinct");

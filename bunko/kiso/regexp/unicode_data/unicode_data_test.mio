@@ -1,0 +1,13 @@
+yobu "kiso/testing";
+
+// Range tables are triples (low, high, stride); unknown names have no table.
+waza test_lookup() -> unit {
+    kaku han = lookup("han");
+    testing.expect(len(han) > 0 && len(han) - (len(han) / 3) * 3 == 0, "the Han table is a list of range triples");
+    kaku found = iie; kaku at = 0;
+    aida (at + 2 < len(han)) { moshi (han[at] <= 26085 && 26085 <= han[at + 1]) { found = hai; } at = at + 3; }
+    testing.expect(found, "U+65E5 (日) is in the Han table");
+    kaku balinese = lookup("balinese");
+    testing.expect(len(balinese) == 6 && balinese[0] == 6912 && balinese[1] == 6988, "a known table decodes exactly");
+    testing.expect(len(lookup("no-such-table")) == 0, "an unknown table is empty");
+}

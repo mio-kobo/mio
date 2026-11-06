@@ -1,0 +1,65 @@
+yobu "kiso/testing";
+yobu "kiso/math";
+
+waza int_is(value: int64?, expected: int64) -> bool { moshi (value == mu) { kaesu iie; } kaesu value == expected; }
+waza uint_is(value: uint32?, expected: uint32) -> bool { moshi (value == mu) { kaesu iie; } kaesu value == expected; }
+waza bool_is(value: bool?, expected: bool) -> bool { moshi (value == mu) { kaesu iie; } kaesu value == expected; }
+
+waza test_parse_int() -> unit {
+    testing.expect(int_is(parse_int("0"), 0) && int_is(parse_int("-0"), 0) && int_is(parse_int("+42"), 42) && int_is(parse_int("-17"), -17), "basic integers");
+    testing.expect(int_is(parse_int("9223372036854775807"), 9223372036854775807), "int64 maximum");
+    testing.expect(parse_int("-9223372036854775808") != mu, "int64 minimum parses");
+    testing.expect(parse_int("9223372036854775808") == mu && parse_int("-9223372036854775809") == mu, "overflow is mu");
+    testing.expect(parse_int("") == mu && parse_int("-") == mu && parse_int("+") == mu && parse_int(" 1") == mu, "malformed is mu");
+    testing.expect(parse_int("1_000") == mu && parse_int("0x10") == mu && parse_int("１") == mu, "only ASCII decimal digits");
+    testing.expect(int_is(parse_int("007"), 7), "leading zeros are accepted");
+}
+
+waza test_parse_uint() -> unit {
+    testing.expect(uint_is(parse_uint("4294967295"), uint32(4294967295)) && uint_is(parse_uint("+0"), uint32(0)), "uint32 range");
+    testing.expect(parse_uint("4294967296") == mu && parse_uint("-1") == mu && parse_uint("") == mu, "out of range or signed");
+}
+
+waza test_format_integers() -> unit {
+    testing.expect(format_int(0) == "0" && format_int(-5) == "-5" && format_int(1234567890) == "1234567890", "format_int");
+    testing.expect(format_int(9223372036854775807) == "9223372036854775807", "format_int maximum");
+    kaku minimum = parse_int("-9223372036854775808");
+    moshi (minimum != mu) { testing.expect(format_int(minimum) == "-9223372036854775808", "format_int minimum"); }
+    testing.expect(format_uint(uint32(4294967295)) == "4294967295" && format_uint(uint32(0)) == "0", "format_uint");
+}
+
+waza test_bool() -> unit {
+    testing.expect(bool_is(parse_bool("hai"), hai) && bool_is(parse_bool("iie"), iie), "Mio keywords");
+    testing.expect(parse_bool("true") == mu && parse_bool("Hai") == mu && parse_bool("") == mu, "other text is mu");
+    testing.expect(format_bool(hai) == "hai" && format_bool(iie) == "iie", "format_bool");
+}
+
+waza test_float64() -> unit {
+    testing.expect(format_float64(0.1) == "0.1" && format_float64(1.5) == "1.5" && format_float64(-2.0) == "-2", "shortest round trip");
+    testing.expect(format_float64(0.1 + 0.2) == "0.30000000000000004", "IEEE 754 binary64 addition");
+    testing.expect(format_float64(1.0 / 3.0) == "0.3333333333333333", "division");
+    testing.expect(format_float64(1e21) == "1e+21" && format_float64(1e-7) == "1e-7", "scientific notation");
+    testing.expect(format_float64(0.0) == "0" && format_float64(-0.0) == "-0", "signed zero");
+    kaku parsed = parse_float64("2.5e-3");
+    testing.expect(parsed != mu, "scientific input parses");
+    moshi (parsed != mu) { testing.expect(parsed == 0.0025, "parse_float64 value"); }
+    kaku infinity = parse_float64("-Infinity");
+    moshi (infinity != mu) { testing.expect(math.is_inf(infinity) && infinity < 0.0, "negative infinity"); }
+    kaku nan = parse_float64("NaN");
+    moshi (nan != mu) { testing.expect(math.is_nan(nan) && format_float64(nan) == "NaN", "NaN"); }
+    testing.expect(parse_float64("1e400") == mu, "overflow is mu");
+    kaku tiny = parse_float64("1e-400");
+    moshi (tiny != mu) { testing.expect(tiny == 0.0, "underflow gives zero"); }
+    testing.expect(parse_float64("1,5") == mu && parse_float64(" 1") == mu && parse_float64("inf") == mu && parse_float64("") == mu, "malformed is mu");
+    testing.expect(format_float64(5e-324) == "5e-324" && format_float64(1.7976931348623157e308) == "1.7976931348623157e+308", "binary64 extremes");
+}
+
+waza test_float32() -> unit {
+    kaku value = parse_float32("0.1");
+    testing.expect(value != mu, "float32 parses");
+    moshi (value != mu) { testing.expect(format_float32(value) == "0.1", "float32 shortest round trip"); }
+    kaku big = parse_float32("3.4028235e38");
+    moshi (big != mu) { testing.expect(format_float32(big) == "3.4028235e+38", "float32 maximum"); }
+    testing.expect(parse_float32("3.5e38") == mu, "float32 overflow is mu");
+    testing.expect(format_float32(float32(16777217)) == "16777216", "float32 rounding to nearest even");
+}

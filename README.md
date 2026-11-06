@@ -49,9 +49,10 @@ Precompiled distributions **do not require Go**. When bootstrapping from source 
 
 | Platform or feature | Current status |
 | --- | --- |
-| macOS ARM64 native AOT | Passed M18 and release-candidate verification; `Mio-2.1` native CI uses `macos-15` (see Actions). |
-| Linux x86-64 native (Mio, static ELF) | Experimental: compiler/CLI native fixed point, `mio test`, and Runtime ABI contract pass in CI. |
-| Windows x86-64 native (Mio, PE32+) | Experimental: CLI native fixed point and Runtime ABI contract pass in CI; `mio test` and threads are not yet supported. |
+| macOS ARM64 native AOT | Passed M18 and release-candidate verification; `Mio-2.1` native CI on `macos-15`: CLI native fixed point, `mio run` and process protocol, `mio test` of every package, Runtime ABI contract and differential corpus (see Actions). |
+| Linux x86-64 native (Mio, static ELF) | Experimental: compiler/CLI native fixed point, `mio run` and process protocol, `mio test` of every package, Runtime ABI contract and differential corpus pass in CI. `chant` of a float value is not yet supported (compile-time error; `convert.format_float64/32` gives the same text on every platform). |
+| Windows x86-64 native (Mio, PE32+) | Experimental: CLI native fixed point, `mio run` and process protocol (CreateProcessW), `mio test` of every package, Runtime ABI contract and differential corpus pass in CI. Not yet supported: `kiso/net/tcp` (no Winsock layer) and `chant` of a float value. |
+| Bunko standard library | Every public library function has a native test (bunko-coverage check in PR CI); per-function, per-platform results: [Bunko test matrix](tests/bunko-matrix/bunko-test-matrix.md). |
 | Linux ARM64 | Planned. |
 | Generational GC | Implemented for darwin-arm64 (Object ABI v1); x86-64 uses non-generational precise mark-and-sweep. Both satisfy [Runtime ABI contract RA-1](docs/runtime-abi.md). |
 | High / Balanced / Low GC modes and concurrent GC | Planned. |

@@ -1,0 +1,47 @@
+yobu "kiso/testing";
+yobu "kiso/bytes";
+
+waza test_bytes_and_lengths() -> unit {
+    testing.expect(byte_len("") == 0 && rune_count("") == 0, "empty string");
+    testing.expect(byte_len("héllo") == 6 && rune_count("héllo") == 5, "two-byte rune");
+    testing.expect(byte_len("日本語") == 9 && rune_count("日本語") == 3, "Japanese text");
+    testing.expect(byte_len("中文") == 6 && rune_count("中文") == 2, "Chinese text");
+    testing.expect(byte_len("😀") == 4 && rune_count("😀") == 1, "four-byte rune");
+    testing.expect(bytes.equal(to_bytes("A日"), [65, 230, 151, 165]), "to_bytes should return UTF-8");
+    kaku back = from_utf8([230, 151, 165]);
+    testing.expect(back != mu, "valid UTF-8 should decode");
+    moshi (back != mu) { testing.expect(back == "日", "from_utf8 should round-trip"); }
+    testing.expect(from_utf8([255]) == mu && from_utf8([237, 160, 128]) == mu && from_utf8([192, 128]) == mu, "invalid, surrogate and overlong UTF-8 should be rejected");
+    kaku empty = from_utf8([]);
+    testing.expect(empty != mu, "empty input is valid UTF-8");
+}
+
+waza test_search() -> unit {
+    testing.expect(has_prefix("mio-lang", "mio") && !has_prefix("mi", "mio") && has_prefix("x", ""), "has_prefix");
+    testing.expect(has_suffix("file.mio", ".mio") && !has_suffix("o", "mio") && has_suffix("", ""), "has_suffix");
+    testing.expect(index("abcabc", "ca") == 2 && index("abc", "") == 0 && index("ab", "abc") == -1 && index("", "a") == -1, "index");
+    testing.expect(index("日本語", "語") == 6, "index should be a byte offset");
+    testing.expect(contains("Mochi", "och") && !contains("Mochi", "x"), "contains");
+}
+
+waza test_concat_and_builder() -> unit {
+    testing.expect(concat("", "") == "" && concat("あ", "い") == "あい", "concat");
+    kaku builder = new_builder();
+    write_string(builder, "Mio ");
+    write_rune(builder, '澪');
+    write_rune(builder, '😀');
+    testing.expect(builder_len(builder) == 11, "builder_len should count bytes");
+    testing.expect(builder_string(builder) == "Mio 澪😀", "builder_string");
+    builder_reset(builder);
+    testing.expect(builder_len(builder) == 0 && builder_string(builder) == "", "builder_reset");
+    kaku sized = builder_with_capacity(32);
+    testing.expect(builder_capacity(sized) >= 32 && builder_len(sized) == 0, "builder_with_capacity");
+}
+
+waza test_trim_space() -> unit {
+    testing.expect(trim_space("  a b \t\n") == "a b", "ASCII whitespace");
+    testing.expect(trim_space("　全角　") == "全角", "ideographic space");
+    testing.expect(trim_space(" x ") == "x", "no-break space and line separator");
+    testing.expect(trim_space("") == "" && trim_space(" \r\n ") == "", "empty results");
+    testing.expect(trim_space("中") == "中", "nothing to trim");
+}

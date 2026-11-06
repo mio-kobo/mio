@@ -6,6 +6,7 @@ yobu "kiso/convert";
 yobu "kiso/string";
 yobu "kiso/array";
 yobu "kiso/fs";
+yobu "kiso/os";
 
 // Linux x86-64 counterpart of the native pipeline in compiler.mio: the same pure-Mio frontend, a different backend.
 // Mochi stays in this process's memory; the result is a static ELF64 executable (no linker, no libc, no signing).
@@ -32,9 +33,22 @@ koukai waza build_linux_mochi_with_options(data: []uint8, gc_stress: bool) -> Na
 }
 
 koukai waza build_linux_test(data: []uint8) -> NativeBuildResult {
+    kaku linked = link_test_packet(data);
+    moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
+    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku lowered = lowerlinux.compile(file);
+    moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
+    kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
+}
+
+koukai kata LinkedTest { file: mochi.File?; error: string; }
+
+// The test image reports through the packet channel: every testing report call is bound to report_packet (added as a
+// body-less function when the module has none). Shared by the Linux and Windows test images.
+koukai waza link_test_packet(data: []uint8) -> LinkedTest {
     kaku decoded = mochi.decode(data); kaku file = decoded.value;
-    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR invalid test module" }; }
-    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    moshi (decoded.error != mu) { kaesu LinkedTest { file: mu, error: "E_IR invalid test module" }; }
+    moshi (file == mu) { kaesu LinkedTest { file: mu, error: "E_IR missing test module" }; }
     kaku functions: []mochi.Function = []; kaku at = 0; kaku found = iie;
     kaku normal = "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
     kaku packet = "$mma::mio/testing/runtime::report_packet::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
@@ -53,19 +67,36 @@ koukai waza build_linux_test(data: []uint8) -> NativeBuildResult {
     }
     kaku linked = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count,
         instructions: file.instructions, functions: functions };
-    kaku lowered = lowerlinux.compile(linked);
-    moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
-    kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
+    kaesu LinkedTest { file: linked, error: "" };
 }
 
-// The host decides which native format a test image must have: /proc exists on Linux and not on macOS.
+// The host decides which native format a test image must have: /proc exists on Linux and not on macOS; Windows is
+// recognised by its system directory (SystemRoot), which neither Unix host has.
 koukai waza host_target() -> string {
     kaku probe = fs.stat("/proc/self");
     moshi (probe.error == mu && probe.is_dir) { kaesu "linux-amd64"; }
+    kaku system = os.environment("SystemRoot");
+    moshi (system != mu) { moshi (system != "" && fs.is_dir(system)) { kaesu "windows-amd64"; } }
     kaesu "darwin-arm64";
 }
 
+// Parent directory for the private run/test directories: /tmp on Unix hosts; on Windows the user's TEMP (or TMP)
+// directory, because "/tmp" is not a system directory there.
+koukai waza temporary_root() -> string {
+    moshi (host_target() != "windows-amd64") { kaesu "/tmp"; }
+    kaku names: []string = ["TEMP", "TMP"];
+    kaku at = 0;
+    aida (at < len(names)) {
+        kaku value = os.environment(names[at]);
+        moshi (value != mu) { moshi (value != "" && fs.is_dir(value)) { kaesu value; } }
+        at = at + 1;
+    }
+    kaesu ".";
+}
+
 koukai waza build_host_test(data: []uint8) -> NativeBuildResult {
-    moshi (host_target() == "linux-amd64") { kaesu build_linux_test(data); }
+    kaku host = host_target();
+    moshi (host == "linux-amd64") { kaesu build_linux_test(data); }
+    moshi (host == "windows-amd64") { kaesu build_windows_test(data); }
     kaesu build_signed_test(data);
 }

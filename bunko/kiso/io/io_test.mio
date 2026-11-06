@@ -131,3 +131,15 @@ waza test_partial_write_and_error_progress() -> unit {
     testing.expect(copied.count == 5 && copied_error == mu, "copy_stream should handle short writes");
     testing.expect(bytes.equal(bytes.buffer_bytes(buffer), [6, 7, 8, 9, 10]), "copy_stream should preserve short-write data");
 }
+
+waza test_single_write_and_invalid_ranges() -> unit {
+    kaku buffer = bytes.new_buffer();
+    kaku out = writer_to_buffer(buffer);
+    kaku first = write(out, [9, 8, 7], 1, 2);
+    testing.expect(first.count == 2 && first.error == mu, "write should honor offset and length");
+    testing.expect(bytes.equal(bytes.buffer_bytes(buffer), [8, 7]), "write should append the selected bytes");
+    kaku bad = write(out, [1], 1, 1);
+    testing.expect(bad.count == 0 && bad.error != mu, "a range outside the source is rejected");
+    kaku empty = write(out, [], 0, 0);
+    testing.expect(empty.count == 0 && empty.error == mu, "an empty write succeeds");
+}

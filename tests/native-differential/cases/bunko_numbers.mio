@@ -1,0 +1,35 @@
+// Cross-platform contract: integer/float conversion and math give identical results on every native target.
+yobu "kiso/convert";
+yobu "kiso/math";
+kaku ints: []string = ["0", "-0", "+7", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "1_0", " 1", ""];
+kaku i = 0;
+aida (i < len(ints)) {
+    kaku v = convert.parse_int(ints[i]);
+    moshi (v == mu) { chant("mu"); } sore { chant(convert.format_int(v)); }
+    i = i + 1;
+}
+kaku floats: []string = ["0.1", "1e21", "1e-7", "-0", "5e-324", "1.7976931348623157e308", "1e309", "NaN", "-Infinity", "2.5e-3"];
+i = 0;
+aida (i < len(floats)) {
+    kaku v = convert.parse_float64(floats[i]);
+    moshi (v == mu) { chant("mu"); } sore { chant(convert.format_float64(v)); }
+    kaku w = convert.parse_float32(floats[i]);
+    moshi (w == mu) { chant("mu32"); } sore { chant(convert.format_float32(w)); }
+    i = i + 1;
+}
+chant(convert.format_float64(0.1 + 0.2));
+chant(convert.format_float64(1.0 / 3.0));
+chant(convert.format_float32(float32(1.0) / float32(3.0)));
+chant(convert.format_float64(math.sqrt(2.0)));
+chant(convert.format_float32(math.sqrt(float32(2.0))));
+chant(convert.format_float64(math.round(2.5)));
+chant(convert.format_float64(math.round(-0.5)));
+chant(math.is_inf(float32(1.0) / float32(0.0)));
+chant(math.is_nan(float32(0.0) / float32(0.0)));
+chant(math.is_finite(float32(3.0e38) * float32(2.0)));
+chant(math.gcd(-12, 18)); chant(math.lcm(4, 6));
+chant(math.min(-3, 2)); chant(math.max(-3, 2)); chant(math.clamp(99, 0, 10));
+chant(math.checked_abs(-9223372036854775807 - 1) == mu);
+chant(convert.parse_uint("4294967295") != mu);
+chant(convert.format_bool(hai));
+chant("bunko_numbers: ok");

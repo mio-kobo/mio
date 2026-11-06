@@ -1,0 +1,41 @@
+yobu "kiso/testing";
+
+waza test_compare_and_search() -> unit {
+    testing.expect(equal([1, 2], [1, 2]) && !equal([1, 2], [1]) && equal([], []), "equal should compare length and bytes");
+    testing.expect(compare([1, 2], [1, 3]) == -1 && compare([2], [1, 9]) == 1, "compare should order lexicographically");
+    testing.expect(compare([1], [1, 0]) == -1 && compare([1, 0], [1]) == 1 && compare([], []) == 0, "a prefix should order first");
+    testing.expect(compare([255], [0]) == 1, "compare should treat bytes as unsigned");
+    testing.expect(index([5, 6, 6], 6) == 1 && index([5], 7) == -1 && index([], 0) == -1, "index should find the first match");
+    testing.expect(contains([0, 128], 128) && !contains([], 1), "contains should follow index");
+    testing.expect(has_prefix([1, 2, 3], [1, 2]) && has_prefix([1], []) && !has_prefix([1], [1, 2]), "has_prefix");
+    testing.expect(has_suffix([1, 2, 3], [2, 3]) && has_suffix([], []) && !has_suffix([3], [2, 3]), "has_suffix");
+}
+
+waza test_copy_fill_clone() -> unit {
+    kaku destination: []uint8 = [0, 0, 0];
+    testing.expect(copy(destination, [7, 8]) == 2 && destination[0] == uint8(7) && destination[2] == uint8(0), "copy should stop at the shorter source");
+    testing.expect(copy(destination, [1, 2, 3, 4]) == 3 && destination[2] == uint8(3), "copy should stop at the shorter destination");
+    fill(destination, uint8(9));
+    testing.expect(equal(destination, [9, 9, 9]), "fill should set every byte");
+    kaku copied = clone(destination);
+    copied[0] = uint8(1);
+    testing.expect(destination[0] == uint8(9), "clone should be independent");
+}
+
+waza test_buffer() -> unit {
+    kaku buffer = new_buffer();
+    testing.expect(buffer_len(buffer) == 0, "a new buffer should be empty");
+    write_byte(buffer, uint8(65));
+    testing.expect(write(buffer, [66, 67]) == 2 && buffer_len(buffer) == 3, "write should report the byte count");
+    kaku snapshot = buffer_bytes(buffer);
+    write_byte(buffer, uint8(68));
+    testing.expect(equal(snapshot, [65, 66, 67]), "buffer_bytes should return an independent copy");
+    kaku copy = buffer_clone(buffer);
+    reset(buffer);
+    testing.expect(buffer_len(buffer) == 0 && buffer_len(copy) == 4, "reset should not affect a clone");
+    kaku sized = buffer_with_capacity(100);
+    testing.expect(buffer_capacity(sized) >= 100 && buffer_len(sized) == 0, "buffer_with_capacity should reserve");
+    kaku count = 0;
+    aida (count < 300) { write_byte(sized, uint8(count - (count / 256) * 256)); count = count + 1; }
+    testing.expect(buffer_len(sized) == 300 && buffer_capacity(sized) >= 300, "the buffer should grow past its capacity");
+}

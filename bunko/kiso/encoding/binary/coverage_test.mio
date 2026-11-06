@@ -1,0 +1,42 @@
+yobu "kiso/testing";
+
+waza test_remaining_fixed_width_codecs() -> unit {
+    kaku data = array.make[uint8](16, uint8(0));
+    testing.expect(write_u8(data, 0, uint8(255)) == mu && read_u8(data, 0).value == uint8(255), "u8 round trip");
+    testing.expect(write_i16_le(data, 1, int16(-2)) == mu && data[1] == uint8(254) && data[2] == uint8(255), "i16 little endian bytes");
+    testing.expect(read_i16_le(data, 1).value == int16(-2), "i16 little endian round trip");
+    testing.expect(write_i32_be(data, 4, int32(-305419896)) == mu && data[4] == uint8(237), "i32 big endian bytes");
+    testing.expect(read_i32_be(data, 4).value == int32(-305419896), "i32 big endian round trip");
+    testing.expect(read_u8(data, 16).error != mu && write_u8(data, 16, uint8(1)) != mu, "u8 at the end is out of range");
+    testing.expect(read_i16_le(data, 15).error != mu && write_i32_be(data, 13, int32(1)) != mu, "short ranges are rejected");
+}
+
+waza test_remaining_stream_codecs_and_patches() -> unit {
+    kaku output = writer(64);
+    testing.expect(writer_write_u16_le(output, uint16(4660)) == mu, "write u16 le");
+    testing.expect(writer_write_u32_le(output, uint32(305419896)) == mu, "write u32 le");
+    testing.expect(writer_write_u64_le(output, U64 { high: uint32(1), low: uint32(2) }) == mu, "write u64 le");
+    kaku slot16 = writer_reserve(output, 2); kaku slot16le = writer_reserve(output, 2);
+    kaku slot32 = writer_reserve(output, 4); kaku slot64be = writer_reserve(output, 8); kaku slot64le = writer_reserve(output, 8);
+    testing.expect(writer_patch_u16_be(output, slot16.value, uint16(258)) == mu, "patch u16 be");
+    testing.expect(writer_patch_u16_le(output, slot16le.value, uint16(258)) == mu, "patch u16 le");
+    testing.expect(writer_patch_u32_le(output, slot32.value, uint32(16909060)) == mu, "patch u32 le");
+    testing.expect(writer_patch_u64_be(output, slot64be.value, U64 { high: uint32(3), low: uint32(4) }) == mu, "patch u64 be");
+    testing.expect(writer_patch_u64_le(output, slot64le.value, U64 { high: uint32(5), low: uint32(6) }) == mu, "patch u64 le");
+    testing.expect(writer_patch_u16_be(output, writer_offset(output), uint16(1)) != mu, "patching past the end fails");
+    kaku data = writer_bytes(output);
+    testing.expect(len(data) == 38 && data[0] == uint8(52) && data[1] == uint8(18), "u16 le bytes");
+    kaku input = reader(data);
+    testing.expect(reader_read_u16_le(input).value == uint16(4660), "read u16 le");
+    testing.expect(reader_read_u32_le(input).value == uint32(305419896), "read u32 le");
+    kaku wide = reader_read_u64_le(input);
+    testing.expect(wide.value.high == uint32(1) && wide.value.low == uint32(2), "read u64 le");
+    testing.expect(reader_read_u16_be(input).value == uint16(258), "read patched u16 be");
+    testing.expect(reader_read_u16_le(input).value == uint16(258), "read patched u16 le");
+    testing.expect(reader_read_u32_le(input).value == uint32(16909060), "read patched u32 le");
+    kaku big = reader_read_u64_be(input);
+    testing.expect(big.value.high == uint32(3) && big.value.low == uint32(4), "read patched u64 be");
+    kaku little = reader_read_u64_le(input);
+    testing.expect(little.value.high == uint32(5) && little.value.low == uint32(6), "read patched u64 le");
+    testing.expect(reader_eof(input) && reader_read_u16_le(input).error != mu, "reading past the end fails");
+}

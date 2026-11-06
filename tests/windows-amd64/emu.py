@@ -38,6 +38,10 @@ class Emu:
         self.environment = dict(environment or {})
         self.stdin_pos = 0
         self.last_error = 0
+        self.processes = {}
+        self.reserved2 = b""
+        self.child_instructions = max_instructions
+        self.ticks = 123456
         self.reserved = []
         self.committed = set()  # (start, end) intervals; may overlap, only used to avoid double mapping
         self.uc = uc = Uc(UC_ARCH_X86, UC_MODE_64)
@@ -193,7 +197,7 @@ class Emu:
         return len(wide) // 2
 
     def api_CreateFileW(self, a, s):
-        name_ptr, access, share, _sec = a
+        name_ptr, access, share, sec = a
         disposition, flags, template = s(4), s(5), s(6)
         if flags != 0x80 or template != 0:
             self._violation("unexpected CreateFileW flags/template")
@@ -204,6 +208,8 @@ class Emu:
                 break
             raw += c
         name = self._canonical(raw.decode("utf-16-le"))
+        if name.upper() == "NUL":  # the null device: always empty, discards writes
+            self.files[name] = bytearray()
         exists = name in self.files
         if disposition == 3 and not exists:
             self.last_error = 2
@@ -213,7 +219,10 @@ class Emu:
         if disposition == 4 and not exists:
             self.files[name] = bytearray()
         handle = 0x1A4 + 4 * len(self.open_files)
-        self.open_files[handle] = dict(name=name, pos=0, append=(access == 4), write=bool(access & 0x40000000 or access == 4))
+        inheritable = bool(sec) and struct.unpack("<IxxxxQI", bytes(self.uc.mem_read(sec, 20))) [2] == 1
+        while handle in self.open_files:
+            handle += 4
+        self.open_files[handle] = dict(name=name, pos=0, append=(access == 4), write=bool(access & 0x40000000 or access == 4), inheritable=inheritable)
         return handle
 
     def api_ReadFile(self, a, s):
@@ -240,6 +249,8 @@ class Emu:
         return 1
 
     def api_CloseHandle(self, a, s):
+        if a[0] in self.processes:
+            return 1
         if a[0] in self.open_files:
             del self.open_files[a[0]]
             return 1
@@ -395,7 +406,8 @@ class Emu:
         return 4242
 
     def api_GetTickCount64(self, a, s):
-        return 123456
+        self.ticks += 1
+        return self.ticks
 
     def api_GetFullPathNameW(self, a, s):
         name = self._read_wide(a[0])
@@ -406,6 +418,130 @@ class Emu:
             return len(wide) // 2
         self.uc.mem_write(a[2], wide)
         return len(full)
+
+    # ---- processes (model: the child image runs to completion inside CreateProcessW, from the same file table) ----
+    def api_CreateProcessW(self, a, s):
+        app = self._canonical(self._read_wide(a[0])) if a[0] else None
+        command_line = self._read_wide(a[1])
+        if a[2] or a[3] or s(5) or s(6) or s(7):
+            self._violation("unexpected CreateProcessW security/flags/environment/directory arguments")
+        inherit, info, pinfo = s(4) & 0xFFFFFFFF, s(8), s(9)
+        if app is None or app not in self.files:
+            self.last_error = 2
+            return 0
+        cb = struct.unpack("<I", bytes(self.uc.mem_read(info, 4)))[0]
+        flags, cb2, reserved2 = struct.unpack("<IxxH4xQ", bytes(self.uc.mem_read(info + 60, 20)))
+        stdin, stdout, stderr = struct.unpack("<QQQ", bytes(self.uc.mem_read(info + 80, 24)))
+        if cb != 104:
+            self._violation("STARTUPINFOW.cb must be 104")
+        child = Emu(bytes(self.files[app]), files=self.files, command_line=command_line, environment=self.environment,
+                    max_instructions=self.child_instructions)
+        child.child_instructions = self.child_instructions
+        if flags & 0x100:
+            if not inherit:
+                self._violation("STARTF_USESTDHANDLES without inheritance")
+            for std, handle in ((-11, stdout), (-12, stderr)):
+                entry = self.open_files.get(handle)
+                if entry is None or not entry.get("inheritable"):
+                    self._violation("redirected handle %#x is not an inheritable open file" % handle)
+                    continue
+                child_handle = 0x9000 + 4 * len(child.open_files)
+                child.open_files[child_handle] = dict(entry, pos=0)
+                child.handles[std & 0xFFFFFFFF] = child_handle
+        if cb2:
+            table = bytes(self.uc.mem_read(reserved2, cb2))
+            count = struct.unpack_from("<I", table, 0)[0]
+            for fd in range(count):
+                handle = struct.unpack_from("<Q", table, 4 + count + 8 * fd)[0]
+                if table[4 + fd] & 1:
+                    entry = self.open_files.get(handle)
+                    if entry is None or not entry.get("inheritable"):
+                        self._violation("lpReserved2 handle %#x is not an inheritable open file" % handle)
+                        continue
+                    child.open_files[handle] = dict(entry, pos=0)
+            child.reserved2 = table
+        code, out, err, violations = child.run()
+        self.violations += ["child: " + v for v in violations if v != "did not exit"]
+        self.out += out
+        self.err += err
+        process = 0x7000 + 8 * len(self.processes)
+        self.processes[process] = None if code is None else code
+        self.uc.mem_write(pinfo, struct.pack("<QQII", process, process + 4, 100, 101))
+        self.processes[process + 4] = "thread"
+        return 1
+
+    def api_WaitForSingleObject(self, a, s):
+        handle, timeout = a[0], a[1] & 0xFFFFFFFF
+        if handle in self.processes:
+            if self.processes[handle] is None:  # never exited within the instruction budget: a timed-out child
+                if timeout == 0xFFFFFFFF:
+                    self._violation("infinite wait on a child that never exits")
+                return 258
+            return 0
+        if handle == 0:
+            return 0 if self.stdin_pos < len(self.stdin) else 258
+        self.last_error = 6
+        return 0xFFFFFFFF
+
+    def api_TerminateProcess(self, a, s):
+        if a[0] not in self.processes:
+            self.last_error = 6
+            return 0
+        self.processes[a[0]] = a[1] & 0xFFFFFFFF
+        return 1
+
+    def api_GetExitCodeProcess(self, a, s):
+        code = self.processes.get(a[0])
+        if code is None or code == "thread":
+            self.last_error = 6
+            return 0
+        self.uc.mem_write(a[1], struct.pack("<I", code))
+        return 1
+
+    def api_GetStartupInfoW(self, a, s):
+        info = bytearray(104)
+        struct.pack_into("<I", info, 0, 104)
+        if self.reserved2:
+            base = self.next_region
+            self.next_region += 0x10000
+            self.uc.mem_map(base, 0x1000, UC_PROT_ALL)
+            self.uc.mem_write(base, self.reserved2)
+            struct.pack_into("<HQ", info, 66, len(self.reserved2), 0)
+            struct.pack_into("<Q", info, 72, base)
+        self.uc.mem_write(a[0], bytes(info))
+        return 0
+
+    def api_GetFileType(self, a, s):
+        if a[0] == 0:
+            return 3
+        return 1 if a[0] in self.open_files else 0
+
+    def api_PeekNamedPipe(self, a, s):
+        if a[0] != 0:
+            self.last_error = 6
+            return 0
+        if self.stdin_pos >= len(self.stdin):
+            self.last_error = 109
+            return 0
+        if s(4):
+            self.uc.mem_write(s(4), struct.pack("<I", len(self.stdin) - self.stdin_pos))
+        return 1
+
+    def api_Sleep(self, a, s):
+        self.ticks += a[0] & 0xFFFFFFFF
+        return 0
+
+    def api_GetModuleFileNameW(self, a, s):
+        if a[0] != 0:
+            self._violation("GetModuleFileNameW expects the current module (NULL)")
+        path = "C:\\work\\" + self.command_line.split(" ")[0].strip('"')
+        wide = (path + "\0").encode("utf-16-le")
+        if len(wide) // 2 > (a[2] & 0xFFFFFFFF):
+            self.last_error = 122
+            return a[2] & 0xFFFFFFFF
+        self.uc.mem_write(a[1], wide)
+        self.files.setdefault(self._canonical(path), bytearray(b"MZ"))
+        return len(path)
 
     def api_ExitProcess(self, a, s):
         self.exit_code = a[0] & 0xFFFFFFFF

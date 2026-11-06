@@ -49,7 +49,7 @@ bash scripts/ci/run.sh macos-arm64 native-release release
 | --- | --- | --- |
 | macos-arm64 | Darwin arm64 | Mio 原生框架、AOT、ABI、GC、自举及辅助检查（Seed 模块）；native.yml 的 darwin-arm64 原生验证 |
 | linux-amd64 | Linux x86_64 | Go/VM 补充参考测试；native.yml 的 linux-amd64 原生验证（编译器/CLI 固定点、mio test、契约、差分） |
-| windows-amd64 | Windows x64 | 仅 native.yml 的 windows-amd64 原生验证（CLI 固定点、契约、差分）；`run.sh` 统一入口未接入 |
+| windows-amd64 | Windows x64 | 仅 native.yml 的 windows-amd64 原生验证（CLI 固定点、`mio run`/进程协议、`mio test` 全部包、契约、差分）；`run.sh` 统一入口未接入 |
 
 会核对真实 OS 和架构。交叉编译不等于原生执行：darwin/windows 的 Stage A 由 Linux 原生 CLI 交叉构建，只在对应 runner 上执行后才计为 PASS。
 
@@ -76,7 +76,7 @@ bash scripts/ci/run.sh macos-arm64 native-release release
 | go-bootstrap-reference | full（standalone） | `go test ./selfhost/bootstrap`：参考 VM 中的 Compiler A→B→C→D 自编译，Linux 约 56 分钟、macOS 更久；独立长时间模块，Full 用单独的 job 运行 |
 | kiso/* | quick, unit, full | 每个已有 `*_test.mio` 包的原生测试；实际清单见各模块注册文件 |
 
-标准库已接入 aot/arm64、aot/lower、aot/lower/types、aot/macho、crypto/sha256、encoding/binary、encoding/json、encoding/mochi、io、math、net/tcp、path、regexp、runtime/cpu/aarch64、runtime/os/darwin、runtime/target，以及单列的 gc。`all` 调度时仅声明 `required_checks=["native"]` 的 AOT 子包可通过 `covered_by` 委托父级递归检查，单独报告 SKIP 和委托原因；arm64、macho 的独立 oracle 必须运行。显式选择子模块仍运行自己的入口。
+标准库已接入 aot/arm64、aot/lower、aot/lower/types、aot/macho、array、bytes、convert、crypto/sha256、encoding/binary、encoding/json、encoding/mochi、fs、io、math、net/tcp、os、path、regexp、regexp/unicode_data、runtime/cpu/aarch64、runtime/os/darwin、runtime/target、string、testing、utf8，以及单列的 gc。`all` 调度时仅声明 `required_checks=["native"]` 的 AOT 子包可通过 `covered_by` 委托父级递归检查，单独报告 SKIP 和委托原因；arm64、macho 的独立 oracle 必须运行。显式选择子模块仍运行自己的入口。
 
 完整 Quick 包含已有库测试和 Core/AOT/GC 的基本双重验证。PR 先由 `scripts/ci/plan.py` 生成计划：文档修改只跑 hosted quality；普通标准库 `*_test.mio` 局部修改跑 Core、受影响包及 Go/VM 基线；所有实现代码、Core/ABI/GC/AOT、测试调度/清单、未知或无法获取的 diff 均回退完整 Quick。没有启用缩小范围的依赖图猜测。每次计划保存选中项 NOT_RUN、未选中项 SKIP 和原因，实际执行后再验收，不能将计划当作测试通过。
 
@@ -98,7 +98,7 @@ GC 独立路径复用现有 `automatic-roots/builder.mio`，由纯 Mio 生成受
 
 ABCD 继续使用现有、带冻结源和哈希/签名复核的脚本；不重写自举算法。依赖 Go AOT 的历史 BCD/M18 gate 已随 Go AOT 后端删除（它们只能验证已废弃的 Go 引导路径，且在当前源码上已不可复现）；纯 Mio 的固定点由 native.yml 在三个平台上验证。
 
-尚无独立 Mio 测试的 array、bytes、convert、fs、string、testing、utf8、部分 nativefs/sign 辅助包通过原生库/集成路径间接覆盖；不创建空入口。selfhost 阶段全集有原生测试，但尚未逐阶段配置独立 oracle。外部 FFI/完整 ABI、长期 GC 压力、新平台后端仍未覆盖。原有 E5/E6 等脚本保留，其硬编码 Seed、固定 fixture、分支或恢复要求不被本次静默改写；未接入项应明确记录 NOT_RUN。
+Bunko 每个库公开函数（`koukai waza`）都必须有覆盖它的原生测试：`scripts/ci/bunko_matrix.py --check`（quality 的 bunko-coverage 检查）从源码生成函数清单并核对 `*_test.mio`、`tests/native-differential` 用例与 `bunko_matrix_coverage.json` 中登记的 runner 协议（子进程、exec、exit、测试通道）。native.yml 的 summary 用三平台原生报告生成逐函数矩阵（`bunko-test-matrix.json/.md`，提交版见 [tests/bunko-matrix/bunko-test-matrix.md](../tests/bunko-matrix/bunko-test-matrix.md)），覆盖的库函数在任一平台非 PASS（UNSUPPORTED 需登记技术原因）即失败。部分 nativefs/sign 辅助包通过原生库/集成路径间接覆盖；不创建空入口。selfhost 阶段全集有原生测试，但尚未逐阶段配置独立 oracle。外部 FFI/完整 ABI、长期 GC 压力、新平台后端仍未覆盖。原有 E5/E6 等脚本保留，其硬编码 Seed、固定 fixture、分支或恢复要求不被本次静默改写；未接入项应明确记录 NOT_RUN。
 
 ## 模块接口
 

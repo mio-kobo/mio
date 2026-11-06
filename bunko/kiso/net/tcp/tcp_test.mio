@@ -72,3 +72,30 @@ waza test_loopback_roundtrip_eof_and_errors() -> unit {
         close_listener(again);
     }
 }
+
+// listen_with_backlog and the kiso/io adapters over a loopback connection.
+waza test_backlog_and_io_adapters() -> unit {
+    kaku port = 41100;
+    kaku server = listen_with_backlog(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port), 4);
+    aida (server.error != mu && port < 41150) {
+        port = port + 1;
+        server = listen_with_backlog(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port), 4);
+    }
+    testing.expect(server.error == mu, "a listener with an explicit backlog can be created");
+    testing.expect(listen_with_backlog(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), 0), -1).error != mu, "a negative backlog is rejected");
+    kaku listener = server.listener;
+    moshi (listener == mu) { kaesu; }
+    kaku client = connect(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
+    kaku accepted = accept(listener);
+    kaku maybe_out = client.connection; kaku maybe_in = accepted.connection;
+    moshi (maybe_out == mu) { close_listener(listener); kaesu; }
+    moshi (maybe_in == mu) { close_listener(listener); kaesu; }
+    kaku outgoing = maybe_out; kaku incoming = maybe_in;
+    kaku sent = io.write_all(writer(outgoing), [77, 105, 111], 0, 3);
+    testing.expect(sent.count == 3 && sent.error == mu, "io.write_all through the connection writer");
+    kaku buffer = array.make[uint8](3, uint8(0));
+    kaku got = io.read_full(reader(incoming), buffer, 0, 3);
+    testing.expect(got.count == 3 && buffer[0] == uint8(77) && buffer[2] == uint8(111), "io.read_full through the connection reader");
+    close(outgoing); close(incoming);
+    testing.expect(close_listener(listener).error == mu, "the listener closes");
+}

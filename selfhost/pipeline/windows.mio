@@ -29,3 +29,13 @@ koukai waza build_windows_mochi_with_options(data: []uint8, gc_stress: bool) -> 
     moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
     kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
 }
+
+// Windows test image: the same packet-channel linking as the Linux test image (link_test_packet), lowered to PE32+.
+koukai waza build_windows_test(data: []uint8) -> NativeBuildResult {
+    kaku linked = link_test_packet(data);
+    moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
+    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku lowered = lowerwinrt.compile(file);
+    moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
+    kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
+}

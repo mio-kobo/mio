@@ -61,7 +61,7 @@ waza run() -> unit {
     }
     moshi (command != "build" && command != "check" && command != "run" && command != "exec" && command != "disasm") { fail("E_COMMAND native command migration is incomplete", 2); kaesu; }
     kaku opts=diagnostic.options();
-    kaku entry = ""; kaku target = "darwin-arm64"; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku at = 2;
+    kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku at = 2;
     aida (at < len(args)) {
         kaku option = args[at];
         moshi (option == "--") {
@@ -109,7 +109,8 @@ waza run() -> unit {
     moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail("E_OPTIONS --emit-symbols applies to darwin-arm64 native builds from source", 2); kaesu; }
     moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail("E_OPTIONS --observe applies to darwin-arm64 native builds from source", 2); kaesu; }
     moshi (gc_stress && (emit_mochi || command == "exec" || command == "disasm" || command == "check")) { fail("E_OPTIONS --gc-stress applies to native builds from source", 2); kaesu; }
-    moshi (target == "windows-amd64" && (command == "run" || command == "exec")) { fail("E_TARGET windows-amd64 images are build-only; run them on Windows", 2); kaesu; }
+    // run/exec start the image on this machine, so it must be built for the host; --target defaults to the host.
+    moshi (target != host && (command == "run" || command == "exec")) { fail(string.concat("E_TARGET run and exec need the host target ", host), 2); kaesu; }
     moshi (entry == "" || output == "") { fail("E_OPTIONS source and output must be nonempty", 2); kaesu; }
     moshi(command=="check"){
         kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
@@ -139,7 +140,7 @@ waza run() -> unit {
     moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error);}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(compiled.error,entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {
-        temporary = string.concat("/tmp/mio-run-", convert.format_int(os.pid()));
+        temporary = string.concat(pipeline.temporary_root(), string.concat("/mio-run-", convert.format_int(os.pid())));
         kaku created = fs.create_dir(temporary);
         moshi (created.error != mu) { fail("E_IO cannot create private run directory", 1); kaesu; }
         moshi (os.chmod(temporary, 448) != 0) { os.remove_dir(temporary); fail("E_IO cannot protect run directory", 1); kaesu; }

@@ -5,6 +5,13 @@ yobu "kiso/fs";
 yobu "kiso/os";
 yobu "selfhost/lsp";
 
+// Fixture root: "/tmp". The analysis paths here are rooted at "/" (Unix-style), so the same spelling is kept on every
+// host; on Windows "/tmp" is \tmp of the current drive, created when missing.
+waza scratch_root_for_fixtures() -> string {
+    moshi (!fs.is_dir("/tmp")) { fs.create_dir("/tmp"); }
+    kaesu "/tmp";
+}
+
 waza test_rpc_cache_reopen_content_identity_and_bounded_retention() -> unit {
     kaku state=session("/","");
     kaku uri="untitled:cache-reopen";
@@ -24,7 +31,7 @@ waza test_rpc_cache_reopen_content_identity_and_bounded_retention() -> unit {
 }
 
 waza test_rpc_cache_disk_dependency_content_and_sibling_invalidation() -> unit {
-    kaku root=string.concat("/tmp/mio-lsp-cache-",convert.format_int(os.pid()));
+    kaku root=string.concat(string.concat(scratch_root_for_fixtures(),"/mio-lsp-cache-"),convert.format_int(os.pid()));
     moshi(fs.create_dir(root).error!=mu){testing.fail("create private cache fixture");kaesu;}
     moshi(os.chmod(root,448)!=0){os.remove_dir(root);testing.fail("protect fixture");kaesu;}
     kaku dep=string.concat(root,"/dep");

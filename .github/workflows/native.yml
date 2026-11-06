@@ -145,6 +145,11 @@ jobs:
           path: build/native-reports
       - name: Combine the platform reports (fails unless every required check is PASS)
         run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
+      # Per-function Bunko matrix from the same native reports: every covered library function must be PASS (or have a
+      # recorded UNSUPPORTED reason) on every platform; UNVERIFIED, SKIP and NOT_RUN fail.
+      - name: Bunko public-function test matrix
+        if: always()
+        run: python scripts/ci/bunko_matrix.py --check --reports build/native-reports --output build/native-summary --require-pass
       - uses: actions/upload-artifact@v4
         if: always()
         with:

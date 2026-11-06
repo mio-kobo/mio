@@ -144,7 +144,17 @@ waza emit_os_path_call(code: x86_64.Assembler, name: string, number: int64) -> u
     x86_64.ret(code);
 }
 
-// rt.os_find_env: rdi = name string -> rax = pointer to the value (after '='), or 0
+// reg = reg - 32 when it holds an ASCII lowercase letter.
+waza emit_ascii_upper(code: x86_64.Assembler, reg: int64, tag: string) -> unit {
+    x86_64.cmp_ri(code, reg, 97);
+    x86_64.jcc(code, x86_64.cc_b, tag);
+    x86_64.cmp_ri(code, reg, 122);
+    x86_64.jcc(code, x86_64.cc_a, tag);
+    x86_64.sub_ri(code, reg, 32);
+    x86_64.label(code, tag);
+}
+
+// rt.os_find_env: rdi = name string -> rax = pointer to the value (after '='), or 0. ASCII case-insensitive.
 waza emit_os_environment(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.os_find_env");
     x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
@@ -170,6 +180,10 @@ waza emit_os_environment(code: x86_64.Assembler) -> unit {
     x86_64.mov_rr(code, x86_64.r10, x86_64.r9);
     x86_64.add_rr(code, x86_64.r10, x86_64.rdx);
     x86_64.mov_load8(code, x86_64.r10, x86_64.r10, 0);
+    // Windows environment names are case-insensitive (GetEnvironmentVariableW): compare with ASCII letters folded,
+    // so os.environment("PATH") finds "Path" as it does on Windows itself.
+    emit_ascii_upper(code, x86_64.rax, "rt.os_find_env.fold_entry");
+    emit_ascii_upper(code, x86_64.r10, "rt.os_find_env.fold_name");
     x86_64.cmp_rr(code, x86_64.rax, x86_64.r10);
     x86_64.jcc(code, x86_64.cc_ne, "rt.os_find_env.skip");
     x86_64.add_ri(code, x86_64.rdx, 1);

@@ -169,7 +169,7 @@ def main():
     program = work / "runtime-chain.mio"
     program.write_text(source(image), encoding="utf-8")
     native = work / "runtime-chain.builder"
-    # The builder runs on this host: build it for the host's native target (the CLI defaults to darwin-arm64).
+    # The builder runs on this host: build it for the host's native target explicitly.
     host = ["--target=linux-amd64"] if (platform.system(), platform.machine()) in (("Linux", "x86_64"), ("Linux", "amd64")) else []
     build = subprocess.run([mio, "build", str(program), *host, "--bunko-root", str(ROOT / "bunko"), "-o", str(native)],
                            capture_output=True, text=True, timeout=900)

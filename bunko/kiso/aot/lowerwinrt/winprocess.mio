@@ -1,0 +1,830 @@
+yobu "kiso/aot/lower/types";
+yobu "kiso/aot/x86_64";
+yobu "kiso/convert";
+yobu "kiso/encoding/mochi";
+yobu "kiso/string";
+
+// Windows process layer: the body-less "mio/os/runtime" process operations (spawn, exec, spawn_test, stdin readiness)
+// and the kiso/testing report channel, with the observable contract of the Linux runtime (kiso/aot/lowerlinux):
+//  * spawn(path, argv): argv (argv[0] included) is joined into one command line with the CommandLineToArgvW quoting
+//    rules, so the child's rt.win_args sees exactly the same argument strings. The program path is used as is (no PATH
+//    search, no extension added), like execve. The result is the child's exit code; a program that cannot be started
+//    returns 127, the status of a failed exec in the Linux child. Exit codes are the Windows 32-bit codes (an exception
+//    ends a process with its NTSTATUS); a Mio program exiting with 0..255 gives the same status on every platform.
+//  * exec(path, argv): Windows has no exec. The program is started, waited for, and this process exits with its
+//    status, so the caller observes the same exit status as after execve; a start failure returns -errno.
+//  * spawn_test: stdout/stderr redirected to private files (create/truncate), the records file is the child's "fd 3",
+//    handed over with the C runtime's STARTUPINFO lpReserved2 descriptor table (count, flags, handles); the child's
+//    testing runtime reads it back with GetStartupInfoW. The child is stopped after the wall deadline (cpu_seconds);
+//    a single-threaded Mio test cannot use more CPU time than wall time, so this also bounds its CPU time. A stopped
+//    child reports 142 (the Linux SIGALRM status); a budget outside 1..3600 or a file that cannot be opened is 126 and a
+//    start failure (also a path or argument with NUL) is 127, as on darwin-arm64 and linux-amd64.
+//  * stdin_ready / stdin_wait: >0 data or end of file, 0 idle, -errno; pipes use PeekNamedPipe, files are always ready,
+//    a console is ready when its input handle is signalled. stdin_wait polls every 10 ms until the deadline.
+
+waza api(code: x86_64.Assembler, ctx: WinContext, index: int64) -> unit { import_call(code, ctx, index); }
+waza set_slot(code: x86_64.Assembler, disp: int64, value: int64) -> unit {
+    x86_64.mov_ri(code, x86_64.rax, value);
+    x86_64.mov_store(code, x86_64.rsp, disp, x86_64.rax);
+}
+waza zero_slots(code: x86_64.Assembler, disp: int64, count: int64) -> unit {
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    kaku at = 0;
+    aida (at < count) { x86_64.mov_store(code, x86_64.rsp, disp + 8 * at, x86_64.rax); at = at + 1; }
+}
+waza testing_counter() -> int64 { kaesu gc_state() + 88; }
+waza records_cache() -> int64 { kaesu gc_state() + 96; }
+koukai teisu spawn_timeout = -10000;
+
+waza emit_win_process(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    emit_win_errno(code);
+    emit_win_cmdline(code);
+    emit_win_wide(code, ctx);
+    emit_win_run(code, ctx);
+    emit_win_spawn(code, ctx, "rt.os_spawn", iie);
+    emit_win_spawn(code, ctx, "rt.os_exec", hai);
+    emit_win_open_inherit(code, ctx);
+    emit_win_spawn_test(code, ctx);
+    emit_win_stdin(code, ctx);
+}
+
+// rt.win_errno: rax = Win32 error code -> rax = -errno. No API call, clobbers rax only.
+waza emit_win_errno(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.win_errno");
+    kaku errors: []int64 = [2, 3, 206, 123, 5, 32, 193, 216, 8, 14, 87];
+    kaku errnos: []int64 = [2, 2, 2, 2, 13, 13, 8, 8, 12, 12, 22];
+    kaku at = 0;
+    aida (at < len(errors)) {
+        x86_64.cmp_ri(code, x86_64.rax, errors[at]);
+        kaku next = string.concat("rt.win_errno.n", convert.format_int(at));
+        x86_64.jcc(code, x86_64.cc_ne, next);
+        x86_64.mov_ri(code, x86_64.rax, -errnos[at]);
+        x86_64.ret(code);
+        x86_64.label(code, next);
+        at = at + 1;
+    }
+    x86_64.mov_ri(code, x86_64.rax, -5);
+    x86_64.ret(code);
+}
+
+// rt.win_cmdline: rdi = array of strings -> rax = NUL-terminated UTF-8 command line in a fresh heap block, or 0 when
+// an argument contains NUL. An argument is quoted when it is empty or contains space, tab, LF, VT or '"'; inside quotes
+// n backslashes before '"' become 2n+1 backslashes and a trailing run of n backslashes becomes 2n (CommandLineToArgvW).
+// Every argument needs at most 2*len+3 bytes. No API call (only rt.alloc), so no frame alignment is needed.
+waza emit_win_cmdline(code: x86_64.Assembler) -> unit {
+    kaku p = "rt.win_cmdline";
+    x86_64.label(code, p);
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 32);
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdi);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdi, 16);
+    x86_64.mov_load(code, x86_64.r9, x86_64.rdi, 40);
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.label(code, string.concat(p, ".bound"));
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".bound_done"));
+    x86_64.mov_load(code, x86_64.rdx, x86_64.r9, 0);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdx, 16);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.add_ri(code, x86_64.rax, 3);
+    x86_64.add_ri(code, x86_64.r9, 8);
+    x86_64.sub_ri(code, x86_64.rcx, 1);
+    x86_64.jmp(code, string.concat(p, ".bound"));
+    x86_64.label(code, string.concat(p, ".bound_done"));
+    x86_64.add_ri(code, x86_64.rax, 7);
+    x86_64.and_ri(code, x86_64.rax, -8);
+    x86_64.add_ri(code, x86_64.rax, 16);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+    x86_64.call(code, "rt.alloc");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -16);
+    x86_64.shl_ri(code, x86_64.rcx, 8);
+    x86_64.add_ri(code, x86_64.rcx, 4);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, 16);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.r10, 0);
+    x86_64.label(code, string.concat(p, ".arg"));
+    x86_64.mov_load(code, x86_64.r9, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.r11, x86_64.r9, 16);
+    x86_64.cmp_rr(code, x86_64.r10, x86_64.r11);
+    x86_64.jcc(code, x86_64.cc_ae, string.concat(p, ".done"));
+    x86_64.test_rr(code, x86_64.r10, x86_64.r10);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".first"));
+    x86_64.mov_ri(code, x86_64.rax, 32);
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.label(code, string.concat(p, ".first"));
+    x86_64.mov_load(code, x86_64.r9, x86_64.r9, 40);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.r10);
+    x86_64.shl_ri(code, x86_64.rsi, 3);
+    x86_64.add_rr(code, x86_64.rsi, x86_64.r9);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsi, 0);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsi, 16);
+    x86_64.add_ri(code, x86_64.rsi, 24);
+    // does the argument need quotes? (rdx = 1 when it does)
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".scan_start"));
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.label(code, string.concat(p, ".scan_start"));
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rsi);
+    x86_64.mov_rr(code, x86_64.r11, x86_64.rcx);
+    x86_64.label(code, string.concat(p, ".scan"));
+    x86_64.test_rr(code, x86_64.r11, x86_64.r11);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".scanned"));
+    x86_64.mov_load8(code, x86_64.r8, x86_64.rax, 0);
+    x86_64.test_rr(code, x86_64.r8, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".invalid"));
+    kaku specials: []int64 = [32, 9, 10, 11, 34];
+    kaku s = 0;
+    aida (s < len(specials)) {
+        x86_64.cmp_ri(code, x86_64.r8, specials[s]);
+        x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".need"));
+        s = s + 1;
+    }
+    x86_64.jmp(code, string.concat(p, ".scan_next"));
+    x86_64.label(code, string.concat(p, ".need"));
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.label(code, string.concat(p, ".scan_next"));
+    x86_64.add_ri(code, x86_64.rax, 1);
+    x86_64.sub_ri(code, x86_64.r11, 1);
+    x86_64.jmp(code, string.concat(p, ".scan"));
+    x86_64.label(code, string.concat(p, ".scanned"));
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".quoted"));
+    x86_64.rep_movsb(code);
+    x86_64.jmp(code, string.concat(p, ".after"));
+    // quoted form; rdx counts the backslashes already written since the last other character
+    x86_64.label(code, string.concat(p, ".quoted"));
+    x86_64.mov_ri(code, x86_64.rax, 34);
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.label(code, string.concat(p, ".q"));
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".q_tail"));
+    x86_64.mov_load8(code, x86_64.r8, x86_64.rsi, 0);
+    x86_64.cmp_ri(code, x86_64.r8, 92);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".q_not_backslash"));
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.r8);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.add_ri(code, x86_64.rdx, 1);
+    x86_64.jmp(code, string.concat(p, ".q_next"));
+    x86_64.label(code, string.concat(p, ".q_not_backslash"));
+    x86_64.cmp_ri(code, x86_64.r8, 34);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".q_plain"));
+    x86_64.add_ri(code, x86_64.rdx, 1);
+    x86_64.mov_ri(code, x86_64.rax, 92);
+    x86_64.label(code, string.concat(p, ".q_escape"));
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".q_quote"));
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.sub_ri(code, x86_64.rdx, 1);
+    x86_64.jmp(code, string.concat(p, ".q_escape"));
+    x86_64.label(code, string.concat(p, ".q_quote"));
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.r8);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.jmp(code, string.concat(p, ".q_next"));
+    x86_64.label(code, string.concat(p, ".q_plain"));
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.r8);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.label(code, string.concat(p, ".q_next"));
+    x86_64.add_ri(code, x86_64.rsi, 1);
+    x86_64.sub_ri(code, x86_64.rcx, 1);
+    x86_64.jmp(code, string.concat(p, ".q"));
+    x86_64.label(code, string.concat(p, ".q_tail"));
+    x86_64.mov_ri(code, x86_64.rax, 92);
+    x86_64.label(code, string.concat(p, ".q_tail_loop"));
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".q_close"));
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.sub_ri(code, x86_64.rdx, 1);
+    x86_64.jmp(code, string.concat(p, ".q_tail_loop"));
+    x86_64.label(code, string.concat(p, ".q_close"));
+    x86_64.mov_ri(code, x86_64.rax, 34);
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.label(code, string.concat(p, ".after"));
+    x86_64.add_ri(code, x86_64.r10, 1);
+    x86_64.jmp(code, string.concat(p, ".arg"));
+    x86_64.label(code, string.concat(p, ".done"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_store8(code, x86_64.rdi, 0, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -24);
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+    x86_64.label(code, string.concat(p, ".invalid"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+}
+
+// rt.win_wide: rdi = NUL-terminated UTF-8 -> rax = NUL-terminated UTF-16 copy in a fresh heap block, or 0 on failure.
+// UTF-16 never needs more code units than UTF-8 has bytes. Frame: +32/+40 stack arguments, +48 source, +56 units, +64 result.
+waza emit_win_wide(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.win_wide";
+    kaku begin = open_frame(code, p, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 80);
+    x86_64.mov_store(code, x86_64.rsp, 48, x86_64.rdi);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rdi);
+    x86_64.label(code, string.concat(p, ".len"));
+    x86_64.mov_load8(code, x86_64.rcx, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".len_done"));
+    x86_64.add_ri(code, x86_64.rsi, 1);
+    x86_64.jmp(code, string.concat(p, ".len"));
+    x86_64.label(code, string.concat(p, ".len_done"));
+    x86_64.sub_rr(code, x86_64.rsi, x86_64.rdi);
+    x86_64.add_ri(code, x86_64.rsi, 1);
+    x86_64.mov_store(code, x86_64.rsp, 56, x86_64.rsi);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rsi);
+    x86_64.shl_ri(code, x86_64.rax, 1);
+    x86_64.add_ri(code, x86_64.rax, 7);
+    x86_64.and_ri(code, x86_64.rax, -8);
+    x86_64.add_ri(code, x86_64.rax, 16);
+    x86_64.mov_store(code, x86_64.rsp, 64, x86_64.rax);
+    x86_64.call(code, "rt.alloc");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 64);
+    x86_64.shl_ri(code, x86_64.rcx, 8);
+    x86_64.add_ri(code, x86_64.rcx, 4);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.add_ri(code, x86_64.rax, 16);
+    x86_64.mov_store(code, x86_64.rsp, 64, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 56);
+    x86_64.mov_store(code, x86_64.rsp, 40, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 65001);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_load(code, x86_64.r8, x86_64.rsp, 48);
+    x86_64.mov_ri(code, x86_64.r9, -1);
+    api(code, ctx, import_multibyte);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".out"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 64);
+    x86_64.label(code, string.concat(p, ".out"));
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// rt.win_run: rdi = UTF-16 program path, rsi = UTF-16 command line (writable), rdx = STARTUPINFOW, rcx = inherit handles
+// (0/1), r8 = wall timeout in ms (4294967295 = none) -> rax = exit code (>= 0), spawn_timeout when the child was stopped
+// at the deadline, or -errno when it could not be created or waited for.
+// Frame: +32..+80 CreateProcessW stack arguments, +80 PROCESS_INFORMATION (24 bytes), +104 timeout, +112 exit code cell,
+// +120 result.
+waza emit_win_run(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.win_run";
+    kaku begin = open_frame(code, p, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 144);
+    x86_64.mov_store(code, x86_64.rsp, 104, x86_64.r8);
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rcx);
+    zero_slots(code, 40, 3);
+    x86_64.mov_store(code, x86_64.rsp, 64, x86_64.rdx);
+    x86_64.lea(code, x86_64.rax, x86_64.rsp, 80);
+    x86_64.mov_store(code, x86_64.rsp, 72, x86_64.rax);
+    zero_slots(code, 80, 3);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rdi);
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    api(code, ctx, import_create_process);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".create_failed"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 88);
+    api(code, ctx, import_close_handle);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 80);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsp, 104);
+    api(code, ctx, import_wait_object);
+    x86_64.zero_extend_eax(code);
+    x86_64.cmp_ri(code, x86_64.rax, 258);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".timeout"));
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".wait_failed"));
+    zero_slots(code, 112, 1);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 80);
+    x86_64.lea(code, x86_64.rdx, x86_64.rsp, 112);
+    api(code, ctx, import_exit_code);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".wait_failed"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 112);
+    x86_64.mov_store(code, x86_64.rsp, 120, x86_64.rax);
+    x86_64.label(code, string.concat(p, ".close"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 80);
+    api(code, ctx, import_close_handle);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 120);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".timeout"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 80);
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    api(code, ctx, import_terminate_process);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 80);
+    x86_64.mov_ri(code, x86_64.rdx, 4294967295);
+    api(code, ctx, import_wait_object);
+    set_slot(code, 120, spawn_timeout);
+    x86_64.jmp(code, string.concat(p, ".close"));
+    x86_64.label(code, string.concat(p, ".wait_failed"));
+    api(code, ctx, import_last_error);
+    x86_64.zero_extend_eax(code);
+    x86_64.call(code, "rt.win_errno");
+    x86_64.mov_store(code, x86_64.rsp, 120, x86_64.rax);
+    x86_64.jmp(code, string.concat(p, ".close"));
+    x86_64.label(code, string.concat(p, ".create_failed"));
+    api(code, ctx, import_last_error);
+    x86_64.zero_extend_eax(code);
+    x86_64.call(code, "rt.win_errno");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// Converts the Mio path (string in rdi) and arguments (array saved at rsp+slot_args) into the UTF-16 program path at
+// rsp+slot_app and command line at rsp+slot_cmd; jumps to `invalid` when either contains NUL or cannot be converted.
+waza emit_prepare_command(code: x86_64.Assembler, slot_args: int64, slot_app: int64, slot_cmd: int64, invalid: string) -> unit {
+    x86_64.call(code, "rt.fs_cpath");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, invalid);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.call(code, "rt.win_wide");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, invalid);
+    x86_64.mov_store(code, x86_64.rsp, slot_app, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rsp, slot_args);
+    x86_64.call(code, "rt.win_cmdline");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, invalid);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.call(code, "rt.win_wide");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, invalid);
+    x86_64.mov_store(code, x86_64.rsp, slot_cmd, x86_64.rax);
+}
+
+// rt.os_spawn / rt.os_exec: rdi = path string, rsi = arguments. Frame: +32 STARTUPINFOW (104 bytes), +144 arguments,
+// +152 UTF-16 path, +160 UTF-16 command line.
+waza emit_win_spawn(code: x86_64.Assembler, ctx: WinContext, name: string, exec: bool) -> unit {
+    kaku begin = open_frame(code, name, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 176);
+    x86_64.mov_store(code, x86_64.rsp, 144, x86_64.rsi);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    emit_prepare_command(code, 144, 152, 160, string.concat(name, ".invalid"));
+    zero_slots(code, 32, 13);
+    set_slot(code, 32, 104);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rsp, 152);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsp, 160);
+    x86_64.lea(code, x86_64.rdx, x86_64.rsp, 32);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.mov_ri(code, x86_64.r8, 4294967295);
+    x86_64.call(code, "rt.win_run");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".failed"));
+    moshi (exec) {
+        x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+        x86_64.call(code, "rt.exit");
+    }
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(name, ".failed"));
+    moshi (!exec) { emit_start_failure_status(code, name); }
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(name, ".invalid"));
+    // exec: -EINVAL (no program was started, as execve); spawn: 127, the darwin/Linux status of a child whose program
+    // cannot be started (a path or argument with NUL).
+    x86_64.mov_ri(code, x86_64.rax, -22);
+    moshi (!exec) { x86_64.mov_ri(code, x86_64.rax, 127); }
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// rax = -errno from rt.win_run: a program that does not exist, is not executable or is not an image becomes 127 (the
+// Linux child's status after a failed execve); other failures (for example memory) stay negative, like a failed fork.
+waza emit_start_failure_status(code: x86_64.Assembler, name: string) -> unit {
+    kaku keep = string.concat(name, ".keep_errno");
+    x86_64.cmp_ri(code, x86_64.rax, -2);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".not_started"));
+    x86_64.cmp_ri(code, x86_64.rax, -13);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".not_started"));
+    x86_64.cmp_ri(code, x86_64.rax, -8);
+    x86_64.jcc(code, x86_64.cc_ne, keep);
+    x86_64.label(code, string.concat(name, ".not_started"));
+    x86_64.mov_ri(code, x86_64.rax, 127);
+    x86_64.label(code, keep);
+}
+
+// rt.win_open_inherit: rdi = path string -> rax = inheritable handle opened for writing (create/truncate), or 0.
+// Frame: +32..+56 stack arguments, +64 SECURITY_ATTRIBUTES (24 bytes).
+waza emit_win_open_inherit(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.win_open_inherit";
+    kaku begin = open_frame(code, p, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 96);
+    x86_64.call(code, "rt.fs_cpath");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".fail"));
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.call(code, "rt.win_wide");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".fail"));
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    set_slot(code, 64, 24);
+    set_slot(code, 72, 0);
+    set_slot(code, 80, 1);
+    set_slot(code, 32, 2);
+    set_slot(code, 40, 128);
+    set_slot(code, 48, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 1073741824);
+    x86_64.mov_ri(code, x86_64.r8, 7);
+    x86_64.lea(code, x86_64.r9, x86_64.rsp, 64);
+    api(code, ctx, import_create_file);
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".fail"));
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".fail"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// rt.os_spawn_test: rdi = path, rsi = arguments, rdx = stdout file, rcx = stderr file, r8 = records file, r9 = CPU
+// seconds (1..3600). Frame: +32 STARTUPINFOW (104 bytes), +144 lpReserved2 table (40 bytes: count 4, flags, 4 handles),
+// +192 stdout path, +200 stderr path, +208 records path, +216 seconds, +224 arguments, +232 UTF-16 path,
+// +240 UTF-16 command line, +248/+256/+264 stdout/stderr/records handles, +272 result.
+waza emit_win_spawn_test(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.os_spawn_test";
+    kaku begin = open_frame(code, p, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 288);
+    x86_64.mov_store(code, x86_64.rsp, 192, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rsp, 200, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rsp, 208, x86_64.r8);
+    x86_64.mov_store(code, x86_64.rsp, 216, x86_64.r9);
+    x86_64.mov_store(code, x86_64.rsp, 224, x86_64.rsi);
+    zero_slots(code, 248, 3);
+    x86_64.cmp_ri(code, x86_64.r9, 1);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(p, ".setup_failed"));
+    x86_64.cmp_ri(code, x86_64.r9, 3600);
+    x86_64.jcc(code, x86_64.cc_g, string.concat(p, ".setup_failed"));
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    emit_prepare_command(code, 224, 232, 240, string.concat(p, ".invalid"));
+    kaku sources: []int64 = [192, 200, 208];
+    kaku targets: []int64 = [248, 256, 264];
+    kaku at = 0;
+    aida (at < 3) {
+        x86_64.mov_load(code, x86_64.rdi, x86_64.rsp, sources[at]);
+        x86_64.call(code, "rt.win_open_inherit");
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".setup_failed"));
+        x86_64.mov_store(code, x86_64.rsp, targets[at], x86_64.rax);
+        at = at + 1;
+    }
+    zero_slots(code, 32, 13);
+    set_slot(code, 32, 104);
+    // dwFlags (+60) = STARTF_USESTDHANDLES, wShowWindow (+64) = 0, cbReserved2 (+66) = 40, padding (+68) = 0
+    set_slot(code, 92, 256 + 40 * 281474976710656);
+    x86_64.lea(code, x86_64.rax, x86_64.rsp, 144);
+    x86_64.mov_store(code, x86_64.rsp, 104, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967286);
+    api(code, ctx, import_get_std_handle);
+    x86_64.mov_store(code, x86_64.rsp, 112, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 248);
+    x86_64.mov_store(code, x86_64.rsp, 120, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 256);
+    x86_64.mov_store(code, x86_64.rsp, 128, x86_64.rax);
+    // lpReserved2: count 4, flags 0,0,0,FOPEN, handles -1, -1, -1, records
+    set_slot(code, 144, 4 + 72057594037927936);
+    set_slot(code, 152, -1);
+    set_slot(code, 160, -1);
+    set_slot(code, 168, -1);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 264);
+    x86_64.mov_store(code, x86_64.rsp, 176, x86_64.rax);
+    x86_64.mov_load(code, x86_64.r8, x86_64.rsp, 216);
+    x86_64.mov_ri(code, x86_64.rax, 1000);
+    x86_64.imul_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rsp, 232);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsp, 240);
+    x86_64.lea(code, x86_64.rdx, x86_64.rsp, 32);
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.call(code, "rt.win_run");
+    x86_64.cmp_ri(code, x86_64.rax, spawn_timeout);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".not_timeout"));
+    x86_64.mov_ri(code, x86_64.rax, 142);
+    x86_64.label(code, string.concat(p, ".not_timeout"));
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, string.concat(p, ".started"));
+    emit_start_failure_status(code, p);
+    x86_64.label(code, string.concat(p, ".started"));
+    x86_64.mov_store(code, x86_64.rsp, 272, x86_64.rax);
+    emit_close_slots(code, ctx, p, targets);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 272);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".setup_failed"));
+    emit_close_slots(code, ctx, string.concat(p, ".setup"), targets);
+    x86_64.mov_ri(code, x86_64.rax, 126);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".invalid"));
+    x86_64.mov_ri(code, x86_64.rax, 127);
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// Closes every nonzero handle stored in the given frame slots.
+waza emit_close_slots(code: x86_64.Assembler, ctx: WinContext, tag: string, slots: []int64) -> unit {
+    kaku at = 0;
+    aida (at < len(slots)) {
+        kaku skip = string.concat(tag, string.concat(".closed", convert.format_int(at)));
+        x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, slots[at]);
+        x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+        x86_64.jcc(code, x86_64.cc_e, skip);
+        api(code, ctx, import_close_handle);
+        x86_64.label(code, skip);
+        at = at + 1;
+    }
+}
+
+// rt.os_stdin_ready -> rt.os_stdin_wait(0). rt.os_stdin_wait: rdi = timeout ms (-1 waits forever; other negative values
+// and values above INT32_MAX are -EINVAL without blocking). Frame: +32/+40 stack arguments, +48 timeout, +56 deadline,
+// +64 bytes available, +72 handle.
+waza emit_win_stdin(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.os_stdin_wait";
+    x86_64.label(code, "rt.os_stdin_ready");
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.jmp(code, string.concat(p, ".go"));
+    x86_64.label(code, p);
+    x86_64.cmp_ri(code, x86_64.rdi, -1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".go"));
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(p, ".invalid"));
+    x86_64.mov_ri(code, x86_64.rax, 2147483647);
+    x86_64.cmp_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_g, string.concat(p, ".invalid"));
+    x86_64.jmp(code, string.concat(p, ".go"));
+    x86_64.label(code, string.concat(p, ".invalid"));
+    x86_64.mov_ri(code, x86_64.rax, -22);
+    x86_64.ret(code);
+    kaku begin = open_frame(code, string.concat(p, ".go"), 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 96);
+    x86_64.mov_store(code, x86_64.rsp, 48, x86_64.rdi);
+    api(code, ctx, import_tick_count);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 48);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rsp, 56, x86_64.rax);
+    x86_64.label(code, string.concat(p, ".poll"));
+    x86_64.mov_ri(code, x86_64.rcx, 4294967286);
+    api(code, ctx, import_get_std_handle);
+    x86_64.mov_store(code, x86_64.rsp, 72, x86_64.rax);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".ebadf"));
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".ebadf"));
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    api(code, ctx, import_file_type);
+    x86_64.zero_extend_eax(code);
+    x86_64.cmp_ri(code, x86_64.rax, 3);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".pipe"));
+    x86_64.cmp_ri(code, x86_64.rax, 2);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".console"));
+    x86_64.cmp_ri(code, x86_64.rax, 1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".ready"));
+    x86_64.jmp(code, string.concat(p, ".ebadf"));
+    x86_64.label(code, string.concat(p, ".pipe"));
+    zero_slots(code, 64, 1);
+    x86_64.lea(code, x86_64.rax, x86_64.rsp, 64);
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax);
+    zero_slots(code, 40, 1);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 72);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    api(code, ctx, import_peek_pipe);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".pipe_error"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 64);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".ready"));
+    x86_64.jmp(code, string.concat(p, ".idle"));
+    // a pipe whose writer is gone is at end of file, which counts as ready (as poll reports POLLHUP)
+    x86_64.label(code, string.concat(p, ".pipe_error"));
+    api(code, ctx, import_last_error);
+    x86_64.zero_extend_eax(code);
+    x86_64.cmp_ri(code, x86_64.rax, 109);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".ready"));
+    x86_64.call(code, "rt.win_errno");
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".console"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 72);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    api(code, ctx, import_wait_object);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".ready"));
+    x86_64.label(code, string.concat(p, ".idle"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 48);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".zero"));
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".sleep"));
+    api(code, ctx, import_tick_count);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 56);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ae, string.concat(p, ".zero"));
+    x86_64.label(code, string.concat(p, ".sleep"));
+    x86_64.mov_ri(code, x86_64.rcx, 10);
+    api(code, ctx, import_sleep);
+    x86_64.jmp(code, string.concat(p, ".poll"));
+    x86_64.label(code, string.concat(p, ".ready"));
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".zero"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".ebadf"));
+    x86_64.mov_ri(code, x86_64.rax, -9);
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// ---------------------------------------------------------------------------------------------- kiso/testing channel
+// Same contract as kiso/aot/lowerlinux/runtime_testing.mio: a failed expectation is counted (gc_state() + 88), written to
+// stderr with a newline and, in packet mode, to the records handle as an 8-byte little-endian length and the bytes;
+// rt.testing_finish writes the all-ones completion marker and exits 1 when any expectation failed, else 0.
+waza uses_testing(file: mochi.File) -> bool {
+    kaku at = 0;
+    aida (at < len(file.functions)) {
+        moshi (types.is_testing_report(file.functions[at].name) || types.is_testing_packet(file.functions[at].name)) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+waza uses_testing_packet(file: mochi.File) -> bool {
+    kaku at = 0;
+    aida (at < len(file.functions)) { moshi (types.is_testing_packet(file.functions[at].name)) { kaesu hai; } at = at + 1; }
+    kaesu iie;
+}
+
+waza emit_syscall_write(code: x86_64.Assembler) -> unit {
+    x86_64.mov_eax_imm(code, 1);
+    x86_64.call(code, "rt.syscall");
+}
+
+waza emit_win_testing(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    emit_win_records_handle(code, ctx);
+    kaku p = "rt.testing_report";
+    x86_64.label(code, p);
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".done"));
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 32);
+    x86_64.mov_ri(code, x86_64.rcx, testing_counter());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 0);
+    x86_64.add_ri(code, x86_64.rax, 1);
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".stderr"));
+    x86_64.call(code, "rt.win_records_handle");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".stderr"));
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 16);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -24);
+    x86_64.lea(code, x86_64.rsi, x86_64.rbp, -16);
+    x86_64.mov_ri(code, x86_64.rdx, 8);
+    emit_syscall_write(code);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 16);
+    x86_64.add_ri(code, x86_64.rsi, 24);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -24);
+    emit_syscall_write(code);
+    x86_64.label(code, string.concat(p, ".stderr"));
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 16);
+    x86_64.add_ri(code, x86_64.rsi, 24);
+    x86_64.mov_ri(code, x86_64.rdi, 2);
+    emit_syscall_write(code);
+    x86_64.lea_label(code, x86_64.rsi, "rt.text.newline");
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.mov_ri(code, x86_64.rdi, 2);
+    emit_syscall_write(code);
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.label(code, string.concat(p, ".done"));
+    x86_64.ret(code);
+
+    // rt.testing_finish: rdi = 1 when the packet channel is used
+    kaku f = "rt.testing_finish";
+    x86_64.label(code, f);
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 16);
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(f, ".status"));
+    x86_64.call(code, "rt.win_records_handle");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(f, ".status"));
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, -1);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -16);
+    x86_64.lea(code, x86_64.rsi, x86_64.rbp, -8);
+    x86_64.mov_ri(code, x86_64.rdx, 8);
+    emit_syscall_write(code);
+    x86_64.label(code, string.concat(f, ".status"));
+    x86_64.mov_ri(code, x86_64.rax, testing_counter());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(f, ".exit"));
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.label(code, string.concat(f, ".exit"));
+    x86_64.call(code, "rt.exit");
+}
+
+// rt.win_records_handle -> rax = the inherited records handle ("fd 3" of the lpReserved2 table), or 0 when there is none.
+// The answer is cached at records_cache() (0 unknown, -1 none). Frame: +32 STARTUPINFOW (104 bytes).
+waza emit_win_records_handle(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku p = "rt.win_records_handle";
+    kaku begin = open_frame(code, p, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, 144);
+    x86_64.mov_ri(code, x86_64.rcx, records_cache());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".lookup"));
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(p, ".out"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".lookup"));
+    zero_slots(code, 32, 13);
+    x86_64.lea(code, x86_64.rcx, x86_64.rsp, 32);
+    api(code, ctx, import_startup_info);
+    // rdx = cbReserved2, r9 = lpReserved2
+    x86_64.mov_load8(code, x86_64.rdx, x86_64.rsp, 32 + 66);
+    x86_64.mov_load8(code, x86_64.r8, x86_64.rsp, 32 + 67);
+    x86_64.shl_ri(code, x86_64.r8, 8);
+    x86_64.or_rr(code, x86_64.rdx, x86_64.r8);
+    x86_64.mov_load(code, x86_64.r9, x86_64.rsp, 32 + 72);
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".none"));
+    x86_64.cmp_ri(code, x86_64.rdx, 4);
+    x86_64.jcc(code, x86_64.cc_b, string.concat(p, ".none"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.r9, 0);
+    x86_64.mov_ri(code, x86_64.r8, 4294967295);
+    x86_64.and_rr(code, x86_64.rcx, x86_64.r8);
+    x86_64.cmp_ri(code, x86_64.rcx, 4);
+    x86_64.jcc(code, x86_64.cc_b, string.concat(p, ".none"));
+    x86_64.mov_ri(code, x86_64.r8, 65535);
+    x86_64.cmp_rr(code, x86_64.rcx, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_a, string.concat(p, ".none"));
+    // the table must hold count flags and count handles: 4 + 9 * count <= cbReserved2
+    x86_64.mov_rr(code, x86_64.r10, x86_64.rcx);
+    x86_64.shl_ri(code, x86_64.r10, 3);
+    x86_64.add_rr(code, x86_64.r10, x86_64.rcx);
+    x86_64.add_ri(code, x86_64.r10, 4);
+    x86_64.cmp_rr(code, x86_64.r10, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_a, string.concat(p, ".none"));
+    x86_64.mov_load8(code, x86_64.r8, x86_64.r9, 7);
+    x86_64.and_ri(code, x86_64.r8, 1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".none"));
+    x86_64.mov_rr(code, x86_64.r10, x86_64.r9);
+    x86_64.add_rr(code, x86_64.r10, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rax, x86_64.r10, 28);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".none"));
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(p, ".none"));
+    x86_64.mov_ri(code, x86_64.rcx, records_cache());
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax);
+    x86_64.label(code, string.concat(p, ".out"));
+    emit_epilogue(code);
+    x86_64.label(code, string.concat(p, ".none"));
+    x86_64.mov_ri(code, x86_64.rcx, records_cache());
+    x86_64.mov_ri(code, x86_64.rax, -1);
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}

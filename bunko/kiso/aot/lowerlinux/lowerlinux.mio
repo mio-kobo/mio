@@ -326,9 +326,19 @@ waza emit_block(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAn
             x86_64.label(code, non_nil_case);
             moshi (nullable_scalar(analysis, stack_node(analysis, function_id, offset, 1))) { x86_64.mov_load(code, x86_64.rax, x86_64.rax, 16); }
             moshi (nullable_scalar(analysis, stack_node(analysis, function_id, offset, 0))) { x86_64.mov_load(code, x86_64.rcx, x86_64.rcx, 16); }
-            x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
-            moshi (opcode == 11) { x86_64.setcc_rax(code, x86_64.cc_e); }
-            moshi (opcode == 12) { x86_64.setcc_rax(code, x86_64.cc_ne); }
+            // Two present floats compare by IEEE 754 value (-0.0 == 0.0, NaN != NaN), as without nullability.
+            kaku value_kind = float_kind(analysis, stack_node(analysis, function_id, offset, 0));
+            moshi (value_kind == 0) { value_kind = float_kind(analysis, stack_node(analysis, function_id, offset, 1)); }
+            moshi (value_kind != 0) {
+                emit_float_load(code, value_kind, 0, x86_64.rax); emit_float_load(code, value_kind, 1, x86_64.rcx);
+                x86_64.ucomis(code, value_kind == 2, 0, 1);
+                moshi (opcode == 11) { x86_64.setcc_rax(code, x86_64.cc_e); x86_64.setcc_rcx(code, 11); x86_64.and_rr(code, x86_64.rax, x86_64.rcx); }
+                moshi (opcode == 12) { x86_64.setcc_rax(code, x86_64.cc_ne); x86_64.setcc_rcx(code, 10); x86_64.or_rr(code, x86_64.rax, x86_64.rcx); }
+            } sore {
+                x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+                moshi (opcode == 11) { x86_64.setcc_rax(code, x86_64.cc_e); }
+                moshi (opcode == 12) { x86_64.setcc_rax(code, x86_64.cc_ne); }
+            }
             x86_64.label(code, finished);
             push(code, x86_64.rax);
         }
@@ -668,28 +678,7 @@ waza emit_block(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAn
                     moshi (primitive == 5) { mode = 11; }
                     emit_float_load(code, fk, 0, x86_64.rax); x86_64.rounds(code, double, 0, 0, mode); emit_float_store(code, fk, x86_64.rax, 0);
                 }
-                moshi (primitive == 6) {
-                    emit_float_load(code, fk, 0, x86_64.rax); x86_64.ucomis(code, double, 0, 0); x86_64.setcc_rax(code, 10);
-                }
-                moshi (primitive == 7 || primitive == 8) {
-                    // exponent field all ones: infinity or NaN; infinity has a zero fraction
-                    kaku bits = 52; kaku mask = 2047; kaku infinity = 9218868437227405312;
-                    moshi (fk == 1) { bits = 23; mask = 255; infinity = 2139095040; }
-                    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
-                    x86_64.shr_ri(code, x86_64.rcx, bits);
-                    x86_64.and_ri(code, x86_64.rcx, mask);
-                    x86_64.cmp_ri(code, x86_64.rcx, mask);
-                    moshi (primitive == 8) { x86_64.setcc_rax(code, x86_64.cc_ne); }
-                    moshi (primitive == 7) {
-                        x86_64.setcc_rcx(code, x86_64.cc_e);
-                        x86_64.mov_ri(code, x86_64.rdx, infinity);
-                        moshi (fk == 1) { x86_64.and_ri(code, x86_64.rax, 2147483647); }
-                        moshi (fk == 2) { x86_64.shl_ri(code, x86_64.rax, 1); x86_64.shr_ri(code, x86_64.rax, 1); }
-                        x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
-                        x86_64.setcc_rax(code, x86_64.cc_e);
-                        x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
-                    }
-                }
+                moshi (primitive >= 6 && primitive <= 8) { emit_float_predicate(code, fk, primitive); }
                 moshi (primitive == 9) {
                     moshi (fk == 2) { x86_64.mov_ri(code, x86_64.rcx, -9223372036854775807 - 1); }
                     moshi (fk == 1) { x86_64.mov_ri(code, x86_64.rcx, 2147483648); }
@@ -796,7 +785,17 @@ waza emit_block(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAn
             x86_64.add_ri(code, x86_64.rsp, 8 * (operand + 1));
             moshi (returns == 1) { push(code, x86_64.rax); }
         }
-        moshi (opcode == 25) {
+        moshi (opcode == 25 && operand >= 0 && operand < len(file.functions) && types.is_float_predicate(file.functions[operand])) {
+            // A width-polymorphic predicate (math.is_nan / is_inf / is_finite instance) has no shared argument
+            // representation: evaluate it inline with the argument's width at this call site, as the darwin-arm64
+            // backend does (kiso/aot/lower). Calling the shared body would read a float32 argument as float64.
+            kaku argument = stack_node(analysis, function_id, offset, 0);
+            kaku width = float_kind(analysis, argument);
+            moshi (width != 1 && types.type_kind(analysis, argument) != types.type_float64) { kaesu "UNSAFE_FLOAT_PREDICATE_OPERAND"; }
+            pop(code, x86_64.rax); unbox_node(code, analysis, argument, x86_64.rax);
+            emit_float_predicate(code, width, int64(file.functions[operand].instructions[4]));
+            push(code, x86_64.rax);
+        } sore { moshi (opcode == 25) {
             moshi (operand < 0 || operand >= len(file.functions)) { kaesu "INVALID_FUNCTION_INDEX"; }
             kaku callee = file.functions[operand];
             x86_64.call(code, function_label(operand));
@@ -804,7 +803,7 @@ waza emit_block(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAn
             moshi (site != "") { kaesu site; }
             moshi (callee.parameter_count > 0) { x86_64.add_ri(code, x86_64.rsp, 8 * callee.parameter_count); }
             moshi (callee.returns_value) { push(code, x86_64.rax); }
-        }
+        } }
         moshi (opcode == 26 || opcode == 27) {
             moshi (function_id < 0) { kaesu "RETURN_OUTSIDE_FUNCTION"; }
             moshi (opcode == 27) { pop(code, x86_64.rax); }
@@ -908,6 +907,34 @@ waza float_kind(analysis: types.TypeAnalysis, node: int64) -> int64 {
     moshi (kind == types.type_float32) { kaesu 1; }
     moshi (kind == types.type_float64 || kind == types.type_float_any) { kaesu 2; }
     kaesu 0;
+}
+
+// Float predicate on the raw bits in rax for width fk (1 float32, 2 float64): primitive 6 is_nan, 7 is_inf,
+// 8 is_finite -> rax = 0/1. Clobbers rcx, rdx, xmm0.
+waza emit_float_predicate(code: x86_64.Assembler, fk: int64, primitive: int64) -> unit {
+    kaku double = fk == 2;
+    moshi (primitive == 6) {
+        emit_float_load(code, fk, 0, x86_64.rax); x86_64.ucomis(code, double, 0, 0); x86_64.setcc_rax(code, 10);
+    }
+    moshi (primitive == 7 || primitive == 8) {
+        // exponent field all ones: infinity or NaN; infinity has a zero fraction
+        kaku bits = 52; kaku mask = 2047; kaku infinity = 9218868437227405312;
+        moshi (fk == 1) { bits = 23; mask = 255; infinity = 2139095040; x86_64.mov_ri(code, x86_64.rcx, 4294967295); x86_64.and_rr(code, x86_64.rax, x86_64.rcx); }
+        x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+        x86_64.shr_ri(code, x86_64.rcx, bits);
+        x86_64.and_ri(code, x86_64.rcx, mask);
+        x86_64.cmp_ri(code, x86_64.rcx, mask);
+        moshi (primitive == 8) { x86_64.setcc_rax(code, x86_64.cc_ne); }
+        moshi (primitive == 7) {
+            x86_64.setcc_rcx(code, x86_64.cc_e);
+            x86_64.mov_ri(code, x86_64.rdx, infinity);
+            moshi (fk == 1) { x86_64.and_ri(code, x86_64.rax, 2147483647); }
+            moshi (fk == 2) { x86_64.shl_ri(code, x86_64.rax, 1); x86_64.shr_ri(code, x86_64.rax, 1); }
+            x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
+            x86_64.setcc_rax(code, x86_64.cc_e);
+            x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
+        }
+    }
 }
 
 // xmm0 <- rax, xmm1 <- rcx for the given float kind (1 or 2).

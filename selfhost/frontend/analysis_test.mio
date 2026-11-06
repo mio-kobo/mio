@@ -5,7 +5,14 @@ yobu "kiso/os";
 yobu "kiso/string";
 yobu "kiso/convert";
 
-waza virtual_root(suffix: string) -> string { kaesu string.concat("/tmp/mio-analysis-",string.concat(convert.format_int(os.pid()),suffix)); }
+// Fixture root: "/tmp". The analysis paths here are rooted at "/" (Unix-style), so the same spelling is kept on every
+// host; on Windows "/tmp" is \tmp of the current drive, created when missing.
+waza scratch_root_for_fixtures() -> string {
+    moshi (!fs.is_dir("/tmp")) { fs.create_dir("/tmp"); }
+    kaesu "/tmp";
+}
+
+waza virtual_root(suffix: string) -> string { kaesu string.concat(string.concat(scratch_root_for_fixtures(),"/mio-analysis-"),string.concat(convert.format_int(os.pid()),suffix)); }
 waza has_symbol(result: AnalysisResult, name: string) -> bool {
     kaku pi=0;aida(pi<len(result.resolved)){kaku symbols=result.resolved[pi].symbols;kaku si=0;aida(si<len(symbols)){moshi(symbols[si].name==name){kaesu hai;}si=si+1;}pi=pi+1;}kaesu iie;
 }

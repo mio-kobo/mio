@@ -9,6 +9,7 @@ yobu "kiso/convert";
 yobu "kiso/encoding/json";
 yobu "kiso/regexp";
 yobu "selfhost/tester";
+yobu "selfhost/pipeline";
 
 kata Options { target: string; filter: string; format: string; color: string; lang: int64; bunko: string; verbose: bool; error: string; }
 waza tail(text: string, offset: int64) -> string {
@@ -52,7 +53,7 @@ koukai waza command(args: []string) -> int64 {
     kaku filter = regexp.compile(opts.filter);
     moshi (filter.error != "") { write_diagnostic(string.concat("E_OPTIONS invalid test filter: ", filter.error),opts); kaesu 1; }
     kaku packages = tester.discover(opts.target); moshi (packages.error != "") { write_diagnostic(packages.error,opts); kaesu 1; }
-    kaku temporary = string.concat("/tmp/mio-test-", convert.format_int(os.pid()));
+    kaku temporary = string.concat(pipeline.temporary_root(), string.concat("/mio-test-", convert.format_int(os.pid())));
     kaku created = fs.create_dir(temporary); moshi (created.error != mu) { write_diagnostic("E_IO cannot create private test directory",opts); kaesu 1; }
     moshi (os.chmod(temporary, 448) != 0) { os.remove_dir(temporary); write_diagnostic("E_IO cannot protect private test directory",opts); kaesu 1; }
     kaku started = os.monotonic_ms(); kaku report = string.new_builder(); put(report, "{\"schema_version\":1,\"packages\":[");

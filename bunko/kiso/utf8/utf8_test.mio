@@ -1,0 +1,38 @@
+yobu "kiso/testing";
+yobu "kiso/bytes";
+
+waza test_runes() -> unit {
+    testing.expect(is_valid_rune('a') && is_valid_rune(rune(1114111)) && !is_valid_rune(rune(55296)) && !is_valid_rune(rune(1114112)), "is_valid_rune");
+    testing.expect(!is_valid_rune(rune(-1)) && is_valid_rune(rune(0)) && is_valid_rune(rune(57344)), "rune boundaries");
+    testing.expect(rune_width('a') == 1 && rune_width('é') == 2 && rune_width('語') == 3 && rune_width('😀') == 4, "rune_width");
+    testing.expect(rune_width(rune(127)) == 1 && rune_width(rune(128)) == 2 && rune_width(rune(2047)) == 2 && rune_width(rune(2048)) == 3, "width boundaries");
+    testing.expect(rune_width(rune(65535)) == 3 && rune_width(rune(65536)) == 4, "plane boundary");
+}
+
+waza test_encode_and_append() -> unit {
+    testing.expect(bytes.equal(encode_rune('A'), [65]) && bytes.equal(encode_rune('é'), [195, 169]), "encode_rune");
+    testing.expect(bytes.equal(encode_rune('語'), [232, 170, 158]) && bytes.equal(encode_rune('😀'), [240, 159, 152, 128]), "encode_rune multibyte");
+    kaku data: []uint8 = [33];
+    append_rune(data, '中');
+    testing.expect(bytes.equal(data, [33, 228, 184, 173]), "append_rune should append the encoding");
+}
+
+waza test_decode_and_validate() -> unit {
+    kaku data: []uint8 = [65, 230, 151, 165, 255];
+    kaku first = decode_one(data, 0);
+    testing.expect(first.valid && first.width == 1 && first.value == 'A', "ASCII decode");
+    kaku second = decode_one(data, 1);
+    testing.expect(second.valid && second.width == 3 && second.value == '日', "three-byte decode");
+    kaku bad = decode_one(data, 4);
+    testing.expect(!bad.valid && bad.width == 1 && bad.value == '�', "invalid byte decodes to U+FFFD with width 1");
+    kaku end = decode_one(data, 5);
+    testing.expect(!end.valid && end.width == 0, "decoding at the end has width 0");
+    kaku truncated = decode_one([230, 151], 0);
+    testing.expect(!truncated.valid && truncated.width == 1, "a truncated sequence is invalid");
+    testing.expect(valid([]) && valid([240, 159, 152, 128]) && !valid([237, 160, 128]) && !valid([224, 128, 128]), "valid");
+    testing.expect(!valid([244, 144, 128, 128]) && !valid([193, 191]), "out-of-range and overlong");
+    kaku count = rune_count([65, 195, 169, 240, 159, 152, 128]);
+    testing.expect(count != mu, "valid count");
+    moshi (count != mu) { testing.expect(count == 3, "rune_count"); }
+    testing.expect(rune_count([65, 128]) == mu, "rune_count of invalid data is mu");
+}
