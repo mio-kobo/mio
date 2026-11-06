@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import inventory, digest
 
 
-def smoke(root, target, flavor):
+def smoke(root, target, flavor, metadata_root=None):
     root = root.resolve()
     m = json.loads((root / 'manifest.json').read_text())
     files = inventory(root)
@@ -20,6 +20,11 @@ def smoke(root, target, flavor):
     if flavor == 'core' and target == 'windows-amd64' and alias.exists():
         assert digest(alias) == digest(root / 'bin/mio.exe'), 'alias differs from compiler'
         files.pop('bin/mio-core.exe')
+    if metadata_root is not None:
+        for name in ('LICENSE', 'README.md'):
+            if name not in files:
+                path = metadata_root / name
+                files[name] = dict(sha256=digest(path), size=path.stat().st_size)
     assert files == m['files'], 'installed inventory mismatch'
     cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
     env = dict(os.environ)

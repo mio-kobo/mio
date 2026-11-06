@@ -52,6 +52,13 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
+    - name: Install current official WinGet client
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+        Repair-WinGetPackageManager -AllUsers -Latest
+        winget --version
     - name: Install package manager test dependencies
       shell: bash
       run: |
@@ -328,6 +335,13 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
+    - name: Install current official WinGet client
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+        Repair-WinGetPackageManager -AllUsers -Latest
+        winget --version
     - name: Install package manager test dependencies
       shell: bash
       run: |

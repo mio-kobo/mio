@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
+GF4_SEED_SHA256 = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
 
 
 def stable(tag):
@@ -60,7 +61,7 @@ def validate(assets, tag, release):
                 if m['version'] != version or m['target'] != target or m['flavor'] != flavor or inventory(root) != m['files']:
                     raise ValueError('payload manifest mismatch')
                 source = source or m['source_sha']
-                if m['source_sha'] != source or p['source_sha'] != source or p['embedded_bunko'] is not False:
+                if m['source_sha'] != source or p['source_sha'] != source or p['embedded_bunko'] is not False or any(p[k] != m[k] for k in ('version', 'target', 'flavor')):
                     raise ValueError('source/embedded Bunko mismatch')
                 binary = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
                 hashes.append(digest(binary))
@@ -83,7 +84,7 @@ def validate(assets, tag, release):
                     raise ValueError('B/C/D mismatch')
                 # Stable releases require separate frozen seed evidence. Hosted
                 # candidate NOT_RUN is intentionally insufficient for publishing.
-                if report['seed']['status'] != 'PASS':
+                if report['seed']['status'] != 'PASS' or report['seed'].get('sha256') != GF4_SEED_SHA256:
                     raise ValueError('stable release requires Trusted Seed PASS')
             records[target, flavor] = dict(filename=filename, sha=sums[filename], url=url, root=name)
         if hashes[0] != hashes[1]:
@@ -100,7 +101,7 @@ def formula(version, flavor, r, local=False):
     name, klass, other = ('mio', 'Mio', 'mio-core') if flavor == 'full' else ('mio-core', 'MioCore', 'mio')
     url = r['url']
     return f'''class {klass} < Formula
-  desc "Mio programming language ({flavor})"
+  desc "Programming language with native compilation ({flavor})"
   homepage "https://github.com/mio-kobo/mio"
   url "{url}"
   version "{version}"

@@ -29,6 +29,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - if: runner.os == 'Windows'
+        name: Install current official WinGet client
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+          Repair-WinGetPackageManager -AllUsers -Latest
+          winget --version
       - run: python -m pip install PyYAML==6.0.3
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
@@ -52,3 +59,35 @@ jobs:
           path: |
             build/fixture/*.json
             fixture-run.json
+  debian:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download verified Linux fixture
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p build/fixture
+          gh run download 42215905342 --repo mio-kobo/mio --name mio-candidates-linux-amd64-42215905342-1 --dir build/fixture
+      - name: Signed APT lifecycle on clean Debian/Ubuntu containers
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm --privileged -v "$PWD:/work" -w /work "$IMAGE" sh -ec '
+            apt-get update
+            apt-get install -y python3 python3-yaml sudo apt-utils gnupg util-linux
+            python3 scripts/distribution/verify.py --target linux-amd64 --output build/fixture
+            python3 scripts/package_managers/test_install.py --assets build/fixture --target linux-amd64
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apt-container-${{ strategy.job-index }}
+          path: build/fixture/*verification.json

@@ -59,14 +59,20 @@ def install(assets, target):
                     # Homebrew requires tapped formulae; this disposable tap has no
                     # network remote and cannot be mistaken for the official tap.
                     taproot = Path(subprocess.check_output(['brew', '--repository'], text=True).strip()) / 'Library/Taps/mio-ci/homebrew-candidate'
+                    if subprocess.run(['brew', 'list', '--versions', name], capture_output=True, text=True).stdout.strip():
+                        raise RuntimeError('refusing to replace an existing Homebrew installation: ' + name)
                     taproot.mkdir(parents=True, exist_ok=False)
-                    brew_env = dict(os.environ, XDG_CONFIG_HOME=str(base / 'brew-config'), HOMEBREW_NO_AUTO_UPDATE='1')
+                    brew_env = dict(os.environ, XDG_CONFIG_HOME=str(base / 'brew-config'), HOMEBREW_NO_AUTO_UPDATE='1', HOMEBREW_NO_AUTOREMOVE='1', HOMEBREW_NO_INSTALL_CLEANUP='1')
                     def brew(*args):
                         return run('brew', *args, env=brew_env)
                     try:
                         run('git', 'init', taproot)
                         f = taproot / 'Formula' / (name + '.rb')
                         f.parent.mkdir()
+                        for other_flavor, (other_archive, other_root, _) in archives.items():
+                            other_name = 'mio' if other_flavor == 'full' else 'mio-core'
+                            other_record = dict(root=other_root.name, sha=digest(other_archive), url=f'http://127.0.0.1:{server.server_port}/{other_archive.name}')
+                            (f.parent / (other_name + '.rb')).write_text(formula('0.0.1', other_flavor, other_record))
                         for v in ('0.0.1', '0.0.2'):
                             f.write_text(formula(v, flavor, r).replace(f'assert_match "{v}"', f'assert_match "{version}"'))
                             if subprocess.run(['brew', 'help', 'trust'], capture_output=True).returncode == 0:
@@ -74,8 +80,14 @@ def install(assets, target):
                             brew('audit', '--formula', 'mio-ci/candidate/' + name)
                             brew('install' if v == '0.0.1' else 'upgrade', 'mio-ci/candidate/' + name)
                             installed = Path(subprocess.check_output(['brew', '--prefix', name], text=True).strip()) / 'libexec'
-                            smoke(installed, target, flavor)
+                            smoke(installed, target, flavor, metadata_root=installed.parent)
                             brew('test', 'mio-ci/candidate/' + name)
+                        relocated = base / ('relocated-' + flavor)
+                        shutil.copytree(installed, relocated)
+                        for filename in ('LICENSE', 'README.md'):
+                            if not (relocated / filename).exists():
+                                shutil.copyfile(installed.parent / filename, relocated / filename)
+                        smoke(relocated, target, flavor)
                         brew('uninstall', name)
                         assert not installed.exists()
                     finally:
@@ -107,7 +119,7 @@ def install(assets, target):
                             installed = Path('/usr/lib') / name
                             run('sudo', 'unshare', '--net', sys.executable, HERE / 'smoke.py', installed, target, flavor)
                             run('mio', 'version')
-                        relocated = base / 'relocated'
+                        relocated = base / ('relocated-' + flavor)
                         shutil.copytree(installed, relocated)
                         smoke(relocated, target, flavor)
                         run('sudo', 'apt-get', 'remove', '-y', name)
@@ -115,6 +127,7 @@ def install(assets, target):
                     finally:
                         run('sudo', 'rm', '-f', source, key)
                 else:
+                    run('winget', '--version')
                     run('winget', 'settings', '--enable', 'LocalManifestFiles')
                     location = base / ('installed-' + flavor)
                     for v in ('0.0.1', '0.0.2'):
@@ -135,7 +148,7 @@ def install(assets, target):
                         smoke(installed, target, flavor)
                         alias_command = Path(os.environ['LOCALAPPDATA']) / 'Microsoft/WinGet/Links' / (name + '.exe')
                         run(alias_command, 'version')
-                    relocated = base / 'relocated'
+                    relocated = base / ('relocated-' + flavor)
                     shutil.copytree(installed, relocated)
                     smoke(relocated, target, flavor)
                     run('winget', 'uninstall', '--id', ident, '--exact', '--silent', '--disable-interactivity')
