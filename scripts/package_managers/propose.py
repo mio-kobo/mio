@@ -17,12 +17,13 @@ def run(*args, **kw):
 
 def propose(generated, assets, tag):
     stable(tag)
-    receipt = {p.name: digest(p) for p in sorted(assets.iterdir()) if p.is_file()}
+    receipt = dict(assets={p.name: digest(p) for p in sorted(assets.iterdir()) if p.is_file()},
+                   generated={p.relative_to(generated).as_posix(): digest(p) for p in sorted(generated.rglob('*')) if p.is_file()})
     receipt_bytes = (json.dumps(receipt, sort_keys=True, indent=2)+'\n').encode()
     for repo, directory in [('homebrew-mio', 'homebrew'), ('mio-apt', 'apt')]:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / repo
-            run('gh', 'repo', 'clone', 'mio-kobo/' + repo, root)
+            run('git', '-c', 'credential.helper=!gh auth git-credential', 'clone', 'https://github.com/mio-kobo/' + repo + '.git', root)
             run('git', '-C', root, 'config', 'credential.helper', '!gh auth git-credential')
             branch = 'release/' + tag
             existing = run('git', '-C', root, 'ls-remote', '--heads', 'origin', branch)

@@ -5,6 +5,7 @@ No compiler building, credential handling or remote publishing lives here.
 """
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -188,7 +189,7 @@ def deb(archive, output, version, flavor, test_version=None):
         output.mkdir(parents=True, exist_ok=True)
         target = output / f'{name}_{test_version or version}_amd64.deb'
         built = base / target.name
-        subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(stage), str(built)], check=True)
+        subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(stage), str(built)], check=True, env=dict(os.environ, SOURCE_DATE_EPOCH='0'))
         immutable(target, built.read_bytes())
 
 

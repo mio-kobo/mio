@@ -5,6 +5,7 @@ Synthetic package metadata versions exercise upgrades without claiming that the
 candidate compiler is a stable release. Archives themselves are never modified.
 """
 import argparse
+from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,53 @@ from smoke import smoke
 from package import digest, extract, TARGETS
 
 HERE = Path(__file__).resolve().parent
+
+
+@contextmanager
+def trusted_windows_fixture():
+    """Trust only the loopback fixture host on an isolated Actions runner.
+
+    Local manifests do not acquire community-source trust after hash validation.
+    WinGet otherwise applies Internet MotW and ShellExecute can wait for an
+    inaccessible security dialog (microsoft/winget-cli#4046). This mirrors the
+    community source's trusted-zone behavior without disabling attachment marks,
+    malware scanning or SHA-256 verification. Restore each previous value.
+    """
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Windows lifecycle tests require an isolated Actions runner')
+    import winreg
+    base = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap'
+    saved = []
+    try:
+        for section in ('Domains', 'EscDomains'):
+            path = rf'{base}\{section}\localhost'
+            existed = True
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path):
+                    pass
+            except FileNotFoundError:
+                existed = False
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+                try:
+                    old = winreg.QueryValueEx(key, 'http')
+                except FileNotFoundError:
+                    old = None
+                saved.append((path, existed, old))
+                winreg.SetValueEx(key, 'http', 0, winreg.REG_DWORD, 2)
+        print('CI fixture only: http://localhost uses Trusted zone; SHA-256 and malware checks remain enabled', flush=True)
+        yield
+    finally:
+        for path, existed, old in reversed(saved):
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+                if old is None:
+                    winreg.DeleteValue(key, 'http')
+                else:
+                    winreg.SetValueEx(key, 'http', 0, old[1], old[0])
+            if not existed:
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+                except OSError:
+                    pass
 
 
 def run(*argv, **kw):
@@ -71,7 +119,9 @@ def install(assets, target):
         handler = partial(SimpleHTTPRequestHandler, directory=str(assets))
         server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        trust = trusted_windows_fixture() if target == 'windows-amd64' else nullcontext()
         try:
+            trust.__enter__()
             for flavor, (archive, root, version) in archives.items():
                 name = 'mio' if flavor == 'full' else 'mio-core'
                 r = dict(root=root.name, sha=digest(archive), url=f'http://127.0.0.1:{server.server_port}/{archive.name}')
@@ -126,6 +176,9 @@ def install(assets, target):
                     try:
                         for v in ('0.0.1', '0.0.2'):
                             deb(archive, repo / 'pool/main/m/mio', version, flavor, test_version=v)
+                            if v == '0.0.1':
+                                # A repeat must reproduce bytes, never overwrite a different version.
+                                deb(archive, repo / 'pool/main/m/mio', version, flavor, test_version=v)
                             run('bash', HERE / 'apt-index.sh', repo, env=env)
                             run('sudo', 'mkdir', '-p', key.parent)
                             run('sudo', 'cp', repo / 'mio-archive-keyring.gpg', key)
@@ -158,7 +211,7 @@ def install(assets, target):
                         from windows import build
                         setup = release_installer if v == version else build(archive, assets / 'inno-test', package_version=v)
                         relative = setup.relative_to(assets).as_posix()
-                        installer_record = dict(url=f'http://127.0.0.1:{server.server_port}/{relative}', sha=digest(setup))
+                        installer_record = dict(url=f'http://localhost:{server.server_port}/{relative}', sha=digest(setup))
                         ident, files = winget(v, flavor, installer_record)
                         manifests = base / (flavor + v)
                         manifests.mkdir()
@@ -195,6 +248,7 @@ def install(assets, target):
                 passed(flavor + ' install, upgrade, offline payload, uninstall')
         finally:
             server.shutdown()
+            trust.__exit__(None, None, None)
     results['status'] = 'PASS'
     if target == 'windows-amd64':
         results['limitations'] = dict(status='NOT_APPLICABLE', reason='kiso/net/tcp: no Windows Winsock runtime layer')

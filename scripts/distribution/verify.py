@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -54,7 +55,7 @@ def verify(output, target):
                 check(flavor + ' exact inventory', inventory(root) == manifest['files'])
                 check(flavor + ' identity', manifest['target'] == target and
                       manifest['source_sha'] == provenance['source_sha'] and
-                      bool(__import__('re').fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-pr\.[0-9a-f]{12})?', manifest['version'])) and provenance['embedded_bunko'] is False)
+                      bool(re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-pr\.[0-9a-f]{12})?', manifest['version'])) and provenance['embedded_bunko'] is False)
                 cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
                 binaries.append(cli)
                 check(flavor + ' compiler provenance', digest(cli) == provenance['compiler_sha256'])

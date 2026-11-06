@@ -127,3 +127,12 @@ upgrades to the actual candidate/Release installer bytes. It validates each mani
 with the current official WinGet client, tests direct and PATH invocation including
 Bunko, and uninstalls using the local manifest before the ID has a community source
 entry. Production users use the documented package ID after upstream publication.
+
+The isolated Windows test runner trusts **only its loopback fixture host** during
+local-manifest installation, restoring prior zone values afterwards. WinGet
+otherwise leaves local manifests' EXEs marked as Internet downloads and can block
+inside ShellExecute awaiting an unavailable security dialog. The real community
+source promotes verified downloads to the trusted zone itself. No installed Mio
+package changes users' Internet settings, and neither hashing nor malware scanning
+is disabled. See [the Microsoft diagnosis](https://github.com/microsoft/winget-cli/issues/4046)
+and [the trust decision in DownloadFlow](https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerCLICore/Workflows/DownloadFlow.cpp).
