@@ -79,6 +79,8 @@ class ReleaseTests(unittest.TestCase):
                     browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{archive.name}'))
             write_json(base / (target+'-verification.json'), dict(target=target, status='PASS', checks=[dict(status='PASS')], archives=archives))
         (base / 'SHA256SUMS').write_text(''.join(sums))
+        linux_full = next(a['digest'][7:] for a in release['assets'] if a['name'].endswith('linux-amd64-full.tar.gz'))
+        write_json(base / 'docker-verification.json', dict(status='PASS', source_sha='a'*40, full_archive_sha256=linux_full, checks=[dict(status='PASS')]))
         return release
 
     def test_six_asset_gate_rejects_tampering_and_missing_evidence(self):

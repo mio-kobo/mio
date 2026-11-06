@@ -137,7 +137,10 @@ def install(assets, target):
                         for suffix, data in files.items():
                             (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
-                        run('winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--location', location, '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        if v == '0.0.1':
+                            command += ['--location', location]
+                        run(*command)
                         installed = location / root.name
                         # WinGet Core creates a hardlink for its distinct command
                         # alias. Validate that additional file before inventory.

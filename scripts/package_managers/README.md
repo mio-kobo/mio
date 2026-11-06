@@ -10,12 +10,20 @@ versions solely to exercise manager upgrades; shipped compiler bytes are unchang
 
 `package-managers.yml` reads an **already published** stable `v2.1+` GitHub Release.
 Manual dispatch is always dry run. The gate requires all six native archives,
-`SHA256SUMS`, `<target>-native-report.json`, `<target>-verification.json`, exact
+`SHA256SUMS`, `<target>-native-report.json`, `<target>-verification.json`,
+`docker-verification.json` bound to the Linux Full archive, exact
 inventories, identical Core/Full compiler hashes, native B=C=D and every required
 native check PASS. GitHub's asset SHA-256 digest must also match. All source SHAs
 must resolve to the stable tag, which must belong to `Mio-2.1` history.
 
-Stable builds can use `prepare.py --stable-version 2.1.0` in the existing disposable
+For stable builds, dispatch `distribution-pr.yml` **on the existing stable tag**
+with `stable_version` matching its unprefixed version. This runs the existing
+three-platform native and Docker pipeline with no publishing credentials. Gather
+the per-target checksums into one `SHA256SUMS`, and retain the target-prefixed
+reports listed above as stable Release assets. The actual frozen Seed result must
+be supplied by maintainers; hosted jobs cannot turn NOT_RUN into PASS.
+
+Stable builds use `prepare.py --stable-version 2.1.0` in the existing disposable
 source pipeline **before** native compilation. Never rename a PR candidate archive
 or stamp a candidate binary after verification. `package.py` and `verify.py` accept
 these stable inputs without changing the candidate workflow's default behavior.
@@ -71,9 +79,12 @@ checks every installed payload hash, runs `mio version`, compiles/executes a lib
 free program and checks Core's missing-Bunko diagnostic. Full checks/imports,
 compiles and executes Bunko math. Linux uses a signed local APT repository and
 `unshare --net` for offline execution. Relocated payloads are checked again.
-Homebrew runs `brew audit` and `brew test`; Windows runs `winget validate` and
+Homebrew runs `brew audit` and `brew test`; installed LICENSE/README are
+verified in Homebrew’s standard prefix location after its document normalization; Windows runs `winget validate` and
 installs the actual ZIP, retaining the full directory tree. Core's separate
-`mio-core` alias avoids collision; Homebrew/APT declare explicit conflicts.
+`mio-core` alias avoids collision; Homebrew/APT declare explicit conflicts. Clean Debian 12/13 and Ubuntu 22.04
+containers also exercise signed APT upgrades. Regression fixtures are pinned
+to the last successful native distribution run and are never release inputs.
 Mio's Windows process-spawn and LSP limitations are NOT_APPLICABLE, not PASS.
 
 The install tests require the native candidates produced by the distribution

@@ -94,6 +94,9 @@ def validate(assets, tag, release):
             raise ValueError('distribution validation required')
         if evidence['archives'] != {r['filename']: r['sha'] for (t, f), r in records.items() if t == target}:
             raise ValueError('distribution evidence not bound to archives')
+    docker = json.loads((assets / 'docker-verification.json').read_text())
+    if docker['status'] != 'PASS' or docker['source_sha'] != source or docker['full_archive_sha256'] != records['linux-amd64', 'full']['sha'] or not docker['checks'] or any(c['status'] != 'PASS' for c in docker['checks']):
+        raise ValueError('Docker offline validation must match Linux Full')
     return version, records
 
 

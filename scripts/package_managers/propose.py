@@ -11,6 +11,7 @@ from release import stable, digest, immutable
 
 
 def run(*args, **kw):
+    print('+', *map(str, args), flush=True)
     return subprocess.check_output([str(a) for a in args], text=True, **kw).strip()
 
 
@@ -32,6 +33,12 @@ def propose(generated, assets, tag):
             if record.exists():
                 if record.read_bytes() != receipt_bytes:
                     raise ValueError('published version differs: ' + repo)
+                if existing:
+                    prs = json.loads(run('gh', 'pr', 'list', '--repo', 'mio-kobo/' + repo, '--head', branch, '--state', 'all', '--json', 'number'))
+                    if not prs:
+                        body = Path(temp) / 'body.md'
+                        body.write_text(f'Prepare {tag} from verified stable Release assets. Review required before merge.\n')
+                        run('gh', 'pr', 'create', '--repo', 'mio-kobo/' + repo, '--head', branch, '--title', 'Prepare Mio ' + tag, '--body-file', body)
                 print('PASS: identical version already proposed/published in ' + repo)
                 continue
             if existing:
