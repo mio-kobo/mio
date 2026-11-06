@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 
-from package import TARGETS, digest, extract, inventory, write_json
+from package import TARGETS, digest, extract, inventory, write_json, safe_name
 
 
 def verify(output, target):
@@ -25,7 +25,12 @@ def verify(output, target):
         archives = []
         for line in sums:
             sha, name = line.split('  ', 1)
+            safe_name(name)
             check('archive checksum ' + name, digest(output / name) == sha)
+            if name.endswith('-setup.exe'):
+                check('Windows installer target', target == 'windows-amd64' and '-windows-amd64-' in name)
+                continue
+            check('native archive format', name.endswith(('.zip', '.tar.gz')))
             archives.append(output / name)
             results['archives'][name] = sha
         check('two candidates', len(archives) == 2)

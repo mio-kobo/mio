@@ -84,8 +84,10 @@ verified in Homebrew’s standard prefix location after its document normalizati
 installs and upgrades the actual self-contained Inno installer, retaining the
 full directory tree and checking the real command on user PATH. Core's separate
 `mio-core` alias avoids collision; Homebrew/APT declare explicit conflicts. Clean Debian 12/13 and Ubuntu 22.04
-containers also exercise signed APT upgrades. Regression fixtures are pinned
-to the last successful native distribution run and are never release inputs.
+containers also exercise signed APT upgrades. Automatic tests consume fresh artifacts from the same distribution run.
+The optional manual regression workflow takes a successful native distribution
+run ID and verifies its status/path before using its unexpired artifacts. Such
+fixtures are never stable release inputs; PR CI has no expiring fixture pin.
 Windows run/exec/test/LSP functionality is tested, matching the current native
 protocol evidence. Only kiso/net/tcp (no Winsock layer) is NOT_APPLICABLE.
 

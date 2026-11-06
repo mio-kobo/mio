@@ -112,6 +112,7 @@ jobs:
     - candidates
     - docker-full-offline
     - candidate-linux
+    - apt-distributions
     runs-on: ubuntu-24.04
     steps:
     - name: Require real native and candidate verification
@@ -395,6 +396,39 @@ jobs:
           '
         if-no-files-found: warn
         retention-days: 14
+
+  apt-distributions:
+    needs: candidate-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04']
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@v4
+      with:
+        name: mio-candidates-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/linux-candidates
+    - name: Signed APT lifecycle on clean Debian and Ubuntu containers
+      env:
+        IMAGE: ${{ matrix.image }}
+      run: |
+        docker run --rm --privileged -v "$PWD:/work" -w /work "$IMAGE" sh -ec '
+          apt-get update
+          apt-get install -y python3 python3-yaml sudo apt-utils gnupg util-linux
+          python3 scripts/distribution/verify.py --target linux-amd64 --output build/linux-candidates
+          python3 scripts/package_managers/test_install.py --assets build/linux-candidates --target linux-amd64
+        '
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: apt-container-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/linux-candidates/*verification.json
+
 'on':
   workflow_dispatch:
     inputs:

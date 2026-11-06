@@ -1,12 +1,11 @@
 name: Package manager regression tests
 on:
-  pull_request:
-    branches: [Mio-2.1]
-    paths:
-      - scripts/package_managers/**
-      - scripts/distribution/**
-      - .github/workflows/package-manager*.yml
   workflow_dispatch:
+    inputs:
+      native_run:
+        description: Successful distribution-pr run with unexpired artifacts (regression only)
+        required: true
+        type: string
 permissions:
   contents: read
   actions: read
@@ -40,17 +39,20 @@ jobs:
       - run: python -m pip install PyYAML==6.0.3
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
-      - name: Download pinned verified native regression fixture (not release input)
+      - name: Download selected verified native regression fixture (not release input)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET: ${{ matrix.target }}
+          NATIVE_RUN: ${{ inputs.native_run }}
         run: |
           set -euo pipefail
-          gh api repos/mio-kobo/mio/actions/runs/42215905342 > fixture-run.json
-          python -c 'import json; r=json.load(open("fixture-run.json")); assert r["conclusion"]=="success" and r["head_sha"]=="d13c35136f14ab6376e3a896da106d9ba912e218" and r["path"]==".github/workflows/distribution-pr.yml"'
+          [[ "$NATIVE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/mio-kobo/mio/actions/runs/$NATIVE_RUN" > fixture-run.json
+          python -c 'import json; r=json.load(open("fixture-run.json")); assert r["conclusion"]=="success" and r["path"]==".github/workflows/distribution-pr.yml"'
+          ATTEMPT=$(python -c 'import json; print(json.load(open("fixture-run.json"))["run_attempt"])')
           mkdir -p build/fixture
-          gh run download 42215905342 --repo mio-kobo/mio --name "mio-candidates-$TARGET-42215905342-1" --dir build/fixture
+          gh run download "$NATIVE_RUN" --repo mio-kobo/mio --name "mio-candidates-$TARGET-$NATIVE_RUN-$ATTEMPT" --dir build/fixture
           python scripts/distribution/verify.py --target "$TARGET" --output build/fixture
       - run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
@@ -61,35 +63,3 @@ jobs:
             build/fixture/*.json
             build/fixture/*-installer.log
             fixture-run.json
-  debian:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        image: ['debian:12', 'debian:13', 'ubuntu:22.04']
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Download verified Linux fixture
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p build/fixture
-          gh run download 42215905342 --repo mio-kobo/mio --name mio-candidates-linux-amd64-42215905342-1 --dir build/fixture
-      - name: Signed APT lifecycle on clean Debian/Ubuntu containers
-        env:
-          IMAGE: ${{ matrix.image }}
-        run: |
-          docker run --rm --privileged -v "$PWD:/work" -w /work "$IMAGE" sh -ec '
-            apt-get update
-            apt-get install -y python3 python3-yaml sudo apt-utils gnupg util-linux
-            python3 scripts/distribution/verify.py --target linux-amd64 --output build/fixture
-            python3 scripts/package_managers/test_install.py --assets build/fixture --target linux-amd64
-          '
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: apt-container-${{ strategy.job-index }}
-          path: build/fixture/*verification.json
