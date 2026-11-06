@@ -107,14 +107,19 @@ def install(assets, stable_packages=None):
                         assert Path(resolved).resolve() == shim.resolve(), resolved
                         # ShimGen diagnostics prove the real executable target, not a
                         # copied executable or WinGet-style filesystem alias.
-                        diagnostic = subprocess.check_output([str(shim), '--shimgen-noop'], text=True)
-                        assert str(payload / 'bin/mio.exe').lower() in diagnostic.lower(), diagnostic
+                        diagnostic = subprocess.check_output([str(shim), '--shimgen-log', 'version'], text=True)
+                        target = payload / 'bin/mio.exe'
+                        assert (str(target).lower() in diagnostic.lower() or
+                                os.path.relpath(target, shim.parent).lower() in diagnostic.lower()), diagnostic
+                        assert json.loads((root / 'manifest.json').read_text())['version'] in diagnostic
                         with offline():
                             smoke(payload, 'windows-amd64', flavor, manager_files=('bin/mio.exe.ignore',))
                             smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=('bin/mio.exe.ignore',))
                         assert paths() == previous, 'Chocolatey bin owns PATH; no per-user mutation'
                         assert project.read_text() == 'chant("keep");'
                         passed(flavor + ' ' + v + ' install/upgrade, real shim/PATH, hashes, offline native/Bunko/tools')
+                        if v == '0.0.1':
+                            (payload / 'obsolete-release-file.txt').write_text('must disappear on upgrade')
                     # Same-version install is a no-op; explicit force reinstalls safely.
                     run('choco', 'install', name, '--version=' + versions[-1], '--source=' + str(packages), '-y', '--no-progress')
                     run('choco', 'install', name, '--version=' + versions[-1], '--source=' + str(packages), '-y', '--force', '--no-progress')
