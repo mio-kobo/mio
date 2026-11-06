@@ -24,7 +24,19 @@ HERE = Path(__file__).resolve().parent
 
 def run(*argv, **kw):
     print('+', *map(str, argv), flush=True)
-    return subprocess.run(list(map(str, argv)), check=True, timeout=900, **kw)
+    process = subprocess.Popen(list(map(str, argv)), **kw)
+    try:
+        code = process.wait(timeout=180 if str(argv[0]).lower() == 'winget' else 900)
+    except subprocess.TimeoutExpired:
+        if os.name == 'nt':
+            subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object Name,MainWindowTitle | Format-Table -AutoSize'], check=False)
+            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], check=False)
+        else:
+            process.kill()
+        raise
+    if code:
+        raise subprocess.CalledProcessError(code, list(map(str, argv)))
+    return process
 
 
 def install(assets, target):
@@ -145,7 +157,7 @@ def install(assets, target):
                         for suffix, data in files.items():
                             (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
-                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--log', assets / (flavor+'-'+v+'-installer.log'), '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
                         if v == '0.0.1':
                             command += ['--location', location]
                         run(*command)
@@ -188,6 +200,9 @@ if __name__ == '__main__':
     try:
         install(a.assets.resolve(), a.target)
     except Exception as error:
+        for log in a.assets.glob('*-installer.log'):
+            print('INSTALLER LOG:', log, flush=True)
+            print(log.read_text(encoding='utf-8', errors='replace')[-20000:], flush=True)
         output = a.assets / 'package-manager-verification.json'
         result = json.loads(output.read_text()) if output.exists() else dict(target=a.target, checks=[])
         result.update(status='FAIL', error=str(error))
