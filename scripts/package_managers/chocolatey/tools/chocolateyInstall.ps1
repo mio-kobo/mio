@@ -1,4 +1,11 @@
 $ErrorActionPreference = 'Stop'
+function Get-MioSha256([string] $Path) {
+    # Chocolatey's embedded PowerShell host does not always expose Get-FileHash.
+    $stream = [System.IO.File]::OpenRead($Path)
+    $hash = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $hash.Dispose() }
+}
 if (-not [Environment]::Is64BitOperatingSystem) { throw 'Mio requires Windows AMD64' }
 $tools = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $record = Get-Content (Join-Path $tools 'release.json') -Raw | ConvertFrom-Json
@@ -8,7 +15,7 @@ $payload = Join-Path $tools 'payload'
 try {
     Get-ChocolateyWebFile -PackageName $env:ChocolateyPackageName -FileFullPath $archive -Url64bit $record.url -Checksum64 $record.sha -ChecksumType64 'sha256'
     # Enforce integrity even if the caller disabled Chocolatey's checksum feature.
-    if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $record.sha) { throw 'Mio archive SHA-256 mismatch' }
+    if ((Get-MioSha256 $archive) -ne $record.sha) { throw 'Mio archive SHA-256 mismatch' }
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     Get-ChocolateyUnzip -FileFullPath $archive -Destination $stage
     $root = Join-Path $stage $record.root
@@ -19,7 +26,7 @@ try {
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($root.Length + 1).Replace('\', '/')
         $expected = $manifest.files.PSObject.Properties[$relative].Value
-        if (-not $expected -or $file.Length -ne $expected.size -or (Get-FileHash $file.FullName -Algorithm SHA256).Hash -ne $expected.sha256) { throw "Mio installed file mismatch: $relative" }
+        if (-not $expected -or $file.Length -ne $expected.size -or (Get-MioSha256 $file.FullName) -ne $expected.sha256) { throw "Mio installed file mismatch: $relative" }
     }
     # Only this manager-owned payload is replaced; projects/config belong outside it.
     if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }

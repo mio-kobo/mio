@@ -46,7 +46,11 @@ def publish(folder, version, push=False, fetch=existing):
         raise ValueError('protected CHOCOLATEY_API_KEY is required')
     for path in pending:
         # Never print argv, process output, or CalledProcessError (contains key).
-        result = subprocess.run(['choco', 'push', str(path), '--source=' + SOURCE, '--api-key=' + key], capture_output=True)
+        try:
+            result = subprocess.run(['choco', 'push', str(path), '--source=' + SOURCE, '--api-key=' + key], capture_output=True, timeout=300)
+        except (subprocess.TimeoutExpired, OSError):
+            # TimeoutExpired includes argv: suppress its exception chain as well.
+            raise RuntimeError('CCR submission could not finish for ' + path.name + '; retry after checking remote state') from None
         if result.returncode:
             raise RuntimeError('CCR submission failed for ' + path.name + '; inspect moderation/account status without exposing credentials')
         print('SUBMITTED for community review: ' + path.name)

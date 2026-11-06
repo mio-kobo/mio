@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -34,7 +35,8 @@ class ChocolateyTests(unittest.TestCase):
                     self.assertEqual(record['sha'], 'a' * 64)
                     self.assertEqual(record['version'], '2.1.0')
                     install = z.read('tools/chocolateyInstall.ps1').decode()
-                    self.assertIn('Get-FileHash $archive -Algorithm SHA256', install)
+                    self.assertIn('(Get-MioSha256 $archive) -ne $record.sha', install)
+                    self.assertIn('[System.Security.Cryptography.SHA256]::Create()', install)
                     self.assertIn('Install-BinFile -Name $record.command -Path $exe', install)
                     self.assertIn("'.ignore'", install)
                     self.assertNotIn('LOCALAPPDATA', install)
@@ -77,6 +79,33 @@ class ChocolateyTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as error:
                     publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
                 self.assertNotIn('secret-test-value', str(error.exception))
+                run.side_effect = subprocess.TimeoutExpired(['choco', '--api-key=secret-test-value'], 300)
+                with self.assertRaises(RuntimeError) as error:
+                    publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
+                self.assertNotIn('secret-test-value', str(error.exception))
+                self.assertTrue(error.exception.__suppress_context__)
+
+    def test_fixture_matching_cannot_reuse_changed_native_inputs(self):
+        from fixture import compatible, wrapper, select
+        self.assertTrue(wrapper('scripts/package_managers/chocolatey/tools/chocolateyInstall.ps1'))
+        for path in ('selfhost/cli/main.mio', 'scripts/distribution/package.py', 'scripts/ci/native_platforms.py', 'VERSION', '.github/workflows/native.yml'):
+            self.assertFalse(wrapper(path), path)
+            with patch('fixture.subprocess.check_output', return_value=path + '\n'):
+                self.assertFalse(compatible('fixture-sha'))
+        with patch('fixture.subprocess.check_output', return_value='scripts/package_managers/chocolatey.py\n'):
+            self.assertTrue(compatible('fixture-sha'))
+        valid = dict(id=1, run_attempt=2, head_sha='a' * 40, conclusion='success', path='.github/workflows/distribution-pr.yml', repository=dict(full_name='mio-kobo/mio'))
+        for delta in (dict(conclusion='failure'), dict(path='.github/workflows/ci-pr.yml'), dict(repository=dict(full_name='other/fork'))):
+            with patch('fixture.api', return_value=dict(valid, **delta)), self.assertRaises(RuntimeError):
+                select('1')
+        for expired in (True, False):
+            artifacts = dict(artifacts=[dict(name='mio-candidates-windows-amd64-1-2', expired=expired)])
+            with patch('fixture.api', side_effect=[valid, artifacts]), patch('fixture.subprocess.run'), patch('fixture.compatible', return_value=True):
+                if expired:
+                    with self.assertRaises(RuntimeError):
+                        select('1')
+                else:
+                    self.assertEqual(select('1')['run_id'], 1)
 
 
 if __name__ == '__main__':

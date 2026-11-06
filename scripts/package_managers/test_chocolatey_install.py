@@ -124,6 +124,17 @@ def install(assets, stable_packages=None):
                         with offline():
                             smoke(other, 'windows-amd64', 'full', command=command, manager_files=('bin/mio.exe.ignore',))
                     passed(flavor + ' uninstall, other flavor and user project preserved, PATH unchanged')
+                # Even --ignore-checksums must not bypass the package's own
+                # SHA-256 verification. Exercise this through real Chocolatey.
+                archive, = assets.glob('mio-*-windows-amd64-core.zip')
+                negative = assets / 'checksum-negative'
+                bad = dict(url=f'http://127.0.0.1:{server.server_port}/{archive.name}', root=archive.stem, sha='0' * 64)
+                build('0.0.1', 'core', bad, negative, fixture=True)
+                rejected = subprocess.run(['choco', 'install', 'mio-core', '--version=0.0.1', '--source=' + str(negative), '--yes', '--no-progress', '--ignore-checksums'], capture_output=True, text=True, timeout=300)
+                assert rejected.returncode != 0 and 'Mio archive SHA-256 mismatch' in rejected.stdout + rejected.stderr, (rejected.returncode, rejected.stdout, rejected.stderr)
+                assert not (choco / 'bin/mio-core.exe').exists()
+                assert not (choco / 'lib/mio-core/tools/payload').exists()
+                passed('wrong archive SHA-256 rejected with nonzero exit even with --ignore-checksums')
             finally:
                 server.shutdown()
         result['status'] = 'PASS'
