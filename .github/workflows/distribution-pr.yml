@@ -2,8 +2,10 @@ name: Mio Core / Full PR candidates
 permissions:
   contents: read
 concurrency:
-  group: distribution-pr-${{ github.event.pull_request.number }}
+  group: distribution-pr-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+env:
+  MIO_DISTRIBUTION_STABLE_VERSION: ${{ inputs.stable_version || '' }}
 jobs:
   packaging-tests:
     runs-on: ubuntu-24.04
@@ -12,6 +14,7 @@ jobs:
       with:
         persist-credentials: false
     - run: python -m unittest discover -s scripts/distribution -p 'test_*.py' -v
+    - run: python -m unittest discover -s scripts/package_managers -p 'test_*.py' -v
     - run: python -m unittest discover -s docker -p 'test_*.py' -v
   candidates:
     needs:
@@ -51,6 +54,24 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
+    - name: Install current official WinGet client
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+        Repair-WinGetPackageManager -Force -Latest
+        winget --version
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+    - name: Install package manager test dependencies
+      shell: bash
+      run: |
+        python -m pip install PyYAML==6.0.3
+        if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Build self-contained Windows installers from verified ZIPs
+      if: runner.os == 'Windows'
+      run: python scripts/package_managers/windows.py --assets build/candidates
+    - name: Real package manager install, offline payload, upgrade and uninstall
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target ${{ matrix.target }}
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -58,6 +79,8 @@ jobs:
         path: 'build/candidates/*.tar.gz
 
           build/candidates/*.zip
+
+          build/candidates/*-setup.exe
 
           build/candidates/SHA256SUMS
 
@@ -72,7 +95,9 @@ jobs:
       if: always()
       with:
         name: distribution-diagnostics-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: 'build/candidates/*.json
+        path: 'build/candidates/*-installer.log
+
+          build/candidates/*.json
 
           build/evidence/
 
@@ -87,6 +112,7 @@ jobs:
     - candidates
     - docker-full-offline
     - candidate-linux
+    - apt-distributions
     runs-on: ubuntu-24.04
     steps:
     - name: Require real native and candidate verification
@@ -320,6 +346,24 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
+    - name: Install current official WinGet client
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+        Repair-WinGetPackageManager -Force -Latest
+        winget --version
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+    - name: Install package manager test dependencies
+      shell: bash
+      run: |
+        python -m pip install PyYAML==6.0.3
+        if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Build self-contained Windows installers from verified ZIPs
+      if: runner.os == 'Windows'
+      run: python scripts/package_managers/windows.py --assets build/candidates
+    - name: Real package manager install, offline payload, upgrade and uninstall
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target linux-amd64
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -327,6 +371,8 @@ jobs:
         path: 'build/candidates/*.tar.gz
 
           build/candidates/*.zip
+
+          build/candidates/*-setup.exe
 
           build/candidates/SHA256SUMS
 
@@ -341,14 +387,55 @@ jobs:
       if: always()
       with:
         name: distribution-diagnostics-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
-        path: 'build/candidates/*.json
+        path: 'build/candidates/*-installer.log
+
+          build/candidates/*.json
 
           build/evidence/
 
           '
         if-no-files-found: warn
         retention-days: 14
+
+  apt-distributions:
+    needs: candidate-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04']
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@v4
+      with:
+        name: mio-candidates-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/linux-candidates
+    - name: Signed APT lifecycle on clean Debian and Ubuntu containers
+      env:
+        IMAGE: ${{ matrix.image }}
+      run: |
+        docker run --rm --privileged -v "$PWD:/work" -w /work "$IMAGE" sh -ec '
+          apt-get update
+          apt-get install -y python3 python3-yaml sudo apt-utils gnupg util-linux
+          python3 scripts/distribution/verify.py --target linux-amd64 --output build/linux-candidates
+          python3 scripts/package_managers/test_install.py --assets build/linux-candidates --target linux-amd64
+        '
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: apt-container-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/linux-candidates/*verification.json
+
 'on':
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: Optional stable version; dispatch only on its existing v-prefixed tag
+        required: false
+        type: string
   pull_request:
     branches:
     - Mio-2.1

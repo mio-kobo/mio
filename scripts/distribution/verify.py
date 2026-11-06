@@ -3,12 +3,13 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 
-from package import TARGETS, digest, extract, inventory, write_json
+from package import TARGETS, digest, extract, inventory, write_json, safe_name
 
 
 def verify(output, target):
@@ -24,7 +25,12 @@ def verify(output, target):
         archives = []
         for line in sums:
             sha, name = line.split('  ', 1)
+            safe_name(name)
             check('archive checksum ' + name, digest(output / name) == sha)
+            if name.endswith('-setup.exe'):
+                check('Windows installer target', target == 'windows-amd64' and '-windows-amd64-' in name)
+                continue
+            check('native archive format', name.endswith(('.zip', '.tar.gz')))
             archives.append(output / name)
             results['archives'][name] = sha
         check('two candidates', len(archives) == 2)
@@ -37,7 +43,7 @@ def verify(output, target):
             env.pop('MIO_BUNKO', None)
             def run(argv, extra=None, stdin=None, timeout=300):
                 proc = subprocess.run([str(a) for a in argv], cwd=cwd, env=dict(env, **(extra or {})),
-                                      input=stdin, capture_output=True, timeout=300)
+                                      input=stdin, capture_output=True, timeout=timeout)
                 text = (proc.stdout + proc.stderr).decode('utf-8', errors='replace')
                 log.append(dict(argv=[str(x) for x in argv], code=proc.returncode, output=text))
                 write_json(output / 'execution-log.json', log)
@@ -54,7 +60,7 @@ def verify(output, target):
                 check(flavor + ' exact inventory', inventory(root) == manifest['files'])
                 check(flavor + ' identity', manifest['target'] == target and
                       manifest['source_sha'] == provenance['source_sha'] and
-                      manifest['version'].startswith('2.1.0-pr.') and provenance['embedded_bunko'] is False)
+                      bool(re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-pr\.[0-9a-f]{12})?', manifest['version'])) and provenance['embedded_bunko'] is False)
                 cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
                 binaries.append(cli)
                 check(flavor + ' compiler provenance', digest(cli) == provenance['compiler_sha256'])
@@ -91,30 +97,30 @@ def verify(output, target):
                     check('Full Mochi build', code == 0)
                     code, text = run([cli, 'disasm', cwd / 'hello.mochi'])
                     check('Full disasm', code == 0 and len(text) > 10)
+                    code, text = run([cli, 'run', hello, '--target=' + target])
+                    check('Full run', code == 0 and text == 'hello from Mio\n')
+                    code, text = run([cli, 'exec', cwd / 'hello.mochi', '--target=' + target])
+                    check('Full exec', code == 0 and text == 'hello from Mio\n')
                     if target != 'windows-amd64':
-                        code, text = run([cli, 'run', hello, '--target=' + target])
-                        check('Full run', code == 0 and text == 'hello from Mio\n')
-                        code, text = run([cli, 'exec', cwd / 'hello.mochi', '--target=' + target])
-                        check('Full exec', code == 0 and text == 'hello from Mio\n')
                         alias = cwd / 'mio alias'
                         alias.symlink_to(cli)
                         code, text = run([alias, 'check', math])
                         check('Full symlink executable lookup', code == 0)
-                        tests = cwd / 'sample'
-                        tests.mkdir()
-                        (tests / 'sample_test.mio').write_text('yobu "kiso/testing"; waza test_math() -> unit { testing.expect(hai,"ok"); }\n', encoding='utf-8')
-                        code, text = run([cli, 'test', tests])
-                        check('Full mio test', code == 0 and '1 passed' in text)
-                        requests = [dict(jsonrpc='2.0', id=1, method='initialize', params={}),
-                                    dict(jsonrpc='2.0', id=2, method='shutdown'), dict(jsonrpc='2.0', method='exit')]
-                        wire = b''
-                        for request in requests:
-                            body = json.dumps(request).encode()
-                            wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
-                        code, text = run([cli, 'lsp', '--stdio'], stdin=wire, timeout=30)
-                        check('Full lsp handshake', code == 0 and 'capabilities' in text)
-                    else:
-                        results['integrated_tools']['test/run/exec/lsp'] = dict(status='NOT_APPLICABLE', reason='Windows runtime process spawn and LSP stdin polling are not implemented')
+                    tests = cwd / 'sample'
+                    tests.mkdir()
+                    (tests / 'sample_test.mio').write_text('yobu "kiso/testing"; waza test_math() -> unit { testing.expect(hai,"ok"); }\n', encoding='utf-8')
+                    code, text = run([cli, 'test', tests])
+                    check('Full mio test', code == 0 and '1 passed' in text)
+                    requests = [dict(jsonrpc='2.0', id=1, method='initialize', params={}),
+                                dict(jsonrpc='2.0', id=2, method='shutdown'), dict(jsonrpc='2.0', method='exit')]
+                    wire = b''
+                    for request in requests:
+                        body = json.dumps(request).encode()
+                        wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
+                    code, text = run([cli, 'lsp', '--stdio'], stdin=wire, timeout=30)
+                    check('Full lsp handshake', code == 0 and 'capabilities' in text)
+                    if target == 'windows-amd64':
+                        results['integrated_tools']['kiso/net/tcp'] = dict(status='NOT_APPLICABLE', reason='Windows runtime has no Winsock layer')
                     # Invalid CLI override must beat valid env and bundled paths.
                     code, text = run([cli, 'check', math, '--bunko-root', cwd / 'missing'], dict(MIO_BUNKO=str(root / 'bunko')))
                     check('explicit invalid root does not fall back', code != 0 and 'E_BUNKO_ROOT' in text)

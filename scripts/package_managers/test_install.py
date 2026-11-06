@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Real manager lifecycle tests on verified PR candidates, never publication.
+
+Synthetic package metadata versions exercise upgrades without claiming that the
+candidate compiler is a stable release. Archives themselves are never modified.
+"""
+import argparse
+from contextlib import contextmanager, nullcontext
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from functools import partial
+from release import deb, formula, winget, manifest_yaml
+from smoke import smoke
+from package import digest, extract, TARGETS
+
+HERE = Path(__file__).resolve().parent
+
+
+@contextmanager
+def trusted_windows_fixture():
+    """Trust only the loopback fixture host on an isolated Actions runner.
+
+    Local manifests do not acquire community-source trust after hash validation.
+    WinGet otherwise applies Internet MotW and ShellExecute can wait for an
+    inaccessible security dialog (microsoft/winget-cli#4046). This mirrors the
+    community source's trusted-zone behavior without disabling attachment marks,
+    malware scanning or SHA-256 verification. Restore each previous value.
+    """
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Windows lifecycle tests require an isolated Actions runner')
+    import winreg
+    base = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap'
+    saved = []
+    try:
+        for section in ('Domains', 'EscDomains'):
+            path = rf'{base}\{section}\localhost'
+            existed = True
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path):
+                    pass
+            except FileNotFoundError:
+                existed = False
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as key:
+                try:
+                    old = winreg.QueryValueEx(key, 'http')
+                except FileNotFoundError:
+                    old = None
+                saved.append((path, existed, old))
+                winreg.SetValueEx(key, 'http', 0, winreg.REG_DWORD, 2)
+        print('CI fixture only: http://localhost uses Trusted zone; SHA-256 and malware checks remain enabled', flush=True)
+        yield
+    finally:
+        for path, existed, old in reversed(saved):
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+                if old is None:
+                    winreg.DeleteValue(key, 'http')
+                else:
+                    winreg.SetValueEx(key, 'http', 0, old[1], old[0])
+            if not existed:
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+                except OSError:
+                    pass
+
+
+def run(*argv, **kw):
+    print('+', *map(str, argv), flush=True)
+    process = subprocess.Popen(list(map(str, argv)), **kw)
+    try:
+        code = process.wait(timeout=180 if str(argv[0]).lower() == 'winget' else 900)
+    except subprocess.TimeoutExpired:
+        if os.name == 'nt':
+            subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object Name,MainWindowTitle | Format-Table -AutoSize'], check=False)
+            ui = r"""Add-Type -AssemblyName UIAutomationClient; Get-Process winget -ErrorAction SilentlyContinue | ForEach-Object { if ($_.MainWindowHandle) { $root = [System.Windows.Automation.AutomationElement]::FromHandle($_.MainWindowHandle); $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Select-Object -First 40 | ForEach-Object { $_.Current.Name } } }"""
+            subprocess.run(['powershell', '-NoProfile', '-Command', ui], check=False, timeout=20)
+            local = Path(os.environ['LOCALAPPDATA'])
+            logs = list(local.glob('Packages/Microsoft.DesktopAppInstaller_*/LocalState/DiagOutputDir/*.log'))
+            logs += list(local.glob('Microsoft/WinGet/State/DiagOutputDir/*.log'))
+            for path in sorted(logs, key=lambda p: p.stat().st_mtime)[-2:]:
+                print('WINGET DIAGNOSTIC:', path, flush=True)
+                print(path.read_text(encoding='utf-8-sig', errors='replace')[-18000:], flush=True)
+            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], check=False)
+        else:
+            process.kill()
+        raise
+    if code:
+        raise subprocess.CalledProcessError(code, list(map(str, argv)))
+    return process
+
+
+def install(assets, target):
+    import yaml
+    results = dict(target=target, status='FAIL', checks=[])
+    output = assets / 'package-manager-verification.json'
+    output.write_text(json.dumps(results, indent=2)+'\n')
+    def passed(name):
+        results['checks'].append(dict(name=name, status='PASS'))
+        output.write_text(json.dumps(results, indent=2)+'\n')
+    with tempfile.TemporaryDirectory(prefix='mio-manager-') as temp:
+        base = Path(temp)
+        archives = {}
+        for flavor in ('core', 'full'):
+            found = list(assets.glob(f'mio-*-{target}-{flavor}.*'))
+            assert len(found) == 1, found
+            archive = found[0]
+            root = extract(archive, base / ('extract-' + flavor))
+            m = json.loads((root / 'manifest.json').read_text())
+            assert m['flavor'] == flavor and m['target'] == target
+            archives[flavor] = (archive, root, m['version'])
+        # Use the candidate's own checksum validation and all original native tests
+        # before entering here. Relocated installed payloads are tested again below.
+        handler = partial(SimpleHTTPRequestHandler, directory=str(assets))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        trust = trusted_windows_fixture() if target == 'windows-amd64' else nullcontext()
+        try:
+            trust.__enter__()
+            for flavor, (archive, root, version) in archives.items():
+                name = 'mio' if flavor == 'full' else 'mio-core'
+                r = dict(root=root.name, sha=digest(archive), url=f'http://127.0.0.1:{server.server_port}/{archive.name}')
+                if target == 'darwin-arm64':
+                    # Homebrew requires tapped formulae; this disposable tap has no
+                    # network remote and cannot be mistaken for the official tap.
+                    taproot = Path(subprocess.check_output(['brew', '--repository'], text=True).strip()) / 'Library/Taps/mio-ci/homebrew-candidate'
+                    if subprocess.run(['brew', 'list', '--versions', name], capture_output=True, text=True).stdout.strip():
+                        raise RuntimeError('refusing to replace an existing Homebrew installation: ' + name)
+                    taproot.mkdir(parents=True, exist_ok=False)
+                    brew_env = dict(os.environ, XDG_CONFIG_HOME=str(base / 'brew-config'), HOMEBREW_NO_AUTO_UPDATE='1', HOMEBREW_NO_AUTOREMOVE='1', HOMEBREW_NO_INSTALL_CLEANUP='1')
+                    def brew(*args):
+                        return run('brew', *args, env=brew_env)
+                    try:
+                        run('git', 'init', taproot)
+                        f = taproot / 'Formula' / (name + '.rb')
+                        f.parent.mkdir()
+                        for other_flavor, (other_archive, other_root, _) in archives.items():
+                            other_name = 'mio' if other_flavor == 'full' else 'mio-core'
+                            other_record = dict(root=other_root.name, sha=digest(other_archive), url=f'http://127.0.0.1:{server.server_port}/{other_archive.name}')
+                            (f.parent / (other_name + '.rb')).write_text(formula('0.0.1', other_flavor, other_record))
+                        for v in ('0.0.1', '0.0.2'):
+                            f.write_text(formula(v, flavor, r).replace(f'assert_match "{v}"', f'assert_match "{version}"'))
+                            if subprocess.run(['brew', 'help', 'trust'], capture_output=True).returncode == 0:
+                                brew('trust', '--tap', 'mio-ci/candidate')
+                            brew('audit', '--formula', 'mio-ci/candidate/' + name)
+                            brew('install' if v == '0.0.1' else 'upgrade', 'mio-ci/candidate/' + name)
+                            installed = Path(subprocess.check_output(['brew', '--prefix', name], text=True).strip()) / 'libexec'
+                            smoke(installed, target, flavor, metadata_root=installed.parent)
+                            brew('test', 'mio-ci/candidate/' + name)
+                        relocated = base / ('relocated-' + flavor)
+                        shutil.copytree(installed, relocated)
+                        for filename in ('LICENSE', 'README.md'):
+                            if not (relocated / filename).exists():
+                                shutil.copyfile(installed.parent / filename, relocated / filename)
+                        smoke(relocated, target, flavor)
+                        brew('uninstall', '--force', name)
+                        assert not installed.exists()
+                    finally:
+                        shutil.rmtree(taproot)
+                elif target == 'linux-amd64':
+                    repo = base / ('apt-' + flavor)
+                    keyhome = base / ('gpg-' + flavor)
+                    keyhome.mkdir(mode=0o700)
+                    env = dict(os.environ, GNUPGHOME=str(keyhome))
+                    run('gpg', '--batch', '--passphrase', '', '--quick-generate-key', 'Mio CI <ci@example.invalid>', 'rsa2048', 'sign', '1d', env=env)
+                    keys = subprocess.check_output(['gpg', '--with-colons', '--list-secret-keys'], env=env, text=True)
+                    fingerprint = next(l.split(':')[9] for l in keys.splitlines() if l.startswith('fpr:'))
+                    env['MIO_APT_SIGNING_FINGERPRINT'] = fingerprint
+                    key = Path('/etc/apt/keyrings/mio-ci.gpg')
+                    source = Path('/etc/apt/sources.list.d/mio-ci.list')
+                    try:
+                        for v in ('0.0.1', '0.0.2'):
+                            deb(archive, repo / 'pool/main/m/mio', version, flavor, test_version=v)
+                            if v == '0.0.1':
+                                # A repeat must reproduce bytes, never overwrite a different version.
+                                deb(archive, repo / 'pool/main/m/mio', version, flavor, test_version=v)
+                            run('bash', HERE / 'apt-index.sh', repo, env=env)
+                            run('sudo', 'mkdir', '-p', key.parent)
+                            run('sudo', 'cp', repo / 'mio-archive-keyring.gpg', key)
+                            # apt's unprivileged acquisition process needs traversal.
+                            run('chmod', '-R', 'a+rX', base)
+                            listing = base / 'source.list'
+                            listing.write_text(f'deb [arch=amd64 signed-by={key}] file:{repo} stable main\n')
+                            run('sudo', 'cp', listing, source)
+                            run('sudo', 'apt-get', 'update')
+                            run('sudo', 'apt-get', 'install', '-y', name + '=' + v)
+                            installed = Path('/usr/lib') / name
+                            run('sudo', 'unshare', '--net', sys.executable, HERE / 'smoke.py', installed, target, flavor)
+                            run('mio', 'version')
+                        relocated = base / ('relocated-' + flavor)
+                        shutil.copytree(installed, relocated)
+                        smoke(relocated, target, flavor)
+                        run('sudo', 'apt-get', 'remove', '-y', name)
+                        assert not (installed / 'bin/mio').exists()
+                    finally:
+                        run('sudo', 'rm', '-f', source, key)
+                else:
+                    run('winget', '--version')
+                    run('winget', 'settings', '--enable', 'LocalManifestFiles')
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                        previous_path = winreg.QueryValueEx(key, 'Path')[0]
+                    location = base / ('installed-' + flavor)
+                    from windows import build
+                    release_installer = assets / f'mio-{version}-windows-amd64-{flavor}-setup.exe'
+                    if not release_installer.exists():
+                        release_installer = build(archive, assets)
+                    for v in ('0.0.1', '0.0.2', version):
+                        from windows import build
+                        setup = release_installer if v == version else build(archive, assets / 'inno-test', package_version=v)
+                        relative = setup.relative_to(assets).as_posix()
+                        installer_record = dict(url=f'http://localhost:{server.server_port}/{relative}', sha=digest(setup))
+                        ident, files = winget(v, flavor, installer_record)
+                        manifests = base / (flavor + v)
+                        manifests.mkdir()
+                        for suffix, data in files.items():
+                            (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
+                        run('winget', 'validate', '--manifest', manifests)
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--verbose-logs', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        if v == '0.0.1':
+                            command += ['--location', location, '--log', assets / (flavor+'-'+v+'-installer.log')]
+                        run(*command)
+                        installed = location
+                        expected_manifest = json.loads((root / 'manifest.json').read_text())
+                        if flavor == 'core':
+                            expected_manifest['files']['bin/mio-core.exe'] = expected_manifest['files'].pop('bin/mio.exe')
+                        assert json.loads((installed / 'manifest.json').read_text()) == expected_manifest, 'installer must contain the verified native archive payload'
+                        import winreg
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                            user_path = winreg.QueryValueEx(key, 'Path')[0]
+                        alias_command = Path(shutil.which(name, path=user_path) or '')
+                        assert alias_command.resolve() == (installed / 'bin' / (name + '.exe')).resolve(), 'real bin must be on user PATH'
+                        smoke(installed, target, flavor)
+                        smoke(installed, target, flavor, command=alias_command)
+                    relocated = base / ('relocated-' + flavor)
+                    shutil.copytree(installed, relocated)
+                    smoke(relocated, target, flavor)
+                    # A local-only manifest has no community source ID to correlate.
+                    run('winget', 'uninstall', '--manifest', manifests, '--silent', '--accept-source-agreements', '--disable-interactivity')
+                    assert not (installed / 'bin' / (name + '.exe')).exists()
+                    assert not alias_command.exists()
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                        remaining_path = winreg.QueryValueEx(key, 'Path')[0]
+                    assert remaining_path == previous_path, ('user PATH must be restored exactly', previous_path, remaining_path)
+                    assert not location.exists() or not list(location.rglob('mio.exe'))
+                passed(flavor + ' install, upgrade, offline payload, uninstall')
+        finally:
+            server.shutdown()
+            trust.__exit__(None, None, None)
+    results['status'] = 'PASS'
+    if target == 'windows-amd64':
+        results['limitations'] = dict(status='NOT_APPLICABLE', reason='kiso/net/tcp: no Windows Winsock runtime layer')
+    output.write_text(json.dumps(results, indent=2)+'\n')
+
+if __name__ == '__main__':
+    sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--assets', type=Path, required=True)
+    p.add_argument('--target', choices=TARGETS, required=True)
+    a = p.parse_args()
+    try:
+        install(a.assets.resolve(), a.target)
+    except Exception as error:
+        for log in a.assets.glob('*-installer.log'):
+            print('INSTALLER LOG:', log, flush=True)
+            print(log.read_text(encoding='utf-8-sig', errors='replace')[-20000:], flush=True)
+        output = a.assets / 'package-manager-verification.json'
+        result = json.loads(output.read_text()) if output.exists() else dict(target=a.target, checks=[])
+        result.update(status='FAIL', error=str(error))
+        output.write_text(json.dumps(result, indent=2)+'\n')
+        raise

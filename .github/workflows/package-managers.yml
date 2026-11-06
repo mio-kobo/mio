@@ -1,0 +1,147 @@
+name: Package manager release proposals
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published stable tag (dry run only)
+        required: true
+        type: string
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: package-managers-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'mio-kobo/mio'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: Mio-2.1
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        name: Install current official WinGet client
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+          Repair-WinGetPackageManager -Force -Latest
+          winget --version
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+      - run: python -m pip install PyYAML==6.0.3
+      - name: Validate tag and download existing Release (no publishing)
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c 'import sys; sys.path.insert(0,"scripts/package_managers"); from release import stable; import os; stable(os.environ["TAG"])'
+          git merge-base --is-ancestor "refs/tags/$TAG" origin/Mio-2.1
+          mkdir -p build/release-assets
+          gh api "repos/mio-kobo/mio/releases/tags/$TAG" > build/release.json
+          gh release download "$TAG" --repo mio-kobo/mio --dir build/release-assets
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Gate all six artifacts and generate real checksummed metadata
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+          python scripts/package_managers/release.py --tag "$TAG" --release build/release.json --assets build/release-assets --output build/generated
+          python -c 'import json,subprocess; from pathlib import Path; r=json.loads(Path("build/release.json").read_text()); tag=r["tag_name"]; sha=subprocess.check_output(["git","rev-parse",tag+"^{commit}"],text=True).strip(); assert all(json.loads(p.read_text())["source_sha"]==sha for p in Path("build/release-assets").glob("*-native-report.json"))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-manager-inputs
+          path: build/
+          if-no-files-found: error
+  install:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: darwin-arm64, runner: macos-15}
+          - {target: windows-amd64, runner: windows-2025}
+          - {target: linux-amd64, runner: ubuntu-24.04}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: Mio-2.1
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Windows'
+        name: Install current official WinGet client
+        shell: pwsh
+        run: |
+          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+          Repair-WinGetPackageManager -Force -Latest
+          winget --version
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+      - run: python -m pip install PyYAML==6.0.3
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-manager-inputs
+          path: build
+      - run: python scripts/package_managers/test_install.py --assets build/release-assets --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manager-results-${{ matrix.target }}
+          path: build/release-assets/package-manager-verification.json
+  propose:
+    needs: [prepare, install]
+    # Activation is an explicit maintainer action; manual dispatch is always dry.
+    if: github.event_name == 'release' && vars.MIO_PACKAGE_PUBLISH_ENABLED == 'true'
+    environment: package-managers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: Mio-2.1
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-manager-inputs
+          path: build
+      - name: Mint token limited to the two distribution repositories
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.MIO_DISTRIBUTION_APP_ID }}
+          private-key: ${{ secrets.MIO_DISTRIBUTION_APP_PRIVATE_KEY }}
+          owner: mio-kobo
+          repositories: |
+            homebrew-mio
+            mio-apt
+          permission-contents: write
+          permission-pull-requests: write
+      - run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+      - name: Sign APT snapshot and open review PRs (never merge)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          GNUPGHOME: ${{ runner.temp }}/mio-signing
+          MIO_APT_PRIVATE_KEY: ${{ secrets.MIO_APT_PRIVATE_KEY }}
+          MIO_APT_SIGNING_FINGERPRINT: ${{ vars.MIO_APT_SIGNING_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          python -c 'import os,subprocess; subprocess.run(["gpg","--batch","--import"], input=os.environ["MIO_APT_PRIVATE_KEY"].encode(), check=True)'
+          unset MIO_APT_PRIVATE_KEY
+          python scripts/package_managers/propose.py --generated build/generated --assets build/release-assets --tag "$TAG"

@@ -45,8 +45,10 @@ cryptographic GitHub attestation of untrusted PR code.
 
 The tool whitelist is in `scripts/distribution/package.py`. Only integrated
 `check/build/run/exec/test/lsp/disasm` are included today; no standalone helper is
-approved. Windows process spawning and LSP stdin polling are not implemented;
-run/exec/test/LSP execution are NOT_APPLICABLE there. Build/check/disasm are tested.
+approved. Windows process spawning, run/exec/test and LSP stdin polling are implemented
+and are tested. Windows `kiso/net/tcp` has no Winsock runtime layer and remains
+NOT_APPLICABLE. Platform statements follow the current native reports rather
+than historical audits.
 
 Bunko resolution for build/check/run/test/lsp is:
 
@@ -73,8 +75,17 @@ mio build examples/hello.mio --target=linux-amd64 -o hello
 mio check examples/math.mio
 ```
 
-Use `darwin-arm64` / `windows-amd64` on those targets. The CLI's historical default
-build target remains Darwin; explicit `--target` is required on Linux/Windows.
+Use `darwin-arm64` / `windows-amd64` on those targets. The CLI defaults to the native host target; an explicit `--target` can select
+a cross-compilation target. `run` and `exec` require the host target.
 There is no runtime download and no Go/Python requirement for installed packages.
 The source preparation, verification and packaging scripts require Python only
 on the build host. See [Docker offline environment](../../docker/README.md).
+
+## Package manager infrastructure
+
+See [installation instructions](../installation/README.md) (English, 简体中文,
+日本語) and [release operations](../../scripts/package_managers/README.md).
+The existing candidate verification remains required. Manager lifecycle tests run
+only after it passes. Stable metadata is generated from actual stable Release
+assets; PR versions can never activate publication. Publication remains disabled
+pending maintainer configuration and approval.
