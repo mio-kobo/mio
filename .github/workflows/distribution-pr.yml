@@ -12,6 +12,7 @@ jobs:
       with:
         persist-credentials: false
     - run: python -m unittest discover -s scripts/distribution -p 'test_*.py' -v
+    - run: python -m unittest discover -s scripts/package_managers -p 'test_*.py' -v
     - run: python -m unittest discover -s docker -p 'test_*.py' -v
   candidates:
     needs:
@@ -51,6 +52,13 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
+    - name: Install package manager test dependencies
+      shell: bash
+      run: |
+        python -m pip install PyYAML==6.0.3
+        if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Real package manager install, offline payload, upgrade and uninstall
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target ${{ matrix.target }}
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -320,6 +328,13 @@ jobs:
       run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
+    - name: Install package manager test dependencies
+      shell: bash
+      run: |
+        python -m pip install PyYAML==6.0.3
+        if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Real package manager install, offline payload, upgrade and uninstall
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target linux-amd64
     - uses: actions/upload-artifact@v4
       if: success()
       with:

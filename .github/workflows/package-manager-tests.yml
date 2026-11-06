@@ -1,0 +1,54 @@
+name: Package manager regression tests
+on:
+  pull_request:
+    branches: [Mio-2.1]
+    paths:
+      - scripts/package_managers/**
+      - scripts/distribution/**
+      - .github/workflows/package-manager*.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  lifecycle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: darwin-arm64, runner: macos-15}
+          - {target: windows-amd64, runner: windows-2025}
+          - {target: linux-amd64, runner: ubuntu-24.04}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML==6.0.3
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y apt-utils gnupg
+      - name: Download pinned verified native regression fixture (not release input)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          gh api repos/mio-kobo/mio/actions/runs/42215905342 > fixture-run.json
+          python -c 'import json; r=json.load(open("fixture-run.json")); assert r["conclusion"]=="success" and r["head_sha"]=="d13c35136f14ab6376e3a896da106d9ba912e218" and r["path"]==".github/workflows/distribution-pr.yml"'
+          mkdir -p build/fixture
+          gh run download 42215905342 --repo mio-kobo/mio --name "mio-candidates-$TARGET-42215905342-1" --dir build/fixture
+          python scripts/distribution/verify.py --target "$TARGET" --output build/fixture
+      - run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manager-regression-${{ matrix.target }}
+          path: |
+            build/fixture/*.json
+            fixture-run.json
