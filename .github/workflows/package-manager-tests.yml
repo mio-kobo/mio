@@ -11,6 +11,11 @@ on:
       native_run:
         required: false
         type: string
+      chocolatey_only:
+        description: Chocolatey lifecycle without unrelated WinGet setup
+        required: false
+        type: boolean
+        default: false
       targets:
         required: false
         type: string
@@ -34,7 +39,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - if: runner.os == 'Windows'
+      - if: runner.os == 'Windows' && !inputs.chocolatey_only
         name: Install current official WinGet client
         shell: pwsh
         run: |
@@ -61,7 +66,8 @@ jobs:
           mkdir -p build/fixture
           gh run download "$RUN" --repo mio-kobo/mio --name "mio-candidates-$TARGET-$RUN-$ATTEMPT" --dir build/fixture
           python scripts/distribution/verify.py --target "$TARGET" --output build/fixture
-      - run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
+      - if: '!inputs.chocolatey_only'
+        run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
       - if: runner.os == 'Windows'
         name: Chocolatey Core and Full lifecycle (verified native fixture)
         run: python scripts/package_managers/test_chocolatey_install.py --assets build/fixture

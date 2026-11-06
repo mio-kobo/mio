@@ -172,11 +172,14 @@ also upgrade to the exact generated stable nupkg using its official HTTPS URL.
 Reports start FAIL and become PASS only after all checks execute. Windows TCP
 remains NOT_APPLICABLE outside required checks.
 
-Wrapper-only PRs reuse the existing Windows regression job and a successful,
+Wrapper-only PRs reuse the existing Windows regression job in Chocolatey-only
+mode (no unrelated PSGallery/WinGet download) and a successful,
 unexpired `distribution-pr.yml` fixture. `fixture.py` checks repository, workflow,
 conclusion and matching non-wrapper Git inputs before downloading. Missing or
 mismatching fixtures fail (run the existing native workflow manually, then retry).
-Compiler/source changes still run the full existing native pipeline. Reused
+Compiler/source changes still run the full existing native pipeline, including
+WinGet/Inno and Chocolatey lifecycles. Manual manager regression keeps all managers
+enabled by default. Reused
 fixtures are never stable release inputs. `.nupkg` files and JSON evidence are
 Actions artifacts. Unit tests cover package metadata, immutable generation,
 untrusted inputs, release gating, dry run, duplicate and collision rejection.
