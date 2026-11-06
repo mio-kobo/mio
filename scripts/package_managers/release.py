@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
@@ -140,6 +141,11 @@ end
 '''
 
 
+def windows_product_code(flavor):
+    appid = str(uuid.uuid5(uuid.NAMESPACE_URL, 'https://github.com/mio-kobo/mio/windows/' + flavor)).upper()
+    return '{' + appid + '}_is1'
+
+
 def winget(version, flavor, r):
     ident = 'MioKobo.Mio' + ('.Core' if flavor == 'core' else '')
     alias = 'mio' if flavor == 'full' else 'mio-core'
@@ -147,7 +153,7 @@ def winget(version, flavor, r):
     return ident, {
         'yaml': dict(common, DefaultLocale='en-US', ManifestType='version'),
         'locale.en-US.yaml': dict(common, PackageLocale='en-US', Publisher='Mio Kobo', PackageName='Mio' + (' Core' if flavor == 'core' else ''), License='MIT', LicenseUrl='https://github.com/mio-kobo/mio/blob/Mio-2.1/LICENSE', PackageUrl='https://github.com/mio-kobo/mio', ShortDescription='Mio programming language', ManifestType='defaultLocale'),
-        'installer.yaml': dict(common, InstallerType='inno', Scope='user', InstallerSwitches=dict(Silent='/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-', SilentWithProgress='/SILENT /SUPPRESSMSGBOXES /NORESTART /SP-', Log='/LOG="<LOGPATH>"', InstallLocation='/DIR="<INSTALLPATH>"'), UpgradeBehavior='install', Commands=[alias], Installers=[dict(Architecture='x64', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper())], ManifestType='installer')}
+        'installer.yaml': dict(common, InstallerType='inno', Scope='user', ProductCode=windows_product_code(flavor), InstallerSwitches=dict(Silent='/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-', SilentWithProgress='/SILENT /SUPPRESSMSGBOXES /NORESTART /SP-', Log='/LOG="<LOGPATH>"', InstallLocation='/DIR="<INSTALLPATH>"'), UpgradeBehavior='install', Commands=[alias], Installers=[dict(Architecture='x64', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper())], ManifestType='installer')}
 
 
 def manifest_yaml(value):

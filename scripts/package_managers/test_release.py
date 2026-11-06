@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release import stable, immutable, formula, winget, validate, GF4_SEED_SHA256
+from release import stable, immutable, formula, winget, validate, GF4_SEED_SHA256, windows_product_code
 from package import digest, inventory, write_json
 
 
@@ -143,6 +143,10 @@ class ReleaseTests(unittest.TestCase):
             ident, files = winget('2.1.0', flavor, r)
             manifest = files['installer.yaml']
             self.assertEqual(manifest['InstallerType'], 'inno')
+            from windows import installer_script
+            product_code = manifest['ProductCode']
+            self.assertEqual(product_code, windows_product_code(flavor))
+            self.assertIn('AppId={' + product_code.removesuffix('_is1'), installer_script('payload', 'output', '2.1.0', flavor, 'setup'))
             self.assertNotIn('NestedInstallerFiles', manifest)
             installer = manifest['Installers'][0]
             self.assertEqual(installer['InstallerSha256'], 'A'*64)

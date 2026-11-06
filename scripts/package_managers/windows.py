@@ -10,8 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import uuid
-from release import digest, extract, inventory, immutable
+from release import digest, extract, inventory, immutable, windows_product_code
 
 
 def installer_script(payload, output, version, flavor, filename):
@@ -22,7 +21,7 @@ def installer_script(payload, output, version, flavor, filename):
     numeric = version.split('-')[0]
     ident = 'Mio' if flavor == 'full' else 'MioCore'
     command = 'mio' if flavor == 'full' else 'mio-core'
-    appid = str(uuid.uuid5(uuid.NAMESPACE_URL, 'https://github.com/mio-kobo/mio/windows/' + flavor)).upper()
+    appid = windows_product_code(flavor).removesuffix('_is1').strip('{}')
     return rf'''[Setup]
 AppId={{{{{appid}}}
 AppName=Mio{' Core' if flavor == 'core' else ''}
