@@ -41,6 +41,30 @@ Core の更新・削除には `MioKobo.Mio.Core` を指定します。
 アンインストール時はこの PATH 項目を削除します。
 Microsoft のコミュニティーリポジトリへの初回提出は手動レビューが必要です。
 
+## Windows AMD64：Chocolatey
+
+初回提出のコミュニティーレビュー完了後に利用できます。
+[公式手順](https://docs.chocolatey.org/en-us/choco/setup/)で Chocolatey を導入し、
+管理者 PowerShell で実行してください。
+
+```powershell
+choco install mio
+mio version
+choco upgrade mio
+choco uninstall mio
+# Core（更新・削除にも mio-core を指定）：
+choco install mio-core
+mio-core version
+```
+
+Full と Core は異なるコマンドで共存できます。検証済みの公式 ZIP を Chocolatey の
+`lib` 配下に配置し、`bin` のプロセス Shim から実際のコンパイラーを起動します。
+隣接する Bunko の配置を保持します。Chocolatey 導入後は端末を開き直して PATH を
+更新してください。同じ種類を WinGet と Chocolatey の両方で導入しないでください。
+Full は導入後にオフラインで開発でき、Core には標準ライブラリーがありません。
+プロジェクトと設定はパッケージディレクトリーの外に保存してください。更新時には
+内容を置換し、削除時にはこのディレクトリーを削除します。Windows TCP は未対応です。
+
 ## Linux AMD64：APT
 
 リポジトリーの有効化後に専用の公開鍵を取得し、別の信頼できる経路で公開された

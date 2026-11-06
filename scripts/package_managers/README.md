@@ -138,3 +138,80 @@ source promotes verified downloads to the trusted zone itself. No installed Mio
 package changes users' Internet settings, and neither hashing nor malware scanning
 is disabled. See [the Microsoft diagnosis](https://github.com/microsoft/winget-cli/issues/4046)
 and [the trust decision in DownloadFlow](https://github.com/microsoft/winget-cli/blob/master/src/AppInstallerCLICore/Workflows/DownloadFlow.cpp).
+
+## Chocolatey Community Repository
+
+`chocolatey.py` reuses `release.validate` unchanged: all six stable archives,
+Inno installers, source/tag binding, Trusted Seed PASS, native B=C=D, exact
+inventories and Docker evidence remain mandatory. It emits deterministic,
+metadata-only `mio.<version>.nupkg` (Full) and `mio-core.<version>.nupkg`.
+No binaries are embedded or rebuilt. Fixed official version URLs and SHA-256
+come from the verified Windows ZIPs. Candidate generation is a separate loopback
+fixture API with only synthetic 0.0.1/0.0.2 package versions.
+
+The existing Inno installer uses `PrivilegesRequired=lowest`, HKCU PATH and
+`{localappdata}`. Elevated Chocolatey may run under another administrator's
+identity; using that installer would install for the wrong user. Chocolatey
+instead owns a ZIP payload under its package directory. `Install-BinFile` creates
+process shims for `mio` and `mio-core`. Core renames only its executable to
+`mio-core.exe` and updates the installed manifest key, preserving every compiler
+byte (the same layout used by Inno). This is necessary because Chocolatey
+automatically removes shims by executable basename on uninstall even with an
+`.ignore` file. Distinct basenames protect Full when Core is removed; `.exe.ignore`
+prevents automatic alias generation. Unlike the rejected WinGet ZIP link, a process shim launches the
+real image and preserves executable-relative Bunko lookup. No user PATH registry
+entries, user profiles or language/compiler bytes are changed. User projects
+must live outside the replaceable package directory. Both uninstall scripts
+remove only their own shim; Chocolatey removes its managed files.
+
+`test_chocolatey_install.py` tests real Windows install/upgrade/reinstall,
+Core/Full coexistence, PATH and ShimGen target, all file hashes, native execution,
+Bunko imports, integrated tools and uninstall. Firewall rules block outbound
+compiler traffic during offline checks and are removed afterwards. Stable jobs
+also upgrade to the exact generated stable nupkg using its official HTTPS URL.
+Reports start FAIL and become PASS only after all checks execute. Windows TCP
+remains NOT_APPLICABLE outside required checks.
+
+Wrapper-only PRs reuse the existing Windows regression job in Chocolatey-only
+mode (no unrelated PSGallery/WinGet download) and a successful,
+unexpired `distribution-pr.yml` fixture. `fixture.py` checks repository, workflow,
+conclusion and matching non-wrapper Git inputs before downloading. Missing or
+mismatching fixtures fail (run the existing native workflow manually, then retry).
+Compiler/source changes still run the full existing native pipeline, including
+WinGet/Inno and Chocolatey lifecycles. Manual manager regression keeps all managers
+enabled by default. Reused
+fixtures are never stable release inputs. `.nupkg` files and JSON evidence are
+Actions artifacts. Unit tests cover package metadata, immutable generation,
+untrusted inputs, release gating, dry run, duplicate and collision rejection.
+
+Maintainer activation, **not performed by this change**:
+
+1. Review the first packages and claim/confirm ownership of both CCR IDs. The
+   official OData `FindPackagesById` endpoint returned zero entries for `mio`
+   and `mio-core` on 2026-11-07 JST; availability is not a reservation. Recheck
+   before submission and stop on any ownership conflict.
+2. Publish a genuine stable Release through the existing gates. Dispatch
+   `package-managers.yml` with that tag for a dry run; inspect generated nupkg,
+   Windows lifecycle evidence and CCR duplicate checks. Dispatch never pushes.
+3. Create environment `chocolatey-community` with required maintainer reviewers
+   and protected branch policies for `Mio-2.1`. Store `CHOCOLATEY_API_KEY` only
+   as that environment's secret. Ordinary PRs cannot enter the submit job.
+4. Only after reviewing the first submission, set repository variable
+   `MIO_CHOCOLATEY_PUBLISH_ENABLED=true`. A published stable Release event then
+   requests environment approval before `choco push` to
+   `https://push.chocolatey.org/`. This submits to normal community moderation;
+   it neither bypasses moderation nor creates a stable Release. To process an
+   already published Release after activation, a maintainer must explicitly
+   re-run its release-event workflow; manual dispatch remains dry run.
+
+`chocolatey_publish.py` preflights both versions. Existing identical bytes are
+no-ops; differing content fails before any push. Interrupted partial submissions
+can be retried: the already submitted identical package is skipped. Publication
+output never prints the key, command arguments or child-process output. No key
+is stored in package files, receipts or artifacts. The implementation has never
+submitted a formal Chocolatey package.
+
+References: [Chocolatey setup](https://docs.chocolatey.org/en-us/choco/setup/),
+[Install-BinFile](https://docs.chocolatey.org/en-us/create/functions/install-binfile/),
+[Uninstall-BinFile](https://docs.chocolatey.org/en-us/create/functions/uninstall-binfile/),
+[shim behavior](https://docs.chocolatey.org/en-us/features/shim/).

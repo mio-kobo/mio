@@ -12,10 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import inventory, digest
 
 
-def smoke(root, target, flavor, metadata_root=None, command=None):
+def smoke(root, target, flavor, metadata_root=None, command=None, manager_files=()):
     root = root.resolve()
     m = json.loads((root / 'manifest.json').read_text())
     files = inventory(root)
+    for name in manager_files:
+        files.pop(name)
     # Inno's generated uninstall support is owned by the installer, not the archive.
     for name in ('unins000.exe', 'unins000.dat', 'unins000.msg'):
         files.pop(name, None)
@@ -46,6 +48,7 @@ def smoke(root, target, flavor, metadata_root=None, command=None):
         assert m['version'] in run([cli, 'version'])
         hello = cwd / 'hello.mio'
         hello.write_text('chant("hello from Mio");\n')
+        run([cli, 'check', hello])
         image = cwd / ('hello.exe' if target == 'windows-amd64' else 'hello')
         run([cli, 'build', hello, '--target=' + target, '-o', image])
         assert run([image]).strip() == 'hello from Mio'

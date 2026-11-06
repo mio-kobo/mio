@@ -37,6 +37,27 @@ Full 使用 `mio` 命令，Core 使用 `mio-core`，安装目录相互独立。
 Windows Runner 验证安装后的文件清单及命令行为；卸载时移除自身的 PATH 项。
 首次向微软社区仓库提交清单仍需人工审核。
 
+## Windows AMD64：Chocolatey
+
+首次提交须通过社区审核后才能使用。先按[官方说明](https://docs.chocolatey.org/en-us/choco/setup/)
+安装 Chocolatey，在管理员 PowerShell 中执行：
+
+```powershell
+choco install mio
+mio version
+choco upgrade mio
+choco uninstall mio
+# Core（升级、卸载也使用 mio-core）：
+choco install mio-core
+mio-core version
+```
+
+Full 与 Core 使用不同命令，可以共存。经校验的官方 ZIP 安装到 Chocolatey 管理的
+`lib` 目录，`bin` 中的进程 Shim 启动真实编译器并保留相邻 Bunko 的定位。
+安装 Chocolatey 后重新打开终端以刷新 PATH。同一版本类型不要同时通过 WinGet 和
+Chocolatey 安装，以免 PATH 选择错误版本。Full 安装后可离线开发，Core 不附带标准库。
+项目和配置应保存在包目录之外；升级会替换、卸载会删除包目录。Windows TCP 尚不支持。
+
 ## Linux AMD64：APT
 
 仓库启用后，下载专用公钥，并通过独立可信渠道核对维护者公布的指纹：

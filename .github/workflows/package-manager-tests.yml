@@ -6,6 +6,20 @@ on:
         description: Successful distribution-pr run with unexpired artifacts (regression only)
         required: true
         type: string
+  workflow_call:
+    inputs:
+      native_run:
+        required: false
+        type: string
+      chocolatey_only:
+        description: Chocolatey lifecycle without unrelated WinGet setup
+        required: false
+        type: boolean
+        default: false
+      targets:
+        required: false
+        type: string
+        default: '[{"target":"windows-amd64","runner":"windows-2025"}]'
 permissions:
   contents: read
   actions: read
@@ -14,10 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {target: darwin-arm64, runner: macos-15}
-          - {target: windows-amd64, runner: windows-2025}
-          - {target: linux-amd64, runner: ubuntu-24.04}
+        include: ${{ fromJSON(inputs.targets || '[{"target":"darwin-arm64","runner":"macos-15"},{"target":"windows-amd64","runner":"windows-2025"},{"target":"linux-amd64","runner":"ubuntu-24.04"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -28,7 +39,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - if: runner.os == 'Windows'
+      - if: runner.os == 'Windows' && !inputs.chocolatey_only
         name: Install current official WinGet client
         shell: pwsh
         run: |
@@ -47,14 +58,19 @@ jobs:
           NATIVE_RUN: ${{ inputs.native_run }}
         run: |
           set -euo pipefail
-          [[ "$NATIVE_RUN" =~ ^[0-9]+$ ]]
-          gh api "repos/mio-kobo/mio/actions/runs/$NATIVE_RUN" > fixture-run.json
-          python -c 'import json; r=json.load(open("fixture-run.json")); assert r["conclusion"]=="success" and r["path"]==".github/workflows/distribution-pr.yml"'
-          ATTEMPT=$(python -c 'import json; print(json.load(open("fixture-run.json"))["run_attempt"])')
+          args=()
+          if [ -n "$NATIVE_RUN" ]; then args=(--run "$NATIVE_RUN"); fi
+          python scripts/package_managers/fixture.py "${args[@]}" --output fixture-run.json
+          RUN=$(python -c 'import json; print(json.load(open("fixture-run.json"))["run_id"])')
+          ATTEMPT=$(python -c 'import json; print(json.load(open("fixture-run.json"))["attempt"])')
           mkdir -p build/fixture
-          gh run download "$NATIVE_RUN" --repo mio-kobo/mio --name "mio-candidates-$TARGET-$NATIVE_RUN-$ATTEMPT" --dir build/fixture
+          gh run download "$RUN" --repo mio-kobo/mio --name "mio-candidates-$TARGET-$RUN-$ATTEMPT" --dir build/fixture
           python scripts/distribution/verify.py --target "$TARGET" --output build/fixture
-      - run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
+      - if: '!inputs.chocolatey_only'
+        run: python scripts/package_managers/test_install.py --assets build/fixture --target ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        name: Chocolatey Core and Full lifecycle (verified native fixture)
+        run: python scripts/package_managers/test_chocolatey_install.py --assets build/fixture
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -62,4 +78,5 @@ jobs:
           path: |
             build/fixture/*.json
             build/fixture/*-installer.log
+            build/fixture/chocolatey-test/*.nupkg
             fixture-run.json
