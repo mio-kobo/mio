@@ -141,7 +141,9 @@ def install(assets, target):
                         if v == '0.0.1':
                             command += ['--location', location]
                         run(*command)
-                        installed = location / root.name
+                        alias_command = Path(os.environ['LOCALAPPDATA']) / 'Microsoft/WinGet/Links' / (name + '.exe')
+                        installed = alias_command.resolve(strict=True).parent.parent
+                        assert installed.name == root.name, 'alias points outside the installed payload'
                         # WinGet Core creates a hardlink for its distinct command
                         # alias. Validate that additional file before inventory.
                         alias = installed / 'bin/mio-core.exe'
@@ -149,12 +151,13 @@ def install(assets, target):
                             assert digest(alias) == digest(installed / 'bin/mio.exe')
                             # Keep WinGet-owned alias intact for upgrade/uninstall.
                         smoke(installed, target, flavor)
-                        alias_command = Path(os.environ['LOCALAPPDATA']) / 'Microsoft/WinGet/Links' / (name + '.exe')
-                        run(alias_command, 'version')
+                        smoke(installed, target, flavor, command=alias_command)
                     relocated = base / ('relocated-' + flavor)
                     shutil.copytree(installed, relocated)
                     smoke(relocated, target, flavor)
                     run('winget', 'uninstall', '--id', ident, '--exact', '--silent', '--disable-interactivity')
+                    assert not (installed / 'bin/mio.exe').exists()
+                    assert not alias_command.exists()
                     assert not location.exists() or not list(location.rglob('mio.exe'))
                 passed(flavor + ' install, upgrade, offline payload, uninstall')
         finally:

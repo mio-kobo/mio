@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import inventory, digest
 
 
-def smoke(root, target, flavor, metadata_root=None):
+def smoke(root, target, flavor, metadata_root=None, command=None):
     root = root.resolve()
     m = json.loads((root / 'manifest.json').read_text())
     files = inventory(root)
@@ -27,6 +27,8 @@ def smoke(root, target, flavor, metadata_root=None):
                 files[name] = dict(sha256=digest(path), size=path.stat().st_size)
     assert files == m['files'], 'installed inventory mismatch'
     cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
+    if command is not None:
+        cli = command
     env = dict(os.environ)
     env.pop('MIO_BUNKO', None)
     def run(args, expected=0):
