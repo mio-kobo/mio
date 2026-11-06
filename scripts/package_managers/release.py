@@ -134,18 +134,24 @@ def winget(version, flavor, r):
     return ident, {
         'yaml': dict(common, DefaultLocale='en-US', ManifestType='version'),
         'locale.en-US.yaml': dict(common, PackageLocale='en-US', Publisher='Mio Kobo', PackageName='Mio' + (' Core' if flavor == 'core' else ''), License='MIT', LicenseUrl='https://github.com/mio-kobo/mio/blob/Mio-2.1/LICENSE', PackageUrl='https://github.com/mio-kobo/mio', ShortDescription='Mio programming language', ManifestType='defaultLocale'),
-        'installer.yaml': dict(common, InstallerType='zip', NestedInstallerType='portable', UpgradeBehavior='uninstallPrevious', Installers=[dict(Architecture='x64', Scope='user', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper(), NestedInstallerFiles=[dict(RelativeFilePath=r['root']+'/bin/mio.exe', PortableCommandAlias=alias)])], ManifestType='installer')}
+        'installer.yaml': dict(common, InstallerType='zip', NestedInstallerType='portable', UpgradeBehavior='uninstallPrevious', Installers=[dict(Architecture='x64', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper(), NestedInstallerFiles=[dict(RelativeFilePath=r['root']+'/bin/mio.exe', PortableCommandAlias=alias)])], ManifestType='installer')}
+
+
+def manifest_yaml(value):
+    import yaml
+    kind = value['ManifestType']
+    schema = f'https://aka.ms/winget-manifest.{kind}.1.12.0.schema.json'
+    return '# yaml-language-server: $schema=' + schema + '\n' + yaml.safe_dump(value, sort_keys=False)
 
 
 def generate(version, records, output):
-    import yaml
     for flavor in ('core', 'full'):
         name = 'mio' if flavor == 'full' else 'mio-core'
         immutable(output / 'homebrew/Formula' / (name + '.rb'), formula(version, flavor, records['darwin-arm64', flavor]).encode())
         ident, manifests = winget(version, flavor, records['windows-amd64', flavor])
         folder = output / 'winget/manifests/m' / Path(*ident.split('.')) / version
         for suffix, value in manifests.items():
-            immutable(folder / (ident + '.' + suffix), yaml.safe_dump(value, sort_keys=False).encode())
+            immutable(folder / (ident + '.' + suffix), manifest_yaml(value).encode())
 
 
 def deb(archive, output, version, flavor, test_version=None):

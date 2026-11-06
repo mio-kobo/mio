@@ -15,7 +15,7 @@ import tempfile
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from functools import partial
-from release import deb, formula, winget
+from release import deb, formula, winget, manifest_yaml
 from smoke import smoke
 from package import digest, extract, TARGETS
 
@@ -31,6 +31,7 @@ def install(assets, target):
     import yaml
     results = dict(target=target, status='FAIL', checks=[])
     output = assets / 'package-manager-verification.json'
+    output.write_text(json.dumps(results, indent=2)+'\n')
     def passed(name):
         results['checks'].append(dict(name=name, status='PASS'))
         output.write_text(json.dumps(results, indent=2)+'\n')
@@ -59,18 +60,23 @@ def install(assets, target):
                     # network remote and cannot be mistaken for the official tap.
                     taproot = Path(subprocess.check_output(['brew', '--repository'], text=True).strip()) / 'Library/Taps/mio-ci/homebrew-candidate'
                     taproot.mkdir(parents=True, exist_ok=False)
+                    brew_env = dict(os.environ, XDG_CONFIG_HOME=str(base / 'brew-config'), HOMEBREW_NO_AUTO_UPDATE='1')
+                    def brew(*args):
+                        return run('brew', *args, env=brew_env)
                     try:
                         run('git', 'init', taproot)
                         f = taproot / 'Formula' / (name + '.rb')
                         f.parent.mkdir()
                         for v in ('0.0.1', '0.0.2'):
                             f.write_text(formula(v, flavor, r).replace(f'assert_match "{v}"', f'assert_match "{version}"'))
-                            run('brew', 'audit', '--formula', 'mio-ci/candidate/' + name)
-                            run('brew', 'install' if v == '0.0.1' else 'upgrade', 'mio-ci/candidate/' + name)
+                            if subprocess.run(['brew', 'help', 'trust'], capture_output=True).returncode == 0:
+                                brew('trust', '--tap', 'mio-ci/candidate')
+                            brew('audit', '--formula', 'mio-ci/candidate/' + name)
+                            brew('install' if v == '0.0.1' else 'upgrade', 'mio-ci/candidate/' + name)
                             installed = Path(subprocess.check_output(['brew', '--prefix', name], text=True).strip()) / 'libexec'
                             smoke(installed, target, flavor)
-                            run('brew', 'test', 'mio-ci/candidate/' + name)
-                        run('brew', 'uninstall', name)
+                            brew('test', 'mio-ci/candidate/' + name)
+                        brew('uninstall', name)
                         assert not installed.exists()
                     finally:
                         shutil.rmtree(taproot)
@@ -116,7 +122,7 @@ def install(assets, target):
                         manifests = base / (flavor + v)
                         manifests.mkdir()
                         for suffix, data in files.items():
-                            (manifests / (ident + '.' + suffix)).write_text(yaml.safe_dump(data, sort_keys=False))
+                            (manifests / (ident + '.' + suffix)).write_text(manifest_yaml(data))
                         run('winget', 'validate', '--manifest', manifests)
                         run('winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--location', location, '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
                         installed = location / root.name
@@ -147,4 +153,11 @@ if __name__ == '__main__':
     p.add_argument('--assets', type=Path, required=True)
     p.add_argument('--target', choices=TARGETS, required=True)
     a = p.parse_args()
-    install(a.assets.resolve(), a.target)
+    try:
+        install(a.assets.resolve(), a.target)
+    except Exception as error:
+        output = a.assets / 'package-manager-verification.json'
+        result = json.loads(output.read_text()) if output.exists() else dict(target=a.target, checks=[])
+        result.update(status='FAIL', error=str(error))
+        output.write_text(json.dumps(result, indent=2)+'\n')
+        raise
