@@ -54,31 +54,61 @@ Type: filesandordirs; Name: "{{app}}\examples"
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{{olddata}};{{app}}\bin"; Flags: preservestringtype; Check: NeedsPath
 
 [Code]
+function LongPathName(ShortName: String; LongName: String; Size: Cardinal): Cardinal;
+  external 'GetLongPathNameW@kernel32.dll stdcall';
+
+function CanonicalPath(Value: String): String;
+var Buffer: String; Count: Cardinal;
+begin
+  Value := Trim(Value);
+  if (Length(Value) >= 2) and (Value[1] = '"') and (Value[Length(Value)] = '"') then
+    Value := Copy(Value, 2, Length(Value) - 2);
+  SetLength(Buffer, 32768);
+  Count := LongPathName(Value, Buffer, 32768);
+  if (Count > 0) and (Count < 32768) then begin
+    SetLength(Buffer, Count);
+    Value := Buffer;
+  end;
+  Result := Uppercase(RemoveBackslashUnlessRoot(Value));
+end;
+
 function NeedsPath: Boolean;
-var Value, Entry: String;
+var Value, Part, Entry: String; At: Integer; Last: Boolean;
 begin
   RegQueryStringValue(HKCU, 'Environment', 'Path', Value);
-  Entry := ExpandConstant('{{app}}\bin');
-  Result := Pos(';' + Uppercase(Entry) + ';', ';' + Uppercase(Value) + ';') = 0;
+  Entry := CanonicalPath(ExpandConstant('{{app}}\bin'));
+  Result := True;
+  repeat
+    At := Pos(';', Value);
+    Last := At = 0;
+    if Last then begin Part := Value; Value := ''; end
+    else begin Part := Copy(Value, 1, At - 1); Delete(Value, 1, At); end;
+    if (Part <> '') and (CanonicalPath(Part) = Entry) then begin Result := False; Exit; end;
+  until Last;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var Value, Updated, Part, Entry: String; At: Integer;
+var Value, Updated, Part, Entry: String; At: Integer; Last, First: Boolean;
 begin
-  if CurUninstallStep = usPostUninstall then begin
+  {{ Normalize while directories still exist, including 8.3 profile aliases. }}
+  if CurUninstallStep = usUninstall then begin
     if RegQueryStringValue(HKCU, 'Environment', 'Path', Value) then begin
-      Entry := ExpandConstant('{{app}}\bin');
+      Entry := CanonicalPath(ExpandConstant('{{app}}\bin'));
       Updated := '';
-      while Value <> '' do begin
+      First := True;
+      repeat
         At := Pos(';', Value);
-        if At = 0 then begin Part := Value; Value := ''; end
+        Last := At = 0;
+        if Last then begin Part := Value; Value := ''; end
         else begin Part := Copy(Value, 1, At - 1); Delete(Value, 1, At); end;
-        if (Part <> '') and (CompareText(Part, Entry) <> 0) then begin
-          if Updated <> '' then Updated := Updated + ';';
+        if CanonicalPath(Part) <> Entry then begin
+          if not First then Updated := Updated + ';';
           Updated := Updated + Part;
+          First := False;
         end;
-      end;
-      RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Updated);
+      until Last;
+      if not RegWriteExpandStringValue(HKCU, 'Environment', 'Path', Updated) then
+        RaiseException('Cannot remove Mio from user PATH');
     end;
   end;
 end;

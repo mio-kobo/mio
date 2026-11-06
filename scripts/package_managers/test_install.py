@@ -202,6 +202,9 @@ def install(assets, target):
                 else:
                     run('winget', '--version')
                     run('winget', 'settings', '--enable', 'LocalManifestFiles')
+                    import winreg
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                        previous_path = winreg.QueryValueEx(key, 'Path')[0]
                     location = base / ('installed-' + flavor)
                     from windows import build
                     release_installer = assets / f'mio-{version}-windows-amd64-{flavor}-setup.exe'
@@ -243,7 +246,7 @@ def install(assets, target):
                     assert not alias_command.exists()
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
                         remaining_path = winreg.QueryValueEx(key, 'Path')[0]
-                    assert str(alias_command.parent).casefold() not in [p.casefold() for p in remaining_path.split(';')]
+                    assert remaining_path == previous_path, ('user PATH must be restored exactly', previous_path, remaining_path)
                     assert not location.exists() or not list(location.rglob('mio.exe'))
                 passed(flavor + ' install, upgrade, offline payload, uninstall')
         finally:
