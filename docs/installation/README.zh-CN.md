@@ -63,9 +63,9 @@ mio check math.mio
 ```
 
 macOS 和 Windows 分别使用 `darwin-arm64` 和 `windows-amd64`。
-CLI 历史默认目标为 Darwin，请明确指定目标。
-Windows 支持编译及直接执行生成的原生程序；Mio 的 `run/exec/test` 进程启动及
-LSP 标准输入轮询尚未实现，标记为 NOT_APPLICABLE。
+CLI 默认选择当前主机目标；`run` 和 `exec` 必须使用主机目标。
+三个平台均验证集成的 check/build/run/exec/test/lsp/disasm 工具。
+Windows 尚无 Winsock 运行时层，`kiso/net/tcp` 标记为 NOT_APPLICABLE。
 
 Bunko 按 `--bunko-root`、`MIO_BUNKO`、真实可执行文件相邻的 `../bunko` 顺序查找。
 显式路径或环境变量无效时直接报错；空的 `MIO_BUNKO` 也是错误。

@@ -68,10 +68,9 @@ mio check math.mio
 ```
 
 macOS では `darwin-arm64`、Windows では `windows-amd64` を指定します。
-従来のデフォルトターゲットは Darwin のため、ターゲットを明示してください。
-Windows ではコンパイルと生成されたネイティブプログラムの直接実行が可能です。
-Mio の `run/exec/test` によるプロセス起動と LSP の標準入力ポーリングは未実装で、
-NOT_APPLICABLE として扱います。
+デフォルトは現在のホストターゲットです。`run` と `exec` はホストターゲットを使用します。
+check/build/run/exec/test/lsp/disasm の統合ツールは三つのプラットフォームで検証します。
+Windows には Winsock ランタイム層がなく、`kiso/net/tcp` は NOT_APPLICABLE です。
 
 Bunko は `--bunko-root`、`MIO_BUNKO`、実際の実行ファイルから見た `../bunko`
 の順に検索します。無効な明示パスや環境変数はエラーになります。空の `MIO_BUNKO`

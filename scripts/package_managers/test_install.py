@@ -164,7 +164,7 @@ def install(assets, target):
             server.shutdown()
     results['status'] = 'PASS'
     if target == 'windows-amd64':
-        results['limitations'] = dict(status='NOT_APPLICABLE', reason='Mio run/exec/test spawning and LSP stdin polling')
+        results['limitations'] = dict(status='NOT_APPLICABLE', reason='kiso/net/tcp: no Windows Winsock runtime layer')
     output.write_text(json.dumps(results, indent=2)+'\n')
 
 if __name__ == '__main__':

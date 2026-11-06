@@ -121,7 +121,7 @@ def package(source, compiler, report_path, output, target):
             "Bunko order: --bunko-root, MIO_BUNKO, executable-relative ../bunko, no library.\n"
             "Core requires an external Bunko installation for kiso/ imports.\n"
             "Integrated tools: " + ', '.join(TOOLS) + '.\n'
-            + ('Windows run/exec/test spawning and LSP stdin polling are not implemented (NOT_APPLICABLE).\n' if target == 'windows-amd64' else ''), encoding='utf-8')
+            + ('Windows kiso/net/tcp has no Winsock runtime layer (NOT_APPLICABLE).\n' if target == 'windows-amd64' else ''), encoding='utf-8')
         if flavor == 'full':
             # Explicit file whitelist: tracked production Mio sources in kiso/,
             # excluding tests and historical patch snapshots at any depth.

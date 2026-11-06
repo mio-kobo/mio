@@ -76,10 +76,10 @@ mio build hello.mio --target=linux-amd64 -o hello
 mio check math.mio
 ```
 
-Use `darwin-arm64` or `windows-amd64` on those systems; the historical default target
-is Darwin, so specify your target. Windows can compile and directly execute native
-images, but Mio `run` / `exec` / `test` process spawning and LSP stdin polling are
-NOT_APPLICABLE. macOS/Linux support the validated integrated CLI tools.
+The default target is the current host. Use `darwin-arm64` or `windows-amd64`
+for those targets; `run` and `exec` require the host target. The integrated
+check/build/run/exec/test/lsp/disasm tools are tested on all three platforms.
+Windows `kiso/net/tcp` is NOT_APPLICABLE because the runtime has no Winsock layer.
 
 Bunko lookup remains: `--bunko-root`, then `MIO_BUNKO`, then `../bunko` relative to
 the real executable. Invalid explicit/environment roots are errors, including an

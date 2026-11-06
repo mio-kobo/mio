@@ -51,8 +51,25 @@ def smoke(root, target, flavor, metadata_root=None, command=None):
             assert run([image]).strip() == '9'
         else:
             assert 'E_BUNKO_MISSING' in run([cli, 'check', math], 1)
+        if flavor == 'full':
+            assert run([cli, 'run', hello]).strip() == 'hello from Mio'
+            mochi = cwd / 'hello.mochi'
+            run([cli, 'build', hello, '--emit=mochi', '-o', mochi])
+            assert run([cli, 'exec', mochi]).strip() == 'hello from Mio'
+            assert len(run([cli, 'disasm', mochi])) > 10
+            tests = cwd / 'sample'
+            tests.mkdir()
+            (tests / 'sample_test.mio').write_text('yobu "kiso/testing"; waza test_math() -> unit { testing.expect(hai,"ok"); }\n')
+            assert '1 passed' in run([cli, 'test', tests])
+            requests = [dict(jsonrpc='2.0', id=1, method='initialize', params={}), dict(jsonrpc='2.0', id=2, method='shutdown'), dict(jsonrpc='2.0', method='exit')]
+            wire = b''
+            for request in requests:
+                body = json.dumps(request).encode()
+                wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
+            proc = subprocess.run([str(cli), 'lsp', '--stdio'], input=wire, cwd=cwd, env=env, capture_output=True, timeout=30)
+            assert proc.returncode == 0 and b'capabilities' in proc.stdout, (proc.returncode, proc.stdout, proc.stderr)
         if target == 'windows-amd64':
-            print('NOT_APPLICABLE: Mio run/exec/test process spawning and LSP stdin polling')
+            print('NOT_APPLICABLE: kiso/net/tcp (no Windows Winsock runtime layer)')
     print(f'PASS: {target} {flavor} inventory, version, offline compile/execute, Bunko contract')
 
 if __name__ == '__main__':

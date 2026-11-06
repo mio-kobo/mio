@@ -85,7 +85,8 @@ installs the actual ZIP, retaining the full directory tree. Core's separate
 `mio-core` alias avoids collision; Homebrew/APT declare explicit conflicts. Clean Debian 12/13 and Ubuntu 22.04
 containers also exercise signed APT upgrades. Regression fixtures are pinned
 to the last successful native distribution run and are never release inputs.
-Mio's Windows process-spawn and LSP limitations are NOT_APPLICABLE, not PASS.
+Windows run/exec/test/LSP functionality is tested, matching the current native
+protocol evidence. Only kiso/net/tcp (no Winsock layer) is NOT_APPLICABLE.
 
 The install tests require the native candidates produced by the distribution
 workflow. Without them, lifecycle tests are NOT_RUN; unit tests do not claim real
