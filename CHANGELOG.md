@@ -4,7 +4,15 @@
 
 # Changelog
 
-## Unreleased (Mio-2.1)
+## 2.1.0-rc.1 — 2026-11-07
+
+### Distribution and release status
+
+- First 2.1 release candidate; not a stable release. macOS ARM64 is the primary target; Linux and Windows AMD64 remain experimental.
+- Core and Full archives for all three targets, plus self-contained Windows installers. Full includes external Bunko sources; Core requires an explicit external Bunko root for library imports. Installed packages do not require Go or Python.
+- Executable-relative Bunko discovery, explicit override precedence, relocated installs, integrated tools and package-manager lifecycle checks.
+- RC builds stamp the exact version and source commit before native compilation and run the full candidate pipeline. Stable package-manager publication continues to reject pre-releases and requires genuine Trusted Seed PASS evidence.
+- Known limits: Windows TCP is unavailable; direct floating-point `chant` is unsupported on Linux/Windows (use `convert.format_float64/32`); macOS builds are ad-hoc signed and not notarized. Concurrent Old-GC is not enabled by default.
 
 ### Runtime ABI and native toolchain
 

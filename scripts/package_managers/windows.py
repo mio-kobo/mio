@@ -16,7 +16,7 @@ from release import digest, extract, inventory, immutable, windows_product_code
 def installer_script(payload, output, version, flavor, filename):
     # Only generated, safe version/package identifiers reach the Inno template.
     import re
-    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-pr\.[0-9a-f]{12})?', version):
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-(?:pr\.[0-9a-f]{12}|rc\.[1-9]\d*))?', version):
         raise ValueError('invalid installer version')
     numeric = version.split('-')[0]
     ident = 'Mio' if flavor == 'full' else 'MioCore'

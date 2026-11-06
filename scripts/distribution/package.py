@@ -117,7 +117,8 @@ def package(source, compiler, report_path, output, target):
         (root / 'README.md').write_text(
             f"# Mio {inputs['version']} {flavor.title()}\n\n"
             f"Target: {target}\nCommit: {inputs['source_sha']}\n\n" +
-            ("PR validation artifact; not a stable release. " if "-pr." in inputs["version"] else "Release artifact. ") + "Put bin/ on PATH.\n" +
+            ("PR validation artifact; not a stable release. " if "-pr." in inputs["version"] else
+             "Release candidate; not a stable release. " if "-rc." in inputs["version"] else "Release artifact. ") + "Put bin/ on PATH.\n" +
             "Bunko order: --bunko-root, MIO_BUNKO, executable-relative ../bunko, no library.\n"
             "Core requires an external Bunko installation for kiso/ imports.\n"
             "Integrated tools: " + ', '.join(TOOLS) + '.\n'

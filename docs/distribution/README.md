@@ -81,6 +81,15 @@ There is no runtime download and no Go/Python requirement for installed packages
 The source preparation, verification and packaging scripts require Python only
 on the build host. See [Docker offline environment](../../docker/README.md).
 
+## Tagged release candidates
+
+Dispatch `distribution-pr.yml` on an existing `v2.1.0-rc.1` tag with
+`rc_version=2.1.0-rc.1` and no `stable_version`. RC and stable inputs are mutually
+exclusive and must match the exact dispatch tag. This stamps the disposable
+sources before native compilation, then runs the full three-platform native,
+archive, real-manager and Docker pipeline. RC versions cannot enter stable
+package-manager publication. See [RC1 notes](../releases/v2.1.0-rc.1.md).
+
 ## Package manager infrastructure
 
 See [installation instructions](../installation/README.md) (English, 简体中文,

@@ -27,6 +27,8 @@ Beyond Mochi bytecode and its virtual machine, **Mio V2** implements native ahea
 
 > **Release status:** The verified initial target for `v2.0.0` is macOS ARM64. The Linux x86-64 and Windows x86-64 native backends have passed native self-hosting fixed-point checks and Runtime ABI contract tests in `Mio-2.1` CI. They remain **experimental** and have not yet been released as officially supported platforms.
 
+For the 2.1 release candidate, choose **Full** for a bundled Bunko library or **Core** for a minimal compiler. See the [RC1 release notes](docs/releases/v2.1.0-rc.1.md) for installation, compatibility changes and verification limits.
+
 ## Language and toolchain
 
 - **Static type system:** Fixed-width integers, floating-point numbers, generics, nullable types, structs, enums, and closures.

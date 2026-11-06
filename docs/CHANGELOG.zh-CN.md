@@ -4,7 +4,15 @@
 
 # 更新日志
 
-## 尚未发布（Mio-2.1）
+## 2.1.0-rc.1 — 2026-11-07
+
+### 发行包与发布状态
+
+- 首个 2.1 候选版，不是正式稳定版。macOS ARM64 是主要目标；Linux 和 Windows AMD64 仍为实验性。
+- 三平台提供 Core / Full 压缩包，Windows 另提供自包含安装程序。Full 携带外置 Bunko 源码；Core 导入标准库时需要外部 Bunko。安装后不依赖 Go 或 Python。
+- 支持基于真实可执行文件位置查找 Bunko、显式覆盖优先级、安装迁移、集成工具和真实包管理器生命周期验证。
+- RC 在原生编译前写入准确版本与源码提交，并运行完整候选验证。正式包管理器发布仍拒绝预发布版，并要求真实的 Trusted Seed PASS 证据。
+- 已知限制：Windows TCP 不可用；Linux/Windows 不支持直接 `chant` 浮点值（可用 `convert.format_float64/32`）；macOS 为 ad-hoc 签名，未经 notarization。并发 Old-GC 默认未开启。
 
 ### Runtime ABI 与原生工具链
 

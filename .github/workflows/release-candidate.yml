@@ -1,4 +1,4 @@
-name: Mio release policy validation (legacy candidate entry)
+name: Mio release preparation checks
 on:
   workflow_dispatch:
 permissions:
@@ -14,6 +14,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m pip install PyYAML==6.0.3
-      - run: python3 scripts/release_automation.py static
-      - run: python3 -m unittest discover -s scripts -p 'test_release_automation.py' -v
-      - run: echo 'Historical Go release policy only; the Go AOT release profile has been removed. Native candidate builds use release.yml.'
+      - run: python3 -m unittest discover -s scripts/distribution -p 'test_*.py' -v
+      - run: python3 -m unittest discover -s scripts/package_managers -p 'test_*.py' -v
+      - run: python3 -m unittest discover -s docker -p 'test_*.py' -v
+      - run: echo 'Native release candidates are built and validated by distribution-pr.yml on their exact RC tag. This workflow does not publish.'

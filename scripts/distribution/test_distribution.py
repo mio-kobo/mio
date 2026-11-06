@@ -1,7 +1,10 @@
 import copy
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import tarfile
 import unittest
@@ -16,6 +19,51 @@ class DistributionTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def source(self, name):
+        source = self.root / name
+        (source / 'selfhost/resources').mkdir(parents=True)
+        (source / 'selfhost/cli').mkdir(parents=True)
+        (source / 'selfhost/resources/bunko_data.mio').write_text('legacy importable source')
+        (source / 'selfhost/cli/main.mio').write_text('mio v2.0.0-dev (pure Mio Native AOT; GF3 candidate)')
+        return source
+
+    def test_release_versions_are_built_into_source_before_compilation(self):
+        for i, kwargs in enumerate(({}, dict(stable_version='2.1.0'), dict(rc_version='2.1.0-rc.1'))):
+            source = self.source(str(i))
+            result = prepare(source, 'a'*40, **kwargs)
+            expected = kwargs.get('stable_version') or kwargs.get('rc_version') or '2.1.0-pr.'+'a'*12
+            self.assertEqual(result['version'], expected)
+            self.assertIn('mio v'+expected, (source/'selfhost/cli/main.mio').read_text())
+            self.assertIn('a'*40, (source/'selfhost/cli/main.mio').read_text())
+        for invalid in ('2.1.0', '2.1.0-rc.0', '2.1.0-rc.01', '2.1.0-rc.1/escape', '2.0.0-rc.1'):
+            with self.subTest(version=invalid), self.assertRaises(ValueError):
+                prepare(self.source(invalid.replace('/', '_')), 'a'*40, rc_version=invalid)
+        with self.assertRaises(ValueError):
+            prepare(self.source('both'), 'a'*40, stable_version='2.1.0', rc_version='2.1.0-rc.1')
+
+    def test_rc_dispatch_ref_is_bound_before_any_source_copy(self):
+        for event, ref in (('pull_request', 'refs/tags/v2.1.0-rc.1'),
+                           ('workflow_dispatch', 'refs/heads/Mio-2.1'),
+                           ('workflow_dispatch', 'refs/tags/v2.1.0-rc.2')):
+            destination = self.root/'must-not-exist'
+            env = dict(os.environ, GITHUB_ACTIONS='true', GITHUB_EVENT_NAME=event, GITHUB_REF=ref,
+                       MIO_DISTRIBUTION_STABLE_VERSION='', MIO_DISTRIBUTION_RC_VERSION='')
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name('prepare.py')),
+                                     '--rc-version', '2.1.0-rc.1', '--disposable-checkout', str(destination)],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('exact pre-existing tag', result.stderr)
+            self.assertFalse(destination.exists())
+
+    def test_rc_windows_installer_retains_version_and_safe_numeric_metadata(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'package_managers'))
+        from windows import installer_script
+        result = installer_script('payload', 'out', '2.1.0-rc.1', 'full', 'setup')
+        self.assertIn('AppVersion=2.1.0-rc.1', result)
+        self.assertIn('VersionInfoVersion=2.1.0\n', result)
+        with self.assertRaises(ValueError):
+            installer_script('payload', 'out', '2.1.0-rc.1\n[Code]', 'full', 'setup')
 
     def report(self):
         import os
