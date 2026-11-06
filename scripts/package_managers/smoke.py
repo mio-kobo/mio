@@ -16,8 +16,11 @@ def smoke(root, target, flavor, metadata_root=None, command=None):
     root = root.resolve()
     m = json.loads((root / 'manifest.json').read_text())
     files = inventory(root)
+    # Inno's generated uninstall support is owned by the installer, not the archive.
+    for name in ('unins000.exe', 'unins000.dat', 'unins000.msg'):
+        files.pop(name, None)
     alias = root / 'bin/mio-core.exe'
-    if flavor == 'core' and target == 'windows-amd64' and alias.exists():
+    if flavor == 'core' and target == 'windows-amd64' and alias.exists() and (root / 'bin/mio.exe').exists():
         assert digest(alias) == digest(root / 'bin/mio.exe'), 'alias differs from compiler'
         files.pop('bin/mio-core.exe')
     if metadata_root is not None:
@@ -27,6 +30,9 @@ def smoke(root, target, flavor, metadata_root=None, command=None):
                 files[name] = dict(sha256=digest(path), size=path.stat().st_size)
     assert files == m['files'], 'installed inventory mismatch'
     cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
+    if target == 'windows-amd64' and flavor == 'core' and (root / 'bin/mio-core.exe').exists() and not cli.exists():
+        cli = root / 'bin/mio-core.exe'
+    assert digest(cli) == json.loads((root / 'provenance.json').read_text())['compiler_sha256']
     if command is not None:
         cli = command
     env = dict(os.environ)

@@ -78,6 +78,12 @@ class ReleaseTests(unittest.TestCase):
                 release['assets'].append(dict(name=archive.name, digest='sha256:'+sha,
                     browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{archive.name}'))
             write_json(base / (target+'-verification.json'), dict(target=target, status='PASS', checks=[dict(status='PASS')], archives=archives))
+        for flavor in ('core', 'full'):
+            filename = f'mio-2.1.0-windows-amd64-{flavor}-setup.exe'
+            (base / filename).write_bytes(b'unit fixture only; not executable')
+            sha = digest(base / filename)
+            sums.append(sha+'  '+filename+'\n')
+            release['assets'].append(dict(name=filename, digest='sha256:'+sha, browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{filename}'))
         (base / 'SHA256SUMS').write_text(''.join(sums))
         linux_full = next(a['digest'][7:] for a in release['assets'] if a['name'].endswith('linux-amd64-full.tar.gz'))
         write_json(base / 'docker-verification.json', dict(status='PASS', source_sha='a'*40, full_archive_sha256=linux_full, checks=[dict(status='PASS')]))
@@ -89,7 +95,7 @@ class ReleaseTests(unittest.TestCase):
             release = self.fixture(base)
             version, records = validate(base, 'v2.1.0', release)
             self.assertEqual(version, '2.1.0')
-            self.assertEqual(len(records), 6)
+            self.assertEqual(len(records), 8)
             bad = copy.deepcopy(release)
             bad['assets'][0]['digest'] = 'sha256:' + '0'*64
             with self.assertRaises(ValueError):
@@ -136,11 +142,11 @@ class ReleaseTests(unittest.TestCase):
             self.assertIn('conflicts_with', f)
             ident, files = winget('2.1.0', flavor, r)
             manifest = files['installer.yaml']
-            self.assertEqual(manifest['NestedInstallerType'], 'portable')
+            self.assertEqual(manifest['InstallerType'], 'inno')
+            self.assertNotIn('NestedInstallerFiles', manifest)
             installer = manifest['Installers'][0]
             self.assertEqual(installer['InstallerSha256'], 'A'*64)
-            self.assertEqual(installer['NestedInstallerFiles'][0]['RelativeFilePath'], r['root']+'/bin/mio.exe')
-            aliases.append(installer['NestedInstallerFiles'][0]['PortableCommandAlias'])
+            aliases.append(manifest['Commands'][0])
         self.assertEqual(aliases, ['mio-core', 'mio'])
 
 if __name__ == '__main__':

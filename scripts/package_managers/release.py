@@ -97,6 +97,14 @@ def validate(assets, tag, release):
     docker = json.loads((assets / 'docker-verification.json').read_text())
     if docker['status'] != 'PASS' or docker['source_sha'] != source or docker['full_archive_sha256'] != records['linux-amd64', 'full']['sha'] or not docker['checks'] or any(c['status'] != 'PASS' for c in docker['checks']):
         raise ValueError('Docker offline validation must match Linux Full')
+    for flavor in ('core', 'full'):
+        filename = f'mio-{version}-windows-amd64-{flavor}-setup.exe'
+        sha = sums[filename]
+        url = f'https://github.com/mio-kobo/mio/releases/download/{tag}/{filename}'
+        remote = [a for a in release['assets'] if a['name'] == filename]
+        if digest(assets / filename) != sha or len(remote) != 1 or remote[0]['browser_download_url'] != url or remote[0].get('digest') != 'sha256:' + sha:
+            raise ValueError('Windows installer Release digest/URL mismatch')
+        records['windows-installer', flavor] = dict(filename=filename, sha=sha, url=url)
     return version, records
 
 
@@ -138,7 +146,7 @@ def winget(version, flavor, r):
     return ident, {
         'yaml': dict(common, DefaultLocale='en-US', ManifestType='version'),
         'locale.en-US.yaml': dict(common, PackageLocale='en-US', Publisher='Mio Kobo', PackageName='Mio' + (' Core' if flavor == 'core' else ''), License='MIT', LicenseUrl='https://github.com/mio-kobo/mio/blob/Mio-2.1/LICENSE', PackageUrl='https://github.com/mio-kobo/mio', ShortDescription='Mio programming language', ManifestType='defaultLocale'),
-        'installer.yaml': dict(common, InstallerType='zip', NestedInstallerType='portable', UpgradeBehavior='uninstallPrevious', Installers=[dict(Architecture='x64', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper(), NestedInstallerFiles=[dict(RelativeFilePath=r['root']+'/bin/mio.exe', PortableCommandAlias=alias)])], ManifestType='installer')}
+        'installer.yaml': dict(common, InstallerType='inno', Scope='user', UpgradeBehavior='install', Commands=[alias], Installers=[dict(Architecture='x64', InstallerUrl=r['url'], InstallerSha256=r['sha'].upper())], ManifestType='installer')}
 
 
 def manifest_yaml(value):
@@ -152,7 +160,7 @@ def generate(version, records, output):
     for flavor in ('core', 'full'):
         name = 'mio' if flavor == 'full' else 'mio-core'
         immutable(output / 'homebrew/Formula' / (name + '.rb'), formula(version, flavor, records['darwin-arm64', flavor]).encode())
-        ident, manifests = winget(version, flavor, records['windows-amd64', flavor])
+        ident, manifests = winget(version, flavor, records['windows-installer', flavor])
         folder = output / 'winget/manifests/m' / Path(*ident.split('.')) / version
         for suffix, value in manifests.items():
             immutable(folder / (ident + '.' + suffix), manifest_yaml(value).encode())

@@ -130,8 +130,16 @@ def install(assets, target):
                     run('winget', '--version')
                     run('winget', 'settings', '--enable', 'LocalManifestFiles')
                     location = base / ('installed-' + flavor)
-                    for v in ('0.0.1', '0.0.2'):
-                        ident, files = winget(v, flavor, r)
+                    from windows import build
+                    release_installer = assets / f'mio-{version}-windows-amd64-{flavor}-setup.exe'
+                    if not release_installer.exists():
+                        release_installer = build(archive, assets)
+                    for v in ('0.0.1', '0.0.2', version):
+                        from windows import build
+                        setup = release_installer if v == version else build(archive, assets / 'inno-test', package_version=v)
+                        relative = setup.relative_to(assets).as_posix()
+                        installer_record = dict(url=f'http://127.0.0.1:{server.server_port}/{relative}', sha=digest(setup))
+                        ident, files = winget(v, flavor, installer_record)
                         manifests = base / (flavor + v)
                         manifests.mkdir()
                         for suffix, data in files.items():
@@ -141,15 +149,12 @@ def install(assets, target):
                         if v == '0.0.1':
                             command += ['--location', location]
                         run(*command)
-                        alias_command = Path(os.environ['LOCALAPPDATA']) / 'Microsoft/WinGet/Links' / (name + '.exe')
-                        installed = alias_command.resolve(strict=True).parent.parent
-                        assert installed.name == root.name, 'alias points outside the installed payload'
-                        # WinGet Core creates a hardlink for its distinct command
-                        # alias. Validate that additional file before inventory.
-                        alias = installed / 'bin/mio-core.exe'
-                        if alias.exists():
-                            assert digest(alias) == digest(installed / 'bin/mio.exe')
-                            # Keep WinGet-owned alias intact for upgrade/uninstall.
+                        installed = location
+                        import winreg
+                        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+                            user_path = winreg.QueryValueEx(key, 'Path')[0]
+                        alias_command = Path(shutil.which(name, path=user_path) or '')
+                        assert alias_command.resolve() == (installed / 'bin' / (name + '.exe')).resolve(), 'real bin must be on user PATH'
                         smoke(installed, target, flavor)
                         smoke(installed, target, flavor, command=alias_command)
                     relocated = base / ('relocated-' + flavor)
@@ -157,7 +162,7 @@ def install(assets, target):
                     smoke(relocated, target, flavor)
                     # A local-only manifest has no community source ID to correlate.
                     run('winget', 'uninstall', '--manifest', manifests, '--silent', '--accept-source-agreements', '--disable-interactivity')
-                    assert not (installed / 'bin/mio.exe').exists()
+                    assert not (installed / 'bin' / (name + '.exe')).exists()
                     assert not alias_command.exists()
                     assert not location.exists() or not list(location.rglob('mio.exe'))
                 passed(flavor + ' install, upgrade, offline payload, uninstall')

@@ -61,11 +61,15 @@ jobs:
         Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
         Repair-WinGetPackageManager -Force -Latest
         winget --version
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
     - name: Install package manager test dependencies
       shell: bash
       run: |
         python -m pip install PyYAML==6.0.3
         if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Build self-contained Windows installers from verified ZIPs
+      if: runner.os == 'Windows'
+      run: python scripts/package_managers/windows.py --assets build/candidates
     - name: Real package manager install, offline payload, upgrade and uninstall
       run: python scripts/package_managers/test_install.py --assets build/candidates --target ${{ matrix.target }}
     - uses: actions/upload-artifact@v4
@@ -75,6 +79,8 @@ jobs:
         path: 'build/candidates/*.tar.gz
 
           build/candidates/*.zip
+
+          build/candidates/*-setup.exe
 
           build/candidates/SHA256SUMS
 
@@ -344,11 +350,15 @@ jobs:
         Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
         Repair-WinGetPackageManager -Force -Latest
         winget --version
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
     - name: Install package manager test dependencies
       shell: bash
       run: |
         python -m pip install PyYAML==6.0.3
         if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
+    - name: Build self-contained Windows installers from verified ZIPs
+      if: runner.os == 'Windows'
+      run: python scripts/package_managers/windows.py --assets build/candidates
     - name: Real package manager install, offline payload, upgrade and uninstall
       run: python scripts/package_managers/test_install.py --assets build/candidates --target linux-amd64
     - uses: actions/upload-artifact@v4
@@ -358,6 +368,8 @@ jobs:
         path: 'build/candidates/*.tar.gz
 
           build/candidates/*.zip
+
+          build/candidates/*-setup.exe
 
           build/candidates/SHA256SUMS
 
