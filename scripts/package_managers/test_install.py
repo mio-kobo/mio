@@ -30,6 +30,14 @@ def run(*argv, **kw):
     except subprocess.TimeoutExpired:
         if os.name == 'nt':
             subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process | Where-Object {$_.MainWindowTitle} | Select-Object Name,MainWindowTitle | Format-Table -AutoSize'], check=False)
+            ui = r"""Add-Type -AssemblyName UIAutomationClient; Get-Process winget -ErrorAction SilentlyContinue | ForEach-Object { if ($_.MainWindowHandle) { $root = [System.Windows.Automation.AutomationElement]::FromHandle($_.MainWindowHandle); $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) | Select-Object -First 40 | ForEach-Object { $_.Current.Name } } }"""
+            subprocess.run(['powershell', '-NoProfile', '-Command', ui], check=False, timeout=20)
+            local = Path(os.environ['LOCALAPPDATA'])
+            logs = list(local.glob('Packages/Microsoft.DesktopAppInstaller_*/LocalState/DiagOutputDir/*.log'))
+            logs += list(local.glob('Microsoft/WinGet/State/DiagOutputDir/*.log'))
+            for path in sorted(logs, key=lambda p: p.stat().st_mtime)[-2:]:
+                print('WINGET DIAGNOSTIC:', path, flush=True)
+                print(path.read_text(encoding='utf-8-sig', errors='replace')[-18000:], flush=True)
             subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], check=False)
         else:
             process.kill()
@@ -157,7 +165,7 @@ def install(assets, target):
                         for suffix, data in files.items():
                             (manifests / (ident + '.' + suffix)).write_bytes(manifest_yaml(data).encode('utf-8'))
                         run('winget', 'validate', '--manifest', manifests)
-                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--log', assets / (flavor+'-'+v+'-installer.log'), '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
+                        command = ['winget', 'install' if v == '0.0.1' else 'upgrade', '--manifest', manifests, '--silent', '--verbose-logs', '--log', assets / (flavor+'-'+v+'-installer.log'), '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity']
                         if v == '0.0.1':
                             command += ['--location', location]
                         run(*command)
