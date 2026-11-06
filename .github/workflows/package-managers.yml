@@ -58,7 +58,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev
           python scripts/package_managers/release.py --tag "$TAG" --release build/release.json --assets build/release-assets --output build/generated
+          python scripts/package_managers/chocolatey.py --tag "$TAG" --release build/release.json --assets build/release-assets --output build/generated/chocolatey
           python -c 'import json,subprocess; from pathlib import Path; r=json.loads(Path("build/release.json").read_text()); tag=r["tag_name"]; sha=subprocess.check_output(["git","rev-parse",tag+"^{commit}"],text=True).strip(); assert all(json.loads(p.read_text())["source_sha"]==sha for p in Path("build/release-assets").glob("*-native-report.json"))'
+      - name: Chocolatey dry run (no credentials, no push)
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version "${TAG#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: package-manager-inputs
@@ -98,11 +103,16 @@ jobs:
           name: package-manager-inputs
           path: build
       - run: python scripts/package_managers/test_install.py --assets build/release-assets --target ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        name: Chocolatey lifecycle and exact stable nupkg from official URLs
+        run: python scripts/package_managers/test_chocolatey_install.py --assets build/release-assets --stable-packages build/generated/chocolatey
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: manager-results-${{ matrix.target }}
-          path: build/release-assets/package-manager-verification.json
+          path: |
+            build/release-assets/package-manager-verification.json
+            build/release-assets/chocolatey-verification.json
   propose:
     needs: [prepare, install]
     # Activation is an explicit maintainer action; manual dispatch is always dry.
@@ -145,3 +155,30 @@ jobs:
           python -c 'import os,subprocess; subprocess.run(["gpg","--batch","--import"], input=os.environ["MIO_APT_PRIVATE_KEY"].encode(), check=True)'
           unset MIO_APT_PRIVATE_KEY
           python scripts/package_managers/propose.py --generated build/generated --assets build/release-assets --tag "$TAG"
+
+  chocolatey-submit:
+    needs: [prepare, install]
+    # Disabled until first maintainer review. Manual dispatch is ALWAYS dry run.
+    if: github.event_name == 'release' && vars.MIO_CHOCOLATEY_PUBLISH_ENABLED == 'true'
+    environment: chocolatey-community
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: Mio-2.1
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: package-manager-inputs
+          path: build
+      - name: Immutable submission to Chocolatey community moderation
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        shell: pwsh
+        run: |
+          python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version $env:TAG.Substring(1) --push
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

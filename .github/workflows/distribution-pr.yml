@@ -7,6 +7,38 @@ concurrency:
 env:
   MIO_DISTRIBUTION_STABLE_VERSION: ${{ inputs.stable_version || '' }}
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      wrapper_only: ${{ steps.scope.outputs.wrapper_only }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - id: scope
+      env:
+        BASE: ${{ github.event.pull_request.base.sha }}
+      run: |
+        python - <<'PYCODE'
+        import os, subprocess, sys
+        sys.path.insert(0, 'scripts/package_managers')
+        from fixture import wrapper
+        base = os.environ['BASE']
+        paths = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines() if base else []
+        only = bool(paths) and all(wrapper(p) for p in paths)
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write('wrapper_only=' + str(only).lower() + '\n')
+        PYCODE
+  wrapper-regression:
+    needs: [scope, packaging-tests]
+    if: needs.scope.outputs.wrapper_only == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/package-manager-tests.yml
+    with:
+      targets: '[{"target":"windows-amd64","runner":"windows-2025"}]'
   packaging-tests:
     runs-on: ubuntu-24.04
     steps:
@@ -72,6 +104,17 @@ jobs:
       run: python scripts/package_managers/windows.py --assets build/candidates
     - name: Real package manager install, offline payload, upgrade and uninstall
       run: python scripts/package_managers/test_install.py --assets build/candidates --target ${{ matrix.target }}
+    - name: Chocolatey install, offline tools, coexistence, upgrade and uninstall
+      if: runner.os == 'Windows'
+      run: python scripts/package_managers/test_chocolatey_install.py --assets build/candidates
+    - uses: actions/upload-artifact@v4
+      if: always() && runner.os == 'Windows'
+      with:
+        name: chocolatey-tests-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          build/candidates/chocolatey-test/*.nupkg
+          build/candidates/chocolatey-verification.json
+        if-no-files-found: error
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -113,6 +156,8 @@ jobs:
     - docker-full-offline
     - candidate-linux
     - apt-distributions
+    - scope
+    - wrapper-regression
     runs-on: ubuntu-24.04
     steps:
     - name: Require real native and candidate verification
@@ -124,12 +169,24 @@ jobs:
 
         results = json.loads(os.environ[''RESULTS''])
 
-        assert all(job[''result''] == ''success'' for job in results.values()), results
+        wrapper = results.pop(''wrapper-regression'')[''result'']
+
+        assert results.pop(''scope'')[''result''] == ''success''
+
+        if wrapper != ''skipped'':
+
+            assert wrapper == ''success'' and results.pop(''packaging-tests'')[''result''] == ''success'' and all(job[''result''] == ''skipped'' for job in results.values()), results
+
+        else:
+
+            assert all(job[''result''] == ''success'' for job in results.values()), results
 
         PY
 
         '
   linux:
+    needs: scope
+    if: needs.scope.outputs.wrapper_only != 'true'
     name: Distribution native / linux-amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -263,8 +320,9 @@ jobs:
         retention-days: 7
   summary:
     name: Distribution native / required
-    if: always()
+    if: always() && needs.scope.outputs.wrapper_only != 'true'
     needs:
+    - scope
     - linux
     - follower
     runs-on: ubuntu-24.04

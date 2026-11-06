@@ -46,6 +46,31 @@ The Windows runner verifies the complete installed payload before manifests
 are submitted. These manifests are prepared for human review; automation does not
 submit to `microsoft/winget-pkgs`.
 
+## Windows AMD64 / Chocolatey
+
+After the first community submission is approved, install Chocolatey from its
+[official instructions](https://docs.chocolatey.org/en-us/choco/setup/) and use
+an elevated PowerShell terminal:
+
+```powershell
+choco install mio
+mio version
+choco upgrade mio
+choco uninstall mio
+# Core instead (upgrade/uninstall use mio-core):
+choco install mio-core
+mio-core version
+```
+
+Full and Core can coexist with distinct commands. Verified official ZIPs are
+installed under Chocolatey's managed `lib` directory; process shims in its `bin`
+launch the real compiler with its adjacent Bunko tree. Reopen the terminal after
+installing Chocolatey to refresh PATH. Do not install the same flavor through
+WinGet and Chocolatey together, since PATH would select only one version.
+Full works offline after installation; Core has no bundled standard library.
+Keep projects and configuration outside Chocolatey's package directory, which
+upgrades replace and uninstall removes. Windows TCP remains unsupported.
+
 ## Linux AMD64 / APT
 
 After repository activation, download the dedicated key and verify its fingerprint
