@@ -11,8 +11,14 @@ try {
     # that omit the manifest relationship and would miss this regression.
     $library = Join-Path $work 'nuget.core.2.14.0.nupkg'
     Invoke-WebRequest -UseBasicParsing -Uri 'https://api.nuget.org/v3-flatcontainer/nuget.core/2.14.0/nuget.core.2.14.0.nupkg' -OutFile $library
-    if ((Get-FileHash -Algorithm SHA256 $library).Hash -ne 'cc282153f8f6b4c1270c2a3946de1ce08c18f5f5995d5735e62680e9f3489b86') {
-        throw 'NuGet.Core 2.14.0 checksum mismatch'
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($library))).Replace('-', '')
+        if ($hash -ne 'cc282153f8f6b4c1270c2a3946de1ce08c18f5f5995d5735e62680e9f3489b86') {
+            throw 'NuGet.Core 2.14.0 checksum mismatch'
+        }
+    } finally {
+        $sha256.Dispose()
     }
     [IO.Compression.ZipFile]::ExtractToDirectory($library, $work)
     Add-Type -Path (Join-Path $work 'lib/net40-Client/NuGet.Core.dll')
@@ -56,7 +62,7 @@ try {
         Remove-Item -LiteralPath (Join-Path $reference '[Content_Types].xml')
 
         # Negative control with the same files and metadata. A readable ZIP
-        # with only the nuspec relationship missing must still be rejected.
+        # without its relationship part must still be rejected.
         $negative = Join-Path $work 'missing-manifest-relationship.nupkg'
         Copy-Item -LiteralPath $path -Destination $negative -Force
         $zip = [IO.Compression.ZipFile]::Open($negative, [IO.Compression.ZipArchiveMode]::Update)

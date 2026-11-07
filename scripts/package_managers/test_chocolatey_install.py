@@ -176,8 +176,12 @@ def install(assets, stable_packages=None):
                 passed('wrong archive SHA-256 rejected with nonzero exit even with --ignore-checksums')
             finally:
                 server.shutdown()
+        # Use Windows PowerShell's module paths instead of the parent pwsh's.
+        windows_powershell_env = os.environ.copy()
+        windows_powershell_env.pop('PSModulePath', None)
         run('powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-            '-File', str(Path(__file__).with_name('chocolatey') / 'verify-nuget.ps1'), str(packages))
+            '-File', str(Path(__file__).with_name('chocolatey') / 'verify-nuget.ps1'), str(packages),
+            env=windows_powershell_env)
         passed('NuGet OPC reader, nuspec XSD, missing manifest regression and choco pack reference')
         result['status'] = 'PASS'
     except Exception as error:
