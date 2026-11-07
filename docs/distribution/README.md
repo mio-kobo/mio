@@ -4,9 +4,10 @@ These archives are PR candidates (`2.1.0-pr.<source-sha-prefix>`), not v2.1.0 re
 The `Mio Core / Full PR candidates` workflow builds all three targets through the
 existing `scripts/ci/native_platforms.py` orchestration. Stage A has a Go-hosted
 root; the shipped compiler must match native B, C and D byte for byte. This is
-independent native verification, **not Trusted Seed verification**. The frozen
-GF4 seed remains NOT_RUN on hosted runners. `tools/native-ci`, its pinned seed,
-resource generator and source hashes have not been repinned or relaxed.
+independent native verification. Trusted GF4 verification is **NOT_RUN** for
+PR and RC candidates. The stable workflow uses the [pinned immutable GF4 release](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable).
+`tools/native-ci`, its pinned seed, resource generator and source hashes have
+not been repinned or relaxed.
 
 Build inputs are copied to a disposable checkout. `prepare.py` replaces only that
 copy's generated Bunko resource table with an empty table and stamps the candidate
@@ -46,9 +47,9 @@ cryptographic GitHub attestation of untrusted PR code.
 The tool whitelist is in `scripts/distribution/package.py`. Only integrated
 `check/build/run/exec/test/lsp/disasm` are included today; no standalone helper is
 approved. Windows process spawning, run/exec/test and LSP stdin polling are implemented
-and are tested. Windows `kiso/net/tcp` has no Winsock runtime layer and remains
-NOT_APPLICABLE. Platform statements follow the current native reports rather
-than historical audits.
+and are tested. The development branch supports blocking IPv4 `kiso/net/tcp`
+on Windows through Winsock. Native verification requires the TCP package and
+two-process echo tests. The published RC1 predates this support.
 
 Bunko resolution for build/check/run/test/lsp is:
 

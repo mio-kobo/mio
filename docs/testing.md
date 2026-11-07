@@ -187,14 +187,14 @@ Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过�
 
 ## 暂行措施：Native Verification 推迟（临时，仅开发用 CI）
 
-**Native Seed 目前未准备好**：受信任的 GF4 Native Seed（SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`，runner 仍强制校验）无法被 GitHub-hosted Runner 取得；仓库内没有已批准的 Seed 分发来源。为了让 `ci-pr.yml` 与 `ci-full.yml` 先迁移到 GitHub-hosted Runner 并正常运行，需要 Seed 的验证被推迟。这是**临时措施**，不改变 `release.yml`。
+Quick 和 Full 的 Seed 驱动模块在 GitHub-hosted Runner 上仍处于暂缓状态。GF4 种子已通过不可变 Release 提供，由下文的[稳定版专用工作流](#stable-distribution-and-trusted-gf4)获取和验证。三平台原生 CI 使用独立的验证流程。
 
 - **Native Verification 的状态是 NOT_RUN。** 所有 `engine=native` 模块（Core、AOT、GC、selfhost、ABCD、标准库原生测试及 `kiso/aot/x86-64` 等）不会启动，也不会被写成 PASS 或 SKIP 之外的成功状态；计划与报告列出它们并标 NOT_RUN。
 - **补充测试成功不等于 Native 测试成功。** 暂缓期间 `Mio CI / required` 只是 Supplementary CI Gate：infrastructure（quality、自检、发布隔离静态检查）、Linux 参考模块、hosted `macos-15` 上的 Go / VM 参考模块。它通过时报告仍写 `native_verification: NOT_RUN`。
 - **不做的事：** 不下载或生成任何 Seed，不用 Go 编译器或参考 VM 代替 Native Seed，不运行未验证的二进制，不把参考结果写成 Native 结果。
 - **Quick：** `scripts/ci/plan.py plan` 在暂缓时把原生模块移入 `deferred_native_modules`（NOT_RUN），`macos_modules` 为 macOS 上可执行的补充模块。**Full：** `plan.py full` 为 Linux/macOS 只选 `engine != native` 的模块，原生模块列为 NOT_RUN 并写入 Step Summary 与 `full-plan` artifact。
 - **重新启用条件：** (1) 确定并批准受信任 Seed 的分发来源，且在运行前校验固定 SHA-256；(2) 在 `ci-pr.yml` 的 native job 与 Full 的 macOS job 前加入准备 Seed 并导出 `MIO_NATIVE_SEED` 的步骤（不得向 fork PR 提供生产机密）；(3) 设置仓库变量 `MIO_NATIVE_VERIFICATION=enabled`。启用后 Quick 计划恢复 `native_modules`，gate 要求 native job 与其执行报告，Full 恢复 `all full`。仅设置变量而没有 Seed 时，runner 返回 NOT_RUN/2，作业失败，不会成功。
-- **仍保留的风险：** 暂缓期间合并所依据的只有补充测试，原生编译器、AOT、GC 与自举的回归不会被 CI 发现；`Mio CI / required` 为绿色容易被误读；hosted `macos-15` 的并行额度和 6 小时作业上限可能限制 Full；`queue: max` 需 GitHub 支持，本地 actionlint 1.7.7 不认识它。维护者合并涉及编译器/AOT/GC 的 PR 前仍应在受信任的 macOS ARM64 环境手动运行 `bash scripts/ci/run.sh macos-arm64 all quick`（或 full）。
+- **仍保留的风险：** 暂缓期间该 gate 只覆盖补充测试，原生编译器、AOT 和 GC 的开发验证见上文的三平台原生 CI；`Mio CI / required` 为绿色容易被误读；hosted `macos-15` 的并行额度和 6 小时作业上限可能限制 Full；`queue: max` 需 GitHub 支持，本地 actionlint 1.7.7 不认识它。维护者合并涉及编译器/AOT/GC 的 PR 前仍应在受信任的 macOS ARM64 环境手动运行 `bash scripts/ci/run.sh macos-arm64 all quick`（或 full）。
 - 不要把 “Native Verification” 加入必需检查，直到它真正启用：被跳过的必需检查在 GitHub 上会被当作通过。
 
 ## Full 失败修复记录（run 41825096644，ff64fd0）
@@ -222,12 +222,11 @@ Candidate verification reports GF4 as **NOT_RUN** and uses the Go reference VM
 for Linux Stage A. The separate stable job uses GitHub-hosted `macos-15` and
 checks the actual Darwin ARM64 host before retrieving the seed.
 
-1. The hosted job needs the original raw, ad-hoc-signed Darwin ARM64 GF4
-   executable as a public asset named `mio-gf4-darwin-arm64` on an immutable
-   Mio-controlled release. No approved asset was found in the public release
-   archives or historical Actions artifacts. The release tag, release ID and
-   asset ID must be reviewed and pinned in
-   `scripts/distribution/seed_evidence.py` before hosted bootstrap can run.
+1. The original ad-hoc-signed Darwin ARM64 GF4 executable is published as
+   `mio-gf4-darwin-arm64` on the [immutable GF4 seed release](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable).
+   The release tag, release ID and asset ID are pinned in
+   `scripts/distribution/seed_evidence.py`. Asset verification and local unit
+   tests are separate from the production bootstrap, which is still pending.
    The runner checks the immutable release and asset identity over HTTPS
    without credentials. It accepts only the expected GitHub release CDN
    redirect. It checks the complete binary against the independently pinned
@@ -282,4 +281,6 @@ The package-manager gate additionally checks every signed evidence file,
 inspects all six archives and reconciles each provenance record with the
 GF4 and native reports. A missing seed is **NOT_RUN** and fails the trusted job,
 so the stable workflow produces no signed release asset set. The separate
-historical GF4 workflow in `release.yml` retains its self-hosted configuration.
+historical GF4 workflow in `release.yml` retains its self-hosted configuration
+and requires the legacy source tree with `VERSION` set to `2.0.0`. The 2.1
+distribution workflow takes its release version from the dispatch input.

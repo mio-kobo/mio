@@ -7,7 +7,7 @@
 ## 2.1.0 — Unreleased
 
 - Windows AMD64 supports blocking IPv4 TCP through Winsock. Native CI requires the TCP package and two-process echo tests.
-- Stable Core and Full builds use the tagged source and bind the shipped compiler hashes to the GF4 bootstrap and native fixed points. Package-manager generation verifies the signed release evidence.
+- Stable Core and Full builds require tagged source and signed evidence linking the distributed compiler hashes to the Trusted GF4 bootstrap and native fixed points. Package-manager generation verifies that evidence. The production Trusted GF4 run is still pending.
 - See the [v2.1.0 release notes draft](docs/releases/v2.1.0.md) for verification status.
 
 ## 2.1.0-rc.1 — 2026-11-07

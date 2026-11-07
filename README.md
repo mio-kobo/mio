@@ -23,16 +23,16 @@
 
 **Mio** is a statically and strongly typed programming language with keywords written in romanized Japanese. It emphasizes explicit numeric semantics, a compact language core, and the **Bunko** standard library, which is imported as needed.
 
-Mio 2.1 targets macOS ARM64, Linux AMD64 and Windows AMD64 for native ahead-of-time (AOT) compilation. Mochi bytecode runs in the reference VM and the browser playground.
+Mio 2.1 targets macOS ARM64, Linux AMD64 and Windows AMD64 for native ahead-of-time (AOT) compilation.
 
-> **Release status:** macOS ARM64 is the verified v2.0.0 target. Linux and Windows AMD64 pass native verification on the 2.1 branch and remain experimental pending stable release acceptance.
+> [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) is the latest stable release and was verified on macOS ARM64. [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) is the latest published release candidate. The [`Mio-2.1` development branch](https://github.com/mio-kobo/mio/tree/Mio-2.1) is preparing v2.1.0, which is still unreleased.
 
-Choose **Full** for the included Bunko library and examples, or **Core** for the compiler with an optional external Bunko installation. See the [RC1 release notes](docs/releases/v2.1.0-rc.1.md) and the [v2.1.0 release notes draft](docs/releases/v2.1.0.md).
+See the [v2.1.0 release notes draft](docs/releases/v2.1.0.md) for changes and release verification status.
 
 ## Language and toolchain
 
 - **Static type system:** Fixed-width integers, floating-point numbers, generics, nullable types, structs, enums, and closures.
-- **Mochi v14:** Bytecode format and VM execution path.
+- **Mochi** bytecode runs in the reference VM.
 - **Native AOT:** Mach-O on macOS ARM64, static ELF on Linux AMD64 and PE32+ on Windows AMD64.
 - **Precise GC:** Shadow Frame root tracking, a dedicated managed arena, and cross-page object allocation.
 - **Bunko standard library:** Import `kiso/` modules as needed with `yobu`.
@@ -43,21 +43,26 @@ Mio and Mochi are also the project's mascots: Mio is the girl pictured above, an
 
 ### Getting Mio
 
-Check [GitHub Releases](https://github.com/mio-kobo/mio/releases) for available distributions.
+Check [GitHub Releases](https://github.com/mio-kobo/mio/releases) for downloads. For Mio 2.1, **Core** contains the native compiler. **Full** adds the external Bunko standard library and examples. Both ship the same compiler, with integrated development commands such as `test` and `lsp`. Bunko stays external to the compiler, and Core can use a separately installed Bunko tree.
 
-Precompiled distributions run without Go, Python or an external development toolchain. macOS release candidates use ad-hoc signing and may be restricted by Gatekeeper. See [Testing](docs/testing.md) for source bootstrap and native verification.
+Precompiled distributions run without Go, Python or an external development toolchain. macOS release candidates use ad-hoc signing and are not notarized, so Gatekeeper may restrict them. See [Testing](docs/testing.md) for source bootstrap and native verification.
 
 ## Platforms and roadmap
 
+The table describes the development branch. See the [three-platform native CI results](https://github.com/mio-kobo/mio/actions/runs/42372415752) for the checks that passed.
+
 | Platform or feature | Current status |
 | --- | --- |
-| macOS ARM64 native AOT | Passed M18 and release-candidate verification; `Mio-2.1` native CI on `macos-15`: CLI native fixed point, `mio run` and process protocol, `mio test` of every package, Runtime ABI contract and differential corpus (see Actions). |
+| macOS ARM64 native AOT | Primary target. Passed M18 and release-candidate verification. `Mio-2.1` native CI on `macos-15`: CLI native fixed point, `mio run` and process protocol, `mio test` of every package, Runtime ABI contract and differential corpus. |
 | Linux x86-64 native (Mio, static ELF) | Experimental: compiler/CLI native fixed point, `mio run` and process protocol, `mio test` of every package, Runtime ABI contract and differential corpus pass in CI. `chant` of a float value is not yet supported (compile-time error; `convert.format_float64/32` gives the same text on every platform). |
-| Windows x86-64 native (Mio, PE32+) | Experimental: CLI native fixed point, `mio run` and process protocol (CreateProcessW), `mio test` of every package, Runtime ABI contract and differential corpus are checked in CI. Blocking IPv4 `kiso/net/tcp` uses Winsock, with native package tests and two-process echo required in CI. Float `chant` is still unsupported. |
+| Windows x86-64 native (Mio, PE32+) | Experimental. The CLI native fixed point, `mio run` and process protocol (CreateProcessW), `mio test` of every package, Runtime ABI contract and differential corpus pass in CI. Blocking IPv4 `kiso/net/tcp` uses Winsock, with native package tests and two-process echo required in CI. The published RC1 lacks Windows TCP support. Direct float `chant` is unsupported. |
+| Web / browser playground | Runs Mochi bytecode in the WebAssembly reference VM. [Web CI](https://github.com/mio-kobo/mio/actions/runs/42372415737) checks native CLI bytecode compatibility and tests the playground in Chromium. |
 | Bunko standard library | Every public library function has a native test (bunko-coverage check in PR CI); per-function, per-platform results: [Bunko test matrix](tests/bunko-matrix/bunko-test-matrix.md). |
 | Linux ARM64 | Planned. |
 | Generational GC | Implemented for darwin-arm64 (Object ABI v1); x86-64 uses non-generational precise mark-and-sweep. Both satisfy [Runtime ABI contract RA-1](docs/runtime-abi.md). |
 | High / Balanced / Low GC modes and concurrent GC | Planned. |
+
+The [frozen Darwin ARM64 GF4 seed](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable) is published as an immutable GitHub Release. The production Trusted GF4 bootstrap for v2.1.0 has no confirmed GitHub Actions PASS.
 
 The [official Mio documentation site](https://mio.kaelexvp.cc) is the home for the language tutorial, Bunko API, CLI reference, and runtime documentation.
 

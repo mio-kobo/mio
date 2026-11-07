@@ -23,11 +23,11 @@
 
 **Mio** は、日本語のローマ字表記をキーワードに使う**静的・強い型付けのプログラミング言語**です。数値の意味を明確にし、言語コアを小さく保ちながら、必要なものだけを取り込める **Bunko** 標準ライブラリを備えています。
 
-Mio 2.1 のネイティブ AOT コンパイル対象は macOS ARM64、Linux AMD64、Windows AMD64 です。Mochi バイトコードは参照 VM とブラウザーの Playground で実行できます。
+Mio 2.1 のネイティブ AOT コンパイル対象は macOS ARM64、Linux AMD64、Windows AMD64 です。
 
-> **リリース状況:** v2.0.0 では macOS ARM64 の検証が完了しています。Linux と Windows の AMD64 は 2.1 ブランチのネイティブ検証を通過していますが、安定版の受け入れ完了までは実験段階です。
+> 最新の安定版は [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) で、macOS ARM64 で検証済みです。公開済みの最新リリース候補は [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) です。[開発ブランチ `Mio-2.1`](https://github.com/mio-kobo/mio/tree/Mio-2.1) では、未公開の安定版 v2.1.0 に向けて開発を進めています。
 
-Bunko とサンプルを使う場合は **Full**、コンパイラのみ必要な場合や Bunko を別途用意する場合は **Core** を選択してください。[RC1 リリースノート](releases/v2.1.0-rc.1.md)と [v2.1.0 リリースノート草案](releases/v2.1.0.md)を参照してください。
+変更点とリリースに向けた検証状況は、[v2.1.0 リリースノートの草案](releases/v2.1.0.md)を参照してください。
 
 ## 言語とツールチェーン
 
@@ -43,21 +43,26 @@ Mio と Mochi はプロジェクトのマスコットでもあります。上の
 
 ### Mio の入手
 
-配布されているビルドは [GitHub Releases](https://github.com/mio-kobo/mio/releases) から確認できます。
+公開済みの配布物は [GitHub Releases](https://github.com/mio-kobo/mio/releases) から入手できます。Mio 2.1 の **Core** にはネイティブコンパイラが含まれ、**Full** にはさらに外部標準ライブラリ Bunko とサンプルが付属します。どちらも `test` や `lsp` などの開発用コマンドを備えた同じコンパイラを同梱します。Bunko はコンパイラから独立しています。Core でも別途インストールした Bunko を利用できます。
 
-ビルド済みの配布物は Go、Python、外部の開発ツールチェーンなしで動作します。macOS のリリース候補は ad-hoc 署名を使用し、Gatekeeper によって制限される場合があります。ソースからのブートストラップとネイティブ検証については [テストガイド](testing.md)を参照してください。
+ビルド済みの配布物は Go、Python、外部の開発ツールチェーンなしで動作します。macOS のリリース候補には ad-hoc 署名が使われています。Apple の公証は受けていないため、Gatekeeper によって制限される場合があります。ソースからのブートストラップとネイティブ検証については [テストガイド](testing.md)を参照してください。
 
 ## プラットフォームと計画
 
+以下は開発ブランチでの対応状況です。検証の詳細は [3 プラットフォームのネイティブ CI の結果](https://github.com/mio-kobo/mio/actions/runs/42372415752)を参照してください。
+
 | プラットフォーム・機能 | 現在の状況 |
 | --- | --- |
-| macOS ARM64 Native AOT | M18 とリリース候補の検証を通過。`Mio-2.1` のネイティブ CI（`macos-15`）で CLI のネイティブ固定点、`mio run` とプロセスプロトコル、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスを実行（結果は Actions を参照）。 |
+| macOS ARM64 Native AOT | 主要ターゲット。M18 とリリース候補の検証を通過。`Mio-2.1` のネイティブ CI（`macos-15`）で CLI のネイティブ固定点、`mio run` とプロセスプロトコル、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスを実行。 |
 | Linux x86-64 ネイティブ（Mio、静的 ELF） | 実験段階。コンパイラ／CLI のネイティブ固定点、`mio run` とプロセスプロトコル、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスが CI で通過。浮動小数点値の `chant` は未対応（コンパイル時エラー。`convert.format_float64/32` は全プラットフォームで同じ文字列を返す）。 |
-| Windows x86-64 ネイティブ（Mio、PE32+） | 実験段階。CLI のネイティブ固定点、`mio run` とプロセスプロトコル（CreateProcessW）、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスが CI で通過。Winsock によるブロッキング IPv4 の `kiso/net/tcp` に対応し、CI ではネイティブのパッケージテストと 2 プロセス間のエコーテストを必須としています。浮動小数点値を直接 `chant` する機能は未対応です。 |
+| Windows x86-64 ネイティブ（Mio、PE32+） | 実験段階。CLI のネイティブ固定点、`mio run` とプロセスプロトコル（CreateProcessW）、全パッケージの `mio test`、Runtime ABI 契約と差分コーパスが CI で通過。Winsock によるブロッキング IPv4 の `kiso/net/tcp` に対応し、CI ではネイティブのパッケージテストと 2 プロセス間のエコーテストを必須としています。公開済みの RC1 では Windows の TCP は未対応。浮動小数点値の直接の `chant` 出力も未対応。 |
+| Web / ブラウザー版 Playground | WebAssembly 版の参照 VM で Mochi バイトコードを実行。[Web CI](https://github.com/mio-kobo/mio/actions/runs/42372415737) では、ネイティブ CLI が生成したバイトコードとの互換性を確認し、Chromium で Playground をテスト。 |
 | Bunko 標準ライブラリ | すべてのライブラリ公開関数にネイティブテストあり（PR CI の bunko-coverage チェック）。関数別・プラットフォーム別の結果は [Bunko テストマトリクス](../tests/bunko-matrix/bunko-test-matrix.md)。 |
 | Linux ARM64 | 計画中。 |
 | 世代別 GC | darwin-arm64 では実装済み（Object ABI v1）。x86-64 では非世代型の正確な mark-and-sweep GC を使用。双方が [Runtime ABI 契約 RA-1](runtime-abi.md) に準拠。 |
 | High / Balanced / Low GC モード、並行 GC | 計画中。 |
+
+[凍結済みの Darwin ARM64 用 GF4 シード](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable)は、変更不可の GitHub Release として公開されています。v2.1.0 の本番用 Trusted GF4 ブートストラップについては、GitHub Actions での成功はまだ確認されていません。
 
 言語チュートリアル、Bunko API、CLI リファレンス、ランタイムの詳しい資料は [Mio 公式ドキュメントサイト](https://mio.kaelexvp.cc) で管理しています。
 
