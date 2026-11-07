@@ -7,11 +7,11 @@ enums, nullable scalars, closures, maps, floats, NativeFS) with the ELF/syscall 
 
 Files copied from `lowerlinux` and changed only where noted: `lowerwinrt.mio` (frames use `sub rsp` + unwind records; write/exit
 helpers call `rt.write` / `rt.exit`; two-pass-free layout), `gc.mio` (heap/mark-stack initialisation, commit-on-demand bump
-allocation, fixed data base), `runtime_fs.mio` (`syscall` -> `call rt.syscall`; os/socket runtime removed), `runtime_objects.mio`,
-`maps.mio` (unchanged). `winos.mio` is new and holds everything Windows-specific.
+allocation, fixed data base), `runtime_fs.mio` (`syscall` -> `call rt.syscall`; OS operations split into their own runtime), `runtime_objects.mio`,
+`maps.mio` (unchanged). `winos.mio` provides the Win32 filesystem, heap and console bridge.
 
-* Image: fixed base 0x140000000, no relocations, `.data` at RVA 0x2000000 (`pe.executable_placed`) so absolute data addresses are
-  constants; KERNEL32 is called through `call [rip+rel32]`. Stack reserve 64 MiB. Text must stay below 32 MiB.
+* The PE has a fixed base of 0x140000000, no relocations and `.data` at RVA 0x1000. Win32 imports are called
+  through `call [rip+rel32]`. The stack reserve is 64 MiB.
 * Win64 ABI at the API boundary: `rt.write`, `rt.exit`, `rt.virtual_alloc`, `rt.commit`, `rt.init`, `rt.syscall` realign RSP to 16
   bytes, reserve 32 bytes of shadow space, keep stack arguments in their own slots and treat rcx, rdx, r8-r11 as clobbered.
 * Heap: 8 GiB VirtualAlloc reservation, first 16 MiB committed, further 16 MiB steps committed by `rt.alloc.grow`; 512 MiB mark
@@ -31,6 +31,10 @@ allocation, fixed data base), `runtime_fs.mio` (`syscall` -> `call rt.syscall`; 
   console via its input handle; stdin_wait polls every 10 ms).
 * kiso/testing report channel (`winprocess.mio`): same protocol as `kiso/aot/lowerlinux/runtime_testing.mio`, so
   `mio test` runs natively on Windows.
-* Not implemented (explicit runtime error "unsupported operation"): sockets (`kiso/net/tcp`). Threads, TLS and
-  concurrent GC are not enabled (the Linux backend does not enable them either). No crash handler: a fault ends the
-  process with the Windows exception code.
+* `runtime_socket.mio` implements blocking IPv4 TCP. Reachable socket primitives add a `WS2_32.dll` import table.
+  Winsock 2.2 starts lazily, and process exit balances initialization. The generation-checked resource table stores
+  full-width SOCKETs and keeps file and socket entries distinct. Windows listeners use SO_EXCLUSIVEADDRUSE.
+  Windows controls port reuse while a previous connection is still closing. See Microsoft’s documentation on
+  [socket handle reuse](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-closesocket)
+  and [exclusive address use](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse).
+* Threads, TLS and concurrent GC are not enabled. A fault ends the process with the Windows exception code.

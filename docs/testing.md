@@ -171,19 +171,19 @@ Quick / Full / Release 三级设计、原架构审计、资源对比和管理员
 
 ## 三平台 Native 验证（native.yml）
 
-`.github/workflows/native.yml`（PR、`runtime-abi/**` push、手动，以及 Full 的 `native` job）运行 `scripts/ci/native_platforms.py`，每项检查记录 engine：`native`（原生 Mio 镜像在该 runner 上执行）、`reference`（Go 参考 VM）、`go-hosted`（Stage A 引导主机）、`host`（runner 自身检查）。状态为 PASS / FAIL / SKIP / NOT_RUN / NOT_APPLICABLE，只有 PASS 计为通过；必需检查非 PASS 时 `Native / required` 失败。
+`.github/workflows/native.yml`（PR、`runtime-abi/**` push、手动，以及 Full 的 `native` job）运行 `scripts/ci/native_platforms.py`，每项检查记录 engine：`native`（原生 Mio 镜像在该 runner 上执行）、`reference`（Go 参考 VM）、`go-hosted`（Stage A 引导主机）、`host`（runner 自身检查）、`native-build`（本机编译）、`cross-build`（交叉编译）和 `pe-static`（PE 导入表检查）。状态为 PASS / FAIL / SKIP / NOT_RUN / NOT_APPLICABLE，只有 PASS 计为通过；必需检查非 PASS 时 `Native / required` 失败。
 
 | 平台 / runner | 检查 |
 | --- | --- |
 | linux-amd64 / `ubuntu-24.04` | 实际 OS/arch；**Stage A = Go 参考前端 + Go VM 中运行的纯 Mio lowerlinux（go-hosted，不是 Seed）**；原生 compiler A→B→C→D（B=C=D）；compiler B 构建 CLI，CLI A→B→C→D（B=C=D）；CLI 冒烟；全部含 `*_test.mio` 包的原生 `mio test`（跳过记为 SKIP 并单列原因）；Runtime ABI 契约与差分语料（默认与 `--gc-stress`）及其 VM 差分；`linux-runtime-chain` oracle；由 CLI B、C 两代交叉构建 darwin/windows Stage A（必须一致，SHA-256 写入 manifest，非 PR 时做 Artifact Attestation） |
 | darwin-arm64 / `macos-15` | 实际 OS/arch；Stage A SHA-256 与 Linux job 输出及 manifest 三方一致；原生 CLI A→B→C→D（B=C=D），A=B（交叉构建与本机构建逐字节一致）；冒烟；全部包的原生 `mio test`（此平台任何 SKIP 都是失败）；契约与差分（默认与 `--gc-stress`）。此路径不使用 Go |
-| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分；原生 `mio test` 使用 CreateProcessW。TCP 包因缺少 Winsock 记为 NOT_APPLICABLE。此路径不使用 Go |
+| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分。原生 `mio test bunko/kiso/net/tcp`、双进程 TCP echo 和 Winsock 通配地址冲突检查必须通过。Linux runner 另行记录 Windows echo 的交叉编译与 PE 静态检查。Windows 路径不使用 Go |
 
 受信任 GF4 Native Seed 在每个报告中固定为 NOT_RUN：B/C/D 固定点成立与 Seed 的独立可信性是两个不同结果。报告（`report.json`、逐检查日志、契约/差分结果）按 run ID/attempt 上传，`Native / required` 汇总三平台并写入 Step Summary。
 
-Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过固定点检查的本机 CLI B，直接构建并运行 `examples/` 的示例。`mio test examples/tests` 验证测试发现和结果，TCP 客户端与服务端在 loopback 完成实际往返。Windows TCP 的排除取自 `scripts/ci/bunko_matrix_coverage.json`；加入 Winsock 后删除该条目即可将两例纳入必需检查。
+Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过固定点检查的本机 CLI B，直接构建并运行 `examples/` 的示例。`mio test examples/tests` 验证测试发现和结果，TCP 客户端与服务端在 loopback 完成实际往返。Winsock 已启用，三个平台的 TCP 示例都必须通过。
 
-平台 artifact 包含 `build/native/<target>/examples/` 中的 `results.json` 和构建、stdout、stderr 日志。适用示例失败、超时或未运行都会让 `Native / required` 失败。普通 PR 默认关闭示例验证。合并前可以手动 dispatch Native 并启用 `run_examples`，或在本机执行 `python3.12 examples/check.py --mio <native-cli>`。
+平台 artifact 包含 `build/native/<target>/examples/` 中的 `results.json` 和构建、stdout、stderr 日志。适用示例失败、超时或未运行都会让 `Native / required` 失败。普通 PR 默认关闭示例全集，仍执行原有的 Windows TCP 检查。合并前可以手动 dispatch Native 并启用 `run_examples`，或在本机执行 `python3.12 examples/check.py --mio <native-cli>`。
 
 ## 暂行措施：Native Verification 推迟（临时，仅开发用 CI）
 

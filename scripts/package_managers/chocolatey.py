@@ -40,7 +40,7 @@ def package_files(version, flavor, record, fixture=False):
                   requireLicenseAcceptance='false', projectSourceUrl='https://github.com/mio-kobo/mio',
                   packageSourceUrl='https://github.com/mio-kobo/mio/tree/Mio-2.1/scripts/package_managers/chocolatey',
                   bugTrackerUrl='https://github.com/mio-kobo/mio/issues', tags='mio programming language compiler native bunko',
-                  summary='Mio programming language (' + flavor + ')', description=description + '\nWindows AMD64 only. kiso/net/tcp is unsupported (no Winsock layer). Keep projects outside the Chocolatey package directory. Full and Core coexist as mio and mio-core. Requires Chocolatey; no extra runtime dependencies.')
+                  summary='Mio programming language (' + flavor + ')', description=description + '\nWindows AMD64 only. Keep projects outside the Chocolatey package directory. Full and Core coexist as mio and mio-core. Requires Chocolatey; no extra runtime dependencies.')
     for key, value in fields.items():
         ET.SubElement(meta, key).text = value
     data = dict(record, command=name, flavor=flavor, version=record['root'].removeprefix('mio-').removesuffix('-windows-amd64-' + flavor))

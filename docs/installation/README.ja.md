@@ -63,7 +63,7 @@ Full と Core は異なるコマンドで共存できます。検証済みの公
 更新してください。同じ種類を WinGet と Chocolatey の両方で導入しないでください。
 Full は導入後にオフラインで開発でき、Core には標準ライブラリーがありません。
 プロジェクトと設定はパッケージディレクトリーの外に保存してください。更新時には
-内容を置換し、削除時にはこのディレクトリーを削除します。Windows TCP は未対応です。
+内容を置換し、削除時にはこのディレクトリーを削除します。
 
 ## Linux AMD64：APT
 
@@ -96,7 +96,7 @@ mio check math.mio
 macOS では `darwin-arm64`、Windows では `windows-amd64` を指定します。
 デフォルトは現在のホストターゲットです。`run` と `exec` はホストターゲットを使用します。
 check/build/run/exec/test/lsp/disasm の統合ツールは三つのプラットフォームで検証します。
-Windows には Winsock ランタイム層がなく、`kiso/net/tcp` は NOT_APPLICABLE です。
+Windows AMD64 のネイティブコンパイラは、Winsock を通じてブロッキング IPv4 の `kiso/net/tcp` をサポートします。
 
 Bunko は `--bunko-root`、`MIO_BUNKO`、実際の実行ファイルから見た `../bunko`
 の順に検索します。無効な明示パスや環境変数はエラーになります。空の `MIO_BUNKO`

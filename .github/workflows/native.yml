@@ -162,6 +162,9 @@ jobs:
           pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/native-reports
       - name: Combine the platform reports (fails unless every required check is PASS)
+        env:
+          NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}
+          NATIVE_FOLLOWER_JOB_RESULT: ${{ needs.follower.result }}
         run: >-
           python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
           ${{ inputs.run_examples && '--run-examples' || '' }}

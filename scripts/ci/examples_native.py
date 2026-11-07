@@ -161,12 +161,14 @@ def loopback_port():
 
 
 class Suite:
-    def __init__(self, cli, target, output, work, deadline, bunko):
+    def __init__(self, cli, target, output, work, deadline, bunko, tcp_only, inspect_tcp_image):
         self.cli, self.target, self.output, self.work, self.deadline = cli, target, output, work, deadline
         self.env = dict(os.environ, MIO_BUNKO=str(bunko))
         self.results = {}
+        self.tcp_only, self.inspect_tcp_image = tcp_only, inspect_tcp_image
         excluded = exclusions(target)
-        for name in ["inventory", *sorted(PROGRAMS.keys() | TESTS.keys()), PE_EXECUTION]:
+        names = TCP if tcp_only else ["inventory", *sorted(PROGRAMS.keys() | TESTS.keys()), PE_EXECUTION]
+        for name in names:
             # Preserve path boundaries in the log names, including future nested examples.
             logs = {kind: f"{name}.{kind}" for kind in ("build.log", "stdout", "stderr")} if name != "inventory" else {}
             for path in logs.values():
@@ -176,7 +178,7 @@ class Suite:
             self.results[name] = dict(name=name, target=target, engine="native", required=name not in excluded,
                                       status="NOT_APPLICABLE" if name in excluded else "NOT_RUN",
                                       reason=excluded.get(name, "not started"), build_exit_code=None, run_exit_code=None,
-                                      seconds=0, logs=logs)
+                                      image_built=False, seconds=0, logs=logs)
 
     def save(self):
         results = list(self.results.values())
@@ -224,6 +226,7 @@ class Suite:
             raise ValueError(f"build exit {code}, image {'present' if image.is_file() else 'missing'}")
         if self.target != "windows-amd64":
             image.chmod(0o755)
+        self.results[name]["image_built"] = True
         return image
 
     def execute(self, name, argv, cwd, deadline):
@@ -303,7 +306,10 @@ class Suite:
             # Build both even when one fails. A build alone cannot pass the example.
             with self.case(name, on_success="NOT_RUN", reason="waiting for both TCP images to run"):
                 work.mkdir()
-                images[name] = self.build(name, work)
+                image = self.build(name, work)
+                if self.inspect_tcp_image and not self.inspect_tcp_image(name, image):
+                    raise ValueError("TCP image failed PE inspection")
+                images[name] = image
         if len(images) != 2:
             return
         server, client = TCP
@@ -332,26 +338,28 @@ class Suite:
 
     def run(self, unavailable):
         self.save()
-        with self.case("inventory"):
-            check_inventory(ROOT / "examples")
-        if self.results["inventory"]["status"] != "PASS":
-            unavailable = "example inventory is invalid"
+        if not self.tcp_only:
+            with self.case("inventory"):
+                check_inventory(ROOT / "examples")
+            if self.results["inventory"]["status"] != "PASS":
+                unavailable = "example inventory is invalid"
         for name, item in self.results.items():
             if item["status"] == "NOT_RUN":
                 item["reason"] = unavailable or "platform time budget exhausted before starting"
         if unavailable:
             return self.save()
-        for name in PROGRAMS:
-            if name not in TCP and time.monotonic() < self.deadline:
-                self.standalone(name)
-        if time.monotonic() < self.deadline:
-            self.mio_test()
+        if not self.tcp_only:
+            for name in PROGRAMS:
+                if name not in TCP and time.monotonic() < self.deadline:
+                    self.standalone(name)
+            if time.monotonic() < self.deadline:
+                self.mio_test()
         if self.results[TCP[0]]["required"] and time.monotonic() < self.deadline:
             self.tcp()
         return self.save()
 
 
-def run_suite(cli, target, output, deadline, bunko=ROOT / "bunko", unavailable=""):
+def run_suite(cli, target, output, deadline, bunko=ROOT / "bunko", unavailable="", *, tcp_only=False, inspect_tcp_image=None):
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     if host_target() != target:
@@ -359,7 +367,7 @@ def run_suite(cli, target, output, deadline, bunko=ROOT / "bunko", unavailable="
     if not cli:
         unavailable = unavailable or "native cli-B did not reach a fixed point"
     with tempfile.TemporaryDirectory(prefix="mio-examples-") as directory:
-        suite = Suite(cli, target, output, Path(directory), deadline, bunko)
+        suite = Suite(cli, target, output, Path(directory), deadline, bunko, tcp_only, inspect_tcp_image)
         suite.run(unavailable)
     return list(suite.results.values())
 

@@ -44,7 +44,7 @@ Full distributions include Bunko. A Core distribution can run the examples marke
 
 Every program above is non-interactive. `filesystem_read.mio` only reads [data/greeting.txt](data/greeting.txt) and must be run from the repository root. `os_arguments.mio` prints the argument count, including `argv[0]`, followed by the supplied arguments.
 
-## TCP echo (macOS and Linux)
+## TCP echo (macOS, Linux and Windows)
 
 The [server](tcp_echo_server.mio) and [client](tcp_echo_client.mio) use the same `kiso/net/tcp` API and loopback address `127.0.0.1:18080` on each target:
 
@@ -60,7 +60,7 @@ Pass the same port to both commands after `--` to use a different loopback port.
 | `3` | `hai` |
 | `hai` | `3`, `hai`, `77`, `105`, `111` (one per line) |
 
-Windows AMD64 currently lacks the Winsock backend. Full CI reports both TCP examples as `NOT_APPLICABLE` on Windows and requires them to pass on Linux and macOS.
+Full CI requires both TCP examples to pass on all three native targets.
 
 The [Windows PE generator](windows-amd64/hello.mio) writes `hello-windows.exe` in its working directory. The suite runs the generator and validates its output on all three platforms. On Windows it also executes the generated PE and checks its stdout and exit status.
 

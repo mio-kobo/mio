@@ -6,7 +6,7 @@ yobu "kiso/string";
 
 // Linux NativeFS bridge for the body-less "mio/fs/runtime" functions of kiso/fs.
 // Resource token = generation << 8 | (slot + 1). The 64-slot handle table lives in the data segment:
-// 3 words per slot: fd, state (0 free, 1 open, 10 + code failed), generation.
+// 3 words per slot: handle, state (0 free, 1 file open, 10 + code file failure, 20 and above socket), generation.
 // Status codes follow kiso/fs: 0 ok, 1 not found, 2 permission, 3 closed, 4 invalid argument, 5 I/O, 6 no space, 7 invalid path.
 waza handle_table_base() -> int64 { kaesu data_base() + 16; }
 waza handle_slots() -> int64 { kaesu 64; }
@@ -105,28 +105,39 @@ waza emit_fs_support(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rax, 0);
     x86_64.ret(code);
 
-    // rt.fs_lookup: rdi = token -> rax = slot address, or 0 when the token is stale, closed or invalid
-    x86_64.label(code, "rt.fs_lookup");
+    // rt.resource_lookup: rdi = token -> rax = slot address, or 0 when the token is stale, closed or invalid
+    x86_64.label(code, "rt.resource_lookup");
     x86_64.mov_rr(code, x86_64.rax, x86_64.rdi);
     x86_64.and_ri(code, x86_64.rax, 255);
     x86_64.sub_ri(code, x86_64.rax, 1);
     x86_64.cmp_ri(code, x86_64.rax, handle_slots());
-    x86_64.jcc(code, x86_64.cc_ae, "rt.fs_lookup.none");
+    x86_64.jcc(code, x86_64.cc_ae, "rt.resource_lookup.none");
     x86_64.mov_ri(code, x86_64.r8, 24);
     x86_64.imul_rr(code, x86_64.rax, x86_64.r8);
     x86_64.mov_ri(code, x86_64.rcx, handle_table_base());
     x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
     x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
-    x86_64.jcc(code, x86_64.cc_e, "rt.fs_lookup.none");
+    x86_64.jcc(code, x86_64.cc_e, "rt.resource_lookup.none");
     x86_64.mov_rr(code, x86_64.rcx, x86_64.rdi);
     x86_64.shr_ri(code, x86_64.rcx, 8);
     x86_64.mov_load(code, x86_64.rdx, x86_64.rax, 16);
     x86_64.cmp_rr(code, x86_64.rcx, x86_64.rdx);
-    x86_64.jcc(code, x86_64.cc_ne, "rt.fs_lookup.none");
+    x86_64.jcc(code, x86_64.cc_ne, "rt.resource_lookup.none");
     x86_64.ret(code);
-    x86_64.label(code, "rt.fs_lookup.none");
+    x86_64.label(code, "rt.resource_lookup.none");
     x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.ret(code);
+
+    // File operations must never pass a SOCKET to the Win32 file APIs.
+    x86_64.label(code, "rt.fs_lookup");
+    x86_64.call(code, "rt.resource_lookup");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.fs_lookup.done");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
+    x86_64.cmp_ri(code, x86_64.rcx, socket_state);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.resource_lookup.none");
+    x86_64.label(code, "rt.fs_lookup.done");
     x86_64.ret(code);
 
     // rt.fs_entry_code: rax = slot address or 0 -> rax = 0 when open, else the status code
