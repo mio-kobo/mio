@@ -7,9 +7,9 @@ WORKFLOW = '.github/workflows/distribution-pr.yml'
 # Set only after the original executable is available as a public immutable
 # release asset. Pin its tag, release ID and asset ID in this reviewed source.
 GF4_SOURCE = {
-    'tag': 'gf4-seed-v1',
-    'release_id': 437553518,
-    'asset_id': 720607603,
+    'tag': 'gf4-seed-v1-immutable',
+    'release_id': 437559652,
+    'asset_id': 720633092,
 }
 GF4_ASSET_NAME = 'mio-gf4-darwin-arm64'
 TARGETS = ('darwin-arm64', 'linux-amd64', 'windows-amd64')
