@@ -133,6 +133,9 @@ and [the trust decision in DownloadFlow](https://github.com/microsoft/winget-cli
 Inno installers, source/tag binding, Trusted Seed PASS, native B=C=D, exact
 inventories and Docker evidence remain mandatory. It emits deterministic,
 metadata-only `mio.<version>.nupkg` (Full) and `mio-core.<version>.nupkg`.
+Both include the OPC manifest and core properties relationships used by legacy
+NuGet readers. Fixed ZIP metadata, stored entries and normalized script line
+endings keep the nupkg hashes reproducible across platforms.
 No binaries are embedded or rebuilt. Fixed official version URLs and SHA-256
 come from the verified Windows ZIPs. Candidate generation is a separate loopback
 fixture API with only synthetic 0.0.1/0.0.2 package versions.
@@ -156,7 +159,11 @@ remove only their own shim; Chocolatey removes its managed files.
 Core/Full coexistence, PATH and ShimGen target, all file hashes, native execution,
 Bunko imports, integrated tools and uninstall. Firewall rules block outbound
 compiler traffic during offline checks and are removed afterwards. Stable jobs
-also upgrade to the exact generated stable nupkg using its official HTTPS URL.
+also upgrade to the exact generated stable nupkg using its official HTTPS URL
+and compare a Windows rebuild's SHA-256 to the Linux-generated package.
+The Windows gate reads the packages through the pinned official NuGet 2 library,
+validates the nuspec against its XSD, checks rejection without the manifest
+relationship, and compares the OPC layout to a local `choco pack` reference.
 Reports start FAIL and become PASS only after all checks execute.
 
 Wrapper-only PRs reuse the existing Windows regression job in Chocolatey-only
@@ -171,32 +178,26 @@ fixtures are never stable release inputs. `.nupkg` files and JSON evidence are
 Actions artifacts. Unit tests cover package metadata, immutable generation,
 untrusted inputs, release gating, dry run, duplicate and collision rejection.
 
-Maintainer activation, **not performed by this change**:
+Maintainer submission:
 
-1. Review the first packages and claim/confirm ownership of both CCR IDs. The
-   official OData `FindPackagesById` endpoint returned zero entries for `mio`
-   and `mio-core` on 2026-11-07 JST; availability is not a reservation. Recheck
-   before submission and stop on any ownership conflict.
-2. Publish a genuine stable Release through the existing gates. Dispatch
-   `package-managers.yml` with that tag for a dry run; inspect generated nupkg,
-   Windows lifecycle evidence and CCR duplicate checks. Dispatch never pushes.
-3. Create environment `chocolatey-community` with required maintainer reviewers
-   and protected branch policies for `Mio-2.1`. Store `CHOCOLATEY_API_KEY` only
-   as that environment's secret. Ordinary PRs cannot enter the submit job.
-4. Only after reviewing the first submission, set repository variable
-   `MIO_CHOCOLATEY_PUBLISH_ENABLED=true`. A published stable Release event then
-   requests environment approval before `choco push` to
-   `https://push.chocolatey.org/`. This submits to normal community moderation;
-   it neither bypasses moderation nor creates a stable Release. To process an
-   already published Release after activation, a maintainer must explicitly
-   re-run its release-event workflow; manual dispatch remains dry run.
+1. Confirm ownership of both CCR IDs and inspect both exact versions in the
+   signed-in moderation queue. Stop if either version is already in moderation.
+   The public package download endpoint may miss a private queue entry.
+2. Dry-run `package-managers.yml` on `Mio-2.1` with the existing published tag.
+   Inspect the generated nupkg files, hashes and Windows lifecycle evidence.
+3. Configure the `chocolatey-community` environment with required maintainer
+   reviewers and protected branch policies for `Mio-2.1`. Store
+   `CHOCOLATEY_API_KEY` as that environment's secret. Enable
+   `MIO_CHOCOLATEY_PUBLISH_ENABLED` after maintainer review.
+4. Dispatch `package-managers.yml` from `Mio-2.1` with the tag and
+   `submit_chocolatey` enabled, then approve the protected environment.
+   Each submission needs a fresh dispatch after checking moderation. The job
+   uploads to `https://push.chocolatey.org/` for normal community review.
 
 `chocolatey_publish.py` preflights both versions. Existing identical bytes are
-no-ops; differing content fails before any push. Interrupted partial submissions
-can be retried: the already submitted identical package is skipped. Publication
-output never prints the key, command arguments or child-process output. No key
-is stored in package files, receipts or artifacts. The implementation has never
-submitted a formal Chocolatey package.
+skipped. Differing content stops submission. If a push fails or times out, check the signed-in queue before
+deciding whether another submission is appropriate. Logs show bounded HTTP
+diagnostics without printing the key, command arguments or raw process output.
 
 References: [Chocolatey setup](https://docs.chocolatey.org/en-us/choco/setup/),
 [Install-BinFile](https://docs.chocolatey.org/en-us/create/functions/install-binfile/),

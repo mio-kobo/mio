@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Immutable CCR submission. No publishing unless --push is explicit."""
+"""Immutable CCR submission. Publishing requires explicit push and moderation confirmation."""
 import argparse
 import os
 from pathlib import Path
@@ -23,11 +23,19 @@ HTTP_ERROR_DETAILS = {
     400: 'bad request (check package metadata and submission requirements)',
     401: 'authentication failed (check the configured API key)',
     403: 'forbidden (check account and package permissions)',
+    406: 'not acceptable (check the package version and CCR moderation queue)',
     409: 'conflict (check whether the package version already exists)',
     413: 'package exceeds the upload size limit',
     429: 'rate limit exceeded',
-    500: 'internal server error',
+    500: 'internal server error (check package format and CCR moderation state)',
+    502: 'bad gateway',
+    503: 'service unavailable',
+    504: 'gateway timeout',
 }
+
+
+# Chocolatey may print this conflict message without an HTTP status.
+ALREADY_EXISTS = b'already exists on the repository and cannot be modified'
 
 
 def push_failure(result):
@@ -35,13 +43,16 @@ def push_failure(result):
     codes = {
         int(code)
         for output in (result.stdout, result.stderr)
-        for code in HTTP_ERROR.findall(output)
+        for code in HTTP_ERROR.findall(output or b'')
     }
     status = 'unknown'
     if len(codes) == 1:
         code = codes.pop()
         status = f'{code} ({HTTP_ERROR_DETAILS.get(code, "unknown")})'
-    return f'returncode={result.returncode}, HTTP status={status}'
+    details = ''
+    if any(ALREADY_EXISTS in (output or b'').lower() for output in (result.stdout, result.stderr)):
+        details = '; Chocolatey reported that this package version already exists'
+    return f'returncode={result.returncode}, HTTP status={status}{details}'
 
 
 def existing(name, version):
@@ -51,7 +62,7 @@ def existing(name, version):
     except HTTPError as error:
         if error.code == 404:
             return None
-        raise
+        raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
 
 
 def publish(folder, version, push=False, fetch=existing):
@@ -83,9 +94,9 @@ def publish(folder, version, push=False, fetch=existing):
             result = subprocess.run(['choco', 'push', str(path), '--source=' + SOURCE, '--api-key=' + key], capture_output=True, timeout=300)
         except (subprocess.TimeoutExpired, OSError):
             # TimeoutExpired includes argv: suppress its exception chain as well.
-            raise RuntimeError('CCR submission could not finish for ' + path.name + '; retry after checking remote state') from None
+            raise RuntimeError('CCR submission could not finish for ' + path.name + '; check the signed-in moderation queue before any retry') from None
         if result.returncode:
-            raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}')
+            raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}; check the signed-in moderation queue before any retry')
         print('SUBMITTED for community review: ' + path.name)
 
 
@@ -94,5 +105,9 @@ if __name__ == '__main__':
     p.add_argument('--packages', type=Path, required=True)
     p.add_argument('--version', required=True)
     p.add_argument('--push', action='store_true')
+    p.add_argument('--moderation-checked', action='store_true',
+                   help='confirm both exact versions were checked in the signed-in CCR moderation queue')
     a = p.parse_args()
+    if a.push and not a.moderation_checked:
+        p.error('--push requires --moderation-checked')
     publish(a.packages, a.version, a.push)
