@@ -1,7 +1,10 @@
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 from pathlib import Path
 import tempfile
 import subprocess
+import traceback
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -75,15 +78,54 @@ class ChocolateyTests(unittest.TestCase):
                     publish(folder, '2.1.0', push=True, fetch=lambda n, v: b'different' if n == 'mio' else None)
                 run.assert_not_called()
             with patch.dict('os.environ', CHOCOLATEY_API_KEY='secret-test-value'), patch('chocolatey_publish.subprocess.run') as run:
-                run.return_value.returncode = 1
-                with self.assertRaises(RuntimeError) as error:
-                    publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
-                self.assertNotIn('secret-test-value', str(error.exception))
                 run.side_effect = subprocess.TimeoutExpired(['choco', '--api-key=secret-test-value'], 300)
                 with self.assertRaises(RuntimeError) as error:
                     publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
                 self.assertNotIn('secret-test-value', str(error.exception))
                 self.assertTrue(error.exception.__suppress_context__)
+
+    def test_push_failure_reports_only_safe_diagnostics(self):
+        key = 'secret-test-value'
+        cases = (
+            (b'Response status code does not indicate success: 400 (raw body)', b'',
+             '400 (bad request (check package metadata and submission requirements))'),
+            (b'', b'HTTP 401', '401 (authentication failed (check the configured API key))'),
+            (b'HTTP/1.1 403', b'HTTP 403', '403 (forbidden (check account and package permissions))'),
+            (b'', b'The remote server returned an error: (409) Conflict.',
+             '409 (conflict (check whether the package version already exists))'),
+            (b'HTTP status code: 413', b'', '413 (package exceeds the upload size limit)'),
+            (b'', b'HTTP error 429', '429 (rate limit exceeded)'),
+            (b'', b'Status code: 500', '500 (internal server error)'),
+            (b'', b'HTTP 503', '503 (unknown)'),
+            (b'HTTP 400', b'HTTP 500', 'unknown'),
+            (b'Chocolatey v2.4.0, port 403', b'HTTP 5000\xff', 'unknown'),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            for name in ('mio-core', 'mio'):
+                (folder / f'{name}.2.1.0.nupkg').write_bytes(name.encode())
+
+            for stdout, stderr, status in cases:
+                with self.subTest(status=status):
+                    command = f'choco push private-package --source=private-source --api-key={key}'
+                    result = subprocess.CompletedProcess(
+                        command.split(), 17,
+                        stdout + b'\r\nraw stdout ' + command.encode(),
+                        stderr + b'\r\nraw stderr ' + key.encode(),
+                    )
+                    log = io.StringIO()
+                    with patch.dict('os.environ', CHOCOLATEY_API_KEY=key), \
+                         patch('chocolatey_publish.subprocess.run', return_value=result) as run, \
+                         redirect_stdout(log), redirect_stderr(log), self.assertRaises(RuntimeError) as error:
+                        publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
+
+                    run.assert_called_once()
+                    self.assertEqual(log.getvalue(), '')
+                    self.assertEqual(str(error.exception),
+                                     f'CCR submission failed for mio-core.2.1.0.nupkg: returncode=17, HTTP status={status}')
+                    traceback.print_exception(error.exception, file=log)
+                    for private in (key, 'private-source', '--api-key=', 'raw stdout', 'raw stderr', 'raw body'):
+                        self.assertNotIn(private, log.getvalue())
 
     def test_fixture_matching_cannot_reuse_changed_native_inputs(self):
         from fixture import compatible, wrapper, select
