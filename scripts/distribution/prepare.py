@@ -52,6 +52,19 @@ def prepare(root, revision, stable_version=None, rc_version=None):
     return record
 
 
+def copy_committed_source(root, revision, destination):
+    # git archive also applies Git's output line endings. Use LF consistently
+    # so a Windows checkout and a Darwin checkout produce identical inputs.
+    with tempfile.TemporaryFile() as stream:
+        subprocess.run(['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+                        'archive', '--format=tar', revision], cwd=root, stdout=stream, check=True)
+        stream.seek(0)
+        with tarfile.open(fileobj=stream) as archive:
+            if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
+                raise ValueError('non-regular member in stable source archive')
+            archive.extractall(destination, filter='data')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stable-version', default=os.environ.get('MIO_DISTRIBUTION_STABLE_VERSION') or None, help='Release builds only; never promotes an existing candidate binary')
@@ -73,15 +86,7 @@ if __name__ == '__main__':
     if requested_version and os.environ.get('GITHUB_ACTIONS') == 'true' and revision != os.environ.get('GITHUB_SHA'):
         parser.error('release checkout does not match the Actions source commit')
     if args.stable_version:
-        # Use the committed bytes on every host, including Windows checkouts
-        # with CRLF conversion. Local modifications cannot enter a stable build.
-        with tempfile.TemporaryFile() as stream:
-            subprocess.run(['git', 'archive', '--format=tar', revision], cwd=ROOT, stdout=stream, check=True)
-            stream.seek(0)
-            with tarfile.open(fileobj=stream) as archive:
-                if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
-                    parser.error('non-regular member in stable source archive')
-                archive.extractall(destination, filter='data')
+        copy_committed_source(ROOT, revision, destination)
     else:
         tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
         for name in filter(None, tracked):

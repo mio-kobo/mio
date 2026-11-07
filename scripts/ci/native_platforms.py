@@ -92,7 +92,10 @@ class Report:
 
     def save(self):
         failed = [c["name"] for c in self.checks if c["required"] and c["status"] != "PASS"]
-        self.data["status"] = "FAIL" if failed else "PASS"
+        status = "FAIL" if failed else "PASS"
+        if not failed and self.data["suite"] == "trusted-gf4-distribution" and self.data["seed"]["status"] != "PASS":
+            status = "NOT_RUN"
+        self.data["status"] = status
         self.data["failed_required"] = failed
         (self.output / "report.json").write_text(json.dumps(self.data, indent=2) + "\n")
 
