@@ -3,12 +3,45 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from chocolatey import FEED, SOURCE
 from release import stable
+
+
+HTTP_ERROR = re.compile(
+    rb'\b(?:HTTP(?:/\d+(?:\.\d+)?)?(?:[ \t]+(?:status(?:[ \t]+code)?|error))?'
+    rb'|(?:response[ \t]+)?status[ \t]+code(?:[ \t]+does not indicate success)?'
+    rb'|the remote server returned an error)'
+    rb'(?:[ \t]*:[ \t]*|[ \t]+)\(?([45][0-9]{2})\b',
+    re.IGNORECASE,
+)
+HTTP_ERROR_DETAILS = {
+    400: 'bad request (check package metadata and submission requirements)',
+    401: 'authentication failed (check the configured API key)',
+    403: 'forbidden (check account and package permissions)',
+    409: 'conflict (check whether the package version already exists)',
+    413: 'package exceeds the upload size limit',
+    429: 'rate limit exceeded',
+    500: 'internal server error',
+}
+
+
+def push_failure(result):
+    # Only emit an unambiguous numeric status and a fixed description.
+    codes = {
+        int(code)
+        for output in (result.stdout, result.stderr)
+        for code in HTTP_ERROR.findall(output)
+    }
+    status = 'unknown'
+    if len(codes) == 1:
+        code = codes.pop()
+        status = f'{code} ({HTTP_ERROR_DETAILS.get(code, "unknown")})'
+    return f'returncode={result.returncode}, HTTP status={status}'
 
 
 def existing(name, version):
@@ -52,7 +85,7 @@ def publish(folder, version, push=False, fetch=existing):
             # TimeoutExpired includes argv: suppress its exception chain as well.
             raise RuntimeError('CCR submission could not finish for ' + path.name + '; retry after checking remote state') from None
         if result.returncode:
-            raise RuntimeError('CCR submission failed for ' + path.name + '; inspect moderation/account status without exposing credentials')
+            raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}')
         print('SUBMITTED for community review: ' + path.name)
 
 
