@@ -6,7 +6,11 @@ REPOSITORY = 'mio-kobo/mio'
 WORKFLOW = '.github/workflows/distribution-pr.yml'
 # Set only after the original executable is available as a public immutable
 # release asset. Pin its tag, release ID and asset ID in this reviewed source.
-GF4_SOURCE = None
+GF4_SOURCE = {
+    'tag': 'gf4-seed-v1',
+    'release_id': 437553518,
+    'asset_id': 720607603,
+}
 GF4_ASSET_NAME = 'mio-gf4-darwin-arm64'
 TARGETS = ('darwin-arm64', 'linux-amd64', 'windows-amd64')
 STABLE_VERSION = r'2\.[1-9]\d*\.(?:0|[1-9]\d*)'
