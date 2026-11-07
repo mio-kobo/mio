@@ -14,7 +14,7 @@ Engines are recorded separately for native execution, build and PE inspection, t
            Windows also runs the two TCP echo examples as separate native processes.
   summary  Combines the platform reports; fails unless every required check is PASS.
 
-The trusted GF4 Native Seed is not available to hosted runners; its verification is always reported NOT_RUN.
+This candidate suite does not use the trusted GF4 seed. Stable distribution verifies it separately.
 Python only starts processes, compares bytes and writes JSON; it generates no code.
 """
 import argparse
@@ -75,7 +75,7 @@ class Report:
                                                                  os.environ.get("GITHUB_REPOSITORY", ""),
                                                                  os.environ.get("GITHUB_RUN_ID", ""))),
                          seed=dict(status="NOT_RUN", sha256=GF4_SEED_SHA256,
-                                   reason="the trusted GF4 Native Seed is not available to GitHub-hosted runners; "
+                                   reason="the candidate suite does not use the trusted GF4 Native Seed; "
                                           "Stage A comes from the Go-hosted reference VM and is not seed-verified"),
                          checks=self.checks, hashes=self.hashes)
         inputs = ROOT / "distribution-input.json"
@@ -93,8 +93,9 @@ class Report:
     def save(self):
         failed = [c["name"] for c in self.checks if c["required"] and c["status"] != "PASS"]
         status = "FAIL" if failed else "PASS"
-        if not failed and self.data["suite"] == "trusted-gf4-distribution" and self.data["seed"]["status"] != "PASS":
-            status = "NOT_RUN"
+        if self.data["suite"] == "trusted-gf4-distribution" and self.data["seed"]["status"] != "PASS":
+            status = ("FAIL" if self.data["seed"]["status"] == "FAIL"
+                      or any(c["status"] == "FAIL" for c in self.checks) else "NOT_RUN")
         self.data["status"] = status
         self.data["failed_required"] = failed
         (self.output / "report.json").write_text(json.dumps(self.data, indent=2) + "\n")

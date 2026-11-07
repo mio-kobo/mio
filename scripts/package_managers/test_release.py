@@ -9,16 +9,47 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release import stable, immutable, formula, winget, validate, windows_product_code
 from package import digest, inventory, write_json
-from seed_evidence import GF4_SEED_SHA256, TARGETS, seed_binding
-from stable_release import BUNDLE, REPORT, SEED_REPORT, authenticate, docker_archive, evidence_files
+from seed_evidence import GF4_LOGS, GF4_SEED_SHA256, TARGETS, release_context, seed_binding
+from stable_release import (BUNDLE, REPORT, SEED_LOG_DIR, SEED_REPORT, assemble, authenticate,
+                            check_seed_artifact, docker_archive, evidence_files)
 
 SOURCE = 'a' * 40
 VERSION = '2.1.0'
 RUN = dict(id='123', attempt='1')
 INPUTS = dict(version=VERSION, source_sha=SOURCE, embedded_bunko=False)
+PIN = dict(tag='gf4-fixture', release_id=42, asset_id=43)
 
 
 class ReleaseTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch('seed_evidence.GF4_SOURCE', PIN)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def seed_fixture(self, base, compiler_sha):
+        host = ['distribution-input', 'release-context', 'runner-os-arch', 'seed-source', 'seed-pin', 'seed-signature']
+        native = ['seed-build-A', 'cli-fixed-point', *['cli-stage-' + stage for stage in 'BCD'],
+                  *['cross-stage-a ' + target for target in TARGETS if target != 'darwin-arm64']]
+        logs = base / SEED_LOG_DIR
+        logs.mkdir(exist_ok=True)
+        for name in GF4_LOGS:
+            (logs / name).write_text('fixture execution log')
+        seed = dict(schema_version=2, suite='trusted-gf4-distribution', status='PASS', target='darwin-arm64',
+                    source_sha=SOURCE, distribution_input=INPUTS, run=RUN, authorization=release_context(VERSION),
+                    runner=dict(os='macOS', arch='ARM64', system='Darwin', machine='arm64'),
+                    seed=dict(status='PASS', sha256=GF4_SEED_SHA256, source=PIN),
+                    checks=[dict(name=name, status='PASS', required=True, engine=engine)
+                            for engine, names in [('host', host), ('native', native)] for name in names],
+                    hashes={**{f'cli-{stage}': compiler_sha for stage in 'ABCD'},
+                            **{f'stage-a-{target}': compiler_sha for target in TARGETS}},
+                    logs={name: digest(logs / name) for name in GF4_LOGS})
+        for check in seed['checks']:
+            if check['name'].startswith('cross-stage-a '):
+                check.update(B=compiler_sha, C=compiler_sha)
+        seed_path = base / SEED_REPORT
+        write_json(seed_path, seed)
+        return seed
+
     def test_candidates_and_unstable_tags_rejected(self):
         for tag in ['2.1.0', 'v2.1.0-pr.abc', 'v2.1.0-rc.1', 'v2.1.0-dev', 'v2.0.0', 'v2.01.0', 'v2.1.00', '../v2.1.0']:
             with self.subTest(tag=tag), self.assertRaises(ValueError):
@@ -46,20 +77,8 @@ class ReleaseTests(unittest.TestCase):
         import zipfile
         release = dict(tag_name='v2.1.0', draft=False, prerelease=False, published_at='date', assets=[])
         compiler_sha = __import__('hashlib').sha256(b'native fixture').hexdigest()
-        names = ['runner-os-arch', 'seed-pin', 'seed-build-A', 'cli-fixed-point',
-                 *['cli-stage-' + stage for stage in 'BCD'],
-                 *['cross-stage-a ' + target for target in TARGETS if target != 'darwin-arm64']]
-        seed = dict(schema_version=1, suite='trusted-gf4-distribution', status='PASS', target='darwin-arm64',
-                    source_sha=SOURCE, distribution_input=INPUTS, run=RUN,
-                    seed=dict(status='PASS', sha256=GF4_SEED_SHA256),
-                    checks=[dict(name=name, status='PASS', required=True) for name in names],
-                    hashes={**{f'cli-{stage}': compiler_sha for stage in 'ABCD'},
-                            **{f'stage-a-{target}': compiler_sha for target in TARGETS}})
-        for check in seed['checks']:
-            if check['name'].startswith('cross-stage-a '):
-                check.update(B=compiler_sha, C=compiler_sha)
+        seed = self.seed_fixture(base, compiler_sha)
         seed_path = base / SEED_REPORT
-        write_json(seed_path, seed)
         sums = []
         for target in ['darwin-arm64', 'linux-amd64', 'windows-amd64']:
             report = dict(target=target, status='PASS', source_sha='a'*40,
@@ -173,18 +192,54 @@ class ReleaseTests(unittest.TestCase):
                 ('seed', dict(status='NOT_RUN', sha256=GF4_SEED_SHA256)),
                 ('seed', dict(status='PASS', sha256='b' * 64)),
                 ('run', dict(RUN, attempt='2')),
+                ('run', dict(RUN, id='999')),
+                ('seed', dict(seed['seed'], source=dict(PIN, asset_id=99))),
+                ('runner', dict(seed['runner'], machine='x86_64')),
+                ('authorization', dict(seed['authorization'], event='pull_request')),
+                ('checks', seed['checks'][:-1]),
+                ('logs', {}),
+                ('hashes', dict(seed['hashes'], **{'cli-A': 'invalid'})),
                 ('hashes', dict(seed['hashes'], **{'stage-a-linux-amd64': 'b' * 64})),
                 ('hashes', dict(seed['hashes'], **{'cli-D': 'b' * 64})),
             ]:
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
                     seed_binding(dict(seed, **{field: value}), report, INPUTS, 'linux-amd64', compiler, 'c' * 64)
 
+    def test_assembly_rejects_pr_dispatch_and_stale_seed_before_creating_output(self):
+        env = dict(GITHUB_REF='refs/tags/v2.1.0', GITHUB_REPOSITORY='mio-kobo/mio',
+                   GITHUB_EVENT_NAME='pull_request', GITHUB_SHA=SOURCE,
+                   GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='2')
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            output = base / 'output'
+            with patch.dict('os.environ', env), self.assertRaisesRegex(ValueError, 'official workflow'):
+                assemble(base, output, VERSION)
+            download = base / 'trusted-gf4-123-2'
+            download.mkdir()
+            self.seed_fixture(download, 'c' * 64)
+            with (patch.dict('os.environ', dict(env, GITHUB_EVENT_NAME='workflow_dispatch')),
+                  self.assertRaisesRegex(ValueError, 'exact tag and Actions attempt')):
+                assemble(base, output, VERSION)
+            self.assertFalse(output.exists())
+
+    def test_assembly_checks_executed_logs_against_seed_report(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            self.seed_fixture(base, 'c' * 64)
+            logs = base / SEED_LOG_DIR
+            check_seed_artifact(base / SEED_REPORT, logs, SOURCE, VERSION, RUN)
+            (logs / GF4_LOGS[0]).write_text('tampered execution log')
+            with self.assertRaisesRegex(ValueError, 'log does not match'):
+                check_seed_artifact(base / SEED_REPORT, logs, SOURCE, VERSION, RUN)
+
     @patch('stable_release.subprocess.run')
     def test_authentication_checks_signer_source_and_all_evidence_hashes(self, gh):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             for name in evidence_files(VERSION):
+                (base / name).parent.mkdir(exist_ok=True)
                 (base / name).write_bytes(b'test evidence')
+            self.seed_fixture(base, 'c' * 64)
             write_json(base / REPORT, dict(schema_version=1, status='PASS', source_sha=SOURCE,
                                            version=VERSION, run=RUN,
                                            files={name: digest(base / name) for name in evidence_files(VERSION)}))

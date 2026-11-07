@@ -9,13 +9,12 @@ import shutil
 import subprocess
 
 from package import digest, write_json
-from seed_evidence import TARGETS, stable_version
+from seed_evidence import GF4_LOGS, REPOSITORY, TARGETS, WORKFLOW, stable_version, validate_seed
 
-REPOSITORY = 'mio-kobo/mio'
-WORKFLOW = '.github/workflows/distribution-pr.yml'
 REPORT = 'release-verification.json'
 BUNDLE = 'release-verification.sigstore.json'
 SEED_REPORT = 'trusted-gf4-report.json'
+SEED_LOG_DIR = 'trusted-gf4-logs'
 
 
 def archives(version, target):
@@ -42,17 +41,29 @@ def reports():
 
 def evidence_files(version):
     return set(payloads(version) + reports() + [
-        SEED_REPORT, 'docker-verification.json', 'chocolatey-verification.json', 'SHA256SUMS',
+        SEED_REPORT, *[f'{SEED_LOG_DIR}/{name}' for name in GF4_LOGS], 'docker-verification.json', 'chocolatey-verification.json', 'SHA256SUMS',
         *[f'apt-container-{i}-verification.json' for i in range(3)],
     ])
 
 
+def check_seed_artifact(report_path, logs, source, version, run):
+    seed = json.loads(report_path.read_text())
+    validate_seed(seed, source, version, run)
+    for name in GF4_LOGS:
+        if digest(logs / name) != seed['logs'][name]:
+            raise ValueError('Trusted GF4 log does not match its report: ' + name)
+
+
 def assemble(downloads, output, version):
-    if not stable_version(version) or os.environ['GITHUB_REF'] != f'refs/tags/v{version}':
-        raise ValueError('release evidence requires the exact stable tag')
+    if (not stable_version(version) or os.environ['GITHUB_REF'] != f'refs/tags/v{version}'
+            or os.environ['GITHUB_EVENT_NAME'] != 'workflow_dispatch' or os.environ['GITHUB_REPOSITORY'] != REPOSITORY):
+        raise ValueError('release evidence requires the official workflow dispatched on the exact stable tag')
     run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
     suffix = f'{run_id}-{attempt}'
     source = os.environ['GITHUB_SHA']
+    run = dict(id=run_id, attempt=attempt)
+    seed = downloads / f'trusted-gf4-{suffix}'
+    check_seed_artifact(seed / SEED_REPORT, seed / 'logs', source, version, run)
     output.mkdir(parents=True)
     for target in TARGETS:
         artifact = downloads / f'mio-candidates-{target}-{suffix}'
@@ -73,19 +84,23 @@ def assemble(downloads, output, version):
     shutil.copyfile(docker / 'docker-verification.json', output / 'docker-verification.json')
     shutil.copyfile(downloads / f'chocolatey-tests-{suffix}' / 'chocolatey-verification.json',
                     output / 'chocolatey-verification.json')
-    shutil.copyfile(downloads / f'trusted-gf4-{suffix}' / SEED_REPORT, output / SEED_REPORT)
+    shutil.copyfile(seed / SEED_REPORT, output / SEED_REPORT)
+    logs = output / SEED_LOG_DIR
+    logs.mkdir()
+    for name in GF4_LOGS:
+        shutil.copyfile(seed / 'logs' / name, logs / name)
     for i in range(3):
         shutil.copyfile(downloads / f'apt-container-{i}-{suffix}' / 'package-manager-verification.json',
                         output / f'apt-container-{i}-verification.json')
     (output / 'SHA256SUMS').write_text(''.join(f'{digest(output / name)}  {name}\n' for name in payloads(version)))
     write_json(output / REPORT, dict(schema_version=1, status='PASS', version=version, source_sha=source,
-                                    run=dict(id=run_id, attempt=attempt),
+                                    run=run,
                                     files={name: digest(output / name) for name in evidence_files(version)}))
 
 
 def authenticate(assets, tag, source):
-    if not re.fullmatch(r'[0-9a-f]{40}', source):
-        raise ValueError('expected the exact commit resolved from the release tag')
+    if not tag.startswith('v') or not stable_version(tag[1:]) or not re.fullmatch(r'[0-9a-f]{40}', source):
+        raise ValueError('expected the exact commit resolved from the stable release tag')
     try:
         subprocess.run(['gh', 'attestation', 'verify', str(assets / REPORT), '--bundle', str(assets / BUNDLE),
                         '--repo', REPOSITORY, '--signer-workflow', f'{REPOSITORY}/{WORKFLOW}',
@@ -100,6 +115,7 @@ def authenticate(assets, tag, source):
     for name, sha in evidence['files'].items():
         if digest(assets / name) != sha:
             raise ValueError('asset does not match signed release evidence: ' + name)
+    check_seed_artifact(assets / SEED_REPORT, assets / SEED_LOG_DIR, source, tag[1:], evidence['run'])
     return evidence['run']
 
 
