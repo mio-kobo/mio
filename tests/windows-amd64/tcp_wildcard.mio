@@ -1,0 +1,40 @@
+yobu "kiso/net/tcp";
+yobu "kiso/os";
+
+// Winsock can return WSAEACCES for a specific address when an exclusive
+// wildcard listener owns the port. The public result should be AddressInUse.
+waza address_in_use(failure: tcp.TcpError?) -> bool {
+    moshi (failure == mu) { kaesu iie; }
+    awase (failure) {
+        baai AddressInUse { kaesu hai; }
+        baai InvalidArgument { kaesu iie; }
+        baai Closed { kaesu iie; }
+        baai TimedOut { kaesu iie; }
+        baai ConnectionRefused { kaesu iie; }
+        baai ConnectionReset { kaesu iie; }
+        baai PermissionDenied { kaesu iie; }
+        baai WouldBlock { kaesu iie; }
+        baai Other(message) { kaesu iie; }
+    }
+    kaesu iie;
+}
+
+waza check() -> int64 {
+    kaku port = 41350;
+    kaku bound = tcp.listen(tcp.ipv4(uint8(0), uint8(0), uint8(0), uint8(0), port));
+    aida (bound.listener == mu && port < 41400) {
+        port = port + 1;
+        bound = tcp.listen(tcp.ipv4(uint8(0), uint8(0), uint8(0), uint8(0), port));
+    }
+    kaku wildcard = bound.listener;
+    moshi (wildcard == mu) { chant("wildcard listen failed"); kaesu 1; }
+    kaku clash = tcp.listen(tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
+    tcp.close_listener(wildcard);
+    kaku overlap = clash.listener;
+    moshi (overlap != mu) { tcp.close_listener(overlap); chant("overlap was allowed"); kaesu 1; }
+    moshi (!address_in_use(clash.error)) { chant("expected AddressInUse"); kaesu 1; }
+    chant("tcp wildcard: ok");
+    kaesu 0;
+}
+
+os.exit(check());

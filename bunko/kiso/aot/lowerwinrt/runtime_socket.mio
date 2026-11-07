@@ -1,0 +1,503 @@
+yobu "kiso/aot/pe";
+yobu "kiso/aot/x86_64";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// The PE writer numbers IAT entries across libraries. Winsock follows KERNEL32.
+teisu import_wsa_startup = 31;
+teisu import_wsa_cleanup = 32;
+teisu import_wsa_error = 33;
+teisu import_wsa_socket = 34;
+teisu import_socket_option = 35;
+teisu import_socket_bind = 36;
+teisu import_socket_connect = 37;
+teisu import_socket_listen = 38;
+teisu import_socket_accept = 39;
+teisu import_socket_recv = 40;
+teisu import_socket_send = 41;
+teisu import_socket_close = 42;
+teisu socket_state = 20; // 20 open, 20 + status failed. File states occupy 1 through 17.
+
+waza winsock_imports() -> pe.ImportLibrary {
+    kaesu pe.ImportLibrary { name: "WS2_32.dll", symbols: [
+        "WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
+        "bind", "connect", "listen", "accept", "recv", "send", "closesocket"] };
+}
+
+waza winsock_started_cell() -> int64 { kaesu gc_state() + 104; }
+
+// Mio's internal calls can enter with either stack alignment. Reserve the Win64 shadow
+// space (and any stack arguments) below the rbp-relative locals.
+waza socket_frame(code: x86_64.Assembler, name: string, bytes: int64) -> int64 {
+    kaku begin = open_frame(code, name, 0);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    x86_64.sub_ri(code, x86_64.rsp, bytes);
+    kaesu begin;
+}
+
+waza socket_status_label(code: int64) -> string {
+    kaesu string.concat("rt.sock.message.", convert.format_int(code));
+}
+
+waza emit_socket_status(code: x86_64.Assembler) -> unit {
+    kaku messages: []string = ["", "invalid argument", "socket closed", "connection timed out",
+        "connection refused", "connection reset", "address already in use", "permission denied",
+        "operation would block", "socket error"];
+    kaku at = 0;
+    aida (at < len(messages)) {
+        emit_string_object(code, socket_status_label(at), messages[at]);
+        at = at + 1;
+    }
+
+    // rt.sock_message: rax = code -> rax = message string
+    x86_64.label(code, "rt.sock_message");
+    at = 0;
+    aida (at < 9) {
+        kaku next = string.concat("rt.sock_message.next.", convert.format_int(at));
+        x86_64.cmp_ri(code, x86_64.rax, at);
+        x86_64.jcc(code, x86_64.cc_ne, next);
+        x86_64.lea_label(code, x86_64.rax, socket_status_label(at));
+        x86_64.ret(code);
+        x86_64.label(code, next);
+        at = at + 1;
+    }
+    x86_64.lea_label(code, x86_64.rax, socket_status_label(9));
+    x86_64.ret(code);
+
+    // rt.sock_status_one: rdi = status array (>= 1 byte), rsi = code -> rax = message
+    x86_64.label(code, "rt.sock_status_one");
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rdi, 40);
+    x86_64.mov_store8(code, x86_64.rax, 0, x86_64.rsi);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rsi);
+    x86_64.jmp(code, "rt.sock_message");
+
+    // rt.sock_status_io: rdi = status array (10 bytes), rsi = count, rdx = eof, rcx = code -> rax = message
+    x86_64.label(code, "rt.sock_status_io");
+    x86_64.test_rr(code, x86_64.rdi, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rdi, 40);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rsi);
+    x86_64.mov_store8(code, x86_64.rax, 8, x86_64.rdx);
+    x86_64.mov_store8(code, x86_64.rax, 9, x86_64.rcx);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jmp(code, "rt.sock_message");
+
+    // rt.sock_status: rdi = token, rsi = status array -> message
+    x86_64.label(code, "rt.sock_status");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, "rt.sock_status.go");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.sock_status.go");
+    x86_64.jmp(code, "rt.sock_status_one");
+}
+
+waza emit_socket_errors(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku begin = socket_frame(code, "rt.sock_last_error", 32);
+    import_call(code, ctx, import_wsa_error);
+    x86_64.zero_extend_eax(code);
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+
+    // Winsock errors -> kiso/net/tcp status byte. Network reset and shutdown are broken streams.
+    x86_64.label(code, "rt.sock_classify");
+    kaku errors: []int64 = [10022, 10047, 10009, 10038, 10060, 10061, 10052, 10053, 10054, 10058, 10048, 10013, 10035];
+    kaku statuses: []int64 = [1, 1, 2, 2, 3, 4, 5, 5, 5, 5, 6, 7, 8];
+    kaku at = 0;
+    aida (at < len(errors)) {
+        kaku next = string.concat("rt.sock_classify.next.", convert.format_int(at));
+        x86_64.cmp_ri(code, x86_64.rax, errors[at]);
+        x86_64.jcc(code, x86_64.cc_ne, next);
+        x86_64.mov_ri(code, x86_64.rax, statuses[at]);
+        x86_64.ret(code);
+        x86_64.label(code, next);
+        at = at + 1;
+    }
+    x86_64.mov_ri(code, x86_64.rax, 9);
+    x86_64.ret(code);
+
+    // Win64 only defines the low 32 bits of int results. SOCKET results use all 64 bits.
+    x86_64.label(code, "rt.sock_int_status");
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_int_status.done");
+    x86_64.call(code, "rt.sock_last_error");
+    x86_64.jmp(code, "rt.sock_classify");
+    x86_64.label(code, "rt.sock_int_status.done");
+    x86_64.ret(code);
+}
+
+waza emit_socket_resources(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    // rdi = Mio token -> slot pointer or negative status. Never use the SOCKET value as a status.
+    x86_64.label(code, "rt.sock_slot");
+    x86_64.call(code, "rt.resource_lookup");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_slot.closed");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
+    x86_64.cmp_ri(code, x86_64.rcx, socket_state);
+    x86_64.jcc(code, x86_64.cc_b, "rt.sock_slot.closed");
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_slot.done");
+    x86_64.mov_ri(code, x86_64.rax, socket_state);
+    x86_64.sub_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.label(code, "rt.sock_slot.done");
+    x86_64.ret(code);
+    x86_64.label(code, "rt.sock_slot.closed");
+    x86_64.mov_ri(code, x86_64.rax, -2);
+    x86_64.ret(code);
+
+    // rax = negative status -> token that preserves the failure until close.
+    x86_64.label(code, "rt.sock_failed");
+    x86_64.mov_ri(code, x86_64.rsi, socket_state);
+    x86_64.sub_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rdi, -1);
+    x86_64.jmp(code, "rt.fs_alloc");
+
+    // rax = result of a SOCKET-producing call. INVALID_SOCKET is (UINT_PTR)-1.
+    kaku begin = socket_frame(code, "rt.sock_wrap", 48);
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_wrap.failed");
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rsi, socket_state);
+    x86_64.call(code, "rt.fs_alloc");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_wrap.done");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -8);
+    import_call(code, ctx, import_socket_close);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jmp(code, "rt.sock_wrap.done");
+    x86_64.label(code, "rt.sock_wrap.failed");
+    x86_64.call(code, "rt.sock_last_error");
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_failed");
+    x86_64.label(code, "rt.sock_wrap.done");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+
+    begin = socket_frame(code, "rt.sock_close", 48);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.call(code, "rt.resource_lookup");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_close.closed");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rax, 8);
+    x86_64.cmp_ri(code, x86_64.rdx, socket_state);
+    x86_64.jcc(code, x86_64.cc_b, "rt.sock_close.closed");
+    // Invalidate the token before releasing the descriptor. Winsock may reuse it immediately.
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.mov_store(code, x86_64.rax, 8, x86_64.r8);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_close.done");
+    import_call(code, ctx, import_socket_close);
+    x86_64.call(code, "rt.sock_int_status");
+    x86_64.jmp(code, "rt.sock_close.done");
+    x86_64.label(code, "rt.sock_close.closed");
+    x86_64.mov_ri(code, x86_64.rax, 2);
+    x86_64.label(code, "rt.sock_close.done");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+waza emit_socket_open(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    // 32-byte shadow space plus room for the 64-bit WSADATA struct.
+    kaku begin = socket_frame(code, "rt.sock_startup", 448);
+    x86_64.mov_ri(code, x86_64.rcx, winsock_started_cell());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_startup.ok");
+    x86_64.mov_ri(code, x86_64.rcx, 514); // MAKEWORD(2, 2)
+    x86_64.lea(code, x86_64.rdx, x86_64.rsp, 32);
+    import_call(code, ctx, import_wsa_startup);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_startup.done"); // WSAStartup returns its own error.
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 32);
+    x86_64.and_ri(code, x86_64.rax, 65535); // WSADATA.wVersion
+    x86_64.cmp_ri(code, x86_64.rax, 514);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_startup.started");
+    import_call(code, ctx, import_wsa_cleanup);
+    x86_64.mov_ri(code, x86_64.rax, 10092); // WSAVERNOTSUPPORTED
+    x86_64.jmp(code, "rt.sock_startup.done");
+    x86_64.label(code, "rt.sock_startup.started");
+    x86_64.mov_ri(code, x86_64.rcx, winsock_started_cell());
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax);
+    x86_64.label(code, "rt.sock_startup.ok");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.label(code, "rt.sock_startup.done");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+
+    begin = socket_frame(code, "rt.sock_open", 48);
+    x86_64.call(code, "rt.sock_startup");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_open.failed");
+    x86_64.mov_ri(code, x86_64.rcx, 2); // AF_INET
+    x86_64.mov_ri(code, x86_64.rdx, 1); // SOCK_STREAM
+    x86_64.mov_ri(code, x86_64.r8, 6); // IPPROTO_TCP
+    x86_64.mov_ri(code, x86_64.r9, 0); // protocol info
+    x86_64.mov_ri(code, x86_64.rax, 0); // group
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, 128); // WSA_FLAG_NO_HANDLE_INHERIT
+    x86_64.mov_store(code, x86_64.rsp, 40, x86_64.rax);
+    import_call(code, ctx, import_wsa_socket);
+    x86_64.call(code, "rt.sock_wrap");
+    x86_64.jmp(code, "rt.sock_open.done");
+    x86_64.label(code, "rt.sock_open.failed");
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_failed");
+    x86_64.label(code, "rt.sock_open.done");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// rdi = token, rsi = address bytes, rdx = port, rcx = status array.
+waza emit_socket_address(code: x86_64.Assembler, ctx: WinContext, name: string, binding: bool) -> unit {
+    kaku begin = socket_frame(code, name, 112);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.rdx);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".state"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -24);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".invalid"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 16);
+    x86_64.cmp_ri(code, x86_64.rax, 4);
+    x86_64.jcc(code, x86_64.cc_ne, string.concat(name, ".invalid"));
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -32);
+    x86_64.cmp_ri(code, x86_64.rdx, 0);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".invalid"));
+    x86_64.cmp_ri(code, x86_64.rdx, 65535);
+    x86_64.jcc(code, x86_64.cc_g, string.concat(name, ".invalid"));
+    // sockaddr_in: family (2 bytes), port big endian (2), address (4), zero padding (8)
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsi, 40);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rax, 255);
+    x86_64.shl_ri(code, x86_64.rax, 8);
+    x86_64.shr_ri(code, x86_64.rdx, 8);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.shl_ri(code, x86_64.rax, 16);
+    x86_64.add_ri(code, x86_64.rax, 2);
+    kaku octet = 0;
+    aida (octet < 4) {
+        x86_64.mov_load8(code, x86_64.rcx, x86_64.rsi, octet);
+        x86_64.shl_ri(code, x86_64.rcx, 32 + 8 * octet);
+        x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
+        octet = octet + 1;
+    }
+    x86_64.mov_store(code, x86_64.rbp, -64, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rax);
+    moshi (binding) {
+        // On Windows SO_REUSEADDR permits a second socket to take over a live port.
+        // Request exclusive bind instead. Windows controls when a closed port becomes reusable.
+        x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -40);
+        x86_64.mov_ri(code, x86_64.rdx, 65535); // SOL_SOCKET
+        x86_64.mov_ri(code, x86_64.r8, -5); // SO_EXCLUSIVEADDRUSE
+        x86_64.mov_ri(code, x86_64.rax, 1);
+        x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+        x86_64.lea(code, x86_64.r9, x86_64.rbp, -16);
+        x86_64.mov_ri(code, x86_64.rax, 4); // sizeof(BOOL)
+        x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax);
+        import_call(code, ctx, import_socket_option);
+        x86_64.call(code, "rt.sock_int_status");
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_ne, string.concat(name, ".done"));
+    }
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -40);
+    x86_64.lea(code, x86_64.rdx, x86_64.rbp, -64);
+    x86_64.mov_ri(code, x86_64.r8, 16);
+    moshi (binding) { import_call(code, ctx, import_socket_bind); }
+    sore { import_call(code, ctx, import_socket_connect); }
+    x86_64.call(code, "rt.sock_int_status");
+    moshi (binding) {
+        // Exclusive TCP bind also reports WSAEACCES for overlapping wildcard
+        // listeners and reserved ports. Both mean the local endpoint is unavailable.
+        x86_64.cmp_ri(code, x86_64.rax, 7);
+        x86_64.jcc(code, x86_64.cc_ne, string.concat(name, ".done"));
+        x86_64.mov_ri(code, x86_64.rax, 6);
+    }
+    x86_64.jmp(code, string.concat(name, ".done"));
+    x86_64.label(code, string.concat(name, ".invalid"));
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.jmp(code, string.concat(name, ".done"));
+    x86_64.label(code, string.concat(name, ".state"));
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.label(code, string.concat(name, ".done"));
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+waza emit_socket_listen(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku begin = socket_frame(code, "rt.sock_listen", 48);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdx);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_listen.state");
+    x86_64.cmp_ri(code, x86_64.rsi, 65535);
+    x86_64.jcc(code, x86_64.cc_a, "rt.sock_listen.invalid");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rsi);
+    import_call(code, ctx, import_socket_listen);
+    x86_64.call(code, "rt.sock_int_status");
+    x86_64.jmp(code, "rt.sock_listen.done");
+    x86_64.label(code, "rt.sock_listen.invalid");
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.jmp(code, "rt.sock_listen.done");
+    x86_64.label(code, "rt.sock_listen.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.label(code, "rt.sock_listen.done");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+
+    begin = socket_frame(code, "rt.sock_accept", 32);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_accept.state");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    import_call(code, ctx, import_socket_accept);
+    x86_64.call(code, "rt.sock_wrap");
+    x86_64.jmp(code, "rt.sock_accept.done");
+    x86_64.label(code, "rt.sock_accept.state");
+    x86_64.call(code, "rt.sock_failed");
+    x86_64.label(code, "rt.sock_accept.done");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// rdi = token, rsi = bytes, rdx = offset, rcx = length, r8 = status array.
+waza emit_socket_transfer(code: x86_64.Assembler, ctx: WinContext, name: string, reading: bool) -> unit {
+    kaku begin = socket_frame(code, name, 80);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.r8);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".state"));
+    x86_64.mov_load(code, x86_64.rax, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    // the whole byte range must lie inside the array, or nothing is touched
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -8);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -16);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -24);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 16);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".range"));
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".range"));
+    x86_64.cmp_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_g, string.concat(name, ".range"));
+    x86_64.sub_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.cmp_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_g, string.concat(name, ".range"));
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".empty"));
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rsi, 40);
+    x86_64.add_rr(code, x86_64.rsi, x86_64.rdx);
+    // Winsock accepts an int length. A larger Mio request can complete as a short transfer.
+    x86_64.mov_rr(code, x86_64.r8, x86_64.rcx);
+    x86_64.cmp_ri(code, x86_64.r8, 2147483647);
+    x86_64.jcc(code, x86_64.cc_le, string.concat(name, ".length"));
+    x86_64.mov_ri(code, x86_64.r8, 2147483647);
+    x86_64.label(code, string.concat(name, ".length"));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -40);
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    moshi (reading) { import_call(code, ctx, import_socket_recv); }
+    sore { import_call(code, ctx, import_socket_send); }
+    x86_64.zero_extend_eax(code);
+    x86_64.mov_ri(code, x86_64.rdx, 4294967295);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".error"));
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    moshi (reading) {
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_ne, string.concat(name, ".status"));
+        x86_64.mov_ri(code, x86_64.rdx, 1);
+    }
+    x86_64.jmp(code, string.concat(name, ".status"));
+    x86_64.label(code, string.concat(name, ".error"));
+    x86_64.call(code, "rt.sock_last_error");
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.jmp(code, string.concat(name, ".no_bytes"));
+    x86_64.label(code, string.concat(name, ".range"));
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.jmp(code, string.concat(name, ".no_bytes"));
+    x86_64.label(code, string.concat(name, ".state"));
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.jmp(code, string.concat(name, ".no_bytes"));
+    x86_64.label(code, string.concat(name, ".empty"));
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.label(code, string.concat(name, ".no_bytes"));
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.label(code, string.concat(name, ".status"));
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -32);
+    x86_64.call(code, "rt.sock_status_io");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+waza emit_socket_runtime(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    emit_socket_status(code);
+    emit_socket_errors(code, ctx);
+    emit_socket_resources(code, ctx);
+    emit_socket_open(code, ctx);
+    emit_socket_address(code, ctx, "rt.sock_bind", hai);
+    emit_socket_address(code, ctx, "rt.sock_connect", iie);
+    emit_socket_listen(code, ctx);
+    emit_socket_transfer(code, ctx, "rt.sock_read", hai);
+    emit_socket_transfer(code, ctx, "rt.sock_write", iie);
+}
+
+// "$mma::mio/sys/socket::<name>::<hash>" -> routine, or "" when the function is not a socket primitive.
+waza socket_routine(function_name: string) -> string {
+    kaku prefix = "$mma::mio/sys/socket::";
+    moshi (!string.has_prefix(function_name, prefix)) { kaesu ""; }
+    kaku bytes = string.to_bytes(function_name);
+    kaku at = string.byte_len(prefix);
+    kaku output: []uint8 = [];
+    aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(output, bytes[at]); at = at + 1; }
+    kaku name = string.from_utf8(output);
+    moshi (name == mu) { kaesu ""; }
+    moshi (name == "open") { kaesu "rt.sock_open"; }
+    moshi (name == "status") { kaesu "rt.sock_status"; }
+    moshi (name == "bind_ipv4") { kaesu "rt.sock_bind"; }
+    moshi (name == "connect_ipv4") { kaesu "rt.sock_connect"; }
+    moshi (name == "listen") { kaesu "rt.sock_listen"; }
+    moshi (name == "accept") { kaesu "rt.sock_accept"; }
+    moshi (name == "read") { kaesu "rt.sock_read"; }
+    moshi (name == "write") { kaesu "rt.sock_write"; }
+    moshi (name == "close") { kaesu "rt.sock_close"; }
+    kaesu "";
+}

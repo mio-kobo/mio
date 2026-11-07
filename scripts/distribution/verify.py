@@ -119,8 +119,6 @@ def verify(output, target):
                         wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
                     code, text = run([cli, 'lsp', '--stdio'], stdin=wire, timeout=30)
                     check('Full lsp handshake', code == 0 and 'capabilities' in text)
-                    if target == 'windows-amd64':
-                        results['integrated_tools']['kiso/net/tcp'] = dict(status='NOT_APPLICABLE', reason='Windows runtime has no Winsock layer')
                     # Invalid CLI override must beat valid env and bundled paths.
                     code, text = run([cli, 'check', math, '--bunko-root', cwd / 'missing'], dict(MIO_BUNKO=str(root / 'bunko')))
                     check('explicit invalid root does not fall back', code != 0 and 'E_BUNKO_ROOT' in text)

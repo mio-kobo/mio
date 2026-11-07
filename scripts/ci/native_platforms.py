@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native verification of the pure-Mio toolchain on darwin-arm64, linux-amd64 and windows-amd64.
 
-Engines are never mixed: every check records whether it ran a native Mio image ("native"), the Go reference VM
-("reference") or the Go-hosted bootstrap host ("go-hosted"). Statuses are PASS, FAIL, SKIP, NOT_RUN and NOT_APPLICABLE
+Engines are recorded separately for native execution, build and PE inspection, the Go reference VM
+("reference") and the Go-hosted bootstrap host ("go-hosted"). Statuses are PASS, FAIL, SKIP, NOT_RUN and NOT_APPLICABLE
 (a check that does not exist on that platform, with the reason); only PASS counts as passed.
 
   linux    Stage A of the native compiler is lowered by the pure-Mio backend running in the Go reference VM (go-hosted,
@@ -10,7 +10,8 @@ Engines are never mixed: every check records whether it ran a native Mio image (
            contract (default and --gc-stress) with the VM differential, then the darwin-arm64 and windows-amd64 Stage A
            CLIs are cross-built by the native Linux CLI (twice, by two generations, which must agree).
   darwin   On macos-15. Stage A = the cross-built CLI (SHA-256 checked against the Linux manifest). Native B->C->D,
-  windows  native `mio test` (darwin only), Runtime ABI contract. A == B (cross build equals native build) is required.
+  windows  native `mio test`, Runtime ABI contract and differential. A == B (cross build equals native build) is required.
+           Windows also runs the two TCP echo examples as separate native processes.
   summary  Combines the platform reports; fails unless every required check is PASS.
 
 The trusted GF4 Native Seed is not available to hosted runners; its verification is always reported NOT_RUN.
@@ -23,12 +24,16 @@ import os
 import platform
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests/windows-amd64"))
+from verify_pe import verify_winsock
+
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
 BUDGET_SECONDS = int(os.environ.get("MIO_NATIVE_BUDGET_SECONDS", "6600"))
@@ -37,6 +42,9 @@ TARGETS = {"linux": "linux-amd64", "darwin": "darwin-arm64", "windows": "windows
 EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
                  "windows-amd64": ("Windows", ("amd64", "x86_64"))}
 EXE = {"windows-amd64": ".exe"}
+TCP_PACKAGE = "bunko/kiso/net/tcp"
+ECHO_SERVER = "examples/tcp_echo_server.mio"
+ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
 
 def sha256(path):
@@ -184,6 +192,64 @@ def smoke(report, cli, target, work, label_prefix=""):
     return report.check(label_prefix + "cli-hello", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s, stdout %r" % (code, out[:200]))
 
 
+def windows_tcp_pe(report, image, label):
+    try:
+        symbols = verify_winsock(image.read_bytes())
+    except (OSError, ValueError, struct.error, StopIteration) as error:
+        return report.check(label, "FAIL", "pe-static", str(error))
+    return report.check(label, "PASS", "pe-static", imports=symbols, sha256=sha256(image))
+
+
+def windows_tcp_echo(report, cli, work):
+    server, client = work / "tcp-echo-server.exe", work / "tcp-echo-client.exe"
+    builds = []
+    for name, entry, image in (("server", ECHO_SERVER, server), ("client", ECHO_CLIENT, client)):
+        label = "windows-tcp-echo-" + name
+        ok, reason, seconds = cli_build(report, label + "-build", cli, entry, "windows-amd64", image)
+        report.check(label + "-build", "PASS" if ok else "FAIL", "native-build", "" if ok else reason,
+                     seconds=round(seconds, 1))
+        builds.append(ok and windows_tcp_pe(report, image, label + "-pe"))
+    if not all(builds):
+        return report.check("windows-tcp-echo", "NOT_RUN", "native", "echo build or PE verification failed")
+
+    server_log = report.logs / "windows-tcp-echo-server-run.log"
+    server_ready = b"hai\nMio TCP server waiting on 127.0.0.1:18080\n"
+    wanted_client = "hai\n3\nhai\n3\nhai\n77\n105\n111\n"
+    try:
+        with server_log.open("wb") as stream, subprocess.Popen(
+                [str(server)], cwd=work, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT) as child:
+            try:
+                deadline = time.monotonic() + 15
+                while not server_log.read_bytes().startswith(server_ready):
+                    if child.poll() is not None or time.monotonic() >= deadline:
+                        return report.check("windows-tcp-echo", "FAIL", "native",
+                                            "server did not listen: %r" % server_log.read_bytes()[:300])
+                    time.sleep(0.05)
+                code, out, err, _ = run(report, "windows-tcp-echo-client-run", [client], cwd=work, timeout=15)
+                server_code = child.wait(timeout=15)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return report.check("windows-tcp-echo", "FAIL", "native", str(error))
+    ok = code == 0 and out == wanted_client and not err and server_code == 0 and server_log.read_bytes() == server_ready + b"3\n"
+    return report.check("windows-tcp-echo", "PASS" if ok else "FAIL", "native",
+                        "" if ok else "client exit %s (%r), server exit %s (%r)" %
+                        (code, (out + err)[:300], server_code, server_log.read_bytes()[:300]))
+
+
+def windows_tcp_wildcard(report, cli, work):
+    image = work / "tcp-wildcard.exe"
+    label = "windows-tcp-wildcard"
+    ok, reason, _ = cli_build(report, label + "-build", cli, "tests/windows-amd64/tcp_wildcard.mio", report.target, image)
+    if not ok:
+        return report.check(label, "FAIL", "native", "build " + reason)
+    code, out, err, _ = run(report, label, [image], cwd=work, timeout=15)
+    ok = code == 0 and out == "tcp wildcard: ok\n" and not err
+    return report.check(label, "PASS" if ok else "FAIL", "native",
+                        "" if ok else "exit %s: %s" % (code, brief(out + err)))
+
+
 def mio_run_protocol(report, cli, work):
     """`mio run` builds for the host (the default target) and starts the program with the given arguments: the same
     argument strings (spaces, empty, quotes, backslashes, UTF-8) and the program's exit status on every platform."""
@@ -283,26 +349,13 @@ def count(pattern, text):
     return int(match.group(1)) if match else 0
 
 
-# Packages whose runtime layer does not exist on a target, with the technical reason. They are reported
-# NOT_APPLICABLE (never PASS) and must match the UNSUPPORTED entries of scripts/ci/bunko_matrix_coverage.json.
-NOT_APPLICABLE_PACKAGES = {
-    "windows-amd64": {
-        "bunko/kiso/net/tcp": "kiso/aot/lowerwinrt has no Winsock layer (the lowerlinux socket runtime uses Linux socket "
-                              "system calls); the calls stop with the explicit runtime error \"unsupported operation\"",
-    },
-}
-
-
 def native_mio_test(report, cli, skips_allowed):
     """Every package with *_test.mio. A skipped test is never a pass: skips are reported separately (SKIP, with the
     test's own reason). Where every test must run (darwin-arm64, the primary target) a skip is a required failure."""
     failures = []
-    excluded = NOT_APPLICABLE_PACKAGES.get(report.target, {})
     for package in test_packages():
         label = "mio-test-" + package.replace("/", "_")
-        if package in excluded:
-            report.check("mio-test " + package, "NOT_APPLICABLE", "native", excluded[package], required=False)
-            continue
+        allow_skip = skips_allowed and package != TCP_PACKAGE
         if time.monotonic() - STARTED > BUDGET_SECONDS:
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
             failures.append(package)
@@ -317,14 +370,14 @@ def native_mio_test(report, cli, skips_allowed):
         ok = code == 0 and complete and failed == 0 and (passed > 0 or skipped > 0)  # nothing executed is a failure
         status = "PASS" if ok and passed > 0 and skipped == 0 else "FAIL" if not ok else "SKIP"
         report.check("mio-test " + package, "PASS" if status == "PASS" else "FAIL" if status == "FAIL" else
-                     ("SKIP" if skips_allowed else "FAIL"), "native",
+                     ("SKIP" if allow_skip else "FAIL"), "native",
                      "" if status == "PASS" else ("exit %s: %s" % (code, brief(text)) if status == "FAIL" else
                                                   "%d skipped: %s" % (skipped, "; ".join(reasons)[:300])),
-                     required=status != "SKIP" or not skips_allowed, seconds=round(seconds, 1),
+                     required=status != "SKIP" or not allow_skip, seconds=round(seconds, 1),
                      passed=passed, failed=failed, skipped=skipped)
-        if status == "SKIP" and skips_allowed and passed > 0:
+        if status == "SKIP" and allow_skip and passed > 0:
             report.check("mio-test " + package + " (non-skipped)", "PASS", "native", "", passed=passed)
-        if status == "FAIL":
+        if status == "FAIL" or (status == "SKIP" and not allow_skip):
             failures.append(package)
     return not failures
 
@@ -364,7 +417,8 @@ def contract(report, cli, target, reference="", suite="contract"):
 
 def linux(args):
     report = Report("linux-amd64", args.output)
-    verify_host(report)
+    if not verify_host(report):
+        return finish(report)
     work = report.output / "work"
     work.mkdir(exist_ok=True)
     refvm = Path(args.refvm).resolve()
@@ -444,6 +498,14 @@ def linux(args):
             manifest[target] = dict(file=name, sha256=sha256(first), built_by="linux-amd64 cli-B", source_sha=report.data["source_sha"])
             report.hashes["stage-a-" + target] = manifest[target]["sha256"]
     (seeds / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    windows_echo = work / "cross-tcp-echo-server.exe"
+    ok, reason, seconds = cli_build(report, "windows-tcp-cross-build", cli, ECHO_SERVER, "windows-amd64", windows_echo)
+    report.check("windows-tcp-cross-build", "PASS" if ok else "FAIL", "cross-build", "" if ok else reason,
+                 seconds=round(seconds, 1))
+    if ok:
+        windows_tcp_pe(report, windows_echo, "windows-tcp-cross-pe")
+    else:
+        report.check("windows-tcp-cross-pe", "NOT_RUN", "pe-static", "cross build failed")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             for target, item in manifest.items():
@@ -455,7 +517,8 @@ def linux(args):
 
 def follower(args, target):
     report = Report(target, args.output)
-    verify_host(report)
+    if not verify_host(report):
+        return finish(report)
     work = report.output / "work"
     work.mkdir(exist_ok=True)
     stage_a = Path(args.stage_a).resolve()
@@ -492,6 +555,9 @@ def follower(args, target):
         # darwin-arm64 is the primary target: every test must run there. Elsewhere a test may skip with its own reason
         # (Mach-O images that need a macOS host); skips are reported separately and never count as passes.
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64")
+        if target == "windows-amd64":
+            windows_tcp_echo(report, cli, work)
+            windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)
         contract(report, cli, target, suite="differential")
     return finish(report)
@@ -499,7 +565,6 @@ def follower(args, target):
 
 def text_section_offset(image):
     """File offset of __TEXT,__text in a 64-bit Mach-O (code word 0 of the symbol map)."""
-    import struct
     data = Path(image).read_bytes()
     count = struct.unpack_from("<I", data, 16)[0]; at = 32
     for _ in range(count):
@@ -625,7 +690,7 @@ def summary(args):
                     ", ".join("%s %d" % kv for kv in sorted(counts.items())), data["seed"]["status"]))
     text = ["## Native verification: %s" % overall, "",
             "Stage A is go-hosted (Go reference VM runs the pure-Mio Linux lowering); the trusted GF4 Native Seed is "
-            "NOT_RUN. B/C/D fixed points and all tests below ran as native images on the named runner.", "",
+            "NOT_RUN. Native execution, builds and static PE checks are recorded separately.", "",
             "| target | status | checks | seed |", "|---|---|---|---|", *rows, ""]
     for target, data in combined.items():
         for item in data.get("checks", []):

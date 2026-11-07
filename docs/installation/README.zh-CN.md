@@ -56,7 +56,7 @@ Full 与 Core 使用不同命令，可以共存。经校验的官方 ZIP 安装�
 `lib` 目录，`bin` 中的进程 Shim 启动真实编译器并保留相邻 Bunko 的定位。
 安装 Chocolatey 后重新打开终端以刷新 PATH。同一版本类型不要同时通过 WinGet 和
 Chocolatey 安装，以免 PATH 选择错误版本。Full 安装后可离线开发，Core 不附带标准库。
-项目和配置应保存在包目录之外；升级会替换、卸载会删除包目录。Windows TCP 尚不支持。
+项目和配置应保存在包目录之外；升级会替换、卸载会删除包目录。
 
 ## Linux AMD64：APT
 
@@ -87,7 +87,7 @@ mio check math.mio
 macOS 和 Windows 分别使用 `darwin-arm64` 和 `windows-amd64`。
 CLI 默认选择当前主机目标；`run` 和 `exec` 必须使用主机目标。
 三个平台均验证集成的 check/build/run/exec/test/lsp/disasm 工具。
-Windows 尚无 Winsock 运行时层，`kiso/net/tcp` 标记为 NOT_APPLICABLE。
+Windows AMD64 原生编译器通过 Winsock 支持阻塞式 IPv4 `kiso/net/tcp`。
 
 Bunko 按 `--bunko-root`、`MIO_BUNKO`、真实可执行文件相邻的 `../bunko` 顺序查找。
 显式路径或环境变量无效时直接报错；空的 `MIO_BUNKO` 也是错误。

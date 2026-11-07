@@ -55,7 +55,7 @@ koukai teisu heap_commit_step = 16777216;
 koukai teisu mark_stack_size = 536870912;
 
 // Packages cannot hold mutable globals, so the collected unwind records and patches travel in a context.
-koukai kata WinContext { patches: []pe.Patch; frames: []pe.FrameFunction; }
+koukai kata WinContext { patches: []pe.Patch; frames: []pe.FrameFunction; sockets: bool; }
 // .data is the first section, at RVA 0x1000 (pe.executable_placed data-first layout): every absolute data address is a
 // link-time constant and the image has no RVA gap.
 koukai teisu data_rva = 4096;
@@ -103,6 +103,17 @@ waza emit_win_exit(code: x86_64.Assembler, ctx: WinContext) -> unit {
     kaku begin = open_frame(code, "rt.exit", 0);
     x86_64.and_ri(code, x86_64.rsp, -16);
     x86_64.sub_ri(code, x86_64.rsp, 32);
+    moshi (ctx.sockets) {
+        x86_64.mov_ri(code, x86_64.rax, winsock_started_cell());
+        x86_64.mov_load(code, x86_64.rax, x86_64.rax, 0);
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_e, "rt.exit.process");
+        x86_64.sub_ri(code, x86_64.rsp, 16);
+        x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rcx);
+        import_call(code, ctx, import_wsa_cleanup);
+        x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 32);
+        x86_64.label(code, "rt.exit.process");
+    }
     import_call(code, ctx, import_exit_process);
     emit_epilogue(code);
     close_frame(code, ctx, begin, 0);

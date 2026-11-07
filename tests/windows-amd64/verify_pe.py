@@ -44,6 +44,57 @@ def read_rva(data, img, rva, n):
     raise PEError("RVA not file-backed: %#x" % rva)
 
 
+def read_imports(data, img):
+    """Return each library's named IAT slots in image order."""
+    def cstring(rva):
+        value = bytearray()
+        while (byte := read_rva(data, img, rva + len(value), 1)) != b"\0":
+            value.extend(byte)
+        return value.decode("ascii")
+
+    rva, size = img["dirs"][1]
+    require(rva and size >= 20 and size % 20 == 0, "import directory")
+    libraries = {}
+    for offset in range(0, size, 20):
+        ilt, stamp, forwarder, name, iat = struct.unpack("<IIIII", read_rva(data, img, rva + offset, 20))
+        if not any((ilt, stamp, forwarder, name, iat)):
+            require(offset == size - 20, "import directory terminator")
+            return libraries
+        dll = cstring(name)
+        require(ilt and iat and dll not in libraries, "invalid import descriptor")
+        symbols = {}
+        index = 0
+        while True:
+            hint, = struct.unpack("<Q", read_rva(data, img, ilt + 8 * index, 8))
+            slot = iat + 8 * index
+            require(read_rva(data, img, slot, 8) == struct.pack("<Q", hint), "IAT and lookup differ")
+            if hint == 0:
+                break
+            symbol = cstring(hint + 2)
+            require(symbol not in symbols, "duplicate named import")
+            symbols[symbol] = slot
+            index += 1
+        libraries[dll] = symbols
+    raise PEError("missing import terminator")
+
+
+def verify_winsock(data):
+    img = parse(data)
+    slots = read_imports(data, img).get("WS2_32.dll", {})
+    expected = {"WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
+                "bind", "connect", "listen", "accept", "recv", "send", "closesocket"}
+    require(slots.keys() == expected, "unexpected Winsock imports: " + repr(list(slots)))
+    iat, iat_size = img["dirs"][12]
+    text = next(s for s in img["secs"] if s["name"] == ".text")
+    code = read_rva(data, img, text["rva"], text["vsize"])
+    calls = {text["rva"] + i + 6 + struct.unpack_from("<i", code, i + 2)[0]
+             for i in range(len(code) - 5) if code[i:i + 2] == b"\xff\x15"}
+    for symbol, slot in slots.items():
+        require(iat <= slot <= iat + iat_size - 8, symbol + " outside IAT")
+        require(slot in calls, "missing RIP-relative call to " + symbol)
+    return list(slots)
+
+
 def verify(data, expect_relocations=True):
     img = parse(data)
     secs = {s["name"]: s for s in img["secs"]}
