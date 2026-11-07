@@ -101,7 +101,8 @@ def assemble(downloads, output, version, kind=GF4):
                                     files={name: digest(output / name) for name in evidence_files(version, kind)}))
 
 
-def authenticate(assets, tag, source):
+def authenticate_report(assets, tag, source):
+    """Authenticate the signed inventory before looking for the listed files."""
     if not tag.startswith('v') or not stable_version(tag[1:]) or not re.fullmatch(r'[0-9a-f]{40}', source):
         raise ValueError('expected the exact commit resolved from the stable release tag')
     try:
@@ -116,6 +117,11 @@ def authenticate(assets, tag, source):
     if (kind is None or evidence['status'] != 'PASS' or evidence['version'] != tag[1:]
             or evidence['source_sha'] != source or set(evidence['files']) != evidence_files(tag[1:], kind)):
         raise ValueError('stable release attestation describes different inputs')
+    return evidence, kind
+
+
+def authenticate(assets, tag, source):
+    evidence, kind = authenticate_report(assets, tag, source)
     for name, sha in evidence['files'].items():
         if digest(assets / name) != sha:
             raise ValueError('asset does not match signed release evidence: ' + name)

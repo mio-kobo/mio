@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
 from seed_evidence import seed_binding, seed_identity, stable_version
 from stable_release import authenticate, docker_archive
+from supplemental_evidence import restore_logs
 
 
 def stable(tag):
@@ -218,6 +219,9 @@ def main():
     p.add_argument('--source-sha', required=True)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
+    # Release-event reruns use their original workflow, which invokes this
+    # entry point from the current Mio-2.1 checkout.
+    restore_logs(a.assets, a.tag, a.source_sha)
     version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()), a.source_sha)
     generate(version, records, a.output)
     for flavor in ('core', 'full'):
