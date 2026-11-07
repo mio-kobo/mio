@@ -126,7 +126,8 @@ def child(argv, cwd, env, stdout, stderr):
                 else:
                     try:
                         os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
+                    except (ProcessLookupError, PermissionError):
+                        # macOS can report EPERM for a group containing only unreaped zombies.
                         pass
                 proc.wait(timeout=5)
 

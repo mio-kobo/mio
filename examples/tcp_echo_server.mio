@@ -27,35 +27,39 @@ waza serve(listener: tcp.Listener?) -> unit {
     kaku stopped = tcp.close_listener(listener);
 }
 
-// Both peers default to port 18080. Pass a port to run an independent pair.
-kaku args = os.arguments();
-kaku port = 18080;
-moshi (len(args) > 1) {
-    kaku parsed = convert.parse_int(args[1]);
-    moshi (parsed != mu) { port = parsed; } sore { port = 0; }
-    moshi (port < 1 || port > 65535) {
-        chant("Expected a TCP port between 1 and 65535");
-        os.exit(2);
-    }
-}
-kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
-kaku started = tcp.listen(address);
-chant(started.error == mu);
-kaku failure = started.error;
-moshi (failure != mu) {
-    awase (failure) {
-        baai AddressInUse {
-            chant("TCP port already in use");
-            os.exit(75);
+waza main() -> unit {
+    // Both peers default to port 18080. Pass a port to run an independent pair.
+    kaku args = os.arguments();
+    kaku port = 18080;
+    moshi (len(args) > 1) {
+        kaku parsed = convert.parse_int(args[1]);
+        moshi (parsed != mu) { port = parsed; } sore { port = 0; }
+        moshi (port < 1 || port > 65535) {
+            chant("Expected a TCP port between 1 and 65535");
+            os.exit(2);
         }
-        baai InvalidArgument { os.exit(1); }
-        baai Closed { os.exit(1); }
-        baai TimedOut { os.exit(1); }
-        baai ConnectionRefused { os.exit(1); }
-        baai ConnectionReset { os.exit(1); }
-        baai PermissionDenied { os.exit(1); }
-        baai WouldBlock { os.exit(1); }
-        baai Other(message) { chant(message); os.exit(1); }
     }
+    kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
+    kaku started = tcp.listen(address);
+    chant(started.error == mu);
+    kaku failure = started.error;
+    moshi (failure != mu) {
+        awase (failure) {
+            baai AddressInUse {
+                chant("TCP port already in use");
+                os.exit(75);
+            }
+            baai InvalidArgument { chant("Invalid socket argument"); os.exit(1); }
+            baai Closed { chant("Socket closed"); os.exit(1); }
+            baai TimedOut { chant("Socket timed out"); os.exit(1); }
+            baai ConnectionRefused { chant("Connection refused"); os.exit(1); }
+            baai ConnectionReset { chant("Connection reset"); os.exit(1); }
+            baai PermissionDenied { chant("Socket permission denied"); os.exit(1); }
+            baai WouldBlock { chant("Socket would block"); os.exit(1); }
+            baai Other(message) { chant(message); os.exit(1); }
+        }
+    }
+    serve(started.listener);
 }
-serve(started.listener);
+
+main();
