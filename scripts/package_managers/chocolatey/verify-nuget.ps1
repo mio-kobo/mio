@@ -21,7 +21,9 @@ try {
         $sha256.Dispose()
     }
     [IO.Compression.ZipFile]::ExtractToDirectory($library, $work)
-    Add-Type -Path (Join-Path $work 'lib/net40-Client/NuGet.Core.dll')
+    # Loading from disk would lock the DLL until this PowerShell process exits.
+    $assemblyBytes = [IO.File]::ReadAllBytes((Join-Path $work 'lib/net40-Client/NuGet.Core.dll'))
+    [Reflection.Assembly]::Load($assemblyBytes) | Out-Null
 
     $inputs = @(Get-ChildItem -LiteralPath $Packages -Filter '*.nupkg' -File)
     if ($inputs.Count -lt 2) { throw 'Expected Core and Full packages' }
