@@ -11,7 +11,11 @@ import json
 import re
 import subprocess
 import shutil
+import tarfile
+import tempfile
 from pathlib import Path
+
+from seed_evidence import STABLE_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 EMPTY = '// Candidate distribution: importable Bunko sources are external.\nwaza data_files() -> []File { kaesu []; }\n'
@@ -24,11 +28,11 @@ def prepare(root, revision, stable_version=None, rc_version=None):
     if stable_version is not None and rc_version is not None:
         raise ValueError('stable and RC versions are mutually exclusive')
     if stable_version is not None:
-        if not re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)', stable_version):
+        if not re.fullmatch(STABLE_VERSION, stable_version):
             raise ValueError('stable 2.1+ version required')
         version = stable_version
     if rc_version is not None:
-        if not re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)-rc\.[1-9]\d*', rc_version):
+        if not re.fullmatch(STABLE_VERSION + r'-rc\.[1-9]\d*', rc_version):
             raise ValueError('2.1+ RC version required')
         version = rc_version
     resource = root / 'selfhost/resources/bunko_data.mio'
@@ -38,13 +42,27 @@ def prepare(root, revision, stable_version=None, rc_version=None):
     text = cli.read_text(encoding='utf-8')
     if old not in text:
         raise ValueError('unexpected CLI version template')
-    resource.write_text(EMPTY, encoding='utf-8')
-    cli.write_text(text.replace(old, f'mio v{version} ({"release" if stable_version else "release candidate" if rc_version else "candidate"}; commit {revision}; pure Mio Native AOT)'), encoding='utf-8')
+    resource.write_bytes(EMPTY.encode('utf-8'))
+    cli.write_text(text.replace(old, f'mio v{version} ({"release" if stable_version else "release candidate" if rc_version else "candidate"}; commit {revision}; pure Mio Native AOT)'), encoding='utf-8', newline='\n')
     record = dict(schema_version=1, version=version, source_sha=revision,
                   embedded_bunko=False, original_resource_sha256=original_hash,
-                  generated_resource_sha256=hashlib.sha256(resource.read_bytes()).hexdigest())
+                  generated_resource_sha256=hashlib.sha256(resource.read_bytes()).hexdigest(),
+                  generated_cli_sha256=hashlib.sha256(cli.read_bytes()).hexdigest())
     (root / 'distribution-input.json').write_text(json.dumps(record, indent=2)+'\n', encoding='utf-8')
     return record
+
+
+def copy_committed_source(root, revision, destination):
+    # git archive also applies Git's output line endings. Use LF consistently
+    # so a Windows checkout and a Darwin checkout produce identical inputs.
+    with tempfile.TemporaryFile() as stream:
+        subprocess.run(['git', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+                        'archive', '--format=tar', revision], cwd=root, stdout=stream, check=True)
+        stream.seek(0)
+        with tarfile.open(fileobj=stream) as archive:
+            if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
+                raise ValueError('non-regular member in stable source archive')
+            archive.extractall(destination, filter='data')
 
 
 if __name__ == '__main__':
@@ -64,13 +82,18 @@ if __name__ == '__main__':
         parser.error('refusing to prepare the source checkout; copy it first')
     if destination.exists():
         parser.error('destination must be new')
-    tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
-    for name in filter(None, tracked):
-        src = ROOT / name
-        if src.is_symlink():
-            parser.error('symlink in source checkout: '+name)
-        dest = destination / name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
+    if requested_version and os.environ.get('GITHUB_ACTIONS') == 'true' and revision != os.environ.get('GITHUB_SHA'):
+        parser.error('release checkout does not match the Actions source commit')
+    if args.stable_version:
+        copy_committed_source(ROOT, revision, destination)
+    else:
+        tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
+        for name in filter(None, tracked):
+            src = ROOT / name
+            if src.is_symlink():
+                parser.error('symlink in source checkout: '+name)
+            dest = destination / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
     print(json.dumps(prepare(destination, revision, args.stable_version, args.rc_version), indent=2))

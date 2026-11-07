@@ -20,7 +20,16 @@ jobs:
     - id: scope
       env:
         BASE: ${{ github.event.pull_request.base.sha }}
+      shell: bash
       run: |
+        if [[ -n "$MIO_DISTRIBUTION_STABLE_VERSION" ]]; then
+          test "$GITHUB_REPOSITORY" = mio-kobo/mio
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = "refs/tags/v$MIO_DISTRIBUTION_STABLE_VERSION"
+          [[ "$MIO_DISTRIBUTION_STABLE_VERSION" =~ ^2\.[1-9][0-9]*\.(0|[1-9][0-9]*)$ ]]
+          test -z "$MIO_DISTRIBUTION_RC_VERSION"
+          git merge-base --is-ancestor HEAD origin/Mio-2.1
+        fi
         python - <<'PYCODE'
         import os, subprocess, sys
         sys.path.insert(0, 'scripts/package_managers')
@@ -31,6 +40,47 @@ jobs:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             f.write('wrapper_only=' + str(only).lower() + '\n')
         PYCODE
+  trusted-seed:
+    name: Trusted GF4 / Darwin ARM64 origin
+    needs: scope
+    if: github.repository == 'mio-kobo/mio' && github.event_name == 'workflow_dispatch' && inputs.stable_version
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Build from the pinned GF4 seed and verify the Darwin fixed point and cross outputs
+      env:
+        SSL_CERT_FILE: /etc/ssl/cert.pem
+        GH_TOKEN: ${{ github.token }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        work=$(mktemp -d "$RUNNER_TEMP/mio-gf4.XXXXXXXX")
+        echo "MIO_GF4_WORK=$work" >> "$GITHUB_ENV"
+        python3 scripts/distribution/prepare.py --disposable-checkout "$work/source"
+        python3 "$work/source/scripts/ci/trusted_seed.py" --output "$work/evidence"
+    - uses: actions/upload-artifact@v4
+      if: always() && env.MIO_GF4_WORK != ''
+      with:
+        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          ${{ env.MIO_GF4_WORK }}/evidence/trusted-gf4-report.json
+          ${{ env.MIO_GF4_WORK }}/evidence/logs/
+        if-no-files-found: error
+        retention-days: 14
+    - name: Remove the private seed copy and working images
+      if: always() && env.MIO_GF4_WORK != ''
+      shell: bash
+      run: rm -rf -- "$MIO_GF4_WORK"
+  stable-web:
+    needs: scope
+    if: github.event_name == 'workflow_dispatch' && inputs.stable_version
+    uses: ./.github/workflows/web.yml
   wrapper-regression:
     needs: [scope, packaging-tests]
     if: needs.scope.outputs.wrapper_only == 'true'
@@ -55,6 +105,12 @@ jobs:
     needs:
     - follower
     - packaging-tests
+    - trusted-seed
+    if: >-
+      !cancelled() && needs.follower.result == 'success' &&
+      needs.packaging-tests.result == 'success' &&
+      (inputs.stable_version && needs.trusted-seed.result == 'success' ||
+       !inputs.stable_version && needs.trusted-seed.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -84,9 +140,14 @@ jobs:
         path: build/evidence
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
+    - uses: actions/download-artifact@v4
+      if: inputs.stable_version
+      with:
+        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-gf4
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed-report build/trusted-gf4/trusted-gf4-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
     - name: Install current official WinGet client
@@ -133,6 +194,8 @@ jobs:
           build/candidates/verification.json
 
           build/candidates/native-report.json
+
+          build/candidates/package-manager-verification.json
 
           '
         if-no-files-found: error
@@ -203,7 +266,7 @@ jobs:
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
     - id: native
       name: Stage A, native compiler and CLI fixed points, mio test, Runtime ABI contract, cross Stage A
-      run: python build/distribution-source/scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64
+      run: python build/distribution-source/scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64 ${{ inputs.stable_version && '--run-examples' || '' }}
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -226,6 +289,8 @@ jobs:
           build/native/linux-amd64/native-differential/results.json
 
           build/native/linux-amd64/native-differential/*.std*
+
+          build/native/linux-amd64/examples/
 
           '
         if-no-files-found: error
@@ -284,7 +349,7 @@ jobs:
       shell: bash
       env:
         EXPECTED_SHA256: ${{ needs.linux.outputs[matrix.sha_output] }}
-      run: python build/distribution-source/scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}"
+      run: python build/distribution-source/scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}" ${{ inputs.stable_version && '--run-examples' || '' }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -300,6 +365,8 @@ jobs:
           build/native/${{ matrix.target }}/native-differential/results.json
 
           build/native/${{ matrix.target }}/native-differential/*.std*
+
+          build/native/${{ matrix.target }}/examples/
 
           '
         if-no-files-found: error
@@ -332,7 +399,10 @@ jobs:
         pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/native-reports
     - name: Combine the platform reports (fails unless every required check is PASS)
-      run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
+      run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary ${{ inputs.stable_version && '--run-examples' || '' }}
+    - name: Verify Bunko public-function coverage on all three release targets
+      if: inputs.stable_version
+      run: python scripts/ci/bunko_matrix.py --check --reports build/native-reports --output build/native-summary --require-pass
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -343,6 +413,8 @@ jobs:
   docker-full-offline:
     needs:
     - candidate-linux
+    # The successful candidate may have an intentionally skipped seed ancestor.
+    if: ${{ !cancelled() && needs.candidate-linux.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -354,7 +426,12 @@ jobs:
         name: mio-candidates-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/linux-candidates
     - name: Build Full image, test offline, save/load, test offline again
-      run: python docker/build.py --candidates build/linux-candidates --output build/docker-candidate
+      env:
+        STABLE_VERSION: ${{ inputs.stable_version }}
+      run: |
+        args=()
+        if [[ -n "$STABLE_VERSION" ]]; then args+=(--image "mio:$STABLE_VERSION-full"); fi
+        python docker/build.py --candidates build/linux-candidates --output build/docker-candidate "${args[@]}"
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -373,6 +450,12 @@ jobs:
     needs:
     - linux
     - packaging-tests
+    - trusted-seed
+    if: >-
+      !cancelled() && needs.linux.result == 'success' &&
+      needs.packaging-tests.result == 'success' &&
+      (inputs.stable_version && needs.trusted-seed.result == 'success' ||
+       !inputs.stable_version && needs.trusted-seed.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -392,9 +475,14 @@ jobs:
         path: build/evidence
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
+    - uses: actions/download-artifact@v4
+      if: inputs.stable_version
+      with:
+        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-gf4
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed-report build/trusted-gf4/trusted-gf4-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
     - name: Install current official WinGet client
@@ -431,6 +519,8 @@ jobs:
 
           build/candidates/native-report.json
 
+          build/candidates/package-manager-verification.json
+
           '
         if-no-files-found: error
         retention-days: 14
@@ -450,6 +540,8 @@ jobs:
 
   apt-distributions:
     needs: candidate-linux
+    # The successful candidate may have an intentionally skipped seed ancestor.
+    if: ${{ !cancelled() && needs.candidate-linux.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -479,6 +571,48 @@ jobs:
       with:
         name: apt-container-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/linux-candidates/*verification.json
+
+  stable-evidence:
+    name: Assemble and attest stable release assets
+    needs: [required, trusted-seed, stable-web]
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.stable_version &&
+      needs.required.result == 'success' && needs.trusted-seed.result == 'success' &&
+      needs.stable-web.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: '@(mio-candidates-*|mio-docker-linux-amd64-candidate|trusted-gf4|chocolatey-tests|apt-container-*)-${{ github.run_id }}-${{ github.run_attempt }}'
+        path: build/downloads
+    - name: Bind checksums and evidence to the release inputs
+      env:
+        VERSION: ${{ inputs.stable_version }}
+      run: python scripts/distribution/stable_release.py --downloads build/downloads --output build/stable --version "$VERSION"
+    - uses: actions/attest-build-provenance@v2
+      id: attest
+      with:
+        subject-path: build/stable/release-verification.json
+    - name: Retain and verify the signed evidence bundle
+      env:
+        BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        cp "$BUNDLE_PATH" build/stable/release-verification.sigstore.json
+        PYTHONPATH=scripts/distribution python -c 'import os; from pathlib import Path; from stable_release import authenticate; authenticate(Path("build/stable"), os.environ["GITHUB_REF_NAME"], os.environ["GITHUB_SHA"])'
+    - uses: actions/upload-artifact@v4
+      with:
+        name: mio-stable-release-assets-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/stable/
+        if-no-files-found: error
+        retention-days: 14
 
 'on':
   workflow_dispatch:

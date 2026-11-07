@@ -65,7 +65,9 @@ def verify(output, target):
                 binaries.append(cli)
                 check(flavor + ' compiler provenance', digest(cli) == provenance['compiler_sha256'])
                 code, text = run([cli, 'version'])
-                check(flavor + ' version', code == 0 and manifest['version'] in text and manifest['source_sha'] in text)
+                version_line = f"mio v{manifest['version']} "
+                source_stamp = f"commit {manifest['source_sha']};"
+                check(flavor + ' version', code == 0 and text.startswith(version_line) and source_stamp in text)
                 hello = cwd / 'hello.mio'
                 hello.write_text('chant("hello from Mio");\n', encoding='utf-8')
                 image = cwd / ('hello.exe' if target == 'windows-amd64' else 'hello')

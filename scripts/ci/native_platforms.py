@@ -14,7 +14,7 @@ Engines are recorded separately for native execution, build and PE inspection, t
            Windows also runs the two TCP echo examples as separate native processes.
   summary  Combines the platform reports; fails unless every required check is PASS.
 
-The trusted GF4 Native Seed is not available to hosted runners; its verification is always reported NOT_RUN.
+This candidate suite does not use the trusted GF4 seed. Stable distribution verifies it separately.
 Python only starts processes, compares bytes and writes JSON; it generates no code.
 """
 import argparse
@@ -36,10 +36,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/windows-amd64"))
 from verify_pe import verify_winsock
 
+sys.path.insert(0, str(ROOT / "scripts/distribution"))
+from seed_evidence import GF4_SEED_SHA256
+
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
 BUDGET_SECONDS = int(os.environ.get("MIO_NATIVE_BUDGET_SECONDS", "6600"))
-GF4_SEED_SHA256 = "4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da"
 TARGETS = {"linux": "linux-amd64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
 EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
                  "windows-amd64": ("Windows", ("amd64", "x86_64"))}
@@ -61,6 +63,7 @@ class Report:
         self.logs.mkdir(exist_ok=True)
         self.checks, self.hashes = [], {}
         self.run_examples = False
+        self.exec_prefix = []
         self.data = dict(schema_version=1, suite="native-platforms", target=target,
                          source_sha=os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD"),
                          runner=dict(os=os.environ.get("RUNNER_OS", ""), arch=os.environ.get("RUNNER_ARCH", ""),
@@ -72,9 +75,12 @@ class Report:
                                                                  os.environ.get("GITHUB_REPOSITORY", ""),
                                                                  os.environ.get("GITHUB_RUN_ID", ""))),
                          seed=dict(status="NOT_RUN", sha256=GF4_SEED_SHA256,
-                                   reason="the trusted GF4 Native Seed is not available to GitHub-hosted runners; "
+                                   reason="the candidate suite does not use the trusted GF4 Native Seed; "
                                           "Stage A comes from the Go-hosted reference VM and is not seed-verified"),
                          checks=self.checks, hashes=self.hashes)
+        inputs = ROOT / "distribution-input.json"
+        if inputs.is_file():
+            self.data["distribution_input"] = json.loads(inputs.read_text())
 
     def check(self, name, status, engine, reason="", required=True, **extra):
         item = dict(name=name, status=status, engine=engine, required=required, reason=reason)
@@ -86,7 +92,11 @@ class Report:
 
     def save(self):
         failed = [c["name"] for c in self.checks if c["required"] and c["status"] != "PASS"]
-        self.data["status"] = "FAIL" if failed else "PASS"
+        status = "FAIL" if failed else "PASS"
+        if self.data["suite"] == "trusted-gf4-distribution" and self.data["seed"]["status"] != "PASS":
+            status = ("FAIL" if self.data["seed"]["status"] == "FAIL"
+                      or any(c["status"] == "FAIL" for c in self.checks) else "NOT_RUN")
+        self.data["status"] = status
         self.data["failed_required"] = failed
         (self.output / "report.json").write_text(json.dumps(self.data, indent=2) + "\n")
 
@@ -100,6 +110,7 @@ def git(*args):
 
 def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
     """Runs a process, keeps its output in logs/<label>.log; returns (exit code or None on timeout, stdout, stderr)."""
+    argv = [*report.exec_prefix, *argv]
     started = time.monotonic()
     environment = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"))
     environment.update(env or {})
@@ -143,7 +154,7 @@ def peak_rss_mib(err):
 
 def cli_build(report, label, cli, entry, target, output, extra=()):
     argv = [cli, "build", entry, "--target=" + target, "-o", output, *extra]
-    if platform.system() == "Darwin" and Path("/usr/bin/time").exists():
+    if not report.exec_prefix and platform.system() == "Darwin" and Path("/usr/bin/time").exists():
         argv = ["/usr/bin/time", "-l", *argv]  # resource usage only; the build itself is unchanged
     code, out, err, seconds = run(report, label, argv, timeout=CLI_BUILD_TIMEOUT)
     ok = code == 0 and Path(output).is_file()

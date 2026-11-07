@@ -56,7 +56,7 @@ class ChocolateyTests(unittest.TestCase):
 
     def test_stable_entry_uses_existing_release_gate(self):
         import chocolatey
-        with patch('sys.argv', ['chocolatey.py', '--tag', 'v2.1.0', '--assets', '/missing', '--release', '/release.json', '--output', '/out']), patch.object(Path, 'read_text', return_value='{}'), patch('chocolatey.validate', side_effect=ValueError('seed NOT_RUN')), patch('chocolatey.build') as generate:
+        with patch('sys.argv', ['chocolatey.py', '--tag', 'v2.1.0', '--assets', '/missing', '--release', '/release.json', '--source-sha', 'a' * 40, '--output', '/out']), patch.object(Path, 'read_text', return_value='{}'), patch('chocolatey.validate', side_effect=ValueError('seed NOT_RUN')), patch('chocolatey.build') as generate:
             with self.assertRaisesRegex(ValueError, 'NOT_RUN'):
                 chocolatey.main()
             generate.assert_not_called()

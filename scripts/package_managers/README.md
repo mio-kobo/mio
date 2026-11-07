@@ -16,23 +16,11 @@ inventories, identical Core/Full compiler hashes, native B=C=D and every require
 native check PASS. GitHub's asset SHA-256 digest must also match. All source SHAs
 must resolve to the stable tag, which must belong to `Mio-2.1` history.
 
-For stable builds, dispatch `distribution-pr.yml` **on the existing stable tag**
-with `stable_version` matching its unprefixed version. This runs the existing
-three-platform native and Docker pipeline with no publishing credentials. Gather
-the per-target checksums into one `SHA256SUMS`, and retain the target-prefixed
-reports listed above as stable Release assets. The actual frozen Seed result must
-be supplied by maintainers; hosted jobs cannot turn NOT_RUN into PASS.
-
-Stable builds use `prepare.py --stable-version 2.1.0` in the existing disposable
-source pipeline **before** native compilation. Never rename a PR candidate archive
-or stamp a candidate binary after verification. `package.py` and `verify.py` accept
-these stable inputs without changing the candidate workflow's default behavior.
-
-Stable publication additionally requires Trusted Seed **PASS**. Current hosted
-reports say NOT_RUN; these cannot publish. Maintainers must supply genuine frozen
-GF4 validation evidence in the release report without altering the frozen seed or
-lowering checks. This change does not create that evidence, stable tags or Releases.
-The existing self-hosted production pipeline remains unchanged.
+For stable builds, follow the [trusted GF4 and release verification instructions](../../docs/testing.md#stable-distribution-and-trusted-gf4).
+Use the complete `mio-stable-release-assets-<run>-<attempt>` artifact from the
+tagged run. The package-manager gate verifies the GitHub Actions attestation
+against the exact tag and source commit, then compares the frozen GF4 origin
+report with the natively tested B/C/D compiler in each package.
 
 Generated output includes both Formulae with real archive hashes, both WinGet
 Inno multi-file manifests, and both AMD64 Debian packages. No fake stable Formula or

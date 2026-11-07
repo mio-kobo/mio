@@ -11,7 +11,7 @@ import unittest
 import zipfile
 
 from package import digest, extract, gate, inventory, package
-from prepare import prepare, EMPTY
+from prepare import copy_committed_source, prepare, EMPTY
 
 
 class DistributionTests(unittest.TestCase):
@@ -41,6 +41,21 @@ class DistributionTests(unittest.TestCase):
                 prepare(self.source(invalid.replace('/', '_')), 'a'*40, rc_version=invalid)
         with self.assertRaises(ValueError):
             prepare(self.source('both'), 'a'*40, stable_version='2.1.0', rc_version='2.1.0-rc.1')
+
+    def test_stable_source_uses_canonical_bytes_even_in_a_crlf_checkout(self):
+        source = self.source('source-checkout')
+        resource = source / 'selfhost/resources/bunko_data.mio'
+        resource.write_bytes(b'committed line\n')
+        subprocess.run(['git', 'init', '-q', str(source)], check=True)
+        subprocess.run(['git', 'config', 'core.autocrlf', 'true'], cwd=source, check=True)
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=Mio Test', '-c', 'user.email=test@example.invalid',
+                        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture'], cwd=source, check=True)
+        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+        resource.write_bytes(b'dirty checkout\r\n')
+        destination = self.root / 'prepared-stable'
+        copy_committed_source(source, revision, destination)
+        self.assertEqual((destination / resource.relative_to(source)).read_bytes(), b'committed line\n')
 
     def test_rc_dispatch_ref_is_bound_before_any_source_copy(self):
         for event, ref in (('pull_request', 'refs/tags/v2.1.0-rc.1'),

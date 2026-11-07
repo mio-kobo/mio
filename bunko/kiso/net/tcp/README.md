@@ -3,8 +3,8 @@
 Blocking, IPv4-only TCP for Mio. The public connection management, error
 translation, short-write handling, and `kiso/io` adapters are implemented in
 `tcp.mio`. The low-level `mio/sys/socket` functions are native system-call
-primitives: the VM uses a host syscall adapter, and Darwin/ARM64 Native AOT
-lowers the same signatures to direct BSD syscalls.
+primitives. The VM uses a host adapter. Native macOS ARM64 and Linux AMD64
+use OS syscalls, and native Windows AMD64 uses Winsock.
 
 ```mio
 yobu "kiso/net/tcp";
@@ -29,19 +29,21 @@ Server-side functions: `listen`, `listen_with_backlog`, `accept`, and
 exact byte count, or `tcp.write_all` to retry short writes. Resources should
 be explicitly closed; the runtime also closes remaining handles at shutdown.
 
-Current scope: IPv4 literals, blocking sockets, macOS ARM64 Native AOT and
-Unix-like VM backends. DNS, IPv6, timeouts, TLS, and a Windows socket backend
-are not implemented in this first iteration.
+The API supports blocking connections with IPv4 literals. DNS, IPv6,
+timeouts and TLS are outside its current scope.
 
 Two runnable examples live in `examples/tcp_echo_server.mio` and
 `examples/tcp_echo_client.mio`. Start the server first, then the client.
 They use loopback port 18080; the server serves one connection and exits.
 
-Native builds use the pure-Mio CLI (the image is written and ad-hoc signed by Mio):
+Build and run the client on macOS or Linux with the native CLI.
 
 ```sh
-mio build examples/tcp_echo_client.mio --target=darwin-arm64 -o tcp-client   # or --target=linux-amd64
+mio build examples/tcp_echo_client.mio -o tcp-client
 ./tcp-client
 ```
+
+On Windows, use `mio build examples/tcp_echo_client.mio -o tcp-client.exe`
+and run `.\tcp-client.exe`.
 
 For a VM run, use `go run ./cmd/mio run examples/tcp_echo_client.mio`.

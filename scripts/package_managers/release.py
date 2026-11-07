@@ -16,11 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
-GF4_SEED_SHA256 = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
+from seed_evidence import seed_binding, stable_version
+from stable_release import SEED_REPORT, authenticate, docker_archive
 
 
 def stable(tag):
-    if not re.fullmatch(r'v2\.(?:[1-9]\d*)\.(?:0|[1-9]\d*)', tag):
+    if not tag.startswith('v') or not stable_version(tag[1:]):
         raise ValueError('requires a stable v2.1+ tag, never a candidate')
     return tag[1:]
 
@@ -32,10 +33,14 @@ def immutable(path, data):
     path.write_bytes(data)
 
 
-def validate(assets, tag, release):
+def validate(assets, tag, release, source):
     version = stable(tag)
     if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
         raise ValueError('published stable GitHub Release required')
+    run = authenticate(assets, tag, source)
+    seed_path = assets / SEED_REPORT
+    seed = json.loads(seed_path.read_text())
+    seed_sha = digest(seed_path)
     sums = {}
     for line in (assets / 'SHA256SUMS').read_text().splitlines():
         sha, name = line.split('  ')
@@ -43,7 +48,6 @@ def validate(assets, tag, release):
             raise ValueError('invalid/duplicate checksum')
         sums[name] = sha
     records = {}
-    source = None
     for target in TARGETS:
         hashes = []
         for flavor in ('core', 'full'):
@@ -62,7 +66,6 @@ def validate(assets, tag, release):
                 p = json.loads((root / 'provenance.json').read_text())
                 if m['version'] != version or m['target'] != target or m['flavor'] != flavor or inventory(root) != m['files']:
                     raise ValueError('payload manifest mismatch')
-                source = source or m['source_sha']
                 if m['source_sha'] != source or p['source_sha'] != source or p['embedded_bunko'] is not False or any(p[k] != m[k] for k in ('version', 'target', 'flavor')):
                     raise ValueError('source/embedded Bunko mismatch')
                 binary = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
@@ -84,10 +87,14 @@ def validate(assets, tag, release):
                     raise ValueError('required native check not PASS')
                 if any(report['hashes']['cli-' + x] != hashes[-1] for x in 'BCD'):
                     raise ValueError('B/C/D mismatch')
-                # Stable releases require separate frozen seed evidence. Hosted
-                # candidate NOT_RUN is intentionally insufficient for publishing.
-                if report['seed']['status'] != 'PASS' or report['seed'].get('sha256') != GF4_SEED_SHA256:
-                    raise ValueError('stable release requires Trusted Seed PASS')
+                if any(report['run'][key] != run[key] for key in ('id', 'attempt')):
+                    raise ValueError('native report does not match the attested run')
+                inputs = report['distribution_input']
+                if (inputs['source_sha'] != source or inputs['version'] != version
+                        or any(p[key] != value for key, value in inputs.items())):
+                    raise ValueError('distribution inputs do not match package provenance')
+                if p['trusted_seed'] != seed_binding(seed, report, inputs, target, hashes[-1], seed_sha):
+                    raise ValueError('package provenance does not bind the Trusted GF4 report')
             records[target, flavor] = dict(filename=filename, sha=sums[filename], url=url, root=name)
         if hashes[0] != hashes[1]:
             raise ValueError('Core/Full compilers differ')
@@ -97,7 +104,11 @@ def validate(assets, tag, release):
         if evidence['archives'] != {r['filename']: r['sha'] for (t, f), r in records.items() if t == target}:
             raise ValueError('distribution evidence not bound to archives')
     docker = json.loads((assets / 'docker-verification.json').read_text())
-    if docker['status'] != 'PASS' or docker['source_sha'] != source or docker['full_archive_sha256'] != records['linux-amd64', 'full']['sha'] or not docker['checks'] or any(c['status'] != 'PASS' for c in docker['checks']):
+    image = docker_archive(version)
+    if (docker['status'] != 'PASS' or docker['source_sha'] != source
+            or docker['full_archive_sha256'] != records['linux-amd64', 'full']['sha']
+            or docker['archive_sha256'] != sums[image] or not docker['checks']
+            or any(c['status'] != 'PASS' for c in docker['checks'])):
         raise ValueError('Docker offline validation must match Linux Full')
     for flavor in ('core', 'full'):
         filename = f'mio-{version}-windows-amd64-{flavor}-setup.exe'
@@ -204,9 +215,10 @@ def main():
     p.add_argument('--assets', type=Path, required=True)
     p.add_argument('--tag', required=True)
     p.add_argument('--release', type=Path, required=True)
+    p.add_argument('--source-sha', required=True)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
-    version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()))
+    version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()), a.source_sha)
     generate(version, records, a.output)
     for flavor in ('core', 'full'):
         deb(a.assets / records['linux-amd64', flavor]['filename'], a.output / 'apt/pool/main/m/mio', version, flavor)
