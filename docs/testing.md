@@ -181,6 +181,10 @@ Quick / Full / Release 三级设计、原架构审计、资源对比和管理员
 
 受信任 GF4 Native Seed 在每个报告中固定为 NOT_RUN：B/C/D 固定点成立与 Seed 的独立可信性是两个不同结果。报告（`report.json`、逐检查日志、契约/差分结果）按 run ID/attempt 上传，`Native / required` 汇总三平台并写入 Step Summary。
 
+Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过固定点检查的本机 CLI B，直接构建并运行 `examples/` 的示例。`mio test examples/tests` 验证测试发现和结果，TCP 客户端与服务端在 loopback 完成实际往返。Winsock 已启用，三个平台的 TCP 示例都必须通过。
+
+平台 artifact 包含 `build/native/<target>/examples/` 中的 `results.json` 和构建、stdout、stderr 日志。适用示例失败、超时或未运行都会让 `Native / required` 失败。普通 PR 默认关闭示例全集，仍执行原有的 Windows TCP 检查。合并前可以手动 dispatch Native 并启用 `run_examples`，或在本机执行 `python3.12 examples/check.py --mio <native-cli>`。
+
 ## 暂行措施：Native Verification 推迟（临时，仅开发用 CI）
 
 **Native Seed 目前未准备好**：受信任的 GF4 Native Seed（SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`，runner 仍强制校验）无法被 GitHub-hosted Runner 取得；仓库内没有已批准的 Seed 分发来源。为了让 `ci-pr.yml` 与 `ci-full.yml` 先迁移到 GitHub-hosted Runner 并正常运行，需要 Seed 的验证被推迟。这是**临时措施**，不改变 `release.yml`。

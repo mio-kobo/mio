@@ -30,6 +30,8 @@ import sys
 import time
 from pathlib import Path
 
+import examples_native
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/windows-amd64"))
 from verify_pe import verify_winsock
@@ -58,6 +60,7 @@ class Report:
         self.logs = self.output / "logs"
         self.logs.mkdir(exist_ok=True)
         self.checks, self.hashes = [], {}
+        self.run_examples = False
         self.data = dict(schema_version=1, suite="native-platforms", target=target,
                          source_sha=os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD"),
                          runner=dict(os=os.environ.get("RUNNER_OS", ""), arch=os.environ.get("RUNNER_ARCH", ""),
@@ -200,42 +203,19 @@ def windows_tcp_pe(report, image, label):
     return report.check(label, "PASS", "pe-static", imports=symbols, sha256=sha256(image))
 
 
-def windows_tcp_echo(report, cli, work):
-    server, client = work / "tcp-echo-server.exe", work / "tcp-echo-client.exe"
-    builds = []
-    for name, entry, image in (("server", ECHO_SERVER, server), ("client", ECHO_CLIENT, client)):
-        label = "windows-tcp-echo-" + name
-        ok, reason, seconds = cli_build(report, label + "-build", cli, entry, "windows-amd64", image)
-        report.check(label + "-build", "PASS" if ok else "FAIL", "native-build", "" if ok else reason,
-                     seconds=round(seconds, 1))
-        builds.append(ok and windows_tcp_pe(report, image, label + "-pe"))
-    if not all(builds):
-        return report.check("windows-tcp-echo", "NOT_RUN", "native", "echo build or PE verification failed")
-
-    server_log = report.logs / "windows-tcp-echo-server-run.log"
-    server_ready = b"hai\nMio TCP server waiting on 127.0.0.1:18080\n"
-    wanted_client = "hai\n3\nhai\n3\nhai\n77\n105\n111\n"
-    try:
-        with server_log.open("wb") as stream, subprocess.Popen(
-                [str(server)], cwd=work, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT) as child:
-            try:
-                deadline = time.monotonic() + 15
-                while not server_log.read_bytes().startswith(server_ready):
-                    if child.poll() is not None or time.monotonic() >= deadline:
-                        return report.check("windows-tcp-echo", "FAIL", "native",
-                                            "server did not listen: %r" % server_log.read_bytes()[:300])
-                    time.sleep(0.05)
-                code, out, err, _ = run(report, "windows-tcp-echo-client-run", [client], cwd=work, timeout=15)
-                server_code = child.wait(timeout=15)
-            finally:
-                if child.poll() is None:
-                    child.kill()
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return report.check("windows-tcp-echo", "FAIL", "native", str(error))
-    ok = code == 0 and out == wanted_client and not err and server_code == 0 and server_log.read_bytes() == server_ready + b"3\n"
-    return report.check("windows-tcp-echo", "PASS" if ok else "FAIL", "native",
-                        "" if ok else "client exit %s (%r), server exit %s (%r)" %
-                        (code, (out + err)[:300], server_code, server_log.read_bytes()[:300]))
+def windows_tcp_echo_checks(report, results, output):
+    """Keep the Winsock PR gate, using the same pair and results as the Full example suite."""
+    pair = [item for item in results if item["name"] in examples_native.TCP]
+    for item in pair:
+        role = "server" if item["name"] == "tcp_echo_server.mio" else "client"
+        built = item["image_built"]
+        report.check(f"windows-tcp-echo-{role}-build", "PASS" if built else "FAIL", "native-build",
+                     "" if built else item["reason"], exit_code=item["build_exit_code"],
+                     log=(output / item["logs"]["build.log"]).relative_to(report.output).as_posix())
+    ok = len(pair) == 2 and all(item["status"] == "PASS" for item in pair)
+    report.check("windows-tcp-echo", "PASS" if ok else "FAIL", "native",
+                 "; ".join(f'{item["name"]}: {item["reason"]}' for item in pair if item["status"] != "PASS"),
+                 results=(output / "results.json").relative_to(report.output).as_posix())
 
 
 def windows_tcp_wildcard(report, cli, work):
@@ -417,6 +397,7 @@ def contract(report, cli, target, reference="", suite="contract"):
 
 def linux(args):
     report = Report("linux-amd64", args.output)
+    report.run_examples = args.run_examples
     if not verify_host(report):
         return finish(report)
     work = report.output / "work"
@@ -508,15 +489,18 @@ def linux(args):
         report.check("windows-tcp-cross-pe", "NOT_RUN", "pe-static", "cross build failed")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+            if not report.data["failed_required"] and len(manifest) == 2:
+                stream.write("stage_a_ready=true\n")
             for target, item in manifest.items():
                 stream.write("%s=%s\n" % (target.replace("-", "_"), item["sha256"]))
-    return finish(report)
+    return finish(report, cli)
 
 
 # ---------------------------------------------------------------------------------------------------- darwin / windows
 
 def follower(args, target):
     report = Report(target, args.output)
+    report.run_examples = args.run_examples
     if not verify_host(report):
         return finish(report)
     work = report.output / "work"
@@ -556,11 +540,10 @@ def follower(args, target):
         # (Mach-O images that need a macOS host); skips are reported separately and never count as passes.
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64")
         if target == "windows-amd64":
-            windows_tcp_echo(report, cli, work)
             windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)
         contract(report, cli, target, suite="differential")
-    return finish(report)
+    return finish(report, cli)
 
 
 def text_section_offset(image):
@@ -652,7 +635,26 @@ def darwin_profile(report, cli, work):
     print("    profile: time %s rss %d MiB top %s" % (timing, peak_rss_mib(err), profile[:12]), flush=True)
 
 
-def finish(report):
+def finish(report, cli=None):
+    windows_echo = report.target == "windows-amd64" and cli is not None
+    if report.run_examples or windows_echo:
+        output = report.output / "examples" if report.run_examples else report.logs / "windows-tcp-echo"
+
+        def inspect_winsock(name, image):
+            role = "server" if name == "tcp_echo_server.mio" else "client"
+            return windows_tcp_pe(report, image, f"windows-tcp-echo-{role}-pe")
+
+        results = examples_native.run_suite(
+            cli, report.target, output, STARTED + BUDGET_SECONDS, tcp_only=not report.run_examples,
+            inspect_tcp_image=inspect_winsock if windows_echo else None,
+        )
+        if windows_echo:
+            windows_tcp_echo_checks(report, results, output)
+        for item in results if report.run_examples else ():
+            details = dict(item)
+            name = details.pop("name")
+            details["logs"] = {key: "examples/" + path for key, path in details["logs"].items()}
+            report.check("example " + name, **details)
     report.save()
     print("%s: %s" % (report.target, report.data["status"]))
     if report.data["failed_required"]:
@@ -676,29 +678,46 @@ def summary(args):
         path = found.get(target)
         if path is None:
             overall = "FAIL"
-            rows.append("| %s | NOT_RUN | report missing (job failed before writing it or was not scheduled) |" % target)
+            rows.append("| %s | NOT_RUN | report missing (job failed before writing it or was not scheduled) | NOT_RUN |" % target)
             combined[target] = dict(status="NOT_RUN")
             continue
         data = json.loads(path.read_text())
         combined[target] = data
+        if args.run_examples:
+            checks = {item["name"]: item for item in data["checks"]}
+            excluded = examples_native.exclusions(target)
+            names = {"inventory", examples_native.PE_EXECUTION} | examples_native.PROGRAMS.keys() | examples_native.TESTS.keys()
+            for name in sorted(names):
+                label = "example " + name
+                if label not in checks:
+                    data["checks"].append(dict(name=label, status="NOT_RUN", engine="native", required=name not in excluded,
+                                               reason="example check missing from platform report"))
+        data["failed_required"] = [item["name"] for item in data["checks"] if item["required"] and item["status"] != "PASS"]
+        status = "FAIL" if data["status"] != "PASS" or data["failed_required"] else "PASS"
+        data["status"] = status
+        if status != "PASS":
+            overall = "FAIL"
         counts = {}
         for item in data["checks"]:
             counts[item["status"]] = counts.get(item["status"], 0) + 1
-        if data["status"] != "PASS":
-            overall = "FAIL"
-        rows.append("| %s | %s | %s | seed %s |" % (target, data["status"],
+        rows.append("| %s | %s | %s | %s |" % (target, status,
                     ", ".join("%s %d" % kv for kv in sorted(counts.items())), data["seed"]["status"]))
+    jobs = {name: result for name, variable in (("linux", "NATIVE_LINUX_JOB_RESULT"), ("follower", "NATIVE_FOLLOWER_JOB_RESULT"))
+            if (result := os.environ.get(variable))}
+    if any(result != "success" for result in jobs.values()):
+        overall = "FAIL"
     text = ["## Native verification: %s" % overall, "",
             "Stage A is go-hosted (Go reference VM runs the pure-Mio Linux lowering); the trusted GF4 Native Seed is "
             "NOT_RUN. Native execution, builds and static PE checks are recorded separately.", "",
             "| target | status | checks | seed |", "|---|---|---|---|", *rows, ""]
+    text.extend(f"- Native {name} job: {result}" for name, result in jobs.items() if result != "success")
     for target, data in combined.items():
         for item in data.get("checks", []):
             if item["status"] != "PASS":
                 text.append("- %s `%s` %s (%s): %s" % (target, item["name"], item["status"], item["engine"], item["reason"]))
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    (output / "native-summary.json").write_text(json.dumps(dict(status=overall, targets=combined), indent=2) + "\n")
+    (output / "native-summary.json").write_text(json.dumps(dict(status=overall, jobs=jobs, targets=combined), indent=2) + "\n")
     (output / "native-summary.md").write_text("\n".join(text) + "\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
@@ -721,6 +740,8 @@ def main():
     p = sub.add_parser("summary")
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
+    for command in sub.choices.values():
+        command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
     if args.command == "linux":
         return linux(args)

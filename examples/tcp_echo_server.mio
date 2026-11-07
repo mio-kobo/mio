@@ -1,28 +1,65 @@
-yobu "kiso/array";
 yobu "kiso/net/tcp";
+yobu "kiso/io";
+yobu "kiso/os";
+yobu "kiso/convert";
 
-// Minimal single-client echo server. Run before tcp_echo_client.mio.
+// Cross-platform loopback server for the matching TCP client example.
+// Read exactly three bytes: TCP may deliver a short read on any OS.
 waza serve_client(connection: tcp.Connection?) -> unit {
     moshi (connection == mu) { kaesu; }
-    kaku data = array.make[uint8](1024, uint8(0));
-    kaku received = tcp.read(connection, data, 0, len(data));
-    kaku failure = received.error;
-    moshi (failure == mu && received.count > 0) {
-        kaku sent = tcp.write_all(connection, data, 0, received.count);
+    kaku data: []uint8 = [uint8(0), uint8(0), uint8(0)];
+    kaku received = io.read_full(tcp.reader(connection), data, 0, len(data));
+    moshi (received.error == mu && received.count == len(data)) {
+        kaku sent = tcp.write_all(connection, data, 0, len(data));
         chant(sent.count);
+        chant(sent.error == mu);
+    } sore {
+        chant("TCP read failed");
     }
     kaku closed = tcp.close(connection);
 }
 
 waza serve(listener: tcp.Listener?) -> unit {
     moshi (listener == mu) { kaesu; }
-    chant("Mio TCP server waiting on 127.0.0.1:18080");
+    chant("Mio TCP server waiting on 127.0.0.1");
     kaku accepted = tcp.accept(listener);
     serve_client(accepted.connection);
     kaku stopped = tcp.close_listener(listener);
 }
 
-kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), 18080);
-kaku started = tcp.listen(address);
-chant(started.error == mu);
-serve(started.listener);
+waza main() -> unit {
+    // Both peers default to port 18080. Pass a port to run an independent pair.
+    kaku args = os.arguments();
+    kaku port = 18080;
+    moshi (len(args) > 1) {
+        kaku parsed = convert.parse_int(args[1]);
+        moshi (parsed != mu) { port = parsed; } sore { port = 0; }
+        moshi (port < 1 || port > 65535) {
+            chant("Expected a TCP port between 1 and 65535");
+            os.exit(2);
+        }
+    }
+    kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
+    kaku started = tcp.listen(address);
+    chant(started.error == mu);
+    kaku failure = started.error;
+    moshi (failure != mu) {
+        awase (failure) {
+            baai AddressInUse {
+                chant("TCP port already in use");
+                os.exit(75);
+            }
+            baai InvalidArgument { chant("Invalid socket argument"); os.exit(1); }
+            baai Closed { chant("Socket closed"); os.exit(1); }
+            baai TimedOut { chant("Socket timed out"); os.exit(1); }
+            baai ConnectionRefused { chant("Connection refused"); os.exit(1); }
+            baai ConnectionReset { chant("Connection reset"); os.exit(1); }
+            baai PermissionDenied { chant("Socket permission denied"); os.exit(1); }
+            baai WouldBlock { chant("Socket would block"); os.exit(1); }
+            baai Other(message) { chant(message); os.exit(1); }
+        }
+    }
+    serve(started.listener);
+}
+
+main();

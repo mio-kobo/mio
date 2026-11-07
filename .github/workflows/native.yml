@@ -6,7 +6,17 @@ name: Mio Native / 3 platforms
 # always recorded NOT_RUN. A required check that is not PASS fails the run; nothing here ignores a failure.
 on:
   workflow_dispatch:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
   pull_request:
     branches: [Mio-2.1]
   push:
@@ -19,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     outputs:
+      stage_a_ready: ${{ steps.native.outputs.stage_a_ready }}
       darwin_arm64: ${{ steps.native.outputs.darwin_arm64 }}
       windows_amd64: ${{ steps.native.outputs.windows_amd64 }}
     permissions:
@@ -41,14 +52,16 @@ jobs:
         run: go build -o build/native/refvm ./tests/windows-amd64/refvm
       - id: native
         name: Stage A, native compiler and CLI fixed points, mio test, Runtime ABI contract, cross Stage A
-        run: python scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64
+        run: >-
+          python scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64
+          ${{ inputs.run_examples && '--run-examples' || '' }}
       - name: Attest the cross-built Stage A images
-        if: success() && github.event_name != 'pull_request'
+        if: ${{ !cancelled() && steps.native.outputs.stage_a_ready == 'true' && github.event_name != 'pull_request' }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: build/native/linux-amd64/stage-a/mio-*
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: ${{ !cancelled() && steps.native.outputs.stage_a_ready == 'true' }}
         with:
           name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/native/linux-amd64/stage-a/
@@ -65,6 +78,7 @@ jobs:
             build/native/linux-amd64/runtime-abi/*.std*
             build/native/linux-amd64/native-differential/results.json
             build/native/linux-amd64/native-differential/*.std*
+            build/native/linux-amd64/examples/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
@@ -79,6 +93,8 @@ jobs:
   follower:
     name: Native / ${{ matrix.target }}
     needs: linux
+    # Both followers can still verify examples when only the Linux examples failed.
+    if: ${{ !cancelled() && needs.linux.outputs.stage_a_ready == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +129,7 @@ jobs:
         run: >-
           python scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}"
           --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}"
+          ${{ inputs.run_examples && '--run-examples' || '' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -124,6 +141,7 @@ jobs:
             build/native/${{ matrix.target }}/runtime-abi/*.std*
             build/native/${{ matrix.target }}/native-differential/results.json
             build/native/${{ matrix.target }}/native-differential/*.std*
+            build/native/${{ matrix.target }}/examples/
           if-no-files-found: error
           retention-days: 7
   summary:
@@ -144,7 +162,12 @@ jobs:
           pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/native-reports
       - name: Combine the platform reports (fails unless every required check is PASS)
-        run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
+        env:
+          NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}
+          NATIVE_FOLLOWER_JOB_RESULT: ${{ needs.follower.result }}
+        run: >-
+          python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
+          ${{ inputs.run_examples && '--run-examples' || '' }}
       # Per-function Bunko matrix from the same native reports: every covered library function must be PASS (or have a
       # recorded UNSUPPORTED reason) on every platform; UNVERIFIED, SKIP and NOT_RUN fail.
       - name: Bunko public-function test matrix
