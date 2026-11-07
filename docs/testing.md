@@ -177,9 +177,13 @@ Quick / Full / Release 三级设计、原架构审计、资源对比和管理员
 | --- | --- |
 | linux-amd64 / `ubuntu-24.04` | 实际 OS/arch；**Stage A = Go 参考前端 + Go VM 中运行的纯 Mio lowerlinux（go-hosted，不是 Seed）**；原生 compiler A→B→C→D（B=C=D）；compiler B 构建 CLI，CLI A→B→C→D（B=C=D）；CLI 冒烟；全部含 `*_test.mio` 包的原生 `mio test`（跳过记为 SKIP 并单列原因）；Runtime ABI 契约与差分语料（默认与 `--gc-stress`）及其 VM 差分；`linux-runtime-chain` oracle；由 CLI B、C 两代交叉构建 darwin/windows Stage A（必须一致，SHA-256 写入 manifest，非 PR 时做 Artifact Attestation） |
 | darwin-arm64 / `macos-15` | 实际 OS/arch；Stage A SHA-256 与 Linux job 输出及 manifest 三方一致；原生 CLI A→B→C→D（B=C=D），A=B（交叉构建与本机构建逐字节一致）；冒烟；全部包的原生 `mio test`（此平台任何 SKIP 都是失败）；契约与差分（默认与 `--gc-stress`）。此路径不使用 Go |
-| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分；`mio test` 为 NOT_APPLICABLE（Windows 运行时未实现进程 spawn，同一批包在 Linux/macOS 原生运行）。此路径不使用 Go |
+| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分；原生 `mio test` 使用 CreateProcessW。TCP 包因缺少 Winsock 记为 NOT_APPLICABLE。此路径不使用 Go |
 
 受信任 GF4 Native Seed 在每个报告中固定为 NOT_RUN：B/C/D 固定点成立与 Seed 的独立可信性是两个不同结果。报告（`report.json`、逐检查日志、契约/差分结果）按 run ID/attempt 上传，`Native / required` 汇总三平台并写入 Step Summary。
+
+Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过固定点检查的本机 CLI B，直接构建并运行 `examples/` 的示例。`mio test examples/tests` 验证测试发现和结果，TCP 客户端与服务端在 loopback 完成实际往返。Windows TCP 的排除取自 `scripts/ci/bunko_matrix_coverage.json`；加入 Winsock 后删除该条目即可将两例纳入必需检查。
+
+平台 artifact 包含 `build/native/<target>/examples/` 中的 `results.json` 和构建、stdout、stderr 日志。适用示例失败、超时或未运行都会让 `Native / required` 失败。普通 PR 默认关闭示例验证。合并前可以手动 dispatch Native 并启用 `run_examples`，或在本机执行 `python3.12 examples/check.py --mio <native-cli>`。
 
 ## 暂行措施：Native Verification 推迟（临时，仅开发用 CI）
 

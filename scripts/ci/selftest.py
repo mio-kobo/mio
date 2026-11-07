@@ -712,12 +712,15 @@ exit "$result"
             for target, status in (("linux-amd64", "PASS"), ("darwin-arm64", "PASS")):
                 report = native.Report(target, reports / ("native-report-" + target))
                 report.check("x", status, "native")
-            args = type("Args", (), dict(reports=str(reports), output=str(Path(directory) / "out")))
+            args = type("Args", (), dict(reports=str(reports), output=str(Path(directory) / "out"), run_examples=False))
             self.assertEqual(native.summary(args), 1)  # windows-amd64 is missing: NOT_RUN, never PASS
             report = native.Report("windows-amd64", reports / "native-report-windows-amd64")
             report.check("x", "PASS", "native")
             report.check("mio-test", "NOT_APPLICABLE", "native", "no spawn", required=False)
             self.assertEqual(native.summary(args), 0)
+            args.run_examples = True
+            self.assertEqual(native.summary(args), 1)  # examples were required but absent
+            args.run_examples = False
             report.check("y", "NOT_RUN", "native", "missing")
             self.assertEqual(native.summary(args), 1)
             for data in json.loads((Path(directory) / "out" / "native-summary.json").read_text())["targets"].values():

@@ -1,19 +1,20 @@
 yobu "kiso/net/tcp";
 yobu "kiso/io";
+yobu "kiso/os";
+yobu "kiso/convert";
 
+// Send "Mio" to the loopback server and verify its echoed bytes.
 waza send_and_receive(connection: tcp.Connection?) -> unit {
     moshi (connection == mu) { kaesu; }
     kaku data: []uint8 = [uint8(77), uint8(105), uint8(111)];
     kaku sent = tcp.write_all(connection, data, 0, len(data));
-    kaku sent_error = sent.error;
     chant(sent.count);
-    chant(sent_error == mu);
+    chant(sent.error == mu);
 
-    kaku echo: []uint8 = [0, 0, 0];
+    kaku echo: []uint8 = [uint8(0), uint8(0), uint8(0)];
     kaku received = io.read_full(tcp.reader(connection), echo, 0, len(echo));
-    kaku read_error = received.error;
     chant(received.count);
-    chant(read_error == mu);
+    chant(received.error == mu);
     chant(echo[0]);
     chant(echo[1]);
     chant(echo[2]);
@@ -21,7 +22,18 @@ waza send_and_receive(connection: tcp.Connection?) -> unit {
     kaku closed = tcp.close(connection);
 }
 
-kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), 18080);
+// Both peers default to port 18080. Pass a port to run an independent pair.
+kaku args = os.arguments();
+kaku port = 18080;
+moshi (len(args) > 1) {
+    kaku parsed = convert.parse_int(args[1]);
+    moshi (parsed != mu) { port = parsed; } sore { port = 0; }
+    moshi (port < 1 || port > 65535) {
+        chant("Expected a TCP port between 1 and 65535");
+        os.exit(2);
+    }
+}
+kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
 kaku connected = tcp.connect(address);
 chant(connected.error == mu);
 send_and_receive(connected.connection);

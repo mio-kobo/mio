@@ -28,6 +28,8 @@ import sys
 import time
 from pathlib import Path
 
+import examples_native
+
 ROOT = Path(__file__).resolve().parents[2]
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
@@ -50,6 +52,7 @@ class Report:
         self.logs = self.output / "logs"
         self.logs.mkdir(exist_ok=True)
         self.checks, self.hashes = [], {}
+        self.run_examples = False
         self.data = dict(schema_version=1, suite="native-platforms", target=target,
                          source_sha=os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD"),
                          runner=dict(os=os.environ.get("RUNNER_OS", ""), arch=os.environ.get("RUNNER_ARCH", ""),
@@ -283,25 +286,15 @@ def count(pattern, text):
     return int(match.group(1)) if match else 0
 
 
-# Packages whose runtime layer does not exist on a target, with the technical reason. They are reported
-# NOT_APPLICABLE (never PASS) and must match the UNSUPPORTED entries of scripts/ci/bunko_matrix_coverage.json.
-NOT_APPLICABLE_PACKAGES = {
-    "windows-amd64": {
-        "bunko/kiso/net/tcp": "kiso/aot/lowerwinrt has no Winsock layer (the lowerlinux socket runtime uses Linux socket "
-                              "system calls); the calls stop with the explicit runtime error \"unsupported operation\"",
-    },
-}
-
-
 def native_mio_test(report, cli, skips_allowed):
     """Every package with *_test.mio. A skipped test is never a pass: skips are reported separately (SKIP, with the
     test's own reason). Where every test must run (darwin-arm64, the primary target) a skip is a required failure."""
     failures = []
-    excluded = NOT_APPLICABLE_PACKAGES.get(report.target, {})
+    tcp_exclusion = examples_native.tcp_exclusion(report.target)
     for package in test_packages():
         label = "mio-test-" + package.replace("/", "_")
-        if package in excluded:
-            report.check("mio-test " + package, "NOT_APPLICABLE", "native", excluded[package], required=False)
+        if package == "bunko/kiso/net/tcp" and tcp_exclusion:
+            report.check("mio-test " + package, "NOT_APPLICABLE", "native", tcp_exclusion, required=False)
             continue
         if time.monotonic() - STARTED > BUDGET_SECONDS:
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
@@ -364,6 +357,7 @@ def contract(report, cli, target, reference="", suite="contract"):
 
 def linux(args):
     report = Report("linux-amd64", args.output)
+    report.run_examples = args.run_examples
     verify_host(report)
     work = report.output / "work"
     work.mkdir(exist_ok=True)
@@ -446,15 +440,18 @@ def linux(args):
     (seeds / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+            if not report.data["failed_required"] and len(manifest) == 2:
+                stream.write("stage_a_ready=true\n")
             for target, item in manifest.items():
                 stream.write("%s=%s\n" % (target.replace("-", "_"), item["sha256"]))
-    return finish(report)
+    return finish(report, cli)
 
 
 # ---------------------------------------------------------------------------------------------------- darwin / windows
 
 def follower(args, target):
     report = Report(target, args.output)
+    report.run_examples = args.run_examples
     verify_host(report)
     work = report.output / "work"
     work.mkdir(exist_ok=True)
@@ -494,7 +491,7 @@ def follower(args, target):
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64")
         contract(report, cli, target)
         contract(report, cli, target, suite="differential")
-    return finish(report)
+    return finish(report, cli)
 
 
 def text_section_offset(image):
@@ -587,7 +584,15 @@ def darwin_profile(report, cli, work):
     print("    profile: time %s rss %d MiB top %s" % (timing, peak_rss_mib(err), profile[:12]), flush=True)
 
 
-def finish(report):
+def finish(report, cli=None):
+    if report.run_examples:
+        output = report.output / "examples"
+        results = examples_native.run_suite(cli, report.target, output, STARTED + BUDGET_SECONDS)
+        for item in results:
+            details = dict(item)
+            name = details.pop("name")
+            details["logs"] = {key: "examples/" + path for key, path in details["logs"].items()}
+            report.check("example " + name, **details)
     report.save()
     print("%s: %s" % (report.target, report.data["status"]))
     if report.data["failed_required"]:
@@ -611,17 +616,30 @@ def summary(args):
         path = found.get(target)
         if path is None:
             overall = "FAIL"
-            rows.append("| %s | NOT_RUN | report missing (job failed before writing it or was not scheduled) |" % target)
+            rows.append("| %s | NOT_RUN | report missing (job failed before writing it or was not scheduled) | NOT_RUN |" % target)
             combined[target] = dict(status="NOT_RUN")
             continue
         data = json.loads(path.read_text())
         combined[target] = data
+        if args.run_examples:
+            checks = {item["name"]: item for item in data["checks"]}
+            excluded = examples_native.exclusions(target)
+            names = {"inventory", examples_native.PE_EXECUTION} | examples_native.PROGRAMS.keys() | examples_native.TESTS.keys()
+            for name in sorted(names):
+                label = "example " + name
+                if label not in checks:
+                    data["checks"].append(dict(name=label, status="NOT_RUN", engine="native", required=name not in excluded,
+                                               reason="example check missing from platform report"))
+        status = "FAIL" if data["status"] != "PASS" or any(
+            item["required"] and item["status"] != "PASS" for item in data["checks"]
+        ) else "PASS"
+        data["status"] = status
+        if status != "PASS":
+            overall = "FAIL"
         counts = {}
         for item in data["checks"]:
             counts[item["status"]] = counts.get(item["status"], 0) + 1
-        if data["status"] != "PASS":
-            overall = "FAIL"
-        rows.append("| %s | %s | %s | seed %s |" % (target, data["status"],
+        rows.append("| %s | %s | %s | %s |" % (target, status,
                     ", ".join("%s %d" % kv for kv in sorted(counts.items())), data["seed"]["status"]))
     text = ["## Native verification: %s" % overall, "",
             "Stage A is go-hosted (Go reference VM runs the pure-Mio Linux lowering); the trusted GF4 Native Seed is "
@@ -656,6 +674,8 @@ def main():
     p = sub.add_parser("summary")
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
+    for command in sub.choices.values():
+        command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
     if args.command == "linux":
         return linux(args)
