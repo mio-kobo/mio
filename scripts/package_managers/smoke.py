@@ -77,8 +77,6 @@ def smoke(root, target, flavor, metadata_root=None, command=None, manager_files=
                 wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
             proc = subprocess.run([str(cli), 'lsp', '--stdio'], input=wire, cwd=cwd, env=env, capture_output=True, timeout=30)
             assert proc.returncode == 0 and b'capabilities' in proc.stdout, (proc.returncode, proc.stdout, proc.stderr)
-        if target == 'windows-amd64':
-            print('NOT_APPLICABLE: kiso/net/tcp (no Windows Winsock runtime layer)')
     print(f'PASS: {target} {flavor} inventory, version, offline compile/execute, Bunko contract')
 
 if __name__ == '__main__':

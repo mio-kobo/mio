@@ -69,7 +69,7 @@ installing Chocolatey to refresh PATH. Do not install the same flavor through
 WinGet and Chocolatey together, since PATH would select only one version.
 Full works offline after installation; Core has no bundled standard library.
 Keep projects and configuration outside Chocolatey's package directory, which
-upgrades replace and uninstall removes. Windows TCP remains unsupported.
+upgrades replace and uninstall removes.
 
 ## Linux AMD64 / APT
 
@@ -104,7 +104,7 @@ mio check math.mio
 The default target is the current host. Use `darwin-arm64` or `windows-amd64`
 for those targets; `run` and `exec` require the host target. The integrated
 check/build/run/exec/test/lsp/disasm tools are tested on all three platforms.
-Windows `kiso/net/tcp` is NOT_APPLICABLE because the runtime has no Winsock layer.
+The Windows AMD64 native compiler supports blocking IPv4 `kiso/net/tcp` through Winsock.
 
 Bunko lookup remains: `--bunko-root`, then `MIO_BUNKO`, then `../bunko` relative to
 the real executable. Invalid explicit/environment roots are errors, including an

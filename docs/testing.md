@@ -171,13 +171,13 @@ Quick / Full / Release 三级设计、原架构审计、资源对比和管理员
 
 ## 三平台 Native 验证（native.yml）
 
-`.github/workflows/native.yml`（PR、`runtime-abi/**` push、手动，以及 Full 的 `native` job）运行 `scripts/ci/native_platforms.py`，每项检查记录 engine：`native`（原生 Mio 镜像在该 runner 上执行）、`reference`（Go 参考 VM）、`go-hosted`（Stage A 引导主机）、`host`（runner 自身检查）。状态为 PASS / FAIL / SKIP / NOT_RUN / NOT_APPLICABLE，只有 PASS 计为通过；必需检查非 PASS 时 `Native / required` 失败。
+`.github/workflows/native.yml`（PR、`runtime-abi/**` push、手动，以及 Full 的 `native` job）运行 `scripts/ci/native_platforms.py`，每项检查记录 engine：`native`（原生 Mio 镜像在该 runner 上执行）、`reference`（Go 参考 VM）、`go-hosted`（Stage A 引导主机）、`host`（runner 自身检查）、`native-build`（本机编译）、`cross-build`（交叉编译）和 `pe-static`（PE 导入表检查）。状态为 PASS / FAIL / SKIP / NOT_RUN / NOT_APPLICABLE，只有 PASS 计为通过；必需检查非 PASS 时 `Native / required` 失败。
 
 | 平台 / runner | 检查 |
 | --- | --- |
 | linux-amd64 / `ubuntu-24.04` | 实际 OS/arch；**Stage A = Go 参考前端 + Go VM 中运行的纯 Mio lowerlinux（go-hosted，不是 Seed）**；原生 compiler A→B→C→D（B=C=D）；compiler B 构建 CLI，CLI A→B→C→D（B=C=D）；CLI 冒烟；全部含 `*_test.mio` 包的原生 `mio test`（跳过记为 SKIP 并单列原因）；Runtime ABI 契约与差分语料（默认与 `--gc-stress`）及其 VM 差分；`linux-runtime-chain` oracle；由 CLI B、C 两代交叉构建 darwin/windows Stage A（必须一致，SHA-256 写入 manifest，非 PR 时做 Artifact Attestation） |
 | darwin-arm64 / `macos-15` | 实际 OS/arch；Stage A SHA-256 与 Linux job 输出及 manifest 三方一致；原生 CLI A→B→C→D（B=C=D），A=B（交叉构建与本机构建逐字节一致）；冒烟；全部包的原生 `mio test`（此平台任何 SKIP 都是失败）；契约与差分（默认与 `--gc-stress`）。此路径不使用 Go |
-| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分；`mio test` 为 NOT_APPLICABLE（Windows 运行时未实现进程 spawn，同一批包在 Linux/macOS 原生运行）。此路径不使用 Go |
+| windows-amd64 / `windows-2025` | 同 darwin 的 Stage A 校验、CLI 固定点、A=B、冒烟、契约与差分。原生 `mio test bunko/kiso/net/tcp` 和两个独立进程的 TCP echo 必须通过。Linux runner 另行记录 Windows echo 的交叉编译与 PE 静态检查。Windows 路径不使用 Go |
 
 受信任 GF4 Native Seed 在每个报告中固定为 NOT_RUN：B/C/D 固定点成立与 Seed 的独立可信性是两个不同结果。报告（`report.json`、逐检查日志、契约/差分结果）按 run ID/attempt 上传，`Native / required` 汇总三平台并写入 Step Summary。
 

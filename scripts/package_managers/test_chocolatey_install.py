@@ -169,7 +169,6 @@ def install(assets, stable_packages=None):
             finally:
                 server.shutdown()
         result['status'] = 'PASS'
-        result['limitations'] = {'kiso/net/tcp': 'NOT_APPLICABLE: no Windows Winsock layer'}
     except Exception as error:
         result.update(status='FAIL', error=str(error))
         raise

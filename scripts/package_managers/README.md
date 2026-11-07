@@ -89,7 +89,7 @@ The optional manual regression workflow takes a successful native distribution
 run ID and verifies its status/path before using its unexpired artifacts. Such
 fixtures are never stable release inputs; PR CI has no expiring fixture pin.
 Windows run/exec/test/LSP functionality is tested, matching the current native
-protocol evidence. Only kiso/net/tcp (no Winsock layer) is NOT_APPLICABLE.
+protocol evidence. Windows TCP is covered by the required native CI checks.
 
 The install tests require the native candidates produced by the distribution
 workflow. Without them, lifecycle tests are NOT_RUN; unit tests do not claim real
@@ -169,8 +169,7 @@ Core/Full coexistence, PATH and ShimGen target, all file hashes, native executio
 Bunko imports, integrated tools and uninstall. Firewall rules block outbound
 compiler traffic during offline checks and are removed afterwards. Stable jobs
 also upgrade to the exact generated stable nupkg using its official HTTPS URL.
-Reports start FAIL and become PASS only after all checks execute. Windows TCP
-remains NOT_APPLICABLE outside required checks.
+Reports start FAIL and become PASS only after all checks execute.
 
 Wrapper-only PRs reuse the existing Windows regression job in Chocolatey-only
 mode (no unrelated PSGallery/WinGet download) and a successful,
