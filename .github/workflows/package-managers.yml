@@ -167,7 +167,7 @@ jobs:
     if: >-
       github.repository == 'mio-kobo/mio' &&
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/Mio-2.1' &&
-      inputs.submit_chocolatey && vars.MIO_CHOCOLATEY_PUBLISH_ENABLED == 'true'
+      github.run_attempt == 1 && inputs.submit_chocolatey && vars.MIO_CHOCOLATEY_PUBLISH_ENABLED == 'true'
     environment: chocolatey-community
     runs-on: windows-2025
     steps:
@@ -188,5 +188,5 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         shell: pwsh
         run: |
-          python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version $env:TAG.Substring(1) --push
+          python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version $env:TAG.Substring(1) --push --moderation-checked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

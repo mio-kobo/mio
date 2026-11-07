@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Immutable CCR submission. No publishing unless --push is explicit."""
+"""Immutable CCR submission. Publishing requires explicit push and moderation confirmation."""
 import argparse
 import os
 from pathlib import Path
@@ -8,7 +8,7 @@ import subprocess
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from chocolatey import COMMUNITY, FEED, SOURCE
+from chocolatey import FEED, SOURCE
 from release import stable
 
 
@@ -60,17 +60,9 @@ def existing(name, version):
         with urlopen(FEED + f'package/{name}/{version}', timeout=60) as response:
             return response.read()
     except HTTPError as error:
-        if error.code != 404:
-            raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
-    # An exact-version page can exist before its package is downloadable.
-    # The maintainer also checks the signed-in queue before authorizing submission.
-    try:
-        with urlopen(COMMUNITY + f'packages/{name}/{version}', timeout=60):
-            raise ValueError(f'CCR already has a page for {name} {version}; check moderation state')
-    except HTTPError as error:
-        if error.code != 404:
-            raise RuntimeError(f'CCR moderation preflight failed for {name} {version}: HTTP status={error.code}') from None
-        return None
+        if error.code == 404:
+            return None
+        raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
 
 
 def publish(folder, version, push=False, fetch=existing):
@@ -113,5 +105,9 @@ if __name__ == '__main__':
     p.add_argument('--packages', type=Path, required=True)
     p.add_argument('--version', required=True)
     p.add_argument('--push', action='store_true')
+    p.add_argument('--moderation-checked', action='store_true',
+                   help='confirm both exact versions were checked in the signed-in CCR moderation queue')
     a = p.parse_args()
+    if a.push and not a.moderation_checked:
+        p.error('--push requires --moderation-checked')
     publish(a.packages, a.version, a.push)

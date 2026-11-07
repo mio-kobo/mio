@@ -15,8 +15,7 @@ from release import immutable, stable, validate
 
 HERE = Path(__file__).resolve().parent
 SOURCE = 'https://push.chocolatey.org/'
-COMMUNITY = 'https://community.chocolatey.org/'
-FEED = COMMUNITY + 'api/v2/'
+FEED = 'https://community.chocolatey.org/api/v2/'
 OPC = 'http://schemas.openxmlformats.org/package/2006/'
 MANIFEST_REL = 'http://schemas.microsoft.com/packaging/2010/07/manifest'
 CORE_REL = OPC + 'relationships/metadata/core-properties'

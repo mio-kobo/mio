@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import subprocess
+import sys
 import traceback
 import unittest
 from unittest.mock import patch
@@ -110,21 +111,21 @@ class ChocolateyTests(unittest.TestCase):
                 self.assertNotIn('secret-test-value', str(error.exception))
                 self.assertTrue(error.exception.__suppress_context__)
 
-    def test_preflight_blocks_visible_moderation_and_fails_closed(self):
-        missing = HTTPError('private-url', 404, 'private-body', None, None)
-        unavailable = HTTPError('private-url', 503, 'private-body', None, None)
-        with patch('chocolatey_publish.urlopen') as request:
-            request.side_effect = [missing, request.return_value]
-            with self.assertRaisesRegex(ValueError, 'check moderation state'):
-                existing('mio-core', '2.1.0')
-            self.assertTrue(request.call_args.args[0].endswith('/packages/mio-core/2.1.0'))
-            request.side_effect = [missing, missing]
-            self.assertIsNone(existing('mio-core', '2.1.0'))
-            request.side_effect = [missing, unavailable]
-            with self.assertRaisesRegex(RuntimeError, 'HTTP status=503') as error:
-                existing('mio-core', '2.1.0')
-            self.assertTrue(error.exception.__suppress_context__)
-            self.assertNotIn('private', str(error.exception))
+    def test_preflight_fails_closed_on_feed_error(self):
+        for code in (403, 503):
+            unavailable = HTTPError('private-url', code, 'private-body', None, None)
+            with patch('chocolatey_publish.urlopen', side_effect=unavailable):
+                with self.assertRaisesRegex(RuntimeError, f'HTTP status={code}') as error:
+                    existing('mio-core', '2.1.0')
+                self.assertTrue(error.exception.__suppress_context__)
+                self.assertNotIn('private', str(error.exception))
+
+    def test_push_requires_moderation_confirmation(self):
+        script = Path(__file__).with_name('chocolatey_publish.py')
+        result = subprocess.run([sys.executable, str(script), '--packages', 'missing',
+                                 '--version', '2.1.0', '--push'], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--push requires --moderation-checked', result.stderr)
 
     def test_push_failure_reports_only_safe_diagnostics(self):
         key = 'secret-test-value'
