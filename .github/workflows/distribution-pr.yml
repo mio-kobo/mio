@@ -407,6 +407,8 @@ jobs:
   docker-full-offline:
     needs:
     - candidate-linux
+    # The successful candidate may have an intentionally skipped seed ancestor.
+    if: ${{ !cancelled() && needs.candidate-linux.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -532,6 +534,8 @@ jobs:
 
   apt-distributions:
     needs: candidate-linux
+    # The successful candidate may have an intentionally skipped seed ancestor.
+    if: ${{ !cancelled() && needs.candidate-linux.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -565,7 +569,10 @@ jobs:
   stable-evidence:
     name: Assemble and attest stable release assets
     needs: [required, trusted-seed, stable-web]
-    if: github.event_name == 'workflow_dispatch' && inputs.stable_version
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.stable_version &&
+      needs.required.result == 'success' && needs.trusted-seed.result == 'success' &&
+      needs.stable-web.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -6,9 +6,15 @@ from pathlib import Path
 import shutil
 import sys
 
-from native_platforms import (ROOT, CLI_BUILD_TIMEOUT, Report, brief, cli_build,
+from native_platforms import (ROOT, Report, brief, cli_build,
                               cli_chain, run, sha256, verify_host)
 from seed_evidence import GF4_SEED_SHA256, TARGETS, stable_version
+
+
+# The frozen seed's historical self-builds took roughly 19–23 minutes on
+# Darwin ARM64. Use the existing CI seed-build budget for this older binary;
+# cli_chain and cross builds retain the current compiler's shorter timeout.
+GF4_BUILD_TIMEOUT = 7200
 
 
 def verify(output, seed_path):
@@ -43,11 +49,12 @@ def verify(output, seed_path):
         '-f', ROOT / 'tools/native-ci/production.sb',
     ]
     first = work / 'mio-A'
-    code, out, err, _ = run(report, 'seed-build-A',
+    code, out, err, seconds = run(report, 'seed-build-A',
                             [seed, 'build', 'selfhost/cli', '--bunko-root', ROOT / 'bunko', '-o', first],
-                            timeout=CLI_BUILD_TIMEOUT, env={'PATH': ''})
+                            timeout=GF4_BUILD_TIMEOUT, env={'PATH': ''})
     if not report.check('seed-build-A', 'PASS' if code == 0 and first.is_file() else 'FAIL', 'native',
-                        '' if code == 0 and first.is_file() else f'exit {code}: {brief(err or out)}'):
+                        '' if code == 0 and first.is_file() else f'exit {code}: {brief(err or out)}',
+                        seconds=round(seconds, 1)):
         return 1
     first.chmod(0o700)
     report.hashes['cli-A'] = sha256(first)
