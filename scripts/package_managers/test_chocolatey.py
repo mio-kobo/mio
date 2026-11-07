@@ -1,4 +1,5 @@
 from contextlib import redirect_stderr, redirect_stdout
+from hashlib import sha256
 import io
 import json
 from pathlib import Path
@@ -8,10 +9,11 @@ import traceback
 import unittest
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
+from urllib.error import HTTPError
 import zipfile
 
 from chocolatey import build, package_files
-from chocolatey_publish import publish
+from chocolatey_publish import existing, publish
 
 
 class ChocolateyTests(unittest.TestCase):
@@ -24,17 +26,41 @@ class ChocolateyTests(unittest.TestCase):
             for flavor in ('core', 'full'):
                 package = build('2.1.0', flavor, self.record(flavor), Path(temp))
                 original = package.read_bytes()
-                self.assertEqual(build('2.1.0', flavor, self.record(flavor), Path(temp)).read_bytes(), original)
+                rebuild = build('2.1.0', flavor, self.record(flavor), Path(temp) / 'rebuild')
+                self.assertEqual(sha256(rebuild.read_bytes()).hexdigest(), sha256(original).hexdigest())
                 with zipfile.ZipFile(package) as z:
-                    self.assertEqual(len(z.namelist()), 5)
                     name = 'mio' if flavor == 'full' else 'mio-core'
-                    ns = {'n': 'http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd'}
+                    self.assertIsNone(z.testzip())
+                    core_path = 'package/services/metadata/core-properties/mio.psmdcp'
+                    self.assertCountEqual(z.namelist(), [
+                        '[Content_Types].xml', '_rels/.rels', core_path, name + '.nuspec',
+                        'tools/release.json', 'tools/chocolateyInstall.ps1', 'tools/chocolateyUninstall.ps1',
+                    ])
+                    opc = 'http://schemas.openxmlformats.org/package/2006/'
+                    types = ET.fromstring(z.read('[Content_Types].xml'))
+                    self.assertEqual(types.tag, '{' + opc + 'content-types}Types')
+                    self.assertEqual({item.attrib['Extension']: item.attrib['ContentType'] for item in types}, {
+                        'rels': 'application/vnd.openxmlformats-package.relationships+xml',
+                        'psmdcp': 'application/vnd.openxmlformats-package.core-properties+xml',
+                        'nuspec': 'application/octet', 'json': 'application/octet', 'ps1': 'application/octet',
+                    })
+                    rels = ET.fromstring(z.read('_rels/.rels'))
+                    self.assertEqual(rels.tag, '{' + opc + 'relationships}Relationships')
+                    self.assertEqual(len({rel.attrib['Id'] for rel in rels}), 2)
+                    self.assertCountEqual([(rel.attrib['Type'], rel.attrib['Target']) for rel in rels], [
+                        ('http://schemas.microsoft.com/packaging/2010/07/manifest', '/' + name + '.nuspec'),
+                        (opc + 'relationships/metadata/core-properties', '/' + core_path),
+                    ])
+                    core = ET.fromstring(z.read(core_path))
+                    self.assertEqual(core.find('{http://purl.org/dc/elements/1.1/}identifier').text, name)
+                    self.assertEqual(core.find('{' + opc + 'metadata/core-properties}version').text, '2.1.0')
+                    ns = {'n': 'http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd'}
                     meta = ET.fromstring(z.read(name + '.nuspec')).find('n:metadata', ns)
                     self.assertEqual(meta.find('n:id', ns).text, name)
                     self.assertEqual(meta.find('n:version', ns).text, '2.1.0')
                     self.assertIsNone(meta.find('n:dependencies', ns))
                     record = json.loads(z.read('tools/release.json'))
-                    self.assertEqual(record['command'], name)
+                    self.assertEqual(record, dict(self.record(flavor), command=name, version='2.1.0', flavor=flavor))
                     self.assertEqual(record['sha'], 'a' * 64)
                     self.assertEqual(record['version'], '2.1.0')
                     install = z.read('tools/chocolateyInstall.ps1').decode()
@@ -84,6 +110,22 @@ class ChocolateyTests(unittest.TestCase):
                 self.assertNotIn('secret-test-value', str(error.exception))
                 self.assertTrue(error.exception.__suppress_context__)
 
+    def test_preflight_blocks_visible_moderation_and_fails_closed(self):
+        missing = HTTPError('private-url', 404, 'private-body', None, None)
+        unavailable = HTTPError('private-url', 503, 'private-body', None, None)
+        with patch('chocolatey_publish.urlopen') as request:
+            request.side_effect = [missing, request.return_value]
+            with self.assertRaisesRegex(ValueError, 'check moderation state'):
+                existing('mio-core', '2.1.0')
+            self.assertTrue(request.call_args.args[0].endswith('/packages/mio-core/2.1.0'))
+            request.side_effect = [missing, missing]
+            self.assertIsNone(existing('mio-core', '2.1.0'))
+            request.side_effect = [missing, unavailable]
+            with self.assertRaisesRegex(RuntimeError, 'HTTP status=503') as error:
+                existing('mio-core', '2.1.0')
+            self.assertTrue(error.exception.__suppress_context__)
+            self.assertNotIn('private', str(error.exception))
+
     def test_push_failure_reports_only_safe_diagnostics(self):
         key = 'secret-test-value'
         cases = (
@@ -95,9 +137,11 @@ class ChocolateyTests(unittest.TestCase):
              '409 (conflict (check whether the package version already exists))'),
             (b'HTTP status code: 413', b'', '413 (package exceeds the upload size limit)'),
             (b'', b'HTTP error 429', '429 (rate limit exceeded)'),
-            (b'', b'Status code: 500', '500 (internal server error)'),
-            (b'', b'HTTP 503', '503 (unknown)'),
+            (b'', b'Status code: 500', '500 (internal server error (check package format and CCR moderation state))'),
+            (b'', b'HTTP 503', '503 (service unavailable)'),
             (b'HTTP 400', b'HTTP 500', 'unknown'),
+            (b'This package version already exists on the repository and cannot be modified.', b'',
+             'unknown; Chocolatey reported that this package version already exists'),
             (b'Chocolatey v2.4.0, port 403', b'HTTP 5000\xff', 'unknown'),
         )
         with tempfile.TemporaryDirectory() as temp:
@@ -122,7 +166,7 @@ class ChocolateyTests(unittest.TestCase):
                     run.assert_called_once()
                     self.assertEqual(log.getvalue(), '')
                     self.assertEqual(str(error.exception),
-                                     f'CCR submission failed for mio-core.2.1.0.nupkg: returncode=17, HTTP status={status}')
+                                     f'CCR submission failed for mio-core.2.1.0.nupkg: returncode=17, HTTP status={status}; check the signed-in moderation queue before any retry')
                     traceback.print_exception(error.exception, file=log)
                     for private in (key, 'private-source', '--api-key=', 'raw stdout', 'raw stderr', 'raw body'):
                         self.assertNotIn(private, log.getvalue())

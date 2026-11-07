@@ -3,9 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing published stable tag (dry run only)
+        description: Existing published stable tag
         required: true
         type: string
+      submit_chocolatey:
+        description: Submit to CCR after checking both exact versions in the signed-in moderation queue
+        type: boolean
+        default: false
   release:
     types: [published]
 permissions:
@@ -22,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: Mio-2.1
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || 'Mio-2.1' }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -83,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: Mio-2.1
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || 'Mio-2.1' }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -159,14 +163,17 @@ jobs:
 
   chocolatey-submit:
     needs: [prepare, install]
-    # Disabled until first maintainer review. Manual dispatch is ALWAYS dry run.
-    if: github.event_name == 'release' && vars.MIO_CHOCOLATEY_PUBLISH_ENABLED == 'true'
+    # A new release or a rerun of a release event cannot upload to CCR.
+    if: >-
+      github.repository == 'mio-kobo/mio' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/Mio-2.1' &&
+      inputs.submit_chocolatey && vars.MIO_CHOCOLATEY_PUBLISH_ENABLED == 'true'
     environment: chocolatey-community
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: Mio-2.1
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:

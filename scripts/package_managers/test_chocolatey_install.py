@@ -100,6 +100,14 @@ def install(assets, stable_packages=None):
                         versions.append(version)
                     for v in versions:
                         package = build(v, flavor, record, packages, fixture=True) if v in ('0.0.1', '0.0.2') else packages / stable_package.name
+                        if v not in ('0.0.1', '0.0.2'):
+                            # Rebuild independently on Windows and compare to the
+                            # bytes produced by the Linux release job.
+                            stable_record = dict(filename=archive.name, root=root.name, sha=record['sha'],
+                                                 url=f'https://github.com/mio-kobo/mio/releases/download/v{v}/{archive.name}')
+                            rebuilt = build(v, flavor, stable_record, Path(temp) / 'rebuild')
+                            assert digest(rebuilt) == digest(package), 'stable nupkg differs between Windows and Linux'
+                            result.setdefault('nupkg_sha256', {})[package.name] = digest(package)
                         assert package.stat().st_size < 20000, 'metadata-only package expected'
                         run('choco', 'install' if v == '0.0.1' else 'upgrade', name, '--version=' + v, '--source=' + str(packages), '--yes', '--no-progress', '--limit-output')
                         assert json.loads((payload / 'manifest.json').read_text()) == expected_manifest
@@ -168,6 +176,9 @@ def install(assets, stable_packages=None):
                 passed('wrong archive SHA-256 rejected with nonzero exit even with --ignore-checksums')
             finally:
                 server.shutdown()
+        run('powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', str(Path(__file__).with_name('chocolatey') / 'verify-nuget.ps1'), str(packages))
+        passed('NuGet OPC reader, nuspec XSD, missing manifest regression and choco pack reference')
         result['status'] = 'PASS'
     except Exception as error:
         result.update(status='FAIL', error=str(error))

@@ -8,7 +8,7 @@ import subprocess
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from chocolatey import FEED, SOURCE
+from chocolatey import COMMUNITY, FEED, SOURCE
 from release import stable
 
 
@@ -23,11 +23,19 @@ HTTP_ERROR_DETAILS = {
     400: 'bad request (check package metadata and submission requirements)',
     401: 'authentication failed (check the configured API key)',
     403: 'forbidden (check account and package permissions)',
+    406: 'not acceptable (check the package version and CCR moderation queue)',
     409: 'conflict (check whether the package version already exists)',
     413: 'package exceeds the upload size limit',
     429: 'rate limit exceeded',
-    500: 'internal server error',
+    500: 'internal server error (check package format and CCR moderation state)',
+    502: 'bad gateway',
+    503: 'service unavailable',
+    504: 'gateway timeout',
 }
+
+
+# Chocolatey may print this conflict message without an HTTP status.
+ALREADY_EXISTS = b'already exists on the repository and cannot be modified'
 
 
 def push_failure(result):
@@ -35,13 +43,16 @@ def push_failure(result):
     codes = {
         int(code)
         for output in (result.stdout, result.stderr)
-        for code in HTTP_ERROR.findall(output)
+        for code in HTTP_ERROR.findall(output or b'')
     }
     status = 'unknown'
     if len(codes) == 1:
         code = codes.pop()
         status = f'{code} ({HTTP_ERROR_DETAILS.get(code, "unknown")})'
-    return f'returncode={result.returncode}, HTTP status={status}'
+    details = ''
+    if any(ALREADY_EXISTS in (output or b'').lower() for output in (result.stdout, result.stderr)):
+        details = '; Chocolatey reported that this package version already exists'
+    return f'returncode={result.returncode}, HTTP status={status}{details}'
 
 
 def existing(name, version):
@@ -49,9 +60,17 @@ def existing(name, version):
         with urlopen(FEED + f'package/{name}/{version}', timeout=60) as response:
             return response.read()
     except HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
+        if error.code != 404:
+            raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
+    # An exact-version page can exist before its package is downloadable.
+    # The maintainer also checks the signed-in queue before authorizing submission.
+    try:
+        with urlopen(COMMUNITY + f'packages/{name}/{version}', timeout=60):
+            raise ValueError(f'CCR already has a page for {name} {version}; check moderation state')
+    except HTTPError as error:
+        if error.code != 404:
+            raise RuntimeError(f'CCR moderation preflight failed for {name} {version}: HTTP status={error.code}') from None
+        return None
 
 
 def publish(folder, version, push=False, fetch=existing):
@@ -83,9 +102,9 @@ def publish(folder, version, push=False, fetch=existing):
             result = subprocess.run(['choco', 'push', str(path), '--source=' + SOURCE, '--api-key=' + key], capture_output=True, timeout=300)
         except (subprocess.TimeoutExpired, OSError):
             # TimeoutExpired includes argv: suppress its exception chain as well.
-            raise RuntimeError('CCR submission could not finish for ' + path.name + '; retry after checking remote state') from None
+            raise RuntimeError('CCR submission could not finish for ' + path.name + '; check the signed-in moderation queue before any retry') from None
         if result.returncode:
-            raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}')
+            raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}; check the signed-in moderation queue before any retry')
         print('SUBMITTED for community review: ' + path.name)
 
 
