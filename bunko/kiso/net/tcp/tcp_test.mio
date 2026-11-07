@@ -92,13 +92,6 @@ waza test_loopback_roundtrip_eof_and_errors() -> unit {
         testing.expect(clash.listener == mu && tcp_error_code(clash.error) == 6, "a second listener on the same port reports AddressInUse");
         close_listener(again);
     }
-    kaku wildcard = listen(ipv4(uint8(0), uint8(0), uint8(0), uint8(0), port)).listener;
-    testing.expect(wildcard != mu, "the wildcard listener can bind after close");
-    moshi (wildcard != mu) {
-        kaku clash = listen(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
-        testing.expect(clash.listener == mu && tcp_error_code(clash.error) == 6, "an overlapping wildcard listener reports AddressInUse");
-        close_listener(wildcard);
-    }
 }
 
 // listen_with_backlog and the kiso/io adapters over a loopback connection.

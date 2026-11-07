@@ -238,6 +238,18 @@ def windows_tcp_echo(report, cli, work):
                         (code, (out + err)[:300], server_code, server_log.read_bytes()[:300]))
 
 
+def windows_tcp_wildcard(report, cli, work):
+    image = work / "tcp-wildcard.exe"
+    label = "windows-tcp-wildcard"
+    ok, reason, _ = cli_build(report, label + "-build", cli, "tests/windows-amd64/tcp_wildcard.mio", report.target, image)
+    if not ok:
+        return report.check(label, "FAIL", "native", "build " + reason)
+    code, out, err, _ = run(report, label, [image], cwd=work, timeout=15)
+    ok = code == 0 and out == "tcp wildcard: ok\n" and not err
+    return report.check(label, "PASS" if ok else "FAIL", "native",
+                        "" if ok else "exit %s: %s" % (code, brief(out + err)))
+
+
 def mio_run_protocol(report, cli, work):
     """`mio run` builds for the host (the default target) and starts the program with the given arguments: the same
     argument strings (spaces, empty, quotes, backslashes, UTF-8) and the program's exit status on every platform."""
@@ -545,6 +557,7 @@ def follower(args, target):
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64")
         if target == "windows-amd64":
             windows_tcp_echo(report, cli, work)
+            windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)
         contract(report, cli, target, suite="differential")
     return finish(report)
