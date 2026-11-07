@@ -232,7 +232,9 @@ checks the actual Darwin ARM64 host before retrieving the seed.
    without credentials. It accepts only the expected GitHub release CDN
    redirect. It checks the complete binary against the independently pinned
    SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`
-   and verifies its existing signature before execution.
+   and verifies the signed GitHub release attestation and the existing
+   macOS signature before execution. Only the attestation command needs
+   the read-only Actions token, which the bootstrap processes do not inherit.
 2. Once the official stable tag exists on `Mio-2.1` history, a maintainer
    dispatches `distribution-pr.yml` on that tag with `stable_version` set to
    its unprefixed version. Each job prepares the same committed inputs with

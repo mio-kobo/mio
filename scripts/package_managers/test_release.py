@@ -27,7 +27,8 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def seed_fixture(self, base, compiler_sha):
-        host = ['distribution-input', 'release-context', 'runner-os-arch', 'seed-source', 'seed-pin', 'seed-signature']
+        host = ['distribution-input', 'release-context', 'runner-os-arch', 'seed-source', 'seed-pin',
+                'seed-release-attestation', 'seed-signature']
         native = ['seed-build-A', 'cli-fixed-point', *['cli-stage-' + stage for stage in 'BCD'],
                   *['cross-stage-a ' + target for target in TARGETS if target != 'darwin-arm64']]
         logs = base / SEED_LOG_DIR

@@ -11,7 +11,7 @@ GF4_ASSET_NAME = 'mio-gf4-darwin-arm64'
 TARGETS = ('darwin-arm64', 'linux-amd64', 'windows-amd64')
 STABLE_VERSION = r'2\.[1-9]\d*\.(?:0|[1-9]\d*)'
 CROSS_TARGETS = TARGETS[1:]
-GF4_LOGS = ('seed-signature.log', 'seed-build-A.log', 'cli-B.log', 'cli-C.log', 'cli-D.log',
+GF4_LOGS = ('seed-release-attestation.log', 'seed-signature.log', 'seed-build-A.log', 'cli-B.log', 'cli-C.log', 'cli-D.log',
             *(f'cross-{stage}-{target}.log' for target in CROSS_TARGETS for stage in 'BC'))
 
 
@@ -52,7 +52,7 @@ def validate_seed(seed, source, version, run):
     hashes = seed['hashes']
     checks = {c['name']: c for c in seed['checks']}
     required = dict.fromkeys(('distribution-input', 'release-context', 'runner-os-arch',
-                              'seed-source', 'seed-pin', 'seed-signature'), 'host')
+                              'seed-source', 'seed-pin', 'seed-release-attestation', 'seed-signature'), 'host')
     required.update(dict.fromkeys(('seed-build-A', 'cli-fixed-point',
                                   *('cli-stage-' + stage for stage in 'BCD'),
                                   *('cross-stage-a ' + name for name in CROSS_TARGETS)), 'native'))

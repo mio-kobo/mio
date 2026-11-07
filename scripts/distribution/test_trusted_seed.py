@@ -94,7 +94,9 @@ class TrustedSeedTests(unittest.TestCase):
             path.write_bytes(BYTES)
 
         self.download_seed.side_effect = retrieve
-        self.run.return_value = (1, '', 'signature rejected', 0)
+        self.run.side_effect = [(1, '', 'release attestation rejected', 0),
+                                (0, 'release attestation verified', '', 0),
+                                (1, '', 'signature rejected', 0)]
         with patch('trusted_seed.GF4_SOURCE', PIN):
             result, report = self.verify()
             self.assertEqual(result, 1)
@@ -105,8 +107,15 @@ class TrustedSeedTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertEqual(report['seed']['source'], PIN)
             self.assertEqual(report['checks'][-2]['status'], 'PASS')
-            self.assertEqual(report['checks'][-1]['name'], 'seed-signature')
+            self.assertEqual(report['checks'][-1]['name'], 'seed-release-attestation')
             self.run.assert_called_once()
+            self.assertEqual(self.run.call_args.args[2][:4], ['gh', 'release', 'verify-asset', PIN['tag']])
+            with patch('trusted_seed.GF4_SEED_SHA256', HASH):
+                result, report = self.verify()
+            self.assertEqual(result, 1)
+            self.assertEqual(report['checks'][-2]['status'], 'PASS')
+            self.assertEqual(report['checks'][-1]['name'], 'seed-signature')
+            self.assertEqual(self.run.call_count, 3)
             self.assertEqual(self.run.call_args.args[2][0], '/usr/bin/codesign')
 
 

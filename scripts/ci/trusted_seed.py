@@ -84,17 +84,24 @@ def verify(output, local_seed=None):
     report.data['seed']['status'] = 'FAIL'
     if not report.check('seed-pin', 'PASS' if sha256(seed) == GF4_SEED_SHA256 else 'FAIL', 'host'):
         return 1
-    seed.chmod(0o500)
+    if local_seed is None:
+        code, out, err, _ = run(report, 'seed-release-attestation',
+                               ['gh', 'release', 'verify-asset', GF4_SOURCE['tag'], seed, '--repo', REPOSITORY],
+                               timeout=120)
+        if not report.check('seed-release-attestation', 'PASS' if code == 0 else 'FAIL', 'host', brief(err or out)):
+            return 1
     code, out, err, _ = run(report, 'seed-signature', ['/usr/bin/codesign', '--verify', '--strict', seed])
     if not report.check('seed-signature', 'PASS' if code == 0 else 'FAIL', 'host', brief(err or out)):
         return 1
     # The existing production sandbox denies network, source writes and
     # execution outside the seed and generated output directories.
     report.exec_prefix = [
+        '/usr/bin/env', '-u', 'GH_TOKEN',
         '/usr/bin/sandbox-exec', '-D', 'SEED=' + str(seed),
         '-D', 'SOURCE=' + str(ROOT), '-D', 'OUT=' + str(work),
         '-f', ROOT / 'tools/native-ci/production.sb',
     ]
+    seed.chmod(0o500)
     first = work / 'mio-A'
     code, out, err, seconds = run(report, 'seed-build-A',
                             [seed, 'build', 'selfhost/cli', '--bunko-root', ROOT / 'bunko', '-o', first],
@@ -121,7 +128,8 @@ def verify(output, local_seed=None):
                             '' if match else reason, B=hash_b, C=hash_c):
             return 1
         report.hashes['stage-a-' + target] = hash_b
-    report.data['logs'] = {name: sha256(report.logs / name) for name in GF4_LOGS}
+    report.data['logs'] = {name: sha256(report.logs / name) for name in GF4_LOGS
+                           if local_seed is None or name != 'seed-release-attestation.log'}
     report.data['seed']['status'] = 'PASS'
     report.save()
     return 0
