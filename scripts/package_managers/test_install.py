@@ -107,7 +107,8 @@ def install(assets, target):
         base = Path(temp)
         archives = {}
         for flavor in ('core', 'full'):
-            found = list(assets.glob(f'mio-*-{target}-{flavor}.*'))
+            extension = 'zip' if target == 'windows-amd64' else 'tar.gz'
+            found = list(assets.glob(f'mio-*-{target}-{flavor}.{extension}'))
             assert len(found) == 1, found
             archive = found[0]
             root = extract(archive, base / ('extract-' + flavor))

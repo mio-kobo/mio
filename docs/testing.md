@@ -215,3 +215,60 @@ Full 通过 `run_examples: true` 启用示例验证。每个平台复用通过�
 与必需 gate 的关系：`bootstrap` job 属于 Full（push 到 Mio-2.1、手动、周计划），不属于 PR Quick；PR 的必需检查 `Mio CI / required` 不依赖它，也不会被它延迟。Full 工作流的结果是各 job 的总和（`Full / linux-amd64`、`Full / macos-arm64`、两个 `Full / bootstrap / …`），任何一个失败都使该次 Full 失败。若要把 Full 设为合并前必需，需要维护者另行配置分支规则。
 
 注：上表中的 `legacy-bcd`、`legacy-m18`、`legacy-m18-reference` 与 `go-aot-reference` 已随 Go AOT 后端一起删除（Mio-2.1 Runtime ABI 统合，见 CHANGELOG.md）；这些行仅作历史记录。
+
+## Stable distribution and trusted GF4
+
+The ordinary hosted native report records GF4 as **NOT_RUN**. Its Linux Stage A
+uses the Go reference VM. Stable distribution has a separate verification job
+that must produce the same final compiler bytes from the frozen seed.
+
+1. Use a maintainer-controlled macOS ARM64 Actions runner with the `mio-native`
+   label, Git, Python 3.12+ and `/usr/bin/sandbox-exec`. Set its service's
+   `MIO_NATIVE_SEED` to a read-only copy of the frozen GF4 executable with SHA-256
+   `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`.
+   Keep the seed on the runner and limit access to trusted release jobs.
+2. Once the final stable tag exists on `Mio-2.1` history, dispatch
+   `distribution-pr.yml` on that tag with `stable_version` set to its unprefixed
+   version. Each job prepares the committed source bytes and generates the same
+   source-free CLI input. The GF4 job checks the digest before executing the seed
+   in the native production sandbox. It records the seed-built Darwin CLI A,
+   the native Darwin B/C/D fixed point, and Linux and Windows cross images built
+   independently by Darwin B and C. Only Darwin executes the seed.
+3. Each target's packaging job compares the GF4-derived hash with its own
+   natively verified B/C/D and packages exactly those bytes. The stable workflow
+   also requires the native examples, Bunko matrix, Chromium, installer and
+   manager lifecycle checks, and Docker offline build/save/load. The resulting
+   `mio-stable-release-assets-<run>-<attempt>` artifact contains the same-run
+   evidence and the signed digest inventory. The workflow only produces Actions
+   artifacts and an attestation.
+
+For an independent Darwin ARM64 replay, run these commands from a checkout of
+the revision being tested. Set `MIO_NATIVE_SEED` as above. A local report records
+what ran and can be compared against the workflow's compiler hashes.
+
+```sh
+work=$(mktemp -d)
+python3 scripts/distribution/prepare.py --stable-version 2.1.0 --disposable-checkout "$work/source"
+GITHUB_SHA=$(git rev-parse HEAD) python3 "$work/source/scripts/ci/trusted_seed.py" --output "$work/evidence"
+```
+
+To verify downloaded stable assets, resolve `source` from the exact release tag
+in a fresh checkout. Verify the report signature against the official workflow,
+source commit and tag, then check the report's file digests and `SHA256SUMS`.
+
+```sh
+tag=v2.1.0
+source=$(git rev-parse "refs/tags/$tag^{commit}")
+gh attestation verify release-verification.json \
+  --bundle release-verification.sigstore.json \
+  --repo mio-kobo/mio \
+  --signer-workflow mio-kobo/mio/.github/workflows/distribution-pr.yml \
+  --source-ref "refs/tags/$tag" --source-digest "$source" --signer-digest "$source" \
+  --deny-self-hosted-runners
+sha256sum -c SHA256SUMS
+```
+
+The package-manager gate additionally checks every signed evidence file,
+inspects all six archives and reconciles each provenance record with the
+GF4 and native reports. Without the seed, its job records **NOT_RUN** and
+the stable workflow produces no signed release asset set.

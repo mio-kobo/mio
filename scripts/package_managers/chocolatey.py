@@ -73,9 +73,10 @@ def main():
     p.add_argument('--assets', type=Path, required=True)
     p.add_argument('--tag', required=True)
     p.add_argument('--release', type=Path, required=True)
+    p.add_argument('--source-sha', required=True)
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
-    version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()))
+    version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()), a.source_sha)
     for flavor in ('core', 'full'):
         print(build(version, flavor, records['windows-amd64', flavor], a.output))
 

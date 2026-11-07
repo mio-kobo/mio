@@ -10,7 +10,7 @@ import stat
 import tarfile
 import zipfile
 
-TARGETS = ('darwin-arm64', 'linux-amd64', 'windows-amd64')
+from seed_evidence import TARGETS, seed_binding, stable_version
 # Integrated tools are the only validated end-user tools today. No standalone
 # binaries, Go VM, historical snapshots or test harnesses are implicitly copied.
 TOOLS = ('check', 'build', 'run', 'exec', 'test', 'lsp', 'disasm')
@@ -19,7 +19,11 @@ EXAMPLES = {'hello.mio': 'chant("hello from Mio");\n',
 
 
 def digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    sha = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            sha.update(chunk)
+    return sha.hexdigest()
 
 
 def write_json(path, value):
@@ -96,10 +100,16 @@ def gate(report, compiler, inputs, target):
         raise ValueError('source-free build input required')
 
 
-def package(source, compiler, report_path, output, target):
+def package(source, compiler, report_path, output, target, seed_report=None):
     inputs = json.loads((source / 'distribution-input.json').read_text(encoding='utf-8'))
     report = json.loads(report_path.read_text(encoding='utf-8'))
     gate(report, compiler, inputs, target)
+    trusted_seed = report['seed']
+    if stable_version(inputs['version']):
+        if seed_report is None:
+            raise ValueError('stable distribution requires a same-run Trusted GF4 report')
+        trusted_seed = seed_binding(json.loads(seed_report.read_text(encoding='utf-8')), report, inputs,
+                                    target, digest(compiler), digest(seed_report))
     from prepare import EMPTY
     if (source / 'selfhost/resources/bunko_data.mio').read_text(encoding='utf-8') != EMPTY:
         raise ValueError('embedded resource table was not disabled')
@@ -140,7 +150,7 @@ def package(source, compiler, report_path, output, target):
                 dest.write_text(content, encoding='utf-8')
         provenance = dict(inputs, target=target, flavor=flavor, compiler_sha256=digest(compiler),
                           native_report_sha256=digest(report_path), native_run=report['run'],
-                          trusted_seed=report['seed'], runtime_abi='RA-1', tools=list(TOOLS),
+                          trusted_seed=trusted_seed, runtime_abi='RA-1', tools=list(TOOLS),
                           standalone_tools=[], build_engine='native B/C/D fixed point (Go-hosted root)')
         write_json(root / 'provenance.json', provenance)
         write_json(root / 'manifest.json', dict(schema_version=1, target=target, flavor=flavor,
@@ -166,7 +176,8 @@ if __name__ == '__main__':
     p.add_argument('--source', type=Path, required=True)
     p.add_argument('--compiler', type=Path, required=True)
     p.add_argument('--report', type=Path, required=True)
+    p.add_argument('--seed-report', type=Path)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--target', choices=TARGETS, required=True)
     a = p.parse_args()
-    package(a.source.resolve(), a.compiler.resolve(), a.report.resolve(), a.output.resolve(), a.target)
+    package(a.source.resolve(), a.compiler.resolve(), a.report.resolve(), a.output.resolve(), a.target, a.seed_report)

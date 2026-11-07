@@ -54,12 +54,13 @@ jobs:
       - name: Gate all six artifacts and generate real checksummed metadata
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev
-          python scripts/package_managers/release.py --tag "$TAG" --release build/release.json --assets build/release-assets --output build/generated
-          python scripts/package_managers/chocolatey.py --tag "$TAG" --release build/release.json --assets build/release-assets --output build/generated/chocolatey
-          python -c 'import json,subprocess; from pathlib import Path; r=json.loads(Path("build/release.json").read_text()); tag=r["tag_name"]; sha=subprocess.check_output(["git","rev-parse",tag+"^{commit}"],text=True).strip(); assert all(json.loads(p.read_text())["source_sha"]==sha for p in Path("build/release-assets").glob("*-native-report.json"))'
+          SOURCE_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+          python scripts/package_managers/release.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated
+          python scripts/package_managers/chocolatey.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated/chocolatey
       - name: Chocolatey dry run (no credentials, no push)
         env:
           TAG: ${{ steps.tag.outputs.tag }}
