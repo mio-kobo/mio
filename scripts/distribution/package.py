@@ -10,7 +10,7 @@ import stat
 import tarfile
 import zipfile
 
-from seed_evidence import TARGETS, seed_binding, stable_version
+from seed_evidence import GF4, SEED_KINDS, TARGETS, seed_binding, stable_version
 # Integrated tools are the only validated end-user tools today. No standalone
 # binaries, Go VM, historical snapshots or test harnesses are implicitly copied.
 TOOLS = ('check', 'build', 'run', 'exec', 'test', 'lsp', 'disasm')
@@ -100,16 +100,16 @@ def gate(report, compiler, inputs, target):
         raise ValueError('source-free build input required')
 
 
-def package(source, compiler, report_path, output, target, seed_report=None):
+def package(source, compiler, report_path, output, target, seed_report=None, seed_kind=GF4):
     inputs = json.loads((source / 'distribution-input.json').read_text(encoding='utf-8'))
     report = json.loads(report_path.read_text(encoding='utf-8'))
     gate(report, compiler, inputs, target)
     trusted_seed = report['seed']
     if stable_version(inputs['version']):
         if seed_report is None:
-            raise ValueError('stable distribution requires a same-run Trusted GF4 report')
+            raise ValueError('stable distribution requires a same-run trusted seed report')
         trusted_seed = seed_binding(json.loads(seed_report.read_text(encoding='utf-8')), report, inputs,
-                                    target, digest(compiler), digest(seed_report))
+                                    target, digest(compiler), digest(seed_report), seed_kind)
     from prepare import EMPTY
     if (source / 'selfhost/resources/bunko_data.mio').read_text(encoding='utf-8') != EMPTY:
         raise ValueError('embedded resource table was not disabled')
@@ -176,8 +176,9 @@ if __name__ == '__main__':
     p.add_argument('--source', type=Path, required=True)
     p.add_argument('--compiler', type=Path, required=True)
     p.add_argument('--report', type=Path, required=True)
+    p.add_argument('--seed', choices=SEED_KINDS, default=GF4)
     p.add_argument('--seed-report', type=Path)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--target', choices=TARGETS, required=True)
     a = p.parse_args()
-    package(a.source.resolve(), a.compiler.resolve(), a.report.resolve(), a.output.resolve(), a.target, a.seed_report)
+    package(a.source.resolve(), a.compiler.resolve(), a.report.resolve(), a.output.resolve(), a.target, a.seed_report, a.seed)

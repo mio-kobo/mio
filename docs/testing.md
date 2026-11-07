@@ -219,36 +219,35 @@ Quick 和 Full 的 Seed 驱动模块在 GitHub-hosted Runner 上仍处于暂缓�
 ## Stable distribution and trusted GF4
 
 Candidate verification reports GF4 as **NOT_RUN** and uses the Go reference VM
-for Linux Stage A. The separate stable job uses GitHub-hosted `macos-15` and
-checks the actual Darwin ARM64 host before retrieving the seed.
+for Linux Stage A. The stable workflow on revisions with v2.1 seed support uses
+a separate GitHub-hosted Darwin ARM64 job.
 
-1. The original ad-hoc-signed Darwin ARM64 GF4 executable is published as
-   `mio-gf4-darwin-arm64` on the [immutable GF4 seed release](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable).
-   The release tag, release ID and asset ID are pinned in
-   `scripts/distribution/seed_evidence.py`. Asset verification and local unit
-   tests are separate from the production bootstrap, which is still pending.
-   The runner checks the immutable release and asset identity over HTTPS
-   without credentials. It accepts only the expected GitHub release CDN
-   redirect. It checks the complete binary against the independently pinned
-   SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`
-   and verifies the signed GitHub release attestation and the existing
-   macOS signature before execution. Only the attestation command needs
-   the read-only Actions token, which the bootstrap processes do not inherit.
-2. Once the official stable tag exists on `Mio-2.1` history, a maintainer
-   dispatches `distribution-pr.yml` on that tag with `stable_version` set to
-   its unprefixed version. Each job prepares the same committed inputs with
-   external Bunko. The GF4 job runs the native production sandbox, builds
-   Darwin CLI A from GF4, verifies the Darwin B/C/D fixed point, and uses
-   Darwin B and C to independently build Linux and Windows images. Only the
-   Darwin job executes GF4.
-3. Each target's packaging job compares the GF4-derived hash with its own
-   natively verified B/C/D and packages those bytes. After native, Bunko,
-   Chromium, installer, package-manager and offline Docker checks pass, the
-   stable workflow attests the signed inventory of assets and evidence. The
-   `mio-stable-release-assets-<run>-<attempt>` artifact includes the seed
-   identity, exact source commit, runner details, bootstrap hashes and logs,
-   bound to the tag and run attempt. The workflow produces Actions artifacts
-   and an attestation.
+1. The job retrieves `mio-v2.1.0-darwin-arm64` from the
+   [immutable v2.1 seed release](https://github.com/mio-kobo/mio/releases/tag/bootstrap-v2.1.0-seed.1).
+   It checks the pinned release tag, release ID, asset ID, asset name, and SHA-256
+   from `scripts/distribution/seed_evidence.py`. The download is restricted to
+   GitHub's API and the expected release CDN redirect. The job verifies the
+   GitHub release attestation and the strict macOS code signature before running
+   the executable in the production sandbox.
+2. A maintainer dispatches `distribution-pr.yml` on an existing stable tag
+   on `Mio-2.1` history with `stable_version` set to the unprefixed version.
+   Every job prepares identical committed inputs with external Bunko. The seed
+   builds Darwin CLI A, then A builds B, B builds C, and C builds D. Darwin B,
+   C, and D must match byte for byte. Darwin B and C independently build Linux
+   and Windows outputs, which must match for each target.
+3. Each packaging job compares the seed-derived hash with its own native
+   B/C/D. After the remaining distribution checks pass, the workflow attests
+   the inventory for the exact tag, commit, and run attempt. The
+   `mio-stable-release-assets-<run>-<attempt>` artifact includes
+   `trusted-native-v21-report.json` and `trusted-native-v21-logs/`. The
+   workflow produces Actions artifacts and an attestation.
+
+The frozen GF4 executable remains pinned to the
+[immutable GF4 seed release](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable)
+and SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`.
+Existing tags retain their original workflows. The release verifier still
+recognizes the historical GF4 evidence format and validates it against the
+GF4 pin. A v2.1 seed report is evidence only for the v2.1 seed.
 
 For an independent Darwin ARM64 replay from a checkout of the revision being
 tested, pass a local copy of the original seed explicitly. This report is
@@ -258,7 +257,7 @@ for local comparison.
 work=$(mktemp -d)
 python3 scripts/distribution/prepare.py --stable-version 2.1.0 --disposable-checkout "$work/source"
 GITHUB_SHA=$(git rev-parse HEAD) python3 "$work/source/scripts/ci/trusted_seed.py" \
-  --output "$work/evidence" --local-seed /path/to/frozen-gf4
+  --seed gf4 --output "$work/evidence" --local-seed /path/to/frozen-gf4
 ```
 
 To verify downloaded stable assets, resolve `source` from the exact release tag

@@ -56,7 +56,7 @@ def sha256(path):
 
 
 class Report:
-    def __init__(self, target, output):
+    def __init__(self, target, output, require_seed=False):
         self.target, self.output = target, Path(output).resolve()
         self.output.mkdir(parents=True, exist_ok=True)
         self.logs = self.output / "logs"
@@ -64,6 +64,7 @@ class Report:
         self.checks, self.hashes = [], {}
         self.run_examples = False
         self.exec_prefix = []
+        self.require_seed = require_seed
         self.data = dict(schema_version=1, suite="native-platforms", target=target,
                          source_sha=os.environ.get("GITHUB_SHA") or git("rev-parse", "HEAD"),
                          runner=dict(os=os.environ.get("RUNNER_OS", ""), arch=os.environ.get("RUNNER_ARCH", ""),
@@ -93,7 +94,7 @@ class Report:
     def save(self):
         failed = [c["name"] for c in self.checks if c["required"] and c["status"] != "PASS"]
         status = "FAIL" if failed else "PASS"
-        if self.data["suite"] == "trusted-gf4-distribution" and self.data["seed"]["status"] != "PASS":
+        if self.require_seed and self.data["seed"]["status"] != "PASS":
             status = ("FAIL" if self.data["seed"]["status"] == "FAIL"
                       or any(c["status"] == "FAIL" for c in self.checks) else "NOT_RUN")
         self.data["status"] = status

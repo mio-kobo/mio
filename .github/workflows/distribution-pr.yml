@@ -41,7 +41,7 @@ jobs:
             f.write('wrapper_only=' + str(only).lower() + '\n')
         PYCODE
   trusted-seed:
-    name: Trusted GF4 / Darwin ARM64 origin
+    name: Trusted Mio v2.1 seed / Darwin ARM64 origin
     needs: scope
     if: github.repository == 'mio-kobo/mio' && github.event_name == 'workflow_dispatch' && inputs.stable_version
     runs-on: macos-15
@@ -53,30 +53,30 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - name: Build from the pinned GF4 seed and verify the Darwin fixed point and cross outputs
+    - name: Build from the pinned Mio v2.1 seed and verify the Darwin fixed point and cross outputs
       env:
         SSL_CERT_FILE: /etc/ssl/cert.pem
         GH_TOKEN: ${{ github.token }}
       shell: bash
       run: |
         set -euo pipefail
-        work=$(mktemp -d "$RUNNER_TEMP/mio-gf4.XXXXXXXX")
-        echo "MIO_GF4_WORK=$work" >> "$GITHUB_ENV"
+        work=$(mktemp -d "$RUNNER_TEMP/mio-native-v21.XXXXXXXX")
+        echo "MIO_NATIVE_SEED_WORK=$work" >> "$GITHUB_ENV"
         python3 scripts/distribution/prepare.py --disposable-checkout "$work/source"
-        python3 "$work/source/scripts/ci/trusted_seed.py" --output "$work/evidence"
+        python3 "$work/source/scripts/ci/trusted_seed.py" --seed native-v21 --output "$work/evidence"
     - uses: actions/upload-artifact@v4
-      if: always() && env.MIO_GF4_WORK != ''
+      if: always() && env.MIO_NATIVE_SEED_WORK != ''
       with:
-        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
+        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
         path: |
-          ${{ env.MIO_GF4_WORK }}/evidence/trusted-gf4-report.json
-          ${{ env.MIO_GF4_WORK }}/evidence/logs/
+          ${{ env.MIO_NATIVE_SEED_WORK }}/evidence/trusted-native-v21-report.json
+          ${{ env.MIO_NATIVE_SEED_WORK }}/evidence/logs/
         if-no-files-found: error
         retention-days: 14
     - name: Remove the private seed copy and working images
-      if: always() && env.MIO_GF4_WORK != ''
+      if: always() && env.MIO_NATIVE_SEED_WORK != ''
       shell: bash
-      run: rm -rf -- "$MIO_GF4_WORK"
+      run: rm -rf -- "$MIO_NATIVE_SEED_WORK"
   stable-web:
     needs: scope
     if: github.event_name == 'workflow_dispatch' && inputs.stable_version
@@ -143,11 +143,11 @@ jobs:
     - uses: actions/download-artifact@v4
       if: inputs.stable_version
       with:
-        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/trusted-gf4
+        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-native-v21
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed-report build/trusted-gf4/trusted-gf4-report.json' || '' }}
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
     - name: Install current official WinGet client
@@ -478,11 +478,11 @@ jobs:
     - uses: actions/download-artifact@v4
       if: inputs.stable_version
       with:
-        name: trusted-gf4-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/trusted-gf4
+        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-native-v21
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed-report build/trusted-gf4/trusted-gf4-report.json' || '' }}
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
     - name: Install current official WinGet client
@@ -590,12 +590,12 @@ jobs:
         persist-credentials: false
     - uses: actions/download-artifact@v4
       with:
-        pattern: '@(mio-candidates-*|mio-docker-linux-amd64-candidate|trusted-gf4|chocolatey-tests|apt-container-*)-${{ github.run_id }}-${{ github.run_attempt }}'
+        pattern: '@(mio-candidates-*|mio-docker-linux-amd64-candidate|trusted-native-v21|chocolatey-tests|apt-container-*)-${{ github.run_id }}-${{ github.run_attempt }}'
         path: build/downloads
     - name: Bind checksums and evidence to the release inputs
       env:
         VERSION: ${{ inputs.stable_version }}
-      run: python scripts/distribution/stable_release.py --downloads build/downloads --output build/stable --version "$VERSION"
+      run: python scripts/distribution/stable_release.py --seed native-v21 --downloads build/downloads --output build/stable --version "$VERSION"
     - uses: actions/attest-build-provenance@v2
       id: attest
       with:

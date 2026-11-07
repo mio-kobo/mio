@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
-from seed_evidence import seed_binding, stable_version
-from stable_release import SEED_REPORT, authenticate, docker_archive
+from seed_evidence import seed_binding, seed_identity, stable_version
+from stable_release import authenticate, docker_archive
 
 
 def stable(tag):
@@ -37,8 +37,8 @@ def validate(assets, tag, release, source):
     version = stable(tag)
     if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
         raise ValueError('published stable GitHub Release required')
-    run = authenticate(assets, tag, source)
-    seed_path = assets / SEED_REPORT
+    run, kind = authenticate(assets, tag, source)
+    seed_path = assets / seed_identity(kind).report_name
     seed = json.loads(seed_path.read_text())
     seed_sha = digest(seed_path)
     sums = {}
@@ -93,8 +93,8 @@ def validate(assets, tag, release, source):
                 if (inputs['source_sha'] != source or inputs['version'] != version
                         or any(p[key] != value for key, value in inputs.items())):
                     raise ValueError('distribution inputs do not match package provenance')
-                if p['trusted_seed'] != seed_binding(seed, report, inputs, target, hashes[-1], seed_sha):
-                    raise ValueError('package provenance does not bind the Trusted GF4 report')
+                if p['trusted_seed'] != seed_binding(seed, report, inputs, target, hashes[-1], seed_sha, kind):
+                    raise ValueError('package provenance does not bind the trusted seed report')
             records[target, flavor] = dict(filename=filename, sha=sums[filename], url=url, root=name)
         if hashes[0] != hashes[1]:
             raise ValueError('Core/Full compilers differ')
