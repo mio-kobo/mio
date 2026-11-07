@@ -109,8 +109,14 @@ def verify(output, target):
                     tests = cwd / 'sample'
                     tests.mkdir()
                     (tests / 'sample_test.mio').write_text('yobu "kiso/testing"; waza test_math() -> unit { testing.expect(hai,"ok"); }\n', encoding='utf-8')
-                    code, text = run([cli, 'test', tests])
-                    check('Full mio test', code == 0 and '1 passed' in text)
+                    code, text = run([cli, 'test', tests, '--format=json'])
+                    try:
+                        summary = json.loads(text)['summary'] if code == 0 else {}
+                    except (ValueError, KeyError, TypeError):
+                        summary = {}
+                    check('Full mio test', code == 0 and isinstance(summary, dict) and
+                          summary.get('status') == 'passed' and
+                          summary.get('passed') == 1 and summary.get('failed') == 0)
                     requests = [dict(jsonrpc='2.0', id=1, method='initialize', params={}),
                                 dict(jsonrpc='2.0', id=2, method='shutdown'), dict(jsonrpc='2.0', method='exit')]
                     wire = b''
