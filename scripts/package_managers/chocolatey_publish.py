@@ -67,10 +67,18 @@ def existing(name, version):
 
 def publish(folder, version, push=False, fetch=existing):
     stable('v' + version)
+    packages = [folder / f'{name}.{version}.nupkg' for name in ('mio-core', 'mio')]
+    if not push:
+        for package in packages:
+            if not package.is_file() or not package.stat().st_size:
+                raise ValueError(f'missing or empty Chocolatey package: {package}')
+            print('DRY_RUN: built ' + package.name)
+        return
+
     pending = []
     # Preflight BOTH packages before sending either; never overwrite/re-push.
-    for name in ('mio-core', 'mio'):
-        package = folder / f'{name}.{version}.nupkg'
+    for package in packages:
+        name = package.name.removesuffix(f'.{version}.nupkg')
         content = package.read_bytes()
         remote = fetch(name, version)
         if remote is not None:
@@ -79,10 +87,6 @@ def publish(folder, version, push=False, fetch=existing):
             print(f'UNCHANGED: {name} {version}; no submission')
         else:
             pending.append(package)
-    if not push:
-        for path in pending:
-            print('DRY_RUN: would submit ' + path.name)
-        return
     if not pending:
         return
     key = os.environ.get('CHOCOLATEY_API_KEY')

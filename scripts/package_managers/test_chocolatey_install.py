@@ -163,17 +163,21 @@ def install(assets, stable_packages=None):
                         run('choco', 'uninstall', 'mio-core', '--yes', '--no-progress')
                         assert not other.exists() and not command.exists()
                     passed(flavor + ' uninstall, other flavor and user project preserved, PATH unchanged')
-                # Even --ignore-checksums must not bypass the package's own
-                # SHA-256 verification. Exercise this through real Chocolatey.
-                archive, = assets.glob('mio-*-windows-amd64-core.zip')
                 negative = assets / 'checksum-negative'
-                bad = dict(url=f'http://127.0.0.1:{server.server_port}/{archive.name}', root=archive.stem, sha='0' * 64)
-                build('0.0.1', 'core', bad, negative, fixture=True)
-                rejected = subprocess.run(['choco', 'install', 'mio-core', '--version=0.0.1', '--source=' + str(negative), '--yes', '--no-progress', '--ignore-checksums'], capture_output=True, text=True, timeout=300)
-                assert rejected.returncode != 0 and 'Mio archive SHA-256 mismatch' in rejected.stdout + rejected.stderr, (rejected.returncode, rejected.stdout, rejected.stderr)
-                assert not (choco / 'bin/mio-core.exe').exists()
-                assert not (choco / 'lib/mio-core/tools/payload').exists()
-                passed('wrong archive SHA-256 rejected with nonzero exit even with --ignore-checksums')
+                for flavor, other in (('core', 'full'), ('full', 'core')):
+                    name = 'mio-core' if flavor == 'core' else 'mio'
+                    archive, = assets.glob(f'mio-*-windows-amd64-{flavor}.zip')
+                    wrong_archive, = assets.glob(f'mio-*-windows-amd64-{other}.zip')
+                    bad = dict(url=f'http://127.0.0.1:{server.server_port}/{archive.name}', root=archive.stem, sha=digest(wrong_archive))
+                    build('0.0.1', flavor, bad, negative, fixture=True)
+                    command = ['choco', 'install', name, '--version=0.0.1', '--source=' + str(negative), '--yes', '--no-progress']
+                    # Test Chocolatey's checksum enforcement and the package's independent check.
+                    for flags, message in (([], r'Checksum for .* did not meet'), (['--ignore-checksums'], 'Mio archive SHA-256 mismatch')):
+                        rejected = subprocess.run(command + flags, capture_output=True, text=True, timeout=300)
+                        assert rejected.returncode != 0 and re.search(message, rejected.stdout + rejected.stderr), (rejected.returncode, rejected.stdout, rejected.stderr)
+                        payload, shim = installed[flavor]
+                        assert not payload.exists() and not shim.exists()
+                    passed(flavor + ' wrong archive SHA-256 rejected by Chocolatey and by the installer')
             finally:
                 server.shutdown()
         # Use Windows PowerShell's module paths instead of the parent pwsh's.

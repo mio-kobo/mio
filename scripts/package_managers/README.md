@@ -137,7 +137,10 @@ Both include the OPC manifest and core properties relationships used by legacy
 NuGet readers. Fixed ZIP metadata, stored entries and normalized script line
 endings keep the nupkg hashes reproducible across platforms.
 No binaries are embedded or rebuilt. Fixed official version URLs and SHA-256
-come from the verified Windows ZIPs. Candidate generation is a separate loopback
+come from the verified Windows ZIPs. The generator writes both as literal
+arguments to `Get-ChocolateyWebFile` for CCR script validation. The installer
+also checks the downloaded ZIP against the same pinned SHA-256 before extraction.
+Candidate generation is a separate loopback
 fixture API with only synthetic 0.0.1/0.0.2 package versions.
 
 The existing Inno installer uses `PrivilegesRequired=lowest`, HKCU PATH and
@@ -162,8 +165,11 @@ compiler traffic during offline checks and are removed afterwards. Stable jobs
 also upgrade to the exact generated stable nupkg using its official HTTPS URL
 and compare a Windows rebuild's SHA-256 to the Linux-generated package.
 The Windows gate reads the packages through the pinned official NuGet 2 library,
-validates the nuspec against its XSD, checks rejection without the manifest
-relationship, and compares the OPC layout to a local `choco pack` reference.
+validates the standard nuspec fields against its XSD and checks the Chocolatey
+metadata extensions separately. It checks rejection without the manifest
+relationship and compares the OPC layout to a local `choco pack` reference.
+Both flavors must reject an incorrect ZIP checksum with the default Chocolatey
+settings and with Chocolatey's checksum feature disabled.
 Reports start FAIL and become PASS only after all checks execute.
 
 Wrapper-only PRs reuse the existing Windows regression job in Chocolatey-only
@@ -185,6 +191,7 @@ Maintainer submission:
    The public package download endpoint may miss a private queue entry.
 2. Dry-run `package-managers.yml` on `Mio-2.1` with the existing published tag.
    Inspect the generated nupkg files, hashes and Windows lifecycle evidence.
+   Dry runs verify locally generated packages without contacting CCR.
 3. Configure the `chocolatey-community` environment with required maintainer
    reviewers and protected branch policies for `Mio-2.1`. Store
    `CHOCOLATEY_API_KEY` as that environment's secret. Enable

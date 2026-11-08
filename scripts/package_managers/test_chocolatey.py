@@ -60,12 +60,24 @@ class ChocolateyTests(unittest.TestCase):
                     self.assertEqual(meta.find('n:id', ns).text, name)
                     self.assertEqual(meta.find('n:version', ns).text, '2.1.0')
                     self.assertIsNone(meta.find('n:dependencies', ns))
+                    for field, url in {
+                        'iconUrl': 'https://raw.githubusercontent.com/mio-kobo/mio-docs/07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
+                        'packageSourceUrl': 'https://github.com/mio-kobo/mio/tree/Mio-2.1/scripts/package_managers',
+                        'releaseNotes': 'https://github.com/mio-kobo/mio/releases/tag/v2.1.0',
+                        'docsUrl': 'https://mio.kaelexvp.cc/docs/',
+                        'bugTrackerUrl': 'https://github.com/mio-kobo/mio/issues',
+                        'projectSourceUrl': 'https://github.com/mio-kobo/mio',
+                    }.items():
+                        self.assertEqual(meta.find('n:' + field, ns).text, url)
                     record = json.loads(z.read('tools/release.json'))
                     self.assertEqual(record, dict(self.record(flavor), command=name, version='2.1.0', flavor=flavor))
                     self.assertEqual(record['sha'], 'a' * 64)
                     self.assertEqual(record['version'], '2.1.0')
                     install = z.read('tools/chocolateyInstall.ps1').decode()
-                    self.assertIn('(Get-MioSha256 $archive) -ne $record.sha', install)
+                    self.assertEqual(install.count('Get-ChocolateyWebFile'), 1)
+                    self.assertIn(f"-Url '{record['url']}' -Checksum '{record['sha']}' -ChecksumType 'sha256'", install)
+                    self.assertIn(f"(Get-MioSha256 $archive) -ne '{record['sha']}'", install)
+                    self.assertNotIn('@MIO_ZIP_', install)
                     self.assertIn('[System.Security.Cryptography.SHA256]::Create()', install)
                     self.assertIn('Install-BinFile -Name $record.command -Path $exe', install)
                     self.assertIn("'.ignore'", install)
@@ -97,7 +109,9 @@ class ChocolateyTests(unittest.TestCase):
             for name in ('mio-core', 'mio'):
                 (folder / f'{name}.2.1.0.nupkg').write_bytes(name.encode())
             with patch('chocolatey_publish.subprocess.run') as run:
-                publish(folder, '2.1.0', fetch=lambda n, v: None)
+                with patch('chocolatey_publish.urlopen') as urlopen:
+                    publish(folder, '2.1.0')
+                    urlopen.assert_not_called()
                 run.assert_not_called()
                 publish(folder, '2.1.0', push=True, fetch=lambda n, v: n.encode())
                 run.assert_not_called()

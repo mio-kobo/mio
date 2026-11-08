@@ -15,7 +15,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: package-managers-${{ github.event.release.tag_name || inputs.tag }}
+  # Dry runs must be able to verify a fix while a submission awaits review.
+  group: package-managers-${{ github.event_name == 'workflow_dispatch' && !inputs.submit_chocolatey && 'dry-run-' || '' }}${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 jobs:
   prepare:
@@ -32,14 +33,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
-      - if: runner.os == 'Windows'
-        name: Install current official WinGet client
-        shell: pwsh
-        run: |
-          Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-          Repair-WinGetPackageManager -Force -Latest
-          winget --version
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
       - run: python -m pip install PyYAML==6.0.3
       - name: Validate tag and download existing Release (no publishing)
         id: tag
@@ -65,7 +58,7 @@ jobs:
           SOURCE_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
           python scripts/package_managers/release.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated
           python scripts/package_managers/chocolatey.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated/chocolatey
-      - name: Chocolatey dry run (no credentials, no push)
+      - name: Check both Chocolatey outputs (no CCR access)
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version "${TAG#v}"

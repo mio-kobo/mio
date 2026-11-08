@@ -49,9 +49,33 @@ try {
             $manifest = @($opc.GetRelationshipsByType('http://schemas.microsoft.com/packaging/2010/07/manifest'))
             $stream = $opc.GetPart($manifest[0].TargetUri).GetStream()
             try {
-                [NuGet.Manifest]::ReadFrom($stream, $true) | Out-Null
+                $nuspecXml = [xml]::new()
+                $nuspecXml.Load($stream)
             } finally {
                 $stream.Dispose()
+            }
+            $metadata = $nuspecXml.DocumentElement.SelectSingleNode("*[local-name()='metadata']")
+            # The upstream NuGet 2 XSD predates these Chocolatey fields. Check
+            # them on the actual package before schema-validating the NuGet fields.
+            foreach ($field in @('iconUrl', 'packageSourceUrl', 'releaseNotes', 'docsUrl', 'bugTrackerUrl', 'projectSourceUrl')) {
+                $nodes = @($metadata.SelectNodes("*[local-name()='$field']"))
+                $fixtureNotes = $field -eq 'releaseNotes' -and $package.Version.Version.Major -eq 0
+                if ($nodes.Count -ne 1 -or $nodes[0].NamespaceURI -cne $metadata.NamespaceURI -or
+                    [string]::IsNullOrWhiteSpace($nodes[0].InnerText) -or
+                    (-not $fixtureNotes -and $nodes[0].InnerText -cnotmatch '^https://[^\s]+$')) {
+                    throw "Missing or invalid $field in $path"
+                }
+                if ($field -in @('packageSourceUrl', 'docsUrl', 'bugTrackerUrl', 'projectSourceUrl')) {
+                    [void]$metadata.RemoveChild($nodes[0])
+                }
+            }
+            $standard = [IO.MemoryStream]::new()
+            try {
+                $nuspecXml.Save($standard)
+                $standard.Position = 0
+                [NuGet.Manifest]::ReadFrom($standard, $true) | Out-Null
+            } finally {
+                $standard.Dispose()
             }
         } finally {
             $opc.Close()
