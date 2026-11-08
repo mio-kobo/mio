@@ -75,6 +75,12 @@ def package_files(version, flavor, record, fixture=False):
     description = ('Native Mio compiler, supported Bunko standard library and integrated check/build/run/exec/test/lsp/disasm tools. Supports offline development.' if flavor == 'full' else 'The identical native Mio compiler without importable Bunko or standalone tools. Compiles library-free programs. Command: mio-core.')
     fields = dict(id=name, version=version, title='Mio' + (' Core' if flavor == 'core' else ''), authors='Mio Kobo',
                   projectUrl='https://github.com/mio-kobo/mio', licenseUrl='https://github.com/mio-kobo/mio/blob/Mio-2.1/LICENSE',
+                  iconUrl='https://raw.githubusercontent.com/mio-kobo/mio-docs/07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
+                  packageSourceUrl='https://github.com/mio-kobo/mio/tree/Mio-2.1/scripts/package_managers',
+                  releaseNotes=f'https://github.com/mio-kobo/mio/releases/tag/v{version}' if not fixture else 'Chocolatey lifecycle fixture.',
+                  docsUrl='https://mio.kaelexvp.cc/docs/',
+                  bugTrackerUrl='https://github.com/mio-kobo/mio/issues',
+                  projectSourceUrl='https://github.com/mio-kobo/mio',
                   requireLicenseAcceptance='false', copyright='Copyright (c) 2026 ExMikuPro', tags='mio programming language compiler native bunko',
                   summary='Mio programming language (' + flavor + ')', description=description + '\nWindows AMD64 only. Keep projects outside the Chocolatey package directory. Full and Core coexist as mio and mio-core. Requires Chocolatey; no extra runtime dependencies.')
     for key, value in fields.items():
@@ -83,7 +89,12 @@ def package_files(version, flavor, record, fixture=False):
     files = {name + '.nuspec': ET.tostring(pkg, encoding='utf-8', xml_declaration=True),
              'tools/release.json': (json.dumps(data, sort_keys=True, indent=2) + '\n').encode()}
     for script in ('chocolateyInstall.ps1', 'chocolateyUninstall.ps1'):
-        files['tools/' + script] = (HERE / 'chocolatey/tools' / script).read_bytes().replace(b'\r\n', b'\n')
+        content = (HERE / 'chocolatey/tools' / script).read_bytes().replace(b'\r\n', b'\n')
+        if script == 'chocolateyInstall.ps1':
+            # Keep the URL and its checksum visible to CCR's script analysis.
+            content = content.replace(b'@MIO_ZIP_URL@', record['url'].encode('ascii'))
+            content = content.replace(b'@MIO_ZIP_SHA256@', record['sha'].encode('ascii'))
+        files['tools/' + script] = content
     files.update(opc_parts(name + '.nuspec', fields))
     return files
 

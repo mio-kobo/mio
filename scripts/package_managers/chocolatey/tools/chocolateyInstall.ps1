@@ -6,16 +6,16 @@ function Get-MioSha256([string] $Path) {
     try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
     finally { $stream.Dispose(); $hash.Dispose() }
 }
-if (-not [Environment]::Is64BitOperatingSystem) { throw 'Mio requires Windows AMD64' }
+if (-not [Environment]::Is64BitOperatingSystem -or $env:chocolateyForceX86) { throw 'Mio requires Windows AMD64' }
 $tools = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $record = Get-Content (Join-Path $tools 'release.json') -Raw | ConvertFrom-Json
 $archive = Join-Path $tools 'download.zip'
 $stage = Join-Path $tools 'unpack'
 $payload = Join-Path $tools 'payload'
 try {
-    Get-ChocolateyWebFile -PackageName $env:ChocolateyPackageName -FileFullPath $archive -Url64bit $record.url -Checksum64 $record.sha -ChecksumType64 'sha256'
+    Get-ChocolateyWebFile -PackageName $env:ChocolateyPackageName -FileFullPath $archive -Url '@MIO_ZIP_URL@' -Checksum '@MIO_ZIP_SHA256@' -ChecksumType 'sha256'
     # Enforce integrity even if the caller disabled Chocolatey's checksum feature.
-    if ((Get-MioSha256 $archive) -ne $record.sha) { throw 'Mio archive SHA-256 mismatch' }
+    if ((Get-MioSha256 $archive) -ne '@MIO_ZIP_SHA256@') { throw 'Mio archive SHA-256 mismatch' }
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     Get-ChocolateyUnzip -FileFullPath $archive -Destination $stage
     $root = Join-Path $stage $record.root
