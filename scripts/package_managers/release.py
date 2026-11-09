@@ -16,15 +16,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
-from seed_evidence import seed_binding, seed_identity, stable_version
+from seed_evidence import seed_binding, seed_identity
 from stable_release import authenticate, docker_archive
 from supplemental_evidence import restore_logs
+from bootstrap import profile_for
+from versions import parse_tag
 
 
 def stable(tag):
-    if not tag.startswith('v') or not stable_version(tag[1:]):
-        raise ValueError('requires a stable v2.1+ tag, never a candidate')
-    return tag[1:]
+    try:
+        version = parse_tag(tag)
+    except ValueError as error:
+        raise ValueError('requires a stable Mio release tag, never a candidate: ' + str(error)) from error
+    if not version.is_stable:
+        raise ValueError('requires a stable Mio release tag, never a candidate')
+    return str(version)
 
 
 def immutable(path, data):
@@ -39,6 +45,8 @@ def validate(assets, tag, release, source):
     if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
         raise ValueError('published stable GitHub Release required')
     run, kind = authenticate(assets, tag, source)
+    if profile_for(version).kind != kind:
+        raise ValueError('published evidence does not use the reviewed bootstrap seed profile for this version')
     seed_path = assets / seed_identity(kind).report_name
     seed = json.loads(seed_path.read_text())
     seed_sha = digest(seed_path)
@@ -244,7 +252,7 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     a = p.parse_args()
     # Release-event reruns use their original workflow, which invokes this
-    # entry point from the current Mio-2.1 checkout.
+    # entry point from the repository default branch.
     restore_logs(a.assets, a.tag, a.source_sha)
     version, records = validate(a.assets, a.tag, json.loads(a.release.read_text()), a.source_sha)
     generate(version, records, a.output)
