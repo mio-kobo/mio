@@ -50,7 +50,11 @@ def validate(assets, tag, release, source):
         sums[name] = sha
     records = {}
     for target in TARGETS:
-        hashes = []
+        report_path = assets / f'{target}-native-report.json'
+        report = json.loads(report_path.read_text())
+        inputs = report['distribution_input']
+        embedded = inputs.get('embedded_bunko') is True
+        hashes = {}
         for flavor in ('core', 'full'):
             name = f'mio-{version}-{target}-{flavor}'
             filename = name + ('.zip' if target == 'windows-amd64' else '.tar.gz')
@@ -67,38 +71,58 @@ def validate(assets, tag, release, source):
                 p = json.loads((root / 'provenance.json').read_text())
                 if m['version'] != version or m['target'] != target or m['flavor'] != flavor or inventory(root) != m['files']:
                     raise ValueError('payload manifest mismatch')
-                if m['source_sha'] != source or p['source_sha'] != source or p['embedded_bunko'] is not False or any(p[k] != m[k] for k in ('version', 'target', 'flavor')):
+                expected_embedded = (flavor == 'full') if embedded else False
+                if (m['source_sha'] != source or p['source_sha'] != source
+                        or p['embedded_bunko'] is not expected_embedded
+                        or any(p[k] != m[k] for k in ('version', 'target', 'flavor'))):
                     raise ValueError('source/embedded Bunko mismatch')
                 binary = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
-                hashes.append(digest(binary))
-                if p['compiler_sha256'] != hashes[-1]:
+                hashes[flavor] = digest(binary)
+                if p['compiler_sha256'] != hashes[flavor]:
                     raise ValueError('compiler provenance mismatch')
-                if flavor == 'core' and set(m['files']) != {'bin/' + binary.name, 'LICENSE', 'README.md', 'provenance.json'}:
-                    raise ValueError('Core contains extra files')
-                if flavor == 'full' and not list((root / 'bunko/kiso').rglob('*.mio')):
+                payload = {'bin/' + binary.name, 'LICENSE', 'README.md', 'provenance.json'}
+                if embedded or flavor == 'core':
+                    if set(m['files']) != payload:
+                        raise ValueError(flavor.title() + ' contains extra files')
+                elif not list((root / 'bunko/kiso').rglob('*.mio')):
                     raise ValueError('Full missing Bunko')
-                report_path = assets / f'{target}-native-report.json'
-                report = json.loads(report_path.read_text())
+                if embedded and list((root / 'bunko').rglob('*')):
+                    raise ValueError(flavor.title() + ' contains an external Bunko tree')
                 if digest(report_path) != p['native_report_sha256'] or report['status'] != 'PASS' or report['source_sha'] != source or report['target'] != target:
                     raise ValueError('native report mismatch')
                 checks = {c['name']: c for c in report['checks']}
-                if checks['cli-fixed-point']['status'] != 'PASS' or checks['cli-fixed-point']['engine'] != 'native':
-                    raise ValueError('native fixed point required')
+                fixed = ('cli-fixed-point' if flavor == 'full' else 'core-cli-fixed-point') if embedded else 'cli-fixed-point'
+                if checks[fixed]['status'] != 'PASS' or checks[fixed]['engine'] != 'native':
+                    raise ValueError('native fixed point required: ' + fixed)
+                prefix = 'core-cli-' if embedded and flavor == 'core' else 'cli-'
+                if any(report['hashes'][prefix + x] != hashes[flavor] for x in 'BCD'):
+                    raise ValueError(flavor.title() + ' B/C/D mismatch')
                 if any(c['required'] and c['status'] != 'PASS' for c in report['checks']):
                     raise ValueError('required native check not PASS')
-                if any(report['hashes']['cli-' + x] != hashes[-1] for x in 'BCD'):
-                    raise ValueError('B/C/D mismatch')
                 if any(report['run'][key] != run[key] for key in ('id', 'attempt')):
                     raise ValueError('native report does not match the attested run')
-                inputs = report['distribution_input']
-                if (inputs['source_sha'] != source or inputs['version'] != version
-                        or any(p[key] != value for key, value in inputs.items())):
+                if inputs['source_sha'] != source or inputs['version'] != version:
                     raise ValueError('distribution inputs do not match package provenance')
-                if p['trusted_seed'] != seed_binding(seed, report, inputs, target, hashes[-1], seed_sha, kind):
+                for key, value in inputs.items():
+                    if key == 'embedded_bunko':
+                        if p[key] is not expected_embedded:
+                            raise ValueError('distribution inputs do not match package provenance')
+                    elif p[key] != value:
+                        raise ValueError('distribution inputs do not match package provenance')
+                full_sha = report['hashes']['cli-B']
+                binding = seed_binding(seed, report, inputs, target, full_sha, seed_sha, kind)
+                if embedded:
+                    core_sha = report['hashes']['core-cli-B']
+                    binding = dict(binding, core_compiler_sha256=core_sha)
+                    if p.get('core_compiler_sha256') != core_sha:
+                        raise ValueError('Core compiler provenance mismatch')
+                if p['trusted_seed'] != binding:
                     raise ValueError('package provenance does not bind the trusted seed report')
             records[target, flavor] = dict(filename=filename, sha=sums[filename], url=url, root=name)
-        if hashes[0] != hashes[1]:
-            raise ValueError('Core/Full compilers differ')
+        if embedded and hashes['core'] == hashes['full']:
+            raise ValueError('Core/Full compilers are identical')
+        if not embedded and hashes['core'] != hashes['full']:
+            raise ValueError('legacy Core/Full compilers differ')
         evidence = json.loads((assets / f'{target}-verification.json').read_text())
         if evidence['status'] != 'PASS' or evidence['target'] != target or not evidence['checks'] or any(c['status'] != 'PASS' for c in evidence['checks']):
             raise ValueError('distribution validation required')

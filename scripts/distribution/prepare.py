@@ -18,13 +18,13 @@ from pathlib import Path
 from seed_evidence import STABLE_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
-EMPTY = '// Candidate distribution: importable Bunko sources are external.\nwaza data_files() -> []File { kaesu []; }\n'
+EMPTY = '// Core distribution: Bunko is not embedded.\nwaza data_available() -> bool { kaesu iie; }\nwaza data_files() -> []File { kaesu []; }\n'
 
 
 def prepare(root, revision, stable_version=None, rc_version=None):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('expected full source commit SHA')
-    version = '2.1.0-pr.' + revision[:12]
+    version = '2.1.1-pr.' + revision[:12]
     if stable_version is not None and rc_version is not None:
         raise ValueError('stable and RC versions are mutually exclusive')
     if stable_version is not None:
@@ -36,17 +36,20 @@ def prepare(root, revision, stable_version=None, rc_version=None):
             raise ValueError('2.1+ RC version required')
         version = rc_version
     resource = root / 'selfhost/resources/bunko_data.mio'
-    original_hash = hashlib.sha256(resource.read_bytes()).hexdigest()
+    resource_data = resource.read_text(encoding='utf-8')
+    if 'waza data_available() -> bool { kaesu hai; }' not in resource_data:
+        raise ValueError('Full distribution requires a populated embedded Bunko resource')
+    resource_hash = hashlib.sha256(resource.read_bytes()).hexdigest()
     cli = root / 'selfhost/cli/main.mio'
-    old = 'mio v2.0.0-dev (pure Mio Native AOT; GF3 candidate)'
+    old = 'mio v2.1.1-dev (pure Mio Native AOT; maintenance candidate)'
     text = cli.read_text(encoding='utf-8')
     if old not in text:
         raise ValueError('unexpected CLI version template')
-    resource.write_bytes(EMPTY.encode('utf-8'))
-    cli.write_text(text.replace(old, f'mio v{version} ({"release" if stable_version else "release candidate" if rc_version else "candidate"}; commit {revision}; pure Mio Native AOT)'), encoding='utf-8', newline='\n')
+    with cli.open('w', encoding='utf-8', newline='\n') as stream:
+        stream.write(text.replace(old, f'mio v{version} ({"release" if stable_version else "release candidate" if rc_version else "candidate"}; commit {revision}; pure Mio Native AOT)'))
     record = dict(schema_version=1, version=version, source_sha=revision,
-                  embedded_bunko=False, original_resource_sha256=original_hash,
-                  generated_resource_sha256=hashlib.sha256(resource.read_bytes()).hexdigest(),
+                  embedded_bunko=True, resource_sha256=resource_hash,
+                  core_resource_sha256=hashlib.sha256(EMPTY.encode('utf-8')).hexdigest(),
                   generated_cli_sha256=hashlib.sha256(cli.read_bytes()).hexdigest())
     (root / 'distribution-input.json').write_text(json.dumps(record, indent=2)+'\n', encoding='utf-8')
     return record
@@ -62,7 +65,10 @@ def copy_committed_source(root, revision, destination):
         with tarfile.open(fileobj=stream) as archive:
             if any(not (member.isfile() or member.isdir()) for member in archive.getmembers()):
                 raise ValueError('non-regular member in stable source archive')
-            archive.extractall(destination, filter='data')
+            try:
+                archive.extractall(destination, filter='data')
+            except TypeError:  # Python < 3.11.4 has no extraction filter; members were checked above.
+                archive.extractall(destination)
 
 
 if __name__ == '__main__':

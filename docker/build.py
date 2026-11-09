@@ -61,7 +61,8 @@ def build(candidates, output, image):
             manifest = json.loads((extracted / 'manifest.json').read_text())
             provenance = json.loads((extracted / 'provenance.json').read_text())
             check('Full identity and exact manifest', manifest['target'] == 'linux-amd64' and manifest['flavor'] == 'full'
-                  and manifest['files'] == inventory(extracted) and provenance['embedded_bunko'] is False)
+                  and manifest['files'] == inventory(extracted) and provenance['embedded_bunko'] is True
+                  and not (extracted / 'bunko').exists())
             compiler = extracted / 'bin/mio'
             sha = digest(compiler)
             check('Full compiler provenance', sha == provenance['compiler_sha256'])
@@ -120,6 +121,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidates', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--image', default='mio:2.1.0-full-pr-candidate')
+    parser.add_argument('--image', default='mio:2.1.1-full-pr-candidate')
     args = parser.parse_args()
     build(args.candidates.resolve(), args.output.resolve(), args.image)

@@ -22,7 +22,8 @@ waza collect(root: string, relative: string, files: []string, error: []string) -
     kaku at = 0;
     aida (at < len(listing.entries)) {
         kaku entry = listing.entries[at]; kaku name = path.join(relative, entry.name);
-        moshi (entry.is_dir) { collect(root, name, files, error); }
+        // Skip test sources and dotted directories such as historical snapshots.
+        moshi (entry.is_dir) { moshi (string.index(entry.name, ".") < 0) { collect(root, name, files, error); } }
         sore { moshi (!entry.is_dir && string.has_suffix(name, ".mio") && !string.has_suffix(name, "_test.mio")) { insert(files, name); } }
         at = at + 1;
     }
@@ -59,12 +60,12 @@ koukai waza generate(root: string) -> GenerateResult {
         kaku text = quoted(source.data);
         moshi (text == "") { kaesu GenerateResult { bytes: [], error: string.concat("invalid UTF8 ", files[at]) }; }
         string.write_string(output, string.concat("waza data_", string.concat(convert.format_int(at), "() -> File { kaesu File { path: ")));
-        string.write_string(output, quoted(string.to_bytes(files[at]))); string.write_string(output, ", version: \"Bunko-GF3-v0.2\", length: ");
+        string.write_string(output, quoted(string.to_bytes(files[at]))); string.write_string(output, ", version: \"Bunko-v2.1.1\", length: ");
         string.write_string(output, convert.format_int(len(source.data))); string.write_string(output, ", sha256: ");
         string.write_string(output, quoted(string.to_bytes(hexadecimal(sha256.sum_range(ctx, source.data, 0, len(source.data)))))); string.write_string(output, ", source: ");
         string.write_string(output, text); string.write_string(output, " }; }\n"); at = at + 1;
     }
-    string.write_string(output, "waza data_files() -> []File { kaku files: []File = [];\n"); at = 0;
+    string.write_string(output, "waza data_available() -> bool { kaesu hai; }\nwaza data_files() -> []File { kaku files: []File = [];\n"); at = 0;
     aida (at < len(files)) { string.write_string(output, string.concat("array.push(files, data_", string.concat(convert.format_int(at), "());\n"))); at = at + 1; }
     string.write_string(output, "kaesu files; }\n");
     kaesu GenerateResult { bytes: string.to_bytes(string.builder_string(output)), error: "" };
@@ -73,5 +74,5 @@ koukai waza generate(root: string) -> GenerateResult {
 // Explicit alternative for distribution builds; the legacy generator above is
 // retained for frozen seed verification. Internal Bunko code still compiles AOT.
 koukai waza generate_external() -> GenerateResult {
-    kaesu GenerateResult {bytes:string.to_bytes("// External Bunko distribution.\nwaza data_files() -> []File { kaesu []; }\n"),error:""};
+    kaesu GenerateResult {bytes:string.to_bytes("// External Bunko distribution.\nwaza data_available() -> bool { kaesu iie; }\nwaza data_files() -> []File { kaesu []; }\n"),error:""};
 }

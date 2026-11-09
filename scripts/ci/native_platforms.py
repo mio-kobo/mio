@@ -38,6 +38,7 @@ from verify_pe import verify_winsock
 
 sys.path.insert(0, str(ROOT / "scripts/distribution"))
 from seed_evidence import GF4_SEED_SHA256
+from prepare import EMPTY
 
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
@@ -114,7 +115,11 @@ def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
     argv = [*report.exec_prefix, *argv]
     started = time.monotonic()
     environment = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"))
-    environment.update(env or {})
+    for name, value in (env or {}).items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
     try:
         proc = subprocess.run([str(a) for a in argv], cwd=cwd, input=stdin, capture_output=True, timeout=timeout, env=environment)
         code, out, err = proc.returncode, proc.stdout, proc.stderr
@@ -153,11 +158,11 @@ def peak_rss_mib(err):
     return int(match.group(1)) // 1024 if match else 0
 
 
-def cli_build(report, label, cli, entry, target, output, extra=()):
+def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT):
     argv = [cli, "build", entry, "--target=" + target, "-o", output, *extra]
     if not report.exec_prefix and platform.system() == "Darwin" and Path("/usr/bin/time").exists():
         argv = ["/usr/bin/time", "-l", *argv]  # resource usage only; the build itself is unchanged
-    code, out, err, seconds = run(report, label, argv, timeout=CLI_BUILD_TIMEOUT)
+    code, out, err, seconds = run(report, label, argv, cwd=cwd, timeout=CLI_BUILD_TIMEOUT)
     ok = code == 0 and Path(output).is_file()
     if ok and target != "windows-amd64":
         os.chmod(output, 0o755)
@@ -186,6 +191,119 @@ def cli_chain(report, first, target, work, engine="native"):
     report.check("cli-fixed-point", "PASS" if same else "FAIL", engine, "" if same else "B, C and D differ",
                  B=report.hashes["cli-B"], C=report.hashes["cli-C"], D=report.hashes["cli-D"])
     return paths["B"] if same else None
+
+
+def core_chain(report, full_cli, target, work):
+    """Build the Core variant from an empty embedded table with the verified Full compiler.
+    The source copy is disposable; Core must remain byte-identical across its own stages."""
+    source = work / "core-source"
+    if source.exists():
+        shutil.rmtree(source)
+    shutil.copytree(ROOT / "selfhost", source / "selfhost")
+    (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
+    suffix = EXE.get(target, "")
+    paths = {"full": Path(full_cli)}
+    for previous, name in (("full", "B"), ("B", "C"), ("C", "D")):
+        output = work / ("mio-core-%s%s" % (name, suffix))
+        ok, reason, seconds = cli_build(report, "core-cli-" + name, paths[previous], "selfhost/cli", target, output, cwd=source)
+        if not report.check("core-cli-stage-" + name, "PASS" if ok else "FAIL", "native",
+                            "" if ok else "%s could not build Core stage %s: %s" % (previous, name, reason),
+                            seconds=round(seconds, 1), built_by=previous, detail=reason if ok else ""):
+            return None
+        report.hashes["core-cli-" + name] = sha256(output)
+        paths[name] = output
+    same = sha256(paths["B"]) == sha256(paths["C"]) == sha256(paths["D"])
+    report.check("core-cli-fixed-point", "PASS" if same else "FAIL", "native", "" if same else "Core B, C and D differ",
+                 B=report.hashes["core-cli-B"], C=report.hashes["core-cli-C"], D=report.hashes["core-cli-D"])
+    return paths["B"] if same else None
+
+
+def embedded_checks(report, full, core, target, work):
+    """Exercise embedded and external Bunko resolution without modifying the repository."""
+    suffix = EXE.get(target, "")
+    base = work / "embedded-bunko"
+    if base.exists():
+        shutil.rmtree(base)
+    (base / "cwd").mkdir(parents=True)
+    def install(binary, name):
+        root = base / name
+        (root / "bin").mkdir(parents=True)
+        cli = root / "bin" / ("mio.exe" if target == "windows-amd64" else "mio")
+        shutil.copyfile(binary, cli)
+        if target != "windows-amd64":
+            cli.chmod(0o755)
+        return root, cli
+    full_root, full_cli = install(full, "full")
+    # A legacy adjacent tree must not displace the embedded default.
+    (full_root / "bunko/kiso").mkdir(parents=True)
+    core_root, core_cli = install(core, "core")
+    cwd = base / "cwd"
+    all_source = cwd / "all.mio"
+    all_source.write_text("""yobu "kiso/math";
+yobu "kiso/string";
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/io";
+yobu "kiso/fs";
+yobu "kiso/encoding/json";
+yobu "kiso/regexp";
+yobu "kiso/crypto/sha256";
+yobu "kiso/os";
+yobu "kiso/net/tcp";
+chant(math.abs(-9));
+chant(string.concat("a","b"));
+kaku xs: []int64=[1,2]; array.push(xs,3); chant(len(xs));
+kaku data: []uint8=[uint8(104),uint8(105)]; chant(bytes.equal(data,data));
+kaku reader=io.reader_from_bytes(data); kaku dst: []uint8=[uint8(0),uint8(0)]; chant(io.read_full(reader,dst,0,2).count);
+chant(fs.exists("all.mio"));
+chant(json.parse(string.to_bytes("{}")).error);
+chant(regexp.matches(regexp.compile("a+"),"aaa"));
+chant(len(sha256.sum(data)));
+chant(os.monotonic_ms()>=0);
+chant(len(tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),0).octets));
+""", encoding="utf-8")
+    math_source = cwd / "math.mio"
+    math_source.write_text('yobu "kiso/math"; chant(math.abs(-9));\n', encoding="utf-8")
+    image = cwd / ("all" + suffix)
+    code, out, err, _ = run(report, "full-embedded-build", [full_cli, "build", all_source, "--target=" + target, "-o", image],
+                            cwd=cwd, env={"MIO_BUNKO": None})
+    executed = ""
+    if code == 0 and image.is_file():
+        if target != "windows-amd64":
+            image.chmod(0o755)
+        run_code, executed, run_err, _ = run(report, "full-embedded-run", [image], cwd=cwd, env={"MIO_BUNKO": None})
+        code = run_code if run_code != 0 else code
+        err += run_err
+    expected = ["9", "ab", "3", "hai", "2", "hai", "", "hai", "32", "hai", "4"]
+    report.check("full-embedded-runtime", "PASS" if code == 0 and [line.strip() for line in executed.splitlines()] == expected else "FAIL",
+                 "native", "" if code == 0 else "embedded build/run failed: " + brief(err or out), output=executed)
+    transitive = cwd / "transitive.mio"
+    transitive.write_text('yobu "kiso/string"; chant(string.concat("x","y"));\n', encoding="utf-8")
+    code, out, err, _ = run(report, "full-embedded-transitive-check", [full_cli, "check", transitive], cwd=cwd, env={"MIO_BUNKO": None})
+    report.check("full-embedded-transitive", "PASS" if code == 0 else "FAIL", "native", "" if code == 0 else brief(err or out))
+    code, out, err, _ = run(report, "core-no-embedded", [core_cli, "check", math_source], cwd=cwd, env={"MIO_BUNKO": None})
+    ok = code != 0 and "E_BUNKO_MISSING" in out + err
+    report.check("core-no-embedded", "PASS" if ok else "FAIL", "native",
+                 "" if ok else "Core unexpectedly resolved embedded Bunko" if code == 0 else brief(err or out))
+    code, out, err, _ = run(report, "core-external-root", [core_cli, "check", math_source, "--bunko-root", ROOT / "bunko"],
+                            cwd=cwd, env={"MIO_BUNKO": None})
+    report.check("core-external-root", "PASS" if code == 0 else "FAIL", "native", "" if code == 0 else brief(err or out))
+    # Adjacent executable-relative discovery remains available to Core.
+    shutil.copytree(ROOT / "bunko", core_root / "bunko")
+    code, out, err, _ = run(report, "core-adjacent", [core_cli, "check", math_source], cwd=cwd, env={"MIO_BUNKO": None})
+    report.check("core-adjacent", "PASS" if code == 0 else "FAIL", "native", "" if code == 0 else brief(err or out))
+    # An invalid explicit root must beat the embedded table and valid adjacent tree.
+    code, out, err, _ = run(report, "explicit-root-precedence", [full_cli, "check", math_source, "--bunko-root", cwd / "missing"],
+                            cwd=cwd, env={"MIO_BUNKO": ROOT / "bunko"})
+    ok = code != 0 and "E_BUNKO_ROOT" in out + err
+    report.check("explicit-root-precedence", "PASS" if ok else "FAIL", "native",
+                 "" if ok else "invalid explicit root fell back to embedded Bunko", output=brief(err or out))
+    missing = cwd / "missing.mio"
+    missing.write_text('yobu "kiso/not/a/package";\n', encoding="utf-8")
+    code, out, err, _ = run(report, "invalid-module-diagnostic", [full_cli, "check", missing], cwd=cwd, env={"MIO_BUNKO": None})
+    ok = code != 0 and "kiso/not/a/package" in out + err
+    report.check("invalid-module-diagnostic", "PASS" if ok else "FAIL", "native",
+                 "" if ok else "missing module was accepted", output=brief(err or out))
 
 
 def smoke(report, cli, target, work, label_prefix=""):
@@ -461,6 +579,10 @@ def linux(args):
     cli = cli_chain(report, cli_a, "linux-amd64", work)
     if cli is None:
         return finish(report)
+    core = core_chain(report, cli, "linux-amd64", work)
+    if core is None:
+        return finish(report)
+    embedded_checks(report, cli, core, "linux-amd64", work)
     smoke(report, cli, "linux-amd64", work)
     mio_run_protocol(report, cli, work)
     os_process_protocol(report, cli, work)
@@ -539,6 +661,9 @@ def follower(args, target):
     smoke(report, first, target, work / "smoke-A", label_prefix="stage-a-")
     cli = cli_chain(report, first, target, work)
     if cli is not None:
+        core = core_chain(report, cli, target, work)
+        if core is not None:
+            embedded_checks(report, cli, core, target, work)
         same = report.hashes["cli-A"] == report.hashes["cli-B"]
         report.check("cross-equals-native", "PASS" if same else "FAIL", "native",
                      "" if same else "the Linux cross build (A) differs from this host's native build (B)")
