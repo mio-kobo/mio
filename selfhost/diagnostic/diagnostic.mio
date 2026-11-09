@@ -9,9 +9,11 @@ yobu "kiso/utf8";
 yobu "selfhost/frontend";
 yobu "selfhost/parser";
 yobu "selfhost/lexer";
+yobu "selfhost/i18n";
+yobu "selfhost/term/theme";
 
-koukai kata Options {format: string; color: string; verbose: bool;}
-koukai waza options() -> Options {kaesu Options {format:"human",color:"auto",verbose:iie};}
+koukai kata Options {format: string; color: string; verbose: bool; lang: string; theme: string;}
+koukai waza options() -> Options {kaesu Options {format:"human",color:"auto",verbose:iie,lang:"",theme:"auto"};}
 kata Display {mn: []int64; me: []int64;}
 kata Location {offset: int64; line: int64; column: int64; first: int64; end: int64;}
 waza in_ranges(ranges: []int64, value: int64) -> bool {
@@ -34,10 +36,9 @@ waza locate(data: []uint8, requested: int64, display: Display) -> Location {
 waza location_json(location: Location) -> string {
     kaesu string.concat("{\"offset\":",string.concat(convert.format_int(location.offset),string.concat(",\"line\":",string.concat(convert.format_int(location.line),string.concat(",\"column\":",string.concat(convert.format_int(location.column),"}"))))));
 }
-waza ansi() -> string {kaku value=string.from_utf8([uint8(27)]);moshi(value==mu){kaesu "";}kaesu value;}
 waza color_enabled(opts: Options) -> bool {
-    moshi(opts.color=="never" || os.getenv("NO_COLOR")!=""){kaesu iie;}moshi(opts.color=="always"){kaesu hai;}
-    moshi(os.getenv("CI")!="" || os.getenv("TERM")=="dumb"){kaesu iie;}kaesu fs.is_character_device("/dev/stderr");
+    kaku selected_theme=opts.theme;moshi(selected_theme==""){selected_theme="auto";}
+    kaesu theme.color_enabled(opts.color,os.getenv("NO_COLOR"),os.getenv("TERM"),os.getenv("CLICOLOR"),os.getenv("CLICOLOR_FORCE"),os.getenv("CI"),fs.is_character_device("/dev/stderr"));
 }
 waza spaces(output: string.StringBuilder, count: int64) -> unit {kaku at=0;aida(at<count){string.write_string(output," ");at=at+1;}}
 waza expanded_line(data: []uint8, first: int64, end: int64, display: Display) -> string {
@@ -64,18 +65,19 @@ koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: 
     moshi(opts.format=="short"){
         string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,": ");
     }
-    kaku color=opts.format=="human" && color_enabled(opts);moshi(color){string.write_string(output,string.concat(ansi(),"[1;31m"));}
-    string.write_string(output,"error[");string.write_string(output,problem.code);string.write_string(output,"]");moshi(color){string.write_string(output,string.concat(ansi(),"[0m"));}
+    kaku style=theme.resolve_for(opts.color,opts.theme,"/dev/stderr");kaku color=opts.format=="human" && style.enabled;
+    kaku header=string.concat("error[",string.concat(problem.code,"]"));
+    moshi(color){string.write_string(output,style.paint(style,"error",header));}sore{string.write_string(output,header);}
     string.write_string(output,": ");string.write_string(output,problem.detail);string.write_string(output,"\n");
     moshi(opts.format=="human"){
         moshi(has_span){string.write_string(output,"  --> ");string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,"\n");}
         moshi(has_span && len(source)>0){
             kaku number=convert.format_int(start.line);kaku padding=string.byte_len(number)+3;
             string.write_string(output,"   ");string.write_string(output,number);string.write_string(output," | ");string.write_string(output,expanded_line(source,start.first,start.end,display));string.write_string(output,"\n");
-            spaces(output,padding);string.write_string(output," | ");spaces(output,start.column-1);kaku count=finish.column-start.column;moshi(finish.line!=start.line){count=locate(source,start.end,display).column-start.column;}moshi(count<1){count=1;}moshi(color){string.write_string(output,string.concat(ansi(),"[1;31m"));}
-            kaku at=0;aida(at<count){string.write_string(output,"^");at=at+1;}moshi(color){string.write_string(output,string.concat(ansi(),"[0m"));}string.write_string(output,"\n");
+            spaces(output,padding);string.write_string(output," | ");spaces(output,start.column-1);kaku count=finish.column-start.column;moshi(finish.line!=start.line){count=locate(source,start.end,display).column-start.column;}moshi(count<1){count=1;}
+            kaku at=0;aida(at<count){string.write_string(output,style.paint(style,"error","^"));at=at+1;}string.write_string(output,"\n");
         }
-        moshi(opts.verbose && cause!=""){string.write_string(output,"  = cause: ");string.write_string(output,cause);string.write_string(output,"\n");}
+        moshi(opts.verbose && cause!=""){string.write_string(output,string.concat("  = ",string.concat(i18n.text(opts.lang,i18n.key_diag_cause),string.concat(": ",string.concat(cause,"\n")))));}
     }kaesu string.builder_string(output);
 }
 
@@ -87,8 +89,7 @@ koukai waza failure(message: string, path: string, opts: Options) -> string {
 // Test-command diagnostics keep their existing text/JSON schema while sharing
 // source-command color policy, including NO_COLOR and terminal detection.
 koukai waza decorate_error(message: string, opts: Options) -> string {
-    moshi(opts.format=="human" && color_enabled(opts)){
-        kaku output=string.new_builder();string.write_string(output,ansi());string.write_string(output,"[1;31m");string.write_string(output,message);string.write_string(output,ansi());string.write_string(output,"[0m");kaesu string.builder_string(output);
-    }
+    kaku style=theme.resolve_for(opts.color,opts.theme,"/dev/stderr");
+    moshi(opts.format=="human" && style.enabled){kaesu style.paint(style,"error",message);}
     kaesu message;
 }

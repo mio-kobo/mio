@@ -1,0 +1,45 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "selfhost/term/theme";
+
+waza test_color_precedence() -> unit {
+    testing.expect(theme.color_enabled("always", "1", "dumb", "0", "", "1", iie), "explicit always wins");
+    testing.expect(!theme.color_enabled("never", "", "xterm-256color", "", "1", "", hai), "explicit never wins");
+    testing.expect(!theme.color_enabled("auto", "1", "xterm", "", "", "", hai), "NO_COLOR disables auto");
+    testing.expect(!theme.color_enabled("auto", "", "dumb", "", "", "", hai), "TERM=dumb disables");
+    testing.expect(!theme.color_enabled("auto", "", "xterm", "0", "", "", hai), "CLICOLOR=0 disables");
+    testing.expect(theme.color_enabled("auto", "", "xterm", "", "1", "1", iie), "CLICOLOR_FORCE enables");
+    testing.expect(!theme.color_enabled("auto", "", "xterm", "", "", "1", hai), "CI disables auto");
+    testing.expect(theme.color_enabled("auto", "", "xterm", "", "", "", hai), "TTY enables auto");
+    testing.expect(!theme.color_enabled("auto", "", "xterm", "", "", "", iie), "non-TTY disables auto");
+}
+
+waza test_palette_detection() -> unit {
+    testing.expect(theme.choose_palette("dark", "", "") == theme.palette_dark, "explicit dark");
+    testing.expect(theme.choose_palette("light", "", "") == theme.palette_light, "explicit light");
+    testing.expect(theme.choose_palette("auto", "dark", "") == theme.palette_dark, "MIO_THEME dark");
+    testing.expect(theme.choose_palette("auto", "", "15;0") == theme.palette_dark, "dark background hint");
+    testing.expect(theme.choose_palette("auto", "", "0;15") == theme.palette_light, "light background hint");
+    testing.expect(theme.choose_palette("auto", "", "") == theme.palette_neutral, "no hint stays neutral");
+    testing.expect(theme.choose_palette("auto", "", "garbage") == theme.palette_neutral, "malformed hint stays neutral");
+}
+
+waza test_color_depth() -> unit {
+    testing.expect(theme.color_depth("truecolor", "xterm") == theme.depth_truecolor, "COLORTERM truecolor");
+    testing.expect(theme.color_depth("24bit", "xterm") == theme.depth_truecolor, "COLORTERM 24bit");
+    testing.expect(theme.color_depth("", "xterm-256color") == theme.depth_256, "256-color TERM");
+    testing.expect(theme.color_depth("", "xterm") == theme.depth_ansi, "ANSI fallback");
+}
+
+waza test_paint_roles_and_reset() -> unit {
+    kaku off = theme.Theme {enabled: iie, depth: theme.depth_ansi, palette: theme.palette_neutral};
+    testing.expect(theme.paint(off, "error", "boom") == "boom", "disabled paint is plain");
+    kaku on = theme.Theme {enabled: hai, depth: theme.depth_ansi, palette: theme.palette_neutral};
+    kaku ansi = string.from_utf8([uint8(27)]);
+    moshi (ansi != mu) {
+        kaku painted = theme.paint(on, "success", "PASS");
+        testing.expect(string.contains(painted, "PASS") && string.contains(painted, ansi), "enabled paint inserts ANSI");
+        testing.expect(string.has_suffix(painted, string.concat(ansi, "[0m")), "style is reset");
+        testing.expect(theme.paint(on, "unknown", "text") == "text", "unknown role stays plain");
+    }
+}

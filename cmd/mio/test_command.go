@@ -65,10 +65,10 @@ type jsonTestReport struct {
 	Summary       jsonTestSummary     `json:"summary"`
 }
 
-func runTestCommand(args []string, stdout, stderr io.Writer) int {
-	options, ok := parseTestArgs(args)
+func runTestCommand(args []string, stdout, stderr io.Writer, language i18n.Language, colorMode string) int {
+	options, ok := parseTestArgs(args, language)
 	if !ok {
-		printUsage(stderr)
+		printCommandHelp(stderr, language, resolveHelpTheme(colorMode, "auto", stderr), "test")
 		return 2
 	}
 	packages, err := discoverTestPackages(options.target)
@@ -76,12 +76,15 @@ func runTestCommand(args []string, stdout, stderr io.Writer) int {
 		renderTestCommandError(stderr, options, options.target, err)
 		return 1
 	}
+	if colorMode != "" {
+		options.diag.color = diagnostic.ColorMode(colorMode)
+	}
 	started := time.Now()
 	report := jsonTestReport{SchemaVersion: 1}
 	discovered := 0
 	for _, packagePath := range packages {
 		if options.diag.format != diagnostic.FormatJSON {
-			fmt.Fprintf(stdout, i18n.Text(options.lang, i18n.TestStarting)+"\n", packagePath)
+			fmt.Fprintln(stdout, i18n.Format(options.lang, i18n.KeyTestStarting, packagePath))
 		}
 		packageResult, runErr := tester.RunPackage(packagePath, bunkoRoot(packagePath), tester.Options{Output: stdout, RunPattern: options.run})
 		if runErr != nil {
@@ -142,13 +145,13 @@ func runTestCommand(args []string, stdout, stderr io.Writer) int {
 	} else {
 		if report.Summary.Passed == 0 && report.Summary.Failed == 0 {
 			if options.run != "" && discovered != 0 {
-				fmt.Fprintf(stdout, i18n.Text(options.lang, i18n.NoMatchingTests)+"\n", options.run)
+				fmt.Fprintln(stdout, i18n.Format(options.lang, i18n.KeyTestNoMatch, options.run))
 			} else {
-				fmt.Fprintln(stdout, i18n.Text(options.lang, i18n.NoTests))
+				fmt.Fprintln(stdout, i18n.Text(options.lang, i18n.KeyTestNone))
 			}
 		}
-		fmt.Fprintf(stdout, i18n.Text(options.lang, i18n.Summary)+"\n", report.Summary.Passed, report.Summary.Failed)
-		fmt.Fprintf(stdout, "%s: %.3fs\n", i18n.Text(options.lang, i18n.TotalDuration), time.Since(started).Seconds())
+		fmt.Fprintln(stdout, i18n.Format(options.lang, i18n.KeyTestSummary, report.Summary.Passed, report.Summary.Failed))
+		fmt.Fprintf(stdout, "%s: %.3fs\n", i18n.Text(options.lang, i18n.KeyTestDuration), time.Since(started).Seconds())
 	}
 	if report.Summary.Failed != 0 {
 		return 1
@@ -156,7 +159,7 @@ func runTestCommand(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func parseTestArgs(args []string) (testCommandOptions, bool) {
+func parseTestArgs(args []string, fallback i18n.Language) (testCommandOptions, bool) {
 	options := testCommandOptions{diag: cliDiagnosticOptions{color: diagnostic.ColorAuto, format: diagnostic.FormatHuman}}
 	explicitLanguage := ""
 	for _, arg := range args {
@@ -175,6 +178,7 @@ func parseTestArgs(args []string) (testCommandOptions, bool) {
 			options.diag.format = diagnostic.FormatJSON
 		case "--verbose":
 			options.diag.verbose = true
+		case "--theme=auto", "--theme=dark", "--theme=light":
 		default:
 			if strings.HasPrefix(arg, "--run=") {
 				options.run = strings.TrimPrefix(arg, "--run=")
@@ -199,7 +203,11 @@ func parseTestArgs(args []string) (testCommandOptions, bool) {
 	if options.target == "" {
 		return testCommandOptions{}, false
 	}
-	options.lang = i18n.Select(explicitLanguage, os.Getenv)
+	if explicitLanguage == "" && fallback != "" {
+		options.lang = fallback
+	} else {
+		options.lang = i18n.Select(explicitLanguage, os.Getenv)
+	}
 	return options, true
 }
 
@@ -257,27 +265,27 @@ func excludedTestDirectory(name string) bool {
 }
 
 func renderHumanTestResult(out io.Writer, language i18n.Language, result tester.Result) {
-	status := i18n.Text(language, i18n.TestPassed)
+	status := i18n.Text(language, i18n.KeyTestPass)
 	if !result.Passed {
-		status = i18n.Text(language, i18n.TestFailed)
+		status = i18n.Text(language, i18n.KeyTestFail)
 	}
 	fmt.Fprintf(out, "--- %s: %s (%.3fs)\n", status, result.Name, result.Duration.Seconds())
 	for _, failure := range result.Failures {
-		fmt.Fprintf(out, "    %s: %s\n", i18n.Text(language, i18n.AssertionFailed), failure.Message)
+		fmt.Fprintf(out, "    %s: %s\n", i18n.Text(language, i18n.KeyTestAssertion), failure.Message)
 	}
 	if result.RuntimeErr != nil {
-		label := i18n.Text(language, i18n.RuntimeFailed)
+		label := i18n.Text(language, i18n.KeyTestRuntime)
 		if result.Resource {
-			label = i18n.Text(language, i18n.ResourceLimit)
+			label = i18n.Text(language, i18n.KeyTestResource)
 		}
 		fmt.Fprintf(out, "    %s: %v\n", label, result.RuntimeErr)
 	}
 }
 
 func renderShortTestResult(out io.Writer, language i18n.Language, packagePath string, result tester.Result) {
-	status := i18n.Text(language, i18n.TestPassed)
+	status := i18n.Text(language, i18n.KeyTestPass)
 	if !result.Passed {
-		status = i18n.Text(language, i18n.TestFailed)
+		status = i18n.Text(language, i18n.KeyTestFail)
 	}
 	fmt.Fprintf(out, "%s:%s: %s (%.3fs)\n", packagePath, result.Name, status, result.Duration.Seconds())
 	for _, failure := range result.Failures {
@@ -300,10 +308,10 @@ func renderTestCommandError(out io.Writer, options testCommandOptions, path stri
 		localized.Notes = append([]diagnostic.Note(nil), d.Notes...)
 		localized.Helps = append([]diagnostic.Help(nil), d.Helps...)
 		if d.Code == "E0601" {
-			localized.Message = i18n.Text(options.lang, i18n.InvalidTestSignature)
+			localized.Message = i18n.Text(options.lang, i18n.KeyTestInvalidSignature)
 		} else {
 			localized.Notes = append([]diagnostic.Note{{Message: d.Message}}, localized.Notes...)
-			localized.Message = i18n.Text(options.lang, i18n.CompileFailed)
+			localized.Message = i18n.Text(options.lang, i18n.KeyTestCompileFailed)
 		}
 		renderPath := localized.Path
 		if renderPath == "" {
@@ -312,7 +320,7 @@ func renderTestCommandError(out io.Writer, options testCommandOptions, path stri
 		renderCLIError(out, renderPath, &localized, options.diag, false)
 		return
 	}
-	fmt.Fprintf(out, "%s: %v\n", i18n.Text(options.lang, i18n.CompileFailed), err)
+	fmt.Fprintf(out, "%s: %v\n", i18n.Text(options.lang, i18n.KeyTestCompileFailed), err)
 }
 
 func makeJSONTestResult(result tester.Result) jsonTestResult {

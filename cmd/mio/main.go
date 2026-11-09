@@ -14,6 +14,7 @@ import (
 	"Mio/internal/compiler"
 	"Mio/internal/constant"
 	"Mio/internal/diagnostic"
+	"Mio/internal/i18n"
 	"Mio/internal/lexer"
 	"Mio/internal/lsp"
 	"Mio/internal/mochi"
@@ -24,7 +25,7 @@ import (
 	"Mio/internal/vm"
 )
 
-var version = "2.0.0"
+var version = "2.1.2-dev"
 
 // main 是 Mio 命令行程序的入口
 func main() {
@@ -41,6 +42,23 @@ func runCLI(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
+	globals := parseGlobalOptions(args)
+	language := i18n.Select(globals.language, os.Getenv)
+	colorMode := globals.color
+	if colorMode == "" {
+		colorMode = "auto"
+	}
+	themeMode := globals.theme
+	if themeMode == "" {
+		themeMode = "auto"
+	}
+	theme := resolveHelpTheme(colorMode, themeMode, stdout)
+	if globals.errKey != "" {
+		fmt.Fprintf(stderr, "E_OPTIONS %s\n", i18n.Format(language, globals.errKey, globals.detail))
+		return 2
+	}
+	args = globals.args
+
 	if len(args) == 1 {
 		switch args[0] {
 		case "version", "--version":
@@ -48,14 +66,29 @@ func runCLI(
 			return 0
 
 		case "help", "-h", "--help":
-			printUsage(stdout)
+			printUsage(stdout, language, theme)
 			return 0
 		}
 	}
 
 	if len(args) == 0 {
-		printUsage(stderr)
+		printUsage(stderr, language, theme)
 		return 2
+	}
+
+	if args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
+		if len(args) > 2 {
+			fmt.Fprintf(stderr, "E_OPTIONS %s\n", i18n.Text(language, i18n.KeyErrHelpArgs))
+			return 2
+		}
+		if len(args) == 2 && !printCommandHelp(stdout, language, theme, args[1]) {
+			fmt.Fprintf(stderr, "E_COMMAND %s\n", i18n.Format(language, i18n.KeyErrHelpUnknown, args[1]))
+			return 2
+		}
+		if len(args) == 1 {
+			printUsage(stdout, language, theme)
+		}
+		return 0
 	}
 
 	switch args[0] {
@@ -63,13 +96,16 @@ func runCLI(
 		return runLSP(args[1:], os.Stdin, stdout, stderr)
 
 	case "test":
-		return runTestCommand(args[1:], stdout, stderr)
+		return runTestCommand(args[1:], stdout, stderr, language, colorMode)
 
 	case "check", "run":
 		path, options, ok := parseDiagnosticArgs(args[1:])
 		if !ok {
-			printUsage(stderr)
+			printUsage(stderr, language, theme)
 			return 2
+		}
+		if globals.color != "" {
+			options.color = diagnostic.ColorMode(globals.color)
 		}
 
 		// 读取、解析并检查 Mio 源码
@@ -81,7 +117,7 @@ func runCLI(
 
 		// 静态检查通过后直接退出
 		if args[0] == "check" {
-			fmt.Fprintln(stdout, "check passed")
+			fmt.Fprintln(stdout, i18n.Text(language, i18n.KeyCheckPassed))
 			return 0
 		}
 
@@ -106,7 +142,7 @@ func runCLI(
 	case "build":
 		sourcePath, outputPath, ok := parseBuildArgs(args[1:])
 		if !ok {
-			printUsage(stderr)
+			printUsage(stderr, language, theme)
 			return 2
 		}
 
@@ -128,7 +164,7 @@ func runCLI(
 
 	case "exec", "disasm":
 		if len(args) != 2 {
-			printUsage(stderr)
+			printUsage(stderr, language, theme)
 			return 2
 		}
 
@@ -158,7 +194,7 @@ func runCLI(
 		return 0
 
 	default:
-		printUsage(stderr)
+		printUsage(stderr, language, theme)
 		return 2
 	}
 }
@@ -496,20 +532,4 @@ func runLSP(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) 
 		return 1
 	}
 	return 0
-}
-
-// printUsage 显示命令行用法
-func printUsage(out io.Writer) {
-	fmt.Fprintf(out, "Mio %s\n", version)
-	fmt.Fprintln(out, "Usage:")
-	fmt.Fprintln(out, "  mio check <file.mio>")
-	fmt.Fprintln(out, "  mio run <file.mio>")
-	fmt.Fprintln(out, "  options: --color=auto|always|never --format=human|short|json --verbose")
-	fmt.Fprintln(out, "  mio test <directory|./...> [--run=<regexp>] [--lang=zh-CN|ja-JP|en-US]")
-	fmt.Fprintln(out, "  mio build [-o <file.mochi>] <file.mio>")
-	fmt.Fprintln(out, "  mio exec <file.mochi>")
-	fmt.Fprintln(out, "  mio disasm <file.mochi>")
-	fmt.Fprintln(out, "  mio lsp [--stdio]")
-	fmt.Fprintln(out, "  mio version")
-	fmt.Fprintln(out, "  mio help")
 }
