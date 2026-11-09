@@ -1,5 +1,6 @@
 from base64 import b64encode
 from contextlib import redirect_stderr, redirect_stdout
+from email.message import Message
 from hashlib import sha256, sha512
 import io
 import json
@@ -182,12 +183,59 @@ class ChocolateyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'CCR metadata preflight failed') as error:
                     moderation_record('mio-core', '2.1.0')
                 self.assertTrue(error.exception.__suppress_context__)
-            urlopen.side_effect = HTTPError('private-url', 503, 'private-body', None, None)
-            with self.assertRaisesRegex(RuntimeError, 'HTTP status=503') as error:
+            urlopen.reset_mock()
+            urlopen.side_effect = HTTPError('private-url', 403, 'private-body', None, None)
+            with self.assertRaisesRegex(RuntimeError, 'HTTP status=403') as error:
                 moderation_record('mio-core', '2.1.0')
             self.assertNotIn('private', str(error.exception))
+            urlopen.assert_called_once()
+            urlopen.reset_mock()
             urlopen.side_effect = HTTPError('private-url', 404, 'private-body', None, None)
             self.assertIsNone(moderation_record('mio-core', '2.1.0'))
+            urlopen.assert_called_once()
+
+            headers = Message()
+            headers['Retry-After'] = '7'
+            response.read.return_value = template.format(
+                digest=b64encode(digest).decode(), approved='false', status='Submitted',
+            ).encode()
+            urlopen.reset_mock()
+            urlopen.side_effect = [HTTPError('private-url', 503, 'private-body', headers, None),
+                                   urlopen.return_value]
+            with patch('chocolatey_publish.sleep') as sleep, redirect_stdout(io.StringIO()) as log:
+                self.assertEqual(moderation_record('mio-core', '2.1.0'), (digest, 'Waiting'))
+            sleep.assert_called_once_with(7)
+            self.assertEqual(urlopen.call_count, 2)
+            self.assertNotIn('private', log.getvalue())
+
+    def test_metadata_outage_never_uploads(self):
+        for retry_after, delays, message in (
+            ('', [2, 5, 15], 'after 4 attempts'),
+            ('120', [], 'longer wait than the retry limit'),
+        ):
+            with self.subTest(retry_after=retry_after), tempfile.TemporaryDirectory() as temp, \
+                 patch('chocolatey_publish.urlopen') as urlopen, \
+                 patch('chocolatey_publish.sleep') as sleep, \
+                 patch('chocolatey_publish.existing') as download, \
+                 patch('chocolatey_publish.subprocess.run') as run, \
+                 redirect_stdout(io.StringIO()) as log:
+                folder = Path(temp)
+                self.publish_packages(folder)
+                headers = Message()
+                if retry_after:
+                    headers['Retry-After'] = retry_after
+                urlopen.side_effect = [
+                    HTTPError('private-url', 503, 'private-body', headers, None)
+                    for _ in range(len(delays) + 1)
+                ]
+                with self.assertRaisesRegex(RuntimeError, f'HTTP status=503.*{message}') as error:
+                    publish(folder, '2.1.0', push=True, resubmit=True)
+                self.assertEqual(urlopen.call_count, len(delays) + 1)
+                self.assertEqual([call.args[0] for call in sleep.call_args_list], delays)
+                traceback.print_exception(error.exception, file=log)
+                self.assertNotIn('private', log.getvalue())
+                download.assert_not_called()
+                run.assert_not_called()
 
     def test_first_upload_and_scoped_moderation_repair(self):
         with tempfile.TemporaryDirectory() as temp, \
