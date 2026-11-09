@@ -1,136 +1,264 @@
-// Package i18n 提供 Mio 命令行共享的轻量消息本地化
+// Package i18n implements the Mio CLI localization contract.
+//
+// The locale catalogs under selfhost/i18n/locales are the single source of
+// truth; scripts/i18n/catalog.py generates messages_generated.go for this
+// package and messages_generated.mio for the native CLI. Both paths implement
+// the same BCP 47 normalization, fallback order and {0} placeholders.
 package i18n
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
 
-// Language 表示受支持的输出语言
+// Language is a canonical BCP 47 locale tag with a bundled catalog.
 type Language string
 
+// Legacy aliases kept for existing callers and tests.
 const (
 	Chinese  Language = "zh-CN"
 	Japanese Language = "ja-JP"
 	English  Language = "en-US"
 )
 
-// Key 标识稳定的本地化消息
+// Key identifies a stable localized message.
 type Key string
 
+// Legacy message identifiers. New code should use the generated KeyX names.
 const (
-	TestStarting         Key = "test.starting"
-	TestPassed           Key = "test.passed"
-	TestFailed           Key = "test.failed"
-	AssertionFailed      Key = "test.assertion_failed"
-	NoTests              Key = "test.no_tests"
-	NoMatchingTests      Key = "test.no_matching_tests"
-	InvalidTestSignature Key = "test.invalid_signature"
-	CompileFailed        Key = "test.compile_failed"
-	RuntimeFailed        Key = "test.runtime_failed"
-	ResourceLimit        Key = "test.resource_limit"
-	PassedCount          Key = "test.passed_count"
-	FailedCount          Key = "test.failed_count"
-	TotalDuration        Key = "test.total_duration"
-	Summary              Key = "test.summary"
+	TestStarting         Key = KeyTestStarting
+	TestPassed           Key = KeyTestPass
+	TestFailed           Key = KeyTestFail
+	AssertionFailed      Key = KeyTestAssertion
+	NoTests              Key = KeyTestNone
+	NoMatchingTests      Key = KeyTestNoMatch
+	InvalidTestSignature Key = KeyTestInvalidSignature
+	CompileFailed        Key = KeyTestCompileFailed
+	RuntimeFailed        Key = KeyTestRuntime
+	ResourceLimit        Key = KeyTestResource
+	PassedCount          Key = KeyTestSummary
+	FailedCount          Key = KeyTestSummary
+	TotalDuration        Key = KeyTestDuration
+	Summary              Key = KeyTestSummary
 )
 
-var messages = map[Language]map[Key]string{
-	Chinese: {
-		TestStarting:         "开始测试 %s",
-		TestPassed:           "通过",
-		TestFailed:           "失败",
-		AssertionFailed:      "断言失败",
-		NoTests:              "没有发现测试",
-		NoMatchingTests:      "没有匹配 --run=%s 的测试",
-		InvalidTestSignature: "测试函数签名错误",
-		CompileFailed:        "编译失败",
-		RuntimeFailed:        "运行时错误",
-		ResourceLimit:        "超出资源限制",
-		PassedCount:          "成功数量",
-		FailedCount:          "失败数量",
-		TotalDuration:        "总执行时间",
-		Summary:              "测试完成：%d 个通过，%d 个失败",
-	},
-	Japanese: {
-		TestStarting:         "テストを開始 %s",
-		TestPassed:           "成功",
-		TestFailed:           "失敗",
-		AssertionFailed:      "アサーション失敗",
-		NoTests:              "テストが見つかりません",
-		NoMatchingTests:      "--run=%s に一致するテストがありません",
-		InvalidTestSignature: "テスト関数のシグネチャが無効です",
-		CompileFailed:        "コンパイル失敗",
-		RuntimeFailed:        "実行時エラー",
-		ResourceLimit:        "リソース制限を超えました",
-		PassedCount:          "成功数",
-		FailedCount:          "失敗数",
-		TotalDuration:        "合計実行時間",
-		Summary:              "テスト完了：%d 件成功、%d 件失敗",
-	},
-	English: {
-		TestStarting:         "Starting tests %s",
-		TestPassed:           "PASS",
-		TestFailed:           "FAIL",
-		AssertionFailed:      "assertion failed",
-		NoTests:              "no tests found",
-		NoMatchingTests:      "no tests matched --run=%s",
-		InvalidTestSignature: "invalid test function signature",
-		CompileFailed:        "compilation failed",
-		RuntimeFailed:        "runtime error",
-		ResourceLimit:        "resource limit exceeded",
-		PassedCount:          "passed",
-		FailedCount:          "failed",
-		TotalDuration:        "total duration",
-		Summary:              "Tests complete: %d passed, %d failed",
-	},
+// Default returns the final fallback language.
+func Default() Language { return defaultLanguage }
+
+// Supported returns every locale with a complete catalog.
+func Supported() []Language { return supported() }
+
+// Normalize canonicalizes a locale tag and applies the documented fallback
+// chain. Unknown input resolves to en-US and never fails.
+func Normalize(value string) Language { return resolve(value) }
+
+// Resolve is the documented public spelling of Normalize.
+func Resolve(value string) Language { return resolve(value) }
+
+func resolve(value string) Language {
+	tag := normalizeTag(value)
+	if tag == "" {
+		return defaultLanguage
+	}
+	if isSupported(tag) {
+		return Language(tag)
+	}
+	language := firstSubtag(tag)
+	region := lastSubtag(tag)
+	if region != language {
+		candidate := language + "-" + region
+		if isSupported(candidate) {
+			return Language(candidate)
+		}
+		if mapped, ok := regionalTags[candidate]; ok && isSupported(string(mapped)) {
+			return mapped
+		}
+	}
+	if script := scriptPrefix(tag); script != "" {
+		if mapped, ok := scriptDefaults[script]; ok && isSupported(string(mapped)) {
+			return mapped
+		}
+	}
+	if aliased, ok := aliases[language]; ok {
+		if primary, ok := primaries[aliased]; ok {
+			return primary
+		}
+	}
+	if primary, ok := primaries[language]; ok {
+		return primary
+	}
+	return defaultLanguage
 }
 
-// Normalize 将常见 Locale 形式归一化为受支持语言
-func Normalize(value string) Language {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if dot := strings.IndexByte(value, '.'); dot >= 0 {
-		value = value[:dot]
+func isSupported(tag string) bool {
+	for _, language := range supported() {
+		if string(language) == tag {
+			return true
+		}
 	}
-	if modifier := strings.IndexByte(value, '@'); modifier >= 0 {
-		value = value[:modifier]
-	}
-	value = strings.ReplaceAll(value, "_", "-")
-	switch {
-	case value == "zh", strings.HasPrefix(value, "zh-"):
-		return Chinese
-	case value == "ja", strings.HasPrefix(value, "ja-"):
-		return Japanese
-	case value == "en", strings.HasPrefix(value, "en-"):
-		return English
-	default:
-		return English
-	}
+	return false
 }
 
-// Select 按 CLI、环境变量和系统 Locale 的优先级选择语言
+// Select implements the environment part of the documented priority:
+// explicit --lang, MIO_LANG, LANGUAGE, LC_ALL, LC_MESSAGES, LANG, en-US.
+// The native CLI additionally probes the operating-system preference.
 func Select(explicit string, getenv func(string) string) Language {
 	if explicit != "" {
-		return Normalize(explicit)
+		return resolve(explicit)
 	}
 	if getenv == nil {
 		getenv = os.Getenv
 	}
 	if configured := getenv("MIO_LANG"); configured != "" {
-		return Normalize(configured)
+		return resolve(configured)
+	}
+	if configured := getenv("LANGUAGE"); configured != "" {
+		return resolve(beforeColon(configured))
 	}
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if locale := getenv(name); locale != "" {
-			return Normalize(locale)
+			return resolve(locale)
 		}
 	}
-	return English
+	return defaultLanguage
 }
 
-// Text 返回指定语言的静态消息模板
+// Text returns a message template, falling back to en-US and then to the key.
 func Text(language Language, key Key) string {
 	if translated := messages[language][key]; translated != "" {
 		return translated
 	}
-	return messages[English][key]
+	if fallback := messages[defaultLanguage][key]; fallback != "" {
+		return fallback
+	}
+	return string(key)
+}
+
+// Format substitutes {0}..{n} placeholders in a translated template.
+func Format(language Language, key Key, arguments ...any) string {
+	template := Text(language, key)
+	var output strings.Builder
+	for at := 0; at < len(template); {
+		if template[at] == '{' {
+			end := at + 1
+			index := 0
+			digits := 0
+			for end < len(template) && template[end] != '}' {
+				if template[end] < '0' || template[end] > '9' {
+					break
+				}
+				index = index*10 + int(template[end]-'0')
+				digits++
+				end++
+			}
+			if digits > 0 && end < len(template) && template[end] == '}' && index < len(arguments) {
+				fmt.Fprint(&output, arguments[index])
+				at = end + 1
+				continue
+			}
+		}
+		output.WriteByte(template[at])
+		at++
+	}
+	return output.String()
+}
+
+// Direction reports "rtl" for Arabic, Hebrew and Persian catalogs.
+func Direction(language Language) string {
+	if direction := directions[language]; direction != "" {
+		return direction
+	}
+	return "ltr"
+}
+
+func normalizeTag(value string) string {
+	value = strings.TrimSpace(value)
+	if index := strings.IndexAny(value, ".@"); index >= 0 {
+		value = value[:index]
+	}
+	value = strings.ReplaceAll(value, "_", "-")
+	parts := make([]string, 0, 4)
+	for _, part := range strings.Split(value, "-") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	language := strings.ToLower(parts[0])
+	if language == "c" || language == "posix" {
+		return ""
+	}
+	if !validLanguage(language) {
+		return ""
+	}
+	normalized := []string{language}
+	for _, part := range parts[1:] {
+		switch {
+		case len(part) == 4 && isAlpha(part):
+			normalized = append(normalized, strings.ToUpper(part[:1])+strings.ToLower(part[1:]))
+		case (len(part) == 2 && isAlpha(part)) || (len(part) == 3 && isDigits(part)):
+			normalized = append(normalized, strings.ToUpper(part))
+		default:
+			normalized = append(normalized, strings.ToLower(part))
+		}
+	}
+	return strings.Join(normalized, "-")
+}
+
+func validLanguage(value string) bool {
+	if len(value) >= 2 && len(value) <= 3 {
+		return isAlpha(value)
+	}
+	return len(value) >= 5 && len(value) <= 8 && isAlpha(value)
+}
+
+func isAlpha(value string) bool {
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if !((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')) {
+			return false
+		}
+	}
+	return len(value) > 0
+}
+
+func isDigits(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return len(value) > 0
+}
+
+func firstSubtag(tag string) string {
+	if index := strings.IndexByte(tag, '-'); index >= 0 {
+		return tag[:index]
+	}
+	return tag
+}
+
+func lastSubtag(tag string) string {
+	if index := strings.LastIndexByte(tag, '-'); index >= 0 {
+		return tag[index+1:]
+	}
+	return tag
+}
+
+func scriptPrefix(tag string) string {
+	parts := strings.Split(tag, "-")
+	if len(parts) < 2 || len(parts[1]) != 4 || !isAlpha(parts[1]) {
+		return ""
+	}
+	return parts[0] + "-" + parts[1]
+}
+
+func beforeColon(value string) string {
+	if index := strings.IndexByte(value, ':'); index >= 0 {
+		return value[:index]
+	}
+	return value
 }
