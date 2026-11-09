@@ -72,6 +72,7 @@ bash scripts/ci/run.sh macos-arm64 native-release release
 | bootstrap | bootstrap, full | 先原生 codegen 测试，再运行并独立复核现有 `tests/m19ef/bootstrap-abcd.sh` |
 | native-release | release | 原生 archive 测试，复现正式生产沙箱和构建/安装检查，再独立审核真实包 |
 | quality | quick, full | gofmt/vet/whitespace、负向自检、发布隔离静态检查 |
+| quality（i18n） | quick, full | `scripts/i18n/catalog.py check --check-generated` 与 `scripts/i18n/test_catalog.py`：39 个 locale 的 Key/占位符/UTF-8/ANSI/技术词/RTL/生成文件一致性，以及 CLI 文本 Key 引用覆盖 |
 | go-reference | quick, unit, full | 补充 Go/VM 回归；full 保留 VM 回归和 `go test` 全仓库（`Mio/selfhost/bootstrap` 除外，见下） |
 | go-bootstrap-reference | full（standalone） | `go test ./selfhost/bootstrap`：参考 VM 中的 Compiler A→B→C→D 自编译，Linux 约 56 分钟、macOS 更久；独立长时间模块，Full 用单独的 job 运行 |
 | kiso/* | quick, unit, full | 每个已有 `*_test.mio` 包的原生测试；实际清单见各模块注册文件 |
@@ -126,6 +127,19 @@ Bunko 每个库公开函数（`koukai waza`）都必须有覆盖它的原生测�
 0 为所有选定必需检查通过；1 为测试失败；2 为环境、参数或基础设施错误。显式指定不支持的组合返回 2。`all` 可以包含明确策略 SKIP，但不能把它们合并为 PASS；某个必需检查 NOT_RUN 不得成功。Go 的条件跳过保留明细，部分通过不代表覆盖所有原生路径。
 
 先查看 report.reason，再看 module.log 和独立 stdout/stderr。Python 捕获真实退出码，避免 tee 吞掉失败；POSIX 超时终止进程组，嵌套检查器转发终止信号；Windows 自检通过 taskkill /T /F 清理进程树。中断也返回非零并记录 NOT_RUN，不能把部分完成的运行写成 PASS。默认单检查超时 2400 秒、模块 7200 秒；Full Go 全集检查为 6600 秒，Go 包自身为 60 分钟，避免原有自举测试因少于 30 分钟的测试期限而跳过，支持 MIO_CI_CHECK_TIMEOUT/MIO_CI_MODULE_TIMEOUT；MIO_CI_RESULTS 可更改报告父目录。PYTHON 可指定解释器。生产环境不需要这些变量。
+
+### CLI 国际化与 Help 主题
+
+`scripts/i18n/catalog.py` 以 `selfhost/i18n/locales/*.json` 为唯一来源，生成 native CLI 的 `messages_generated.mio` 和 Go 参考 CLI 的 `messages_generated.go`。quality 的 `i18n-catalog` 检查会重新生成并比对已提交文件，`i18n-tests` 检查 39 个 locale 的完整性、占位符、控制字符、技术名称、RTL 元数据和每个 Key 的 CLI 引用。新增任何 CLI 文本而未翻译时，这两项会失败。
+
+原生三平台验证在 CLI B=C=D 固定点之后运行 `scripts/ci/native_platforms.py::cli_checks`：日文/区域回退 Help、显式颜色与 `NO_COLOR`、未知子命令退出码、版本输出，以及 `--format=json` 在 `--color=always` 下仍无 ANSI 或本地化字段。Core 与 Full 都运行同一组检查。本地可先运行：
+
+```sh
+python3 scripts/i18n/catalog.py check --check-generated
+python3 scripts/i18n/test_catalog.py
+go test ./internal/i18n ./cmd/mio
+MIO_LANG=en-US mio test selfhost/... --format=json
+```
 
 CI 命令可以在相同平台/架构本地原样执行，不依赖 GitHub 环境变量。Release 的受信任 Seed 仍由既有主机提供；开发用 Quick/Full 暂不使用 Seed（见下文“暂行措施”）。缺少 Seed 时不得宣称原生 CI 已运行。
 

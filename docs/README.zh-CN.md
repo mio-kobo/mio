@@ -25,7 +25,7 @@
 
 Mio 2.1 的原生 AOT 编译目标为 macOS ARM64、Linux AMD64 和 Windows AMD64。
 
-> 最新稳定版为 [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0)，已在 macOS ARM64 上通过验证。最新公开发布的候选版为 [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1)。[`Mio-2.1.1` 开发分支](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) 正在筹备 v2.1.1，正式版尚未发布。
+> 最新稳定版为 [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0)，已在 macOS ARM64 上通过验证。最新公开发布的候选版为 [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1)。[`Mio-2.1.2` 开发分支](https://github.com/mio-kobo/mio/tree/Mio-2.1.2) 正在筹备 v2.1.2，正式版尚未发布。
 
 改动与发布验证进度见 [v2.1.0 发布说明草案](releases/v2.1.0.md)。
 
