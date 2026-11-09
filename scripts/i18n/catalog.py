@@ -386,7 +386,7 @@ def render_mio(manifest, locales, catalogs):
     lines.append("koukai waza text(language: string, key: string) -> string {")
     lines.append("    kaku value = localized(language, key);")
     lines.append('    moshi (value != "") { kaesu value; }')
-    lines.append("    kaku fallback = %s(key);" % mio_function(manifest["default"]))
+    lines.append("    kaku fallback = table_lookup(%s(), key);" % mio_function(manifest["default"]))
     lines.append('    moshi (fallback != "") { kaesu fallback; }')
     lines.append("    kaesu key;")
     lines.append("}")
