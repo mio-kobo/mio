@@ -32,7 +32,7 @@ class DistributionTests(unittest.TestCase):
         return source
 
     def test_release_versions_are_built_into_source_before_compilation(self):
-        for i, kwargs in enumerate(({}, dict(stable_version='2.1.0'), dict(rc_version='2.1.0-rc.1'))):
+        for i, kwargs in enumerate(({}, dict(stable_version='2.1.1'), dict(rc_version='2.1.1-rc.1'))):
             source = self.source(str(i))
             result = prepare(source, 'a'*40, **kwargs)
             expected = kwargs.get('stable_version') or kwargs.get('rc_version') or '2.1.1-pr.'+'a'*12
@@ -40,12 +40,18 @@ class DistributionTests(unittest.TestCase):
             self.assertIn('mio v'+expected, (source/'selfhost/cli/main.mio').read_text())
             self.assertIn('a'*40, (source/'selfhost/cli/main.mio').read_text())
             self.assertTrue(result['embedded_bunko'])
+            self.assertEqual(result['source_version'], '2.1.1')
             self.assertIn('kaesu hai;', (source/'selfhost/resources/bunko_data.mio').read_text())
-        for invalid in ('2.1.0', '2.1.0-rc.0', '2.1.0-rc.01', '2.1.0-rc.1/escape', '2.0.0-rc.1'):
+        for invalid in ('2.1.1-rc.0', '2.1.1-rc.01', '2.1.1-rc.1/escape', '2.0.0-rc.1', '2.0.0', '2.1.1-rc'):
             with self.subTest(version=invalid), self.assertRaises(ValueError):
                 prepare(self.source(invalid.replace('/', '_')), 'a'*40, rc_version=invalid)
         with self.assertRaises(ValueError):
-            prepare(self.source('both'), 'a'*40, stable_version='2.1.0', rc_version='2.1.0-rc.1')
+            prepare(self.source('both'), 'a'*40, stable_version='2.1.1', rc_version='2.1.1-rc.1')
+        # The source version and the requested release version must agree.
+        with self.assertRaisesRegex(ValueError, 'source declares Mio 2.1.1'):
+            prepare(self.source('mismatch'), 'a'*40, stable_version='2.1.2')
+        with self.assertRaisesRegex(ValueError, 'source declares Mio 2.1.1'):
+            prepare(self.source('mismatch-rc'), 'a'*40, rc_version='2.1.2-rc.1')
 
     def test_stable_source_uses_canonical_bytes_even_in_a_crlf_checkout(self):
         source = self.source('source-checkout')
@@ -100,6 +106,7 @@ class DistributionTests(unittest.TestCase):
                    ('full-embedded-runtime', 'full-embedded-transitive', 'core-no-embedded',
                     'core-external-root', 'explicit-root-precedence', 'invalid-module-diagnostic')]
         return dict(target='linux-amd64', status='PASS', source_sha='a'*40,
+                    distribution_input=self.inputs,
                     run=dict(id=os.getenv('GITHUB_RUN_ID', ''), attempt=os.getenv('GITHUB_RUN_ATTEMPT', '')),
                     checks=checks,
                     hashes=dict({f'cli-{s}': full for s in 'BCD'},
@@ -186,9 +193,10 @@ class DistributionTests(unittest.TestCase):
         for name in ('kiso/math/integer.mio', 'kiso/math/integer_test.mio', 'kiso/snap.before-patch/old.mio', 'kiso/math/test.sh'):
             p = source / 'bunko' / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('source')
         prepare(source, self.inputs['source_sha'])
+        prepared = json.loads((source / 'distribution-input.json').read_text())
         self.assertIn('kaesu hai;', (source / 'selfhost/resources/bunko_data.mio').read_text())
         for target in ('linux-amd64', 'windows-amd64'):
-            report['target'] = target; report['seed'] = dict(status='NOT_RUN')
+            report['target'] = target; report['seed'] = dict(status='NOT_RUN'); report['distribution_input'] = prepared
             rp = self.root / 'report.json'; rp.write_text(json.dumps(report))
             archives = package(source, self.compilers, rp, self.root / target, target)
             binaries = []

@@ -8,15 +8,24 @@ versions solely to exercise manager upgrades; shipped compiler bytes are unchang
 
 ## Stable inputs and review boundary
 
-`package-managers.yml` reads an **already published** stable `v2.1+` GitHub Release.
-Manual dispatch is always dry run. The gate requires all six native archives and both self-contained Windows installers,
+`package-managers.yml` reads an **already published** stable GitHub Release for
+any supported version (`v2.1+`, including future majors). Manual dispatch is
+always dry run. It resolves the release tag to its permanent version archive
+branch (`v2.1.2` -> `Mio-2.1.2`, `v3.0.0` -> `Mio-3.0.0`) and requires the tag
+to be that branch's exact tip. The historical, already published v2.1.0 tag is
+the only exception and may remain an ancestor of `Mio-2.1`. Release branches do
+not need to be merged into the default branch. A missing branch, moved branch,
+unrelated tag commit or source mismatch fails before any metadata is generated.
+
+The gate requires all six native archives and both self-contained Windows installers,
 `SHA256SUMS`, `<target>-native-report.json`, `<target>-verification.json`,
 `docker-verification.json` bound to the Linux Full archive, exact inventories,
 distinct Core/Full compiler hashes with separate native fixed points, embedded
 Bunko resolution checks, and every required native check PASS. GitHub's asset SHA-256 digest must also match. All source SHAs
-must resolve to the stable tag, which must belong to `Mio-2.1` history.
+must resolve to the exact published stable tag and its version archive branch,
+and the evidence must use the reviewed bootstrap profile for that version.
 
-For stable builds, follow the [trusted GF4 and release verification instructions](../../docs/testing.md#stable-distribution-and-trusted-gf4).
+For stable builds, follow the [trusted bootstrap and release verification instructions](../../docs/testing.md#stable-distribution-and-trusted-bootstrap-seeds).
 Use the complete `mio-stable-release-assets-<run>-<attempt>` artifact from the
 tagged run. The package-manager gate verifies the GitHub Actions attestation
 against the exact tag and source commit, then compares the frozen GF4 origin
@@ -192,14 +201,16 @@ Maintainer submission:
    version is already present. Public CCR endpoints may miss private entries.
    For the v2.1.0 repair, check both entries and confirm that any package whose
    content needs updating is Waiting, Pending, Responded, or Updated.
-2. Dry-run `package-managers.yml` on `Mio-2.1` with the existing published tag.
-   Inspect the generated nupkg files, hashes and Windows lifecycle evidence.
-   Dry runs verify locally generated packages without contacting CCR.
+2. Dry-run `package-managers.yml` on the default branch with the existing
+   published tag. The workflow resolves the correct version archive branch from
+   the tag; no branch name is passed manually. Inspect the generated nupkg files,
+   hashes and Windows lifecycle evidence. Dry runs verify locally generated
+   packages without contacting CCR.
 3. Configure the `chocolatey-community` environment with required maintainer
    reviewers and protected branch policies for `Mio-2.1`. Store
    `CHOCOLATEY_API_KEY` as that environment's secret. Enable
    `MIO_CHOCOLATEY_PUBLISH_ENABLED` after maintainer review.
-4. Dispatch `package-managers.yml` from `Mio-2.1` with the tag and
+4. Dispatch `package-managers.yml` from the default branch with the tag and
    `submit_chocolatey` enabled, then approve the protected environment. Enable
    `resubmit_chocolatey_v2_1_0` only to authorize the repair of `mio` and
    `mio-core` v2.1.0.

@@ -216,42 +216,51 @@ Quick 和 Full 的 Seed 驱动模块在 GitHub-hosted Runner 上仍处于暂缓�
 
 注：上表中的 `legacy-bcd`、`legacy-m18`、`legacy-m18-reference` 与 `go-aot-reference` 已随 Go AOT 后端一起删除（Mio-2.1 Runtime ABI 统合，见 CHANGELOG.md）；这些行仅作历史记录。
 
-## Stable distribution and trusted GF4
+## Stable distribution and trusted bootstrap seeds
 
-Candidate verification reports GF4 as **NOT_RUN** and uses the Go reference VM
-for Linux Stage A. The stable workflow on revisions with v2.1 seed support uses
-a separate GitHub-hosted Darwin ARM64 job.
+Candidate verification reports the trusted seed as **NOT_RUN** and uses the Go
+reference VM for Linux Stage A. The stable workflow on revisions with a reviewed
+bootstrap profile uses a separate GitHub-hosted Darwin ARM64 job.
 
-1. The job retrieves `mio-v2.1.0-darwin-arm64` from the
+1. The profile is selected from the release version by
+   `scripts/distribution/bootstrap.py`, never from a workflow input. For the
+   v2.1.x line the job retrieves `mio-v2.1.0-darwin-arm64` from the
    [immutable v2.1 seed release](https://github.com/mio-kobo/mio/releases/tag/bootstrap-v2.1.0-seed.1).
    It checks the pinned release tag, release ID, asset ID, asset name, and SHA-256
    from `scripts/distribution/seed_evidence.py`. The download is restricted to
    GitHub's API and the expected release CDN redirect. The job verifies the
    GitHub release attestation and the strict macOS code signature before running
-   the executable in the production sandbox.
-2. A maintainer dispatches `distribution-pr.yml` on an existing stable tag
-   on `Mio-2.1` history with `stable_version` set to the unprefixed version.
-   Every job prepares the same committed Full inputs with embedded Bunko. The seed
-   builds Darwin CLI A, then A builds B, B builds C, and C builds D. Darwin B,
-   C, and D must match byte for byte. The verified Full compiler also builds a
-   disposable Core source with an empty resource table; Core B, C, and D must
-   match. Darwin B and C independently build Linux and Windows outputs, which
-   must match for each target. The native suite additionally checks embedded
-   imports, transitive imports, Core's missing-Bunko diagnostic, external
-   overrides, and that an invalid explicit root never falls back.
+   the executable in the production sandbox. A version whose profile is not
+   registered fails closed; it cannot fall back to an unverified seed.
+2. A maintainer dispatches `distribution-pr.yml` on an existing stable tag whose
+   version archive branch (`Mio-2.1.1`, `Mio-2.1.2`, `Mio-2.2.0`, `Mio-3.0.0`,
+   ...) is its exact tip, with `stable_version` set to the unprefixed version.
+   The branch does not need to be merged into the default branch. The workflow
+   rejects a missing branch, a moved branch, an unrelated tag commit, a source
+   revision mismatch, and mixed stable/RC inputs. Every job prepares the same
+   committed Full inputs with embedded Bunko. The seed builds Darwin CLI A, then
+   A builds B, B builds C, and C builds D. Darwin B, C, and D must match byte for
+   byte. The verified Full compiler also builds a disposable Core source with an
+   empty resource table; Core B, C, and D must match. Darwin B and C
+   independently build Linux and Windows outputs, which must match for each
+   target. The native suite additionally checks embedded imports, transitive
+   imports, Core's missing-Bunko diagnostic, external overrides, and that an
+   invalid explicit root never falls back.
 3. Each packaging job compares the seed-derived hash with its own native
    B/C/D. After the remaining distribution checks pass, the workflow attests
    the inventory for the exact tag, commit, and run attempt. The
-   `mio-stable-release-assets-<run>-<attempt>` artifact includes
-   `trusted-native-v21-report.json` and `trusted-native-v21-logs/`. The
-   workflow produces Actions artifacts and an attestation.
+   `mio-stable-release-assets-<run>-<attempt>` artifact includes the selected
+   seed report (for example `trusted-native-v21-report.json`) and its log
+   directory. The workflow produces Actions artifacts and an attestation; it
+   never creates the GitHub Release or a tag.
 
 The frozen GF4 executable remains pinned to the
 [immutable GF4 seed release](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable)
 and SHA-256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`.
-Existing tags retain their original workflows. The release verifier still
-recognizes the historical GF4 evidence format and validates it against the
-GF4 pin. A v2.1 seed report is evidence only for the v2.1 seed.
+It is retained only for the historical v2.1.0 evidence format. Existing tags
+retain their original workflows. The release verifier still recognizes the
+historical GF4 evidence format and validates it against the GF4 pin. A v2.1 seed
+report is evidence only for a version whose reviewed profile selects that seed.
 
 For an independent Darwin ARM64 replay from a checkout of the revision being
 tested, pass a local copy of the original seed explicitly. This report is
@@ -267,6 +276,7 @@ GITHUB_SHA=$(git rev-parse HEAD) python3 "$work/source/scripts/ci/trusted_seed.p
 To verify downloaded stable assets, resolve `source` from the exact release tag
 in a fresh checkout. Verify the report signature against the official workflow,
 source commit and tag, then check the report's file digests and `SHA256SUMS`.
+Use the release's own version in place of the historical `v2.1.0` example.
 
 ```sh
 tag=v2.1.0
@@ -282,8 +292,9 @@ sha256sum -c SHA256SUMS
 
 The package-manager gate additionally checks every signed evidence file,
 inspects all six archives and reconciles each provenance record with the
-GF4 and native reports. A missing seed is **NOT_RUN** and fails the trusted job,
-so the stable workflow produces no signed release asset set. The separate
-historical GF4 workflow in `release.yml` retains its self-hosted configuration
-and requires the legacy source tree with `VERSION` set to `2.0.0`. The 2.1
-distribution workflow takes its release version from the dispatch input.
+bootstrap seed and native reports. A missing seed is **NOT_RUN** and fails the
+trusted job, so the stable workflow produces no signed release asset set. The
+separate historical GF4 workflow in `release.yml` retains its self-hosted
+configuration and requires the legacy source tree with `VERSION` set to `2.0.0`.
+The distribution workflow resolves its release version and archive branch from
+the dispatch tag; see [the version-independent release process](distribution/README.md).

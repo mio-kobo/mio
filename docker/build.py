@@ -32,7 +32,7 @@ def require_static_amd64(compiler):
                 dynamic_interpreter=None, dynamic_dependencies=[])
 
 
-def build(candidates, output, image):
+def build(candidates, output, image=None):
     output.mkdir(parents=True, exist_ok=True)
     report = dict(status='FAIL', image=image, platform='linux/amd64', checks=[], commands=[])
     def run(argv, **kwargs):
@@ -66,6 +66,10 @@ def build(candidates, output, image):
             compiler = extracted / 'bin/mio'
             sha = digest(compiler)
             check('Full compiler provenance', sha == provenance['compiler_sha256'])
+            # The image tag follows the verified archive version, so a candidate
+            # or RC never inherits another release's hardcoded image name.
+            image = image or 'mio:%s-full' % manifest['version']
+            report['image'] = image
             report.update(compiler_sha256=sha, source_sha=manifest['source_sha'], full_archive_sha256=digest(archive),
                           linkage=require_static_amd64(compiler))
             # Independent system-tool evidence, retained with the image archive.
@@ -121,6 +125,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidates', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--image', default='mio:2.1.1-full-pr-candidate')
+    parser.add_argument('--image', help='Image tag; defaults to mio:<verified archive version>-full')
     args = parser.parse_args()
     build(args.candidates.resolve(), args.output.resolve(), args.image)

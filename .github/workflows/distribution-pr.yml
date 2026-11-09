@@ -8,28 +8,71 @@ env:
   MIO_DISTRIBUTION_STABLE_VERSION: ${{ inputs.stable_version || '' }}
   MIO_DISTRIBUTION_RC_VERSION: ${{ inputs.rc_version || '' }}
 jobs:
+  # One reviewed resolver owns tag parsing, version-to-branch mapping, exact
+  # branch-tip verification, and bootstrap profile selection. Every later job
+  # consumes its outputs instead of repeating release-specific assumptions.
   scope:
     runs-on: ubuntu-24.04
     outputs:
       wrapper_only: ${{ steps.scope.outputs.wrapper_only }}
+      kind: ${{ steps.resolve.outputs.kind }}
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      branch: ${{ steps.resolve.outputs.branch }}
+      seed_kind: ${{ steps.resolve.outputs.seed_kind }}
+      seed_artifact: ${{ steps.resolve.outputs.seed_artifact }}
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         fetch-depth: 0
         persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - id: resolve
+      name: Resolve the release version, archive branch and bootstrap profile
+      env:
+        STABLE: ${{ inputs.stable_version }}
+        RC: ${{ inputs.rc_version }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p build/scope
+        python - <<'PY' > build/scope/resolution.json
+        import json, os, sys
+        sys.path.insert(0, 'scripts/distribution')
+        import bootstrap, versions
+        stable = (os.environ.get('STABLE') or '').strip()
+        rc = (os.environ.get('RC') or '').strip()
+        if stable and rc:
+            raise SystemExit('stable and RC versions are mutually exclusive')
+        if stable:
+            data = versions.verify_dispatch(stable, 'stable')
+            profile = bootstrap.profile_for(stable)
+            data.update(seed_kind=profile.kind, seed_artifact=profile.artifact)
+        elif rc:
+            data = versions.verify_dispatch(rc, 'rc')
+        else:
+            data = dict(kind='candidate', version='', tag='', branch='', seed_kind='', seed_artifact='')
+        json.dump(data, sys.stdout)
+        PY
+        if [[ "${{ github.event_name }}" == workflow_dispatch && -n "${MIO_DISTRIBUTION_STABLE_VERSION}${MIO_DISTRIBUTION_RC_VERSION}" ]]; then
+          TAG=$(python -c 'import json; print(json.load(open("build/scope/resolution.json"))["tag"])')
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          python scripts/distribution/versions.py verify --tag "$TAG" --source-sha "$GITHUB_SHA" > build/scope/refs.json
+        fi
+        python - <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os
+        data = json.load(open('build/scope/resolution.json'))
+        for key in ('kind', 'version', 'tag', 'branch', 'seed_kind', 'seed_artifact'):
+            print('%s=%s' % (key, data.get(key, '')))
+        PY
     - id: scope
+      name: Detect wrapper-only changes
       env:
         BASE: ${{ github.event.pull_request.base.sha }}
       shell: bash
       run: |
-        if [[ -n "$MIO_DISTRIBUTION_STABLE_VERSION" ]]; then
-          test "$GITHUB_REPOSITORY" = mio-kobo/mio
-          test "$GITHUB_EVENT_NAME" = workflow_dispatch
-          test "$GITHUB_REF" = "refs/tags/v$MIO_DISTRIBUTION_STABLE_VERSION"
-          [[ "$MIO_DISTRIBUTION_STABLE_VERSION" =~ ^2\.[1-9][0-9]*\.(0|[1-9][0-9]*)$ ]]
-          test -z "$MIO_DISTRIBUTION_RC_VERSION"
-          git merge-base --is-ancestor HEAD origin/Mio-2.1
-        fi
         python - <<'PYCODE'
         import os, subprocess, sys
         sys.path.insert(0, 'scripts/package_managers')
@@ -40,10 +83,17 @@ jobs:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             f.write('wrapper_only=' + str(only).lower() + '\n')
         PYCODE
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: release-scope-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/scope/
+        if-no-files-found: error
+        retention-days: 7
   trusted-seed:
-    name: Trusted Mio v2.1 seed / Darwin ARM64 origin
+    name: Trusted bootstrap seed / Darwin ARM64 origin
     needs: scope
-    if: github.repository == 'mio-kobo/mio' && github.event_name == 'workflow_dispatch' && inputs.stable_version
+    if: github.repository == 'mio-kobo/mio' && github.event_name == 'workflow_dispatch' && needs.scope.outputs.kind == 'stable'
     runs-on: macos-15
     timeout-minutes: 180
     steps:
@@ -53,23 +103,26 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - name: Build from the pinned Mio v2.1 seed and verify the Darwin fixed point and cross outputs
+    - name: Build from the reviewed pinned seed and verify the Darwin fixed point and cross outputs
       env:
         SSL_CERT_FILE: /etc/ssl/cert.pem
         GH_TOKEN: ${{ github.token }}
+        VERSION: ${{ needs.scope.outputs.version }}
+        SEED_KIND: ${{ needs.scope.outputs.seed_kind }}
       shell: bash
       run: |
         set -euo pipefail
-        work=$(mktemp -d "$RUNNER_TEMP/mio-native-v21.XXXXXXXX")
+        work=$(mktemp -d "$RUNNER_TEMP/mio-native.XXXXXXXX")
         echo "MIO_NATIVE_SEED_WORK=$work" >> "$GITHUB_ENV"
         python3 scripts/distribution/prepare.py --disposable-checkout "$work/source"
-        python3 "$work/source/scripts/ci/trusted_seed.py" --seed native-v21 --output "$work/evidence"
+        python3 scripts/distribution/bootstrap.py --version "$VERSION"
+        python3 "$work/source/scripts/ci/trusted_seed.py" --seed "$SEED_KIND" --output "$work/evidence"
     - uses: actions/upload-artifact@v4
       if: always() && env.MIO_NATIVE_SEED_WORK != ''
       with:
-        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
+        name: ${{ needs.scope.outputs.seed_artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
         path: |
-          ${{ env.MIO_NATIVE_SEED_WORK }}/evidence/trusted-native-v21-report.json
+          ${{ env.MIO_NATIVE_SEED_WORK }}/evidence/${{ needs.scope.outputs.seed_artifact }}-report.json
           ${{ env.MIO_NATIVE_SEED_WORK }}/evidence/logs/
         if-no-files-found: error
         retention-days: 14
@@ -79,7 +132,7 @@ jobs:
       run: rm -rf -- "$MIO_NATIVE_SEED_WORK"
   stable-web:
     needs: scope
-    if: github.event_name == 'workflow_dispatch' && inputs.stable_version
+    if: github.event_name == 'workflow_dispatch' && needs.scope.outputs.kind == 'stable'
     uses: ./.github/workflows/web.yml
   wrapper-regression:
     needs: [scope, packaging-tests]
@@ -103,14 +156,15 @@ jobs:
     - run: python -m unittest discover -s docker -p 'test_*.py' -v
   candidates:
     needs:
+    - scope
     - follower
     - packaging-tests
     - trusted-seed
     if: >-
       !cancelled() && needs.follower.result == 'success' &&
       needs.packaging-tests.result == 'success' &&
-      (inputs.stable_version && needs.trusted-seed.result == 'success' ||
-       !inputs.stable_version && needs.trusted-seed.result == 'skipped')
+      (needs.scope.outputs.kind == 'stable' && needs.trusted-seed.result == 'success' ||
+       needs.scope.outputs.kind != 'stable' && needs.trusted-seed.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -143,13 +197,17 @@ jobs:
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
     - uses: actions/download-artifact@v4
-      if: inputs.stable_version
+      if: needs.scope.outputs.kind == 'stable'
       with:
-        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/trusted-native-v21
+        name: ${{ needs.scope.outputs.seed_artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-seed
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
+      run: >-
+        python scripts/distribution/package.py --source build/distribution-source
+        --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }}
+        --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
+        ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
     - name: Install current official WinGet client
@@ -218,13 +276,13 @@ jobs:
   required:
     if: always()
     needs:
+    - scope
     - packaging-tests
     - summary
     - candidates
     - docker-full-offline
     - candidate-linux
     - apt-distributions
-    - scope
     - wrapper-regression
     runs-on: ubuntu-24.04
     steps:
@@ -268,7 +326,7 @@ jobs:
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
     - id: native
       name: Stage A, native compiler and CLI fixed points, mio test, Runtime ABI contract, cross Stage A
-      run: python build/distribution-source/scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64 ${{ inputs.stable_version && '--run-examples' || '' }}
+      run: python build/distribution-source/scripts/ci/native_platforms.py linux --refvm build/native/refvm --output build/native/linux-amd64 ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
     - uses: actions/upload-artifact@v4
       if: success()
       with:
@@ -319,7 +377,7 @@ jobs:
         retention-days: 7
   follower:
     name: Distribution native / ${{ matrix.target }}
-    needs: linux
+    needs: [scope, linux]
     strategy:
       fail-fast: false
       matrix:
@@ -353,7 +411,7 @@ jobs:
       shell: bash
       env:
         EXPECTED_SHA256: ${{ needs.linux.outputs[matrix.sha_output] }}
-      run: python build/distribution-source/scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}" ${{ inputs.stable_version && '--run-examples' || '' }}
+      run: python build/distribution-source/scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}" ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -405,9 +463,9 @@ jobs:
         pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
         path: build/native-reports
     - name: Combine the platform reports (fails unless every required check is PASS)
-      run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary ${{ inputs.stable_version && '--run-examples' || '' }}
+      run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
     - name: Verify Bunko public-function coverage on all three release targets
-      if: inputs.stable_version
+      if: needs.scope.outputs.kind == 'stable'
       run: python scripts/ci/bunko_matrix.py --check --reports build/native-reports --output build/native-summary --require-pass
     - uses: actions/upload-artifact@v4
       if: always()
@@ -418,6 +476,7 @@ jobs:
         retention-days: 7
   docker-full-offline:
     needs:
+    - scope
     - candidate-linux
     # The successful candidate may have an intentionally skipped seed ancestor.
     if: ${{ !cancelled() && needs.candidate-linux.result == 'success' }}
@@ -433,7 +492,7 @@ jobs:
         path: build/linux-candidates
     - name: Build Full image, test offline, save/load, test offline again
       env:
-        STABLE_VERSION: ${{ inputs.stable_version }}
+        STABLE_VERSION: ${{ needs.scope.outputs.kind == 'stable' && needs.scope.outputs.version || '' }}
       run: |
         args=()
         if [[ -n "$STABLE_VERSION" ]]; then args+=(--image "mio:$STABLE_VERSION-full"); fi
@@ -454,14 +513,15 @@ jobs:
         retention-days: 14
   candidate-linux:
     needs:
+    - scope
     - linux
     - packaging-tests
     - trusted-seed
     if: >-
       !cancelled() && needs.linux.result == 'success' &&
       needs.packaging-tests.result == 'success' &&
-      (inputs.stable_version && needs.trusted-seed.result == 'success' ||
-       !inputs.stable_version && needs.trusted-seed.result == 'skipped')
+      (needs.scope.outputs.kind == 'stable' && needs.trusted-seed.result == 'success' ||
+       needs.scope.outputs.kind != 'stable' && needs.trusted-seed.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -482,13 +542,17 @@ jobs:
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
     - uses: actions/download-artifact@v4
-      if: inputs.stable_version
+      if: needs.scope.outputs.kind == 'stable'
       with:
-        name: trusted-native-v21-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/trusted-native-v21
+        name: ${{ needs.scope.outputs.seed_artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: build/trusted-seed
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
+      run: >-
+        python scripts/distribution/package.py --source build/distribution-source
+        --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B
+        --report build/evidence/report.json --target linux-amd64 --output build/candidates
+        ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
     - name: Install current official WinGet client
@@ -580,9 +644,9 @@ jobs:
 
   stable-evidence:
     name: Assemble and attest stable release assets
-    needs: [required, trusted-seed, stable-web]
+    needs: [scope, required, trusted-seed, stable-web]
     if: >-
-      !cancelled() && github.event_name == 'workflow_dispatch' && inputs.stable_version &&
+      !cancelled() && github.event_name == 'workflow_dispatch' && needs.scope.outputs.kind == 'stable' &&
       needs.required.result == 'success' && needs.trusted-seed.result == 'success' &&
       needs.stable-web.result == 'success'
     runs-on: ubuntu-24.04
@@ -596,12 +660,12 @@ jobs:
         persist-credentials: false
     - uses: actions/download-artifact@v4
       with:
-        pattern: '@(mio-candidates-*|mio-docker-linux-amd64-candidate|trusted-native-v21|chocolatey-tests|apt-container-*)-${{ github.run_id }}-${{ github.run_attempt }}'
+        pattern: '@(mio-candidates-*|mio-docker-linux-amd64-candidate|trusted-*|chocolatey-tests|apt-container-*)-${{ github.run_id }}-${{ github.run_attempt }}'
         path: build/downloads
-    - name: Bind checksums and evidence to the release inputs
+    - name: Bind checksums and evidence to the exact release inputs
       env:
-        VERSION: ${{ inputs.stable_version }}
-      run: python scripts/distribution/stable_release.py --seed native-v21 --downloads build/downloads --output build/stable --version "$VERSION"
+        VERSION: ${{ needs.scope.outputs.version }}
+      run: python scripts/distribution/stable_release.py --downloads build/downloads --output build/stable --version "$VERSION"
     - uses: actions/attest-build-provenance@v2
       id: attest
       with:
@@ -624,14 +688,13 @@ jobs:
   workflow_dispatch:
     inputs:
       stable_version:
-        description: Optional stable version; dispatch only on its existing v-prefixed tag
+        description: Stable version without the v prefix; dispatch only on its existing tag in the matching version branch
         required: false
         type: string
       rc_version:
-        description: Optional RC version (e.g. 2.1.1-rc.1); dispatch only on its existing v-prefixed tag
+        description: Release candidate version (e.g. 2.1.2-rc.1); dispatch only on its existing v-prefixed tag
         required: false
         type: string
   pull_request:
     branches:
-    - Mio-2.1
-    - Mio-2.1.1
+    - 'Mio-[0-9]*'

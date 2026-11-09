@@ -8,9 +8,11 @@ import re
 import shutil
 import subprocess
 
+from bootstrap import profile_for
 from package import digest, write_json
 from seed_evidence import (GF4, NATIVE_V21, REPOSITORY, SEED_KINDS, SEED_LOGS, TARGETS, WORKFLOW,
-                           seed_identity, stable_version, validate_seed)
+                           seed_identity, validate_seed)
+from versions import stable_version
 
 REPORT = 'release-verification.json'
 BUNDLE = 'release-verification.sigstore.json'
@@ -39,7 +41,8 @@ def reports():
             ('native-report.json', 'verification.json', 'package-manager-verification.json')]
 
 
-def evidence_files(version, kind=GF4):
+def evidence_files(version, kind=None):
+    kind = kind or profile_for(version).kind
     identity = seed_identity(kind)
     return set(payloads(version) + reports() + [
         identity.report_name, *(f'{identity.log_dir}/{name}' for name in SEED_LOGS),
@@ -48,7 +51,8 @@ def evidence_files(version, kind=GF4):
     ])
 
 
-def check_seed_artifact(report_path, logs, source, version, run, kind=GF4):
+def check_seed_artifact(report_path, logs, source, version, run, kind=None):
+    kind = kind or profile_for(version).kind
     seed = json.loads(report_path.read_text())
     validate_seed(seed, source, version, run, kind)
     for name in SEED_LOGS:
@@ -56,10 +60,15 @@ def check_seed_artifact(report_path, logs, source, version, run, kind=GF4):
             raise ValueError('Trusted seed log does not match its report: ' + name)
 
 
-def assemble(downloads, output, version, kind=GF4):
+def assemble(downloads, output, version, kind=None):
     if (not stable_version(version) or os.environ['GITHUB_REF'] != f'refs/tags/v{version}'
             or os.environ['GITHUB_EVENT_NAME'] != 'workflow_dispatch' or os.environ['GITHUB_REPOSITORY'] != REPOSITORY):
         raise ValueError('release evidence requires the official workflow dispatched on the exact stable tag')
+    profile = profile_for(version)
+    if kind is not None and kind != profile.kind:
+        raise ValueError('bootstrap seed %s is not the reviewed profile for Mio %s (expected %s)'
+                         % (kind, version, profile.kind))
+    kind = profile.kind
     run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
     suffix = f'{run_id}-{attempt}'
     source = os.environ['GITHUB_SHA']
@@ -135,6 +144,7 @@ if __name__ == '__main__':
     parser.add_argument('--downloads', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--version', required=True)
-    parser.add_argument('--seed', choices=SEED_KINDS, default=GF4)
+    parser.add_argument('--seed', choices=SEED_KINDS, default=None,
+                        help='Assert the reviewed bootstrap profile; defaults to the version profile')
     args = parser.parse_args()
     assemble(args.downloads, args.output, args.version, args.seed)
