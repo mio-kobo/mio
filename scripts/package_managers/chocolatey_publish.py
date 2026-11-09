@@ -2,6 +2,7 @@
 """Submit to CCR after maintainer confirmation, with a scoped v2.1.0 repair option."""
 import argparse
 from base64 import b64decode
+from email.utils import parsedate_to_datetime
 from hashlib import sha512
 from http.client import HTTPException
 from io import BytesIO
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from time import sleep, time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
@@ -21,6 +23,9 @@ from release import stable
 PACKAGE_NAMES = ('mio-core', 'mio')
 REPAIR_VERSION = '2.1.0'
 REPAIR_STATUSES = {'Waiting', 'Pending', 'Responded', 'Updated'}
+METADATA_BACKOFF = (2, 5, 15, None)
+METADATA_RETRY_STATUS = {502, 503, 504}
+METADATA_MAX_RETRY_DELAY = 30
 ODATA = {
     'a': 'http://www.w3.org/2005/Atom',
     'm': 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata',
@@ -83,12 +88,46 @@ def existing(name, version):
         raise RuntimeError(f'CCR download preflight failed for {name} {version}') from None
 
 
-def moderation_record(name, version):
+def metadata_body(name, version):
     url = FEED + f"Packages(Id='{name}',Version='{version}')"
     request = Request(url, headers={'Accept': 'application/atom+xml', 'Cache-Control': 'no-cache'})
+    failure = f'CCR metadata preflight failed for {name} {version}'
+    for attempt, delay in enumerate(METADATA_BACKOFF, 1):
+        try:
+            with urlopen(request, timeout=20) as response:
+                return response.read()
+        except HTTPError as error:
+            retry_after = error.headers.get('Retry-After', '') if error.headers else ''
+            error.close()
+            if error.code == 404:
+                return None
+            status = f'HTTP status={error.code}'
+            if error.code not in METADATA_RETRY_STATUS:
+                raise RuntimeError(f'{failure}: {status}') from None
+        except (OSError, HTTPException):
+            retry_after = ''
+            status = 'network error'
+
+        if delay is None:
+            raise RuntimeError(f'{failure}: {status} after {attempt} attempts') from None
+        if retry_after:
+            try:
+                seconds = int(retry_after) if retry_after.isdecimal() else parsedate_to_datetime(retry_after).timestamp() - time()
+            except (ValueError, TypeError, OverflowError, OSError):
+                seconds = 0
+            delay = max(delay, seconds)
+        if delay > METADATA_MAX_RETRY_DELAY:
+            raise RuntimeError(f'{failure}: {status}; CCR requested a longer wait than the retry limit') from None
+        print(f'CCR metadata preflight for {name} {version}: {status}; retrying in {delay:g}s', flush=True)
+        sleep(delay)
+
+
+def moderation_record(name, version):
+    body = metadata_body(name, version)
+    if body is None:
+        return None
     try:
-        with urlopen(request, timeout=60) as response:
-            entry = ET.fromstring(response.read())
+        entry = ET.fromstring(body)
         if (entry.tag != '{' + ODATA['a'] + '}entry'
                 or entry.findtext('a:title', namespaces=ODATA) != name
                 or entry.findtext('m:properties/d:Version', namespaces=ODATA) != version
@@ -104,11 +143,7 @@ def moderation_record(name, version):
         if approved == 'false' and status == 'Submitted':
             return digest, entry.findtext('m:properties/d:PackageSubmittedStatus', namespaces=ODATA)
         return digest, None
-    except HTTPError as error:
-        if error.code == 404:
-            return None
-        raise RuntimeError(f'CCR metadata preflight failed for {name} {version}: HTTP status={error.code}') from None
-    except (OSError, HTTPException, ET.ParseError, ValueError, LookupError):
+    except (ET.ParseError, ValueError, LookupError):
         raise RuntimeError(f'CCR metadata preflight failed for {name} {version}') from None
 
 

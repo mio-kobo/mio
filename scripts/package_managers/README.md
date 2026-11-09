@@ -208,8 +208,10 @@ Maintainer submission:
 `chocolatey_publish.py` checks the exact CCR records for both packages before
 uploading either. It skips matching SHA-512 digests, blocks changes to approved
 versions, and requires a recognized review status and explicit authorization
-for any repair. A missing CCR record stops a repair. If a push fails or times
-out, check both entries in the signed-in queue before a fresh dispatch. A
+for any repair. The read-only metadata lookup retries brief network errors or
+HTTP 502/503/504 responses with bounded backoff. If the lookup still fails,
+submission stops. A missing CCR record also stops a repair. If a push fails or
+times out, check both entries in the signed-in queue before a fresh dispatch. A
 package already uploaded with the expected digest is skipped on that dispatch.
 Logs show bounded HTTP diagnostics without printing the key, command arguments
 or raw process output.
