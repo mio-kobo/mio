@@ -10,7 +10,9 @@ import stat
 import tarfile
 import zipfile
 
-from seed_evidence import GF4, SEED_KINDS, TARGETS, seed_binding, stable_version
+from seed_evidence import SEED_KINDS, TARGETS, seed_binding
+from bootstrap import profile_for
+from versions import stable_version
 # Integrated tools are the only validated end-user tools today. No standalone
 # binaries, Go VM, historical snapshots or test harnesses are implicitly copied.
 TOOLS = ('check', 'build', 'run', 'exec', 'test', 'lsp', 'disasm')
@@ -83,6 +85,11 @@ def extract(archive, destination):
 def gate(report, compilers, inputs, target):
     if report['target'] != target or report['status'] != 'PASS' or report['source_sha'] != inputs['source_sha']:
         raise ValueError('native report target/status/source mismatch')
+    # The native report embeds the prepared distribution inputs. Requiring exact
+    # equality binds the source version, requested release version, generated
+    # compiler version and the native build to one input record.
+    if report.get('distribution_input') != inputs:
+        raise ValueError('native report distribution inputs do not match the prepared source')
     if report['run']['id'] != os.environ.get('GITHUB_RUN_ID', '') or report['run']['attempt'] != os.environ.get('GITHUB_RUN_ATTEMPT', ''):
         raise ValueError('native report belongs to another Actions run')
     checks = {c['name']: c for c in report['checks']}
@@ -106,7 +113,7 @@ def gate(report, compilers, inputs, target):
         raise ValueError('Full embedded Bunko source required')
 
 
-def package(source, compilers, report_path, output, target, seed_report=None, seed_kind=GF4):
+def package(source, compilers, report_path, output, target, seed_report=None, seed_kind=None):
     inputs = json.loads((source / 'distribution-input.json').read_text(encoding='utf-8'))
     report = json.loads(report_path.read_text(encoding='utf-8'))
     gate(report, compilers, inputs, target)
@@ -115,13 +122,22 @@ def package(source, compilers, report_path, output, target, seed_report=None, se
         raise ValueError('Core and Full compilers must differ')
     trusted_seed = report['seed']
     if stable_version(inputs['version']):
+        # Stable binaries always require the reviewed bootstrap profile for this
+        # exact version. A future line without a registered profile fails before
+        # any archive is written.
+        profile = profile_for(inputs['version'])
+        if seed_kind is not None and seed_kind != profile.kind:
+            raise ValueError('bootstrap seed %s is not the reviewed profile for Mio %s (expected %s)'
+                             % (seed_kind, inputs['version'], profile.kind))
         if seed_report is None:
             raise ValueError('stable distribution requires a same-run trusted seed report')
         trusted_seed = seed_binding(json.loads(seed_report.read_text(encoding='utf-8')), report, inputs,
-                                    target, full_sha, digest(seed_report), seed_kind)
+                                    target, full_sha, digest(seed_report), profile.kind)
         if 'core_compiler_sha256' in trusted_seed:
             raise ValueError('trusted seed binding already names a Core compiler')
         trusted_seed = dict(trusted_seed, core_compiler_sha256=core_sha)
+    elif seed_report is not None or seed_kind is not None:
+        raise ValueError('PR and RC candidates cannot be promoted or bound to a stable bootstrap seed')
     output.mkdir(parents=True, exist_ok=True)
     archives = []
     for flavor in ('core', 'full'):
@@ -173,7 +189,8 @@ if __name__ == '__main__':
     p.add_argument('--compiler', type=Path, required=True, help='Full compiler with embedded Bunko')
     p.add_argument('--core-compiler', type=Path, required=True, help='Core compiler without embedded Bunko')
     p.add_argument('--report', type=Path, required=True)
-    p.add_argument('--seed', choices=SEED_KINDS, default=GF4)
+    p.add_argument('--seed', choices=SEED_KINDS, default=None,
+                   help='Assert the reviewed bootstrap seed profile for a stable version')
     p.add_argument('--seed-report', type=Path)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--target', choices=TARGETS, required=True)

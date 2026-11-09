@@ -3,13 +3,13 @@
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 
 from package import TARGETS, digest, extract, inventory, write_json, safe_name
+from versions import is_build_version
 
 
 def verify(output, target):
@@ -61,7 +61,7 @@ def verify(output, target):
                 check(flavor + ' exact inventory', inventory(root) == manifest['files'])
                 check(flavor + ' identity', manifest['target'] == target and
                       manifest['source_sha'] == provenance['source_sha'] and
-                      bool(re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-(?:pr\.[0-9a-f]{12}|rc\.[1-9]\d*))?', manifest['version'])) and
+                      is_build_version(manifest['version']) and
                       provenance['embedded_bunko'] is (flavor == 'full'))
                 check(flavor + ' payload', {p.parts[0] for p in map(Path, manifest['files'])} ==
                       {'bin', 'LICENSE', 'README.md', 'provenance.json'})
