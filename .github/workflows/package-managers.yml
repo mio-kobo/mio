@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
+      branch: ${{ steps.version.outputs.branch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -38,11 +40,26 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install PyYAML==6.0.3
+      - name: Resolve the exact release tag and its version archive branch
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+          python scripts/distribution/versions.py info --tag "$TAG"
+          SOURCE_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
+          python scripts/distribution/versions.py verify --tag "$TAG" --source-sha "$SOURCE_SHA"
+          BRANCH=$(python -c 'import json,sys; sys.path.insert(0,"scripts/distribution"); import versions; print(versions.branch_for(sys.argv[1]))' "$TAG")
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
       - name: Validate tag and download existing Release (no publishing)
         id: tag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          SOURCE_SHA: ${{ steps.version.outputs.source_sha }}
           CCR_REPAIR: ${{ inputs.resubmit_chocolatey_v2_1_0 }}
           CCR_SUBMIT: ${{ inputs.submit_chocolatey }}
         shell: bash
@@ -53,7 +70,6 @@ jobs:
             exit 1
           fi
           python -c 'import sys; sys.path.insert(0,"scripts/package_managers"); from release import stable; import os; stable(os.environ["TAG"])'
-          git merge-base --is-ancestor "refs/tags/$TAG" origin/Mio-2.1
           mkdir -p build/release-assets
           gh api "repos/mio-kobo/mio/releases/tags/$TAG" > build/release.json
           gh release download "$TAG" --repo mio-kobo/mio --dir build/release-assets
@@ -61,11 +77,11 @@ jobs:
       - name: Gate all six artifacts and generate real checksummed metadata
         env:
           TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_SHA: ${{ steps.version.outputs.source_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev
-          SOURCE_SHA=$(git rev-parse "refs/tags/$TAG^{commit}")
           python scripts/package_managers/release.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated
           python scripts/package_managers/chocolatey.py --tag "$TAG" --source-sha "$SOURCE_SHA" --release build/release.json --assets build/release-assets --output build/generated/chocolatey
       - name: Check both Chocolatey outputs (no CCR access)
