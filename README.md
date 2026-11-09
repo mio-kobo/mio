@@ -25,7 +25,7 @@
 
 Mio 2.1 targets macOS ARM64, Linux AMD64 and Windows AMD64 for native ahead-of-time (AOT) compilation.
 
-> [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) is the latest stable release and was verified on macOS ARM64. [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) is the latest published release candidate. The [`Mio-2.1` development branch](https://github.com/mio-kobo/mio/tree/Mio-2.1) is preparing v2.1.0, which is still unreleased.
+> [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) is the latest stable release and was verified on macOS ARM64. [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) is the latest published release candidate. The [`Mio-2.1.1` development branch](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) is preparing v2.1.1, which is still unreleased.
 
 See the [v2.1.0 release notes draft](docs/releases/v2.1.0.md) for changes and release verification status.
 
@@ -43,7 +43,7 @@ Mio and Mochi are also the project's mascots: Mio is the girl pictured above, an
 
 ### Getting Mio
 
-Check [GitHub Releases](https://github.com/mio-kobo/mio/releases) for downloads. For Mio 2.1, **Core** contains the native compiler. **Full** adds the external Bunko standard library and examples. Both ship the same compiler, with integrated development commands such as `test` and `lsp`. Bunko stays external to the compiler, and Core can use a separately installed Bunko tree.
+Check [GitHub Releases](https://github.com/mio-kobo/mio/releases) for downloads. For Mio 2.1.1, **Full** is a single self-contained `mio` executable (`mio.exe` on Windows) with the complete Bunko standard library embedded. **Core** ships a smaller compiler without embedded Bunko. Both provide integrated development commands such as `test` and `lsp`. Full needs no external Bunko tree; Core can use a separately installed Bunko tree through `--bunko-root` or `MIO_BUNKO`.
 
 Precompiled distributions run without Go, Python or an external development toolchain. macOS release candidates use ad-hoc signing and are not notarized, so Gatekeeper may restrict them. See [Testing](docs/testing.md) for source bootstrap and native verification.
 

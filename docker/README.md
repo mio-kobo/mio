@@ -1,6 +1,6 @@
 # Mio Full offline development candidate (linux/amd64)
 
-The planned stable name is `ghcr.io/mio-kobo/mio:2.1.0-full`. This PR does **not**
+The planned stable name is `ghcr.io/mio-kobo/mio:2.1.1-full`. This PR does **not**
 push that image or any other registry image. Download the Docker candidate tar
 and SHA256SUMS from the PR's `mio-docker-linux-amd64-candidate-*` Actions artifact:
 
@@ -10,7 +10,7 @@ docker load -i mio-linux-amd64-full-candidate.docker.tar
 docker run --rm -it --platform linux/amd64 --network none \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
   --mount "type=bind,src=$PWD,dst=/workspace" \
-  mio:2.1.0-full-pr-candidate
+  mio:2.1.1-full-pr-candidate
 ```
 
 The image defaults to UID/GID 1000:1000, `/workspace`, and `/bin/sh`. On Linux,
@@ -25,11 +25,11 @@ Inside the offline shell:
 
 ```sh
 mio version
-cp /opt/mio/examples/hello.mio .
+printf 'chant("offline hello");\n' > hello.mio
 mio build hello.mio --target=linux-amd64 -o hello
 ./hello
 mio run hello.mio --target=linux-amd64
-cp /opt/mio/examples/math.mio .
+printf 'yobu "kiso/math";\nchant(math.abs(-9));\n' > math.mio
 mio check math.mio
 mio build math.mio --target=linux-amd64 -o math
 ./math
@@ -39,9 +39,10 @@ mio test your-tests
 mio lsp --stdio
 ```
 
-The image provides `/opt/mio/bin/mio`, external `/opt/mio/bunko`, Full examples,
-license, manifest and provenance. PATH includes `/opt/mio/bin`, MIO_BUNKO points
-to `/opt/mio/bunko`. The historical CLI build default is Darwin; specify
+The image provides `/opt/mio/bin/mio`, license, manifest and provenance. Full
+embeds the complete Bunko standard library, so the image has no external
+`bunko/` directory and does not set `MIO_BUNKO`. PATH includes `/opt/mio/bin`.
+The historical CLI build default is Darwin; specify
 `--target=linux-amd64` for native Linux build/run/exec commands. Test selects the
 Linux host automatically. Full's integrated tools are preserved; no unverified
 standalone tools are added.
@@ -65,9 +66,9 @@ python docker/build.py --candidates /path/to/verified-linux-candidate-artifact \
 ```
 
 This script consumes the verified Full tar.gz and its SHA256SUMS plus successful
-`verification.json`; checks the manifest/provenance; copies those exact bytes;
-compares the container compiler hash with Full; runs `--network=none` build, run,
-Bunko import, check, disasm, test and LSP tests as the host's non-root UID/GID in
+`verification.json`; checks the manifest/provenance and embedded-Bunko provenance; copies those exact
+bytes; compares the container compiler hash with Full; runs `--network=none`
+build, run, embedded Bunko import, check, disasm, test and LSP tests as the host's non-root UID/GID in
 an external directory containing spaces/Unicode; checks host persistence; then
 saves, removes, loads and tests the image again. Any failed command fails CI.
 Docker may pull the pinned base while building; all container tests and Dockerfile

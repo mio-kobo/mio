@@ -11,9 +11,9 @@ versions solely to exercise manager upgrades; shipped compiler bytes are unchang
 `package-managers.yml` reads an **already published** stable `v2.1+` GitHub Release.
 Manual dispatch is always dry run. The gate requires all six native archives and both self-contained Windows installers,
 `SHA256SUMS`, `<target>-native-report.json`, `<target>-verification.json`,
-`docker-verification.json` bound to the Linux Full archive, exact
-inventories, identical Core/Full compiler hashes, native B=C=D and every required
-native check PASS. GitHub's asset SHA-256 digest must also match. All source SHAs
+`docker-verification.json` bound to the Linux Full archive, exact inventories,
+distinct Core/Full compiler hashes with separate native fixed points, embedded
+Bunko resolution checks, and every required native check PASS. GitHub's asset SHA-256 digest must also match. All source SHAs
 must resolve to the stable tag, which must belong to `Mio-2.1` history.
 
 For stable builds, follow the [trusted GF4 and release verification instructions](../../docs/testing.md#stable-distribution-and-trusted-gf4).
@@ -105,8 +105,9 @@ the Links directory. Full then failed with E_BUNKO_MISSING. Direct invocation of
 the installed compiler passed, so checking only the extracted ZIP was insufficient.
 
 `windows.py` instead wraps the verified native ZIP in an Inno Setup installer. It
-never recompiles Mio. Full preserves bin/mio.exe and bunko; Core installs the same
-compiler bytes as bin/mio-core.exe and updates its installed file inventory. Both
+never recompiles Mio. Full installs the self-contained `bin/mio.exe`; Core installs
+`bin/mio-core.exe` and updates its installed file inventory. Legacy `bunko/` and
+`examples/` directories from pre-2.1.1 Full installs are removed on upgrade. Both
 use separate stable AppIds and per-user install directories. Their actual bin
 directories are appended to user PATH; uninstall removes only its own entry. The
 installer owns its normal uninstall executable/data files in addition to the Mio
