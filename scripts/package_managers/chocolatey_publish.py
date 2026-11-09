@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
-"""Immutable CCR submission. Publishing requires explicit push and moderation confirmation."""
+"""Submit to CCR after maintainer confirmation, with a scoped v2.1.0 repair option."""
 import argparse
+from base64 import b64decode
+from hashlib import sha512
+from http.client import HTTPException
+from io import BytesIO
 import os
 from pathlib import Path
 import re
 import subprocess
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
+from zipfile import BadZipFile, ZipFile
 
 from chocolatey import FEED, SOURCE
 from release import stable
+
+
+PACKAGE_NAMES = ('mio-core', 'mio')
+REPAIR_VERSION = '2.1.0'
+REPAIR_STATUSES = {'Waiting', 'Pending', 'Responded', 'Updated'}
+ODATA = {
+    'a': 'http://www.w3.org/2005/Atom',
+    'm': 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata',
+    'd': 'http://schemas.microsoft.com/ado/2007/08/dataservices',
+}
 
 
 HTTP_ERROR = re.compile(
@@ -57,42 +73,102 @@ def push_failure(result):
 
 def existing(name, version):
     try:
-        with urlopen(FEED + f'package/{name}/{version}', timeout=60) as response:
-            return response.read()
+        with urlopen(FEED + f'package/{name}/{version}', timeout=60):
+            return True
+    except HTTPError as error:
+        if error.code == 404:
+            return False
+        raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
+    except (OSError, HTTPException):
+        raise RuntimeError(f'CCR download preflight failed for {name} {version}') from None
+
+
+def moderation_record(name, version):
+    url = FEED + f"Packages(Id='{name}',Version='{version}')"
+    request = Request(url, headers={'Accept': 'application/atom+xml', 'Cache-Control': 'no-cache'})
+    try:
+        with urlopen(request, timeout=60) as response:
+            entry = ET.fromstring(response.read())
+        if (entry.tag != '{' + ODATA['a'] + '}entry'
+                or entry.findtext('a:title', namespaces=ODATA) != name
+                or entry.findtext('m:properties/d:Version', namespaces=ODATA) != version
+                or entry.findtext('m:properties/d:PackageHashAlgorithm', namespaces=ODATA) != 'SHA512'):
+            raise ValueError
+        digest = b64decode(entry.findtext('m:properties/d:PackageHash', '', ODATA), validate=True)
+        if len(digest) != sha512().digest_size:
+            raise ValueError
+        approved = entry.findtext('m:properties/d:IsApproved', namespaces=ODATA)
+        status = entry.findtext('m:properties/d:PackageStatus', namespaces=ODATA)
+        if approved == 'true' or status == 'Approved':
+            return digest, 'Approved'
+        if approved == 'false' and status == 'Submitted':
+            return digest, entry.findtext('m:properties/d:PackageSubmittedStatus', namespaces=ODATA)
+        return digest, None
     except HTTPError as error:
         if error.code == 404:
             return None
-        raise RuntimeError(f'CCR download preflight failed for {name} {version}: HTTP status={error.code}') from None
+        raise RuntimeError(f'CCR metadata preflight failed for {name} {version}: HTTP status={error.code}') from None
+    except (OSError, HTTPException, ET.ParseError, ValueError, LookupError):
+        raise RuntimeError(f'CCR metadata preflight failed for {name} {version}') from None
 
 
-def publish(folder, version, push=False, fetch=existing):
+def package_digest(package, name, version):
+    content = package.read_bytes()
+    try:
+        with ZipFile(BytesIO(content)) as archive:
+            manifests = [part for part in archive.namelist() if part.lower().endswith('.nuspec')]
+            if manifests != [name + '.nuspec']:
+                raise ValueError
+            manifest = ET.fromstring(archive.read(manifests[0]))
+        if (manifest.findtext('{*}metadata/{*}id') != name
+                or manifest.findtext('{*}metadata/{*}version') != version):
+            raise ValueError
+    except (BadZipFile, ET.ParseError, ValueError, LookupError, RuntimeError):
+        raise ValueError(f'invalid Chocolatey package identity: {package.name}') from None
+    return sha512(content).digest()
+
+
+def publish(folder, version, push=False, *, resubmit=False):
     stable('v' + version)
-    packages = [folder / f'{name}.{version}.nupkg' for name in ('mio-core', 'mio')]
+    if resubmit and (not push or version != REPAIR_VERSION):
+        raise ValueError(f'CCR repair authorization requires a push for v{REPAIR_VERSION}')
+    packages = [folder / f'{name}.{version}.nupkg' for name in PACKAGE_NAMES]
+    for package in packages:
+        if not package.is_file() or not package.stat().st_size:
+            raise ValueError(f'missing or empty Chocolatey package: {package}')
     if not push:
         for package in packages:
-            if not package.is_file() or not package.stat().st_size:
-                raise ValueError(f'missing or empty Chocolatey package: {package}')
             print('DRY_RUN: built ' + package.name)
         return
 
     pending = []
-    # Preflight BOTH packages before sending either; never overwrite/re-push.
-    for package in packages:
-        name = package.name.removesuffix(f'.{version}.nupkg')
-        content = package.read_bytes()
-        remote = fetch(name, version)
-        if remote is not None:
-            if remote != content:
-                raise ValueError(f'CCR already contains different content: {name} {version}')
+    # Check both packages before sending either. The feed digest and moderation
+    # status come from the same record, avoiding stale CDN downloads on retry.
+    for name, package in zip(PACKAGE_NAMES, packages):
+        local_digest = package_digest(package, name, version)
+        record = moderation_record(name, version)
+        if record is None:
+            if resubmit or existing(name, version):
+                raise ValueError(f'CCR moderation status could not be confirmed for {name} {version}')
+            pending.append((package, 'SUBMITTED'))
+            continue
+        digest, status = record
+        if digest == local_digest:
             print(f'UNCHANGED: {name} {version}; no submission')
-        else:
-            pending.append(package)
+            continue
+        if status == 'Approved':
+            raise ValueError(f'CCR version is approved and cannot be overwritten: {name} {version}')
+        if status not in REPAIR_STATUSES:
+            raise ValueError(f'CCR moderation status does not permit a repair for {name} {version}')
+        if not resubmit:
+            raise ValueError(f'CCR already contains different content: {name} {version}; repair authorization required')
+        pending.append((package, 'RESUBMITTED'))
     if not pending:
         return
     key = os.environ.get('CHOCOLATEY_API_KEY')
     if not key:
         raise ValueError('protected CHOCOLATEY_API_KEY is required')
-    for path in pending:
+    for path, action in pending:
         # Never print argv, process output, or CalledProcessError (contains key).
         try:
             result = subprocess.run(['choco', 'push', str(path), '--source=' + SOURCE, '--api-key=' + key], capture_output=True, timeout=300)
@@ -101,7 +177,7 @@ def publish(folder, version, push=False, fetch=existing):
             raise RuntimeError('CCR submission could not finish for ' + path.name + '; check the signed-in moderation queue before any retry') from None
         if result.returncode:
             raise RuntimeError(f'CCR submission failed for {path.name}: {push_failure(result)}; check the signed-in moderation queue before any retry')
-        print('SUBMITTED for community review: ' + path.name)
+        print(f'{action} for community review: {path.name}')
 
 
 if __name__ == '__main__':
@@ -111,7 +187,11 @@ if __name__ == '__main__':
     p.add_argument('--push', action='store_true')
     p.add_argument('--moderation-checked', action='store_true',
                    help='confirm both exact versions were checked in the signed-in CCR moderation queue')
+    p.add_argument('--resubmit-v2-1-0', action='store_true',
+                   help='authorize the mio and mio-core v2.1.0 moderation repair')
     a = p.parse_args()
     if a.push and not a.moderation_checked:
         p.error('--push requires --moderation-checked')
-    publish(a.packages, a.version, a.push)
+    if a.resubmit_v2_1_0 and (not a.push or a.version != REPAIR_VERSION):
+        p.error(f'--resubmit-v2-1-0 requires --push --version {REPAIR_VERSION}')
+    publish(a.packages, a.version, a.push, resubmit=a.resubmit_v2_1_0)
