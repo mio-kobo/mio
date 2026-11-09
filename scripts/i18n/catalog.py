@@ -401,17 +401,16 @@ def render_go(manifest, locales, catalogs):
         "package i18n",
         "",
         "// Message identifiers shared with selfhost/i18n/messages_generated.mio.",
-        "const (",
     ]
     for key in keys:
-        lines.append("\t%s Key = %s" % (key_constant(key), go_quote(key)))
-    lines.append(")")
+        lines.append("const %s Key = %s" % (key_constant(key), go_quote(key)))
     lines.append("")
     lines.append("var messages = map[Language]map[Key]string{")
+    width = max(len(key_constant(key)) for key in keys)
     for tag in sorted(catalogs):
         lines.append("\tLanguage(%s): {" % go_quote(tag))
         for key in keys:
-            lines.append("\t\t%s: %s," % (key_constant(key), go_quote(catalogs[tag][key])))
+            lines.append("\t\t%s:%s %s," % (key_constant(key), " " * (width - len(key_constant(key))), go_quote(catalogs[tag][key])))
         lines.append("\t},")
     lines.append("}")
     lines.append("")
@@ -423,31 +422,18 @@ def render_go(manifest, locales, catalogs):
     lines.append("\t}")
     lines.append("}")
     lines.append("")
-    lines.append("var directions = map[Language]string{")
-    for tag in sorted(catalogs):
-        lines.append("\tLanguage(%s): %s," % (go_quote(tag), go_quote(locales[tag]["direction"])))
-    lines.append("}")
-    lines.append("")
-    lines.append("var primaries = map[string]Language{")
-    for entry in manifest["languages"]:
-        lines.append("\t%s: Language(%s)," % (go_quote(entry["language"]), go_quote(entry["primary"])))
-    lines.append("}")
-    lines.append("")
-    lines.append("var aliases = map[string]string{")
-    for source, target in manifest.get("aliases", {}).items():
-        lines.append("\t%s: %s," % (go_quote(source), go_quote(target)))
-    lines.append("}")
-    lines.append("")
-    lines.append("var regionalTags = map[string]Language{")
-    for source, target in manifest.get("regional", {}).items():
-        lines.append("\t%s: Language(%s)," % (go_quote(source), go_quote(target)))
-    lines.append("}")
-    lines.append("")
-    lines.append("var scriptDefaults = map[string]Language{")
-    for source, target in manifest.get("scripts", {}).items():
-        lines.append("\t%s: Language(%s)," % (go_quote(source), go_quote(target)))
-    lines.append("}")
-    lines.append("")
+    def mapped(name, pairs, value):
+        widths = max(len(key) for key, _ in pairs)
+        lines.append("var %s = map[Language]string{" % name if name == "directions" else "var %s = map[string]%s{" % (name, value))
+        for key, item in pairs:
+            lines.append("\t%s:%s %s," % (key, " " * (widths - len(key)), item))
+        lines.append("}")
+        lines.append("")
+    mapped("directions", [('Language(%s)' % go_quote(tag), go_quote(locales[tag]["direction"])) for tag in sorted(catalogs)], "string")
+    mapped("primaries", [(go_quote(entry["language"]), "Language(%s)" % go_quote(entry["primary"])) for entry in manifest["languages"]], "Language")
+    mapped("aliases", [(go_quote(source), go_quote(target)) for source, target in manifest.get("aliases", {}).items()], "string")
+    mapped("regionalTags", [(go_quote(source), "Language(%s)" % go_quote(target)) for source, target in manifest.get("regional", {}).items()], "Language")
+    mapped("scriptDefaults", [(go_quote(source), "Language(%s)" % go_quote(target)) for source, target in manifest.get("scripts", {}).items()], "Language")
     lines.append("const defaultLanguage = Language(%s)" % go_quote(manifest["default"]))
     return "\n".join(lines) + "\n"
 

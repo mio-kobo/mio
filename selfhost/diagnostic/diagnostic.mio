@@ -67,7 +67,7 @@ koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: 
     }
     kaku style=theme.resolve_for(opts.color,opts.theme,"/dev/stderr");kaku color=opts.format=="human" && style.enabled;
     kaku header=string.concat("error[",string.concat(problem.code,"]"));
-    moshi(color){string.write_string(output,style.paint(style,"error",header));}sore{string.write_string(output,header);}
+    moshi(color){string.write_string(output,theme.paint(style,"error",header));}sore{string.write_string(output,header);}
     string.write_string(output,": ");string.write_string(output,problem.detail);string.write_string(output,"\n");
     moshi(opts.format=="human"){
         moshi(has_span){string.write_string(output,"  --> ");string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,"\n");}
@@ -75,7 +75,7 @@ koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: 
             kaku number=convert.format_int(start.line);kaku padding=string.byte_len(number)+3;
             string.write_string(output,"   ");string.write_string(output,number);string.write_string(output," | ");string.write_string(output,expanded_line(source,start.first,start.end,display));string.write_string(output,"\n");
             spaces(output,padding);string.write_string(output," | ");spaces(output,start.column-1);kaku count=finish.column-start.column;moshi(finish.line!=start.line){count=locate(source,start.end,display).column-start.column;}moshi(count<1){count=1;}
-            kaku at=0;aida(at<count){string.write_string(output,style.paint(style,"error","^"));at=at+1;}string.write_string(output,"\n");
+            kaku at=0;aida(at<count){string.write_string(output,theme.paint(style,"error","^"));at=at+1;}string.write_string(output,"\n");
         }
         moshi(opts.verbose && cause!=""){string.write_string(output,string.concat("  = ",string.concat(i18n.text(opts.lang,i18n.key_diag_cause),string.concat(": ",string.concat(cause,"\n")))));}
     }kaesu string.builder_string(output);
@@ -90,6 +90,6 @@ koukai waza failure(message: string, path: string, opts: Options) -> string {
 // source-command color policy, including NO_COLOR and terminal detection.
 koukai waza decorate_error(message: string, opts: Options) -> string {
     kaku style=theme.resolve_for(opts.color,opts.theme,"/dev/stderr");
-    moshi(opts.format=="human" && style.enabled){kaesu style.paint(style,"error",message);}
+    moshi(opts.format=="human" && style.enabled){kaesu theme.paint(style,"error",message);}
     kaesu message;
 }
