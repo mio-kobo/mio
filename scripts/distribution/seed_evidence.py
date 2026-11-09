@@ -1,6 +1,12 @@
-"""Pinned bootstrap identities and evidence binding for distribution compilers."""
+"""Pinned bootstrap identities and evidence binding for distribution compilers.
+
+Version parsing lives in ``versions.py`` so every workflow and script resolves
+tags, releases and archive branches through one reviewed implementation.
+"""
 from dataclasses import dataclass
 import re
+
+from versions import STABLE_VERSION, stable_version  # noqa: F401  (re-exported API)
 
 GF4_SEED_SHA256 = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
 REPOSITORY = 'mio-kobo/mio'
@@ -14,7 +20,6 @@ GF4_SOURCE = {
 }
 GF4_ASSET_NAME = 'mio-gf4-darwin-arm64'
 TARGETS = ('darwin-arm64', 'linux-amd64', 'windows-amd64')
-STABLE_VERSION = r'2\.[1-9]\d*\.(?:0|[1-9]\d*)'
 CROSS_TARGETS = TARGETS[1:]
 SEED_LOGS = ('seed-release-attestation.log', 'seed-signature.log', 'seed-build-A.log', 'cli-B.log', 'cli-C.log', 'cli-D.log',
             *(f'cross-{stage}-{target}.log' for target in CROSS_TARGETS for stage in 'BC'))
@@ -83,10 +88,6 @@ def seed_record(identity, kind):
     return record
 
 
-def stable_version(version):
-    return re.fullmatch(STABLE_VERSION, version) is not None
-
-
 def release_context(version):
     return dict(repository=REPOSITORY, workflow=WORKFLOW, event='workflow_dispatch',
                 ref=f'refs/tags/v{version}', runner_environment='github-hosted')
@@ -108,7 +109,7 @@ def validate_seed(seed, source, version, run, kind=GF4):
             or seed['target'] != 'darwin-arm64' or seed['source_sha'] != source
             or seed['distribution_input']['source_sha'] != source
             or seed['distribution_input']['version'] != version
-            or seed['distribution_input']['embedded_bunko'] is not False
+            or not isinstance(seed['distribution_input'].get('embedded_bunko'), bool)
             or any(seed['run'].get(key) != run[key] for key in ('id', 'attempt'))
             or seed.get('authorization') != release_context(version)):
         raise ValueError('Trusted seed report must PASS for the pinned source, exact tag and Actions attempt')

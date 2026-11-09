@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from seed_evidence import STABLE_VERSION
+from versions import VersionError, parse_version
 
 ROOT = Path(__file__).resolve().parents[2]
 EMPTY = '// Candidate distribution: importable Bunko sources are external.\nwaza data_files() -> []File { kaesu []; }\n'
@@ -28,13 +28,21 @@ def prepare(root, revision, stable_version=None, rc_version=None):
     if stable_version is not None and rc_version is not None:
         raise ValueError('stable and RC versions are mutually exclusive')
     if stable_version is not None:
-        if not re.fullmatch(STABLE_VERSION, stable_version):
+        try:
+            parsed = parse_version(stable_version)
+        except VersionError as error:
+            raise ValueError('stable 2.1+ version required: ' + str(error)) from error
+        if parsed.is_rc:
             raise ValueError('stable 2.1+ version required')
-        version = stable_version
+        version = str(parsed)
     if rc_version is not None:
-        if not re.fullmatch(STABLE_VERSION + r'-rc\.[1-9]\d*', rc_version):
+        try:
+            parsed = parse_version(rc_version)
+        except VersionError as error:
+            raise ValueError('2.1+ RC version required: ' + str(error)) from error
+        if not parsed.is_rc:
             raise ValueError('2.1+ RC version required')
-        version = rc_version
+        version = str(parsed)
     resource = root / 'selfhost/resources/bunko_data.mio'
     original_hash = hashlib.sha256(resource.read_bytes()).hexdigest()
     cli = root / 'selfhost/cli/main.mio'
