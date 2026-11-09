@@ -119,7 +119,7 @@ def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
         if value is None:
             environment.pop(name, None)
         else:
-            environment[name] = value
+            environment[name] = str(value)
     try:
         proc = subprocess.run([str(a) for a in argv], cwd=cwd, input=stdin, capture_output=True, timeout=timeout, env=environment)
         code, out, err = proc.returncode, proc.stdout, proc.stderr
