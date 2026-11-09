@@ -174,7 +174,7 @@ def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT):
     return ok, reason, seconds
 
 
-def cli_chain(report, first, target, work, engine="native"):
+def cli_chain(report, first, target, work, engine="native", checks=False):
     """first builds selfhost/cli -> B, B -> C, C -> D for `target`; requires B == C == D. Returns the path of B."""
     suffix = EXE.get(target, "")
     paths = {"A": Path(first)}
@@ -190,7 +190,7 @@ def cli_chain(report, first, target, work, engine="native"):
     same = sha256(paths["B"]) == sha256(paths["C"]) == sha256(paths["D"])
     report.check("cli-fixed-point", "PASS" if same else "FAIL", engine, "" if same else "B, C and D differ",
                  B=report.hashes["cli-B"], C=report.hashes["cli-C"], D=report.hashes["cli-D"])
-    if same:
+    if same and checks:
         cli_checks(report, paths["B"], target, work)
     return paths["B"] if same else None
 
@@ -225,7 +225,7 @@ def cli_checks(report, cli, target, work):
           contains=('"code":', '"severity":"error"'), absent=(ansi, "不明な"))
 
 
-def core_chain(report, full_cli, target, work):
+def core_chain(report, full_cli, target, work, checks=False):
     """Build the Core variant from an empty embedded table with the verified Full compiler.
     The source copy is disposable; Core must remain byte-identical across its own stages."""
     source = work / "core-source"
@@ -247,7 +247,7 @@ def core_chain(report, full_cli, target, work):
     same = sha256(paths["B"]) == sha256(paths["C"]) == sha256(paths["D"])
     report.check("core-cli-fixed-point", "PASS" if same else "FAIL", "native", "" if same else "Core B, C and D differ",
                  B=report.hashes["core-cli-B"], C=report.hashes["core-cli-C"], D=report.hashes["core-cli-D"])
-    if same:
+    if same and checks:
         cli_checks(report, paths["B"], target, work)
     return paths["B"] if same else None
 
@@ -610,10 +610,10 @@ def linux(args):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
-    cli = cli_chain(report, cli_a, "linux-amd64", work)
+    cli = cli_chain(report, cli_a, "linux-amd64", work, checks=True)
     if cli is None:
         return finish(report)
-    core = core_chain(report, cli, "linux-amd64", work)
+    core = core_chain(report, cli, "linux-amd64", work, checks=True)
     if core is None:
         return finish(report)
     embedded_checks(report, cli, core, "linux-amd64", work)
@@ -693,9 +693,9 @@ def follower(args, target):
         os.chmod(first, 0o755)
     # A quick signal that Stage A works on this host before the long self-builds.
     smoke(report, first, target, work / "smoke-A", label_prefix="stage-a-")
-    cli = cli_chain(report, first, target, work)
+    cli = cli_chain(report, first, target, work, checks=True)
     if cli is not None:
-        core = core_chain(report, cli, target, work)
+        core = core_chain(report, cli, target, work, checks=True)
         if core is not None:
             embedded_checks(report, cli, core, target, work)
         same = report.hashes["cli-A"] == report.hashes["cli-B"]

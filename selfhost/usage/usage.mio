@@ -7,7 +7,7 @@ yobu "kiso/os";
 yobu "kiso/string";
 yobu "kiso/utf8";
 yobu "selfhost/i18n";
-yobu "selfhost/term/theme";
+yobu "selfhost/theme";
 
 koukai teisu group_general = 0;
 koukai teisu group_compilation = 1;
@@ -170,14 +170,14 @@ koukai waza wrap(value: string, limit: int64) -> []string {
 
 waza put(builder: string.StringBuilder, value: string) -> unit { string.write_string(builder, value); }
 waza line(builder: string.StringBuilder, value: string) -> unit { put(builder, string.concat(value, "\n")); }
-waza section(builder: string.StringBuilder, theme: theme.Theme, title: string) -> unit {
-    line(builder, theme.paint(theme, "title", title));
+waza section(builder: string.StringBuilder, style: theme.Theme, title: string) -> unit {
+    line(builder, theme.paint(style, "title", title));
 }
-waza entry(builder: string.StringBuilder, theme: theme.Theme, syntax: string, description: string, width: int64, column: int64, role: string) -> unit {
+waza entry(builder: string.StringBuilder, style: theme.Theme, syntax: string, description: string, width: int64, column: int64, role: string) -> unit {
     kaku indent = 2;
     kaku syntax_width = visible_width(syntax);
     moshi (width >= 44 && column > syntax_width + 4) {
-        kaku lead = string.concat(spaces(indent), theme.paint(theme, role, syntax));
+        kaku lead = string.concat(spaces(indent), theme.paint(style, role, syntax));
         kaku pad = column - indent - syntax_width;
         kaku lines = wrap(description, width - column);
         line(builder, string.concat(lead, string.concat(spaces(pad), lines[0])));
@@ -185,7 +185,7 @@ waza entry(builder: string.StringBuilder, theme: theme.Theme, syntax: string, de
         aida (at < len(lines)) { line(builder, string.concat(spaces(column), lines[at])); at = at + 1; }
         kaesu;
     }
-    line(builder, string.concat(spaces(indent), theme.paint(theme, role, syntax)));
+    line(builder, string.concat(spaces(indent), theme.paint(style, role, syntax)));
     kaku lines = wrap(description, width - indent - 2);
     kaku at = 0;
     aida (at < len(lines)) { line(builder, string.concat(spaces(indent + 2), lines[at])); at = at + 1; }
@@ -243,7 +243,7 @@ koukai waza width() -> int64 {
 
 koukai waza global(language: string, version: string, theme_value: theme.Theme) -> string {
     kaku output = string.new_builder(); kaku size = width();
-    line(output, theme_value.paint(theme_value, "title", i18n.format(language, i18n.key_help_title, [version])));
+    line(output, theme.paint(theme_value, "title", i18n.format(language, i18n.key_help_title, [version])));
     line(output, i18n.text(language, i18n.key_help_tagline));
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_usage));
@@ -258,7 +258,7 @@ koukai waza global(language: string, version: string, theme_value: theme.Theme) 
         kaku at = 0;
         aida (at < len(entries)) {
             moshi (entries[at].group == group) {
-                moshi (first) { line(output, string.concat(spaces(2), theme_value.paint(theme_value, "muted", i18n.text(language, group_key(group))))); first = iie; }
+                moshi (first) { line(output, string.concat(spaces(2), theme.paint(theme_value, "muted", i18n.text(language, group_key(group))))); first = iie; }
                 entry(output, theme_value, syntaxes[at], i18n.text(language, entries[at].description), size, column, "command");
             }
             at = at + 1;
@@ -288,14 +288,14 @@ koukai waza global(language: string, version: string, theme_value: theme.Theme) 
     index = 0;
     aida (index < len(samples)) { line(output, string.concat(spaces(2), samples[index])); index = index + 1; }
     line(output, "");
-    line(output, theme_value.paint(theme_value, "muted", i18n.text(language, i18n.key_help_more)));
+    line(output, theme.paint(theme_value, "muted", i18n.text(language, i18n.key_help_more)));
     kaesu string.builder_string(output);
 }
 
 koukai waza command(language: string, name: string, theme_value: theme.Theme) -> string {
     kaku index = find(name); moshi (index < 0) { kaesu ""; }
     kaku entries = commands(); kaku entry_value = entries[index]; kaku output = string.new_builder(); kaku size = width();
-    line(output, theme_value.paint(theme_value, "command", string.concat("mio ", name)));
+    line(output, theme.paint(theme_value, "command", string.concat("mio ", name)));
     line(output, i18n.text(language, entry_value.description));
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_usage));
