@@ -11,8 +11,8 @@ yobu "selfhost/disasm";
 yobu "selfhost/testrunner";
 yobu "selfhost/lsp/rpc";
 
-// GF3 development CLI. The status file remains NOT_ACCEPTED until all command,
-// compatibility, embedded-resource and isolation gates are complete.
+// Mio v2.1 CLI. Full embeds Bunko; Core keeps the external-only distribution.
+// Command, compatibility, embedded-resource and isolation gates remain in CI.
 waza fail(message: string, status: int64) -> unit {
     fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n"))); os.exit(status);
 }
@@ -52,7 +52,7 @@ waza run() -> unit {
     moshi (command == "lsp") { os.exit(rpc.command(args)); kaesu; }
     moshi (command == "version" || command == "--version") {
         moshi (len(args) != 2) { fail("E_OPTIONS version takes no arguments", 2); kaesu; }
-        chant("mio v2.0.0-dev (pure Mio Native AOT; GF3 candidate)"); kaesu;
+        chant("mio v2.1.1-dev (pure Mio Native AOT; maintenance candidate)"); kaesu;
     }
     moshi (command == "help" || command == "--help" || command == "-h") {
         moshi (len(args) > 3) { fail("E_OPTIONS help takes at most one command", 2); kaesu; }

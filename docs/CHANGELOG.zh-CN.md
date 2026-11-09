@@ -4,6 +4,15 @@
 
 # 更新日志
 
+## 2.1.1 — 未发布
+
+- **Full** 现为内嵌完整 Bunko 标准库的单个自包含原生编译器。无需外部 `bunko/` 目录，可立即使用全部 `kiso/...` 导入，并可单独复制到其他目录或兼容的电脑。
+- **Core** 仍是不内嵌 Bunko 的精简编译器，原有行为和显式外部 Bunko 支持保持不变。
+- Bunko 解析顺序为 `--bunko-root`、`MIO_BUNKO`、Full 内嵌 Bunko、Core 与旧版布局的可执行文件相邻 `../bunko`。无效的显式根仍会报错且不回退。
+- Mio 原生资源生成器包含所有生产 `kiso/` 源码（排除测试和历史点号快照）。Full 与 Core 使用各自的原生固定点链构建，二进制 SHA-256 有意不同。
+- 发布压缩包、Docker 镜像和包管理器验证改为要求 Full 内嵌 Bunko 且不含外部库目录。自动化测试会从迁移后的 Full 可执行文件编译并执行导入 `kiso/math`、`string`、`array`、`bytes`、`io`、`fs`、`encoding/json`、`regexp`、`crypto/sha256`、`os`、`net/tcp` 的程序。
+- 未修改语言语法、Mochi 格式、Native AOT 输出或用户程序的打包行为。
+
 ## 2.1.0 — 未发布
 
 - Windows AMD64 通过 Winsock 支持阻塞式 IPv4 TCP。原生 CI 要求通过 TCP 包测试及双进程回显测试。

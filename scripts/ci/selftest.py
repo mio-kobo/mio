@@ -683,6 +683,20 @@ exit "$result"
             return code, text, "", 0.1
         return run
 
+    def test_native_run_normalizes_path_environment_and_preserves_removal(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"REMOVE_ME": "present"}):
+            report = self.native_report(directory)
+            captured = {}
+            def fake_run(argv, **kwargs):
+                captured.update(kwargs)
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            with patch.object(native.subprocess, "run", side_effect=fake_run):
+                native.run(report, "environment", ["true"],
+                           env={"MIO_BUNKO": Path("/tmp/bunko"), "SECOND": Path("/tmp/second"), "REMOVE_ME": None})
+            self.assertEqual(captured["env"]["MIO_BUNKO"], "/tmp/bunko")
+            self.assertEqual(captured["env"]["SECOND"], "/tmp/second")
+            self.assertNotIn("REMOVE_ME", captured["env"])
+
     def test_native_mio_test_never_counts_a_skip_as_a_pass(self):
         skipped = "--- SKIP: test_x (0.1s)\n    skipped: Mach-O test image needs a macOS ARM64 host\nTests complete: 0 passed, 0 failed\nTests skipped: 1\n"
         with tempfile.TemporaryDirectory() as directory, patch.object(native, "test_packages", return_value=["pkg"]):

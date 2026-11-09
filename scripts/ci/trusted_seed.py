@@ -34,7 +34,7 @@ def verify(output, local_seed=None, kind=GF4):
     inputs = report.data.get('distribution_input', {})
     version = inputs.get('version', '')
     source = report.data['source_sha']
-    inputs_match = (stable_version(version) and inputs.get('embedded_bunko') is False
+    inputs_match = (stable_version(version) and inputs.get('embedded_bunko') is True
                     and re.fullmatch(r'[0-9a-f]{40}', source) and inputs.get('source_sha') == source)
     if not report.check('distribution-input', 'PASS' if inputs_match else 'FAIL', 'host',
                         '' if inputs_match else 'stable disposable checkout with the exact source commit required'):

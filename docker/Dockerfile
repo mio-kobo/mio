@@ -11,7 +11,7 @@ RUN test -n "$MIO_COMPILER_SHA256" \
     && echo "$MIO_COMPILER_SHA256  /opt/mio/bin/mio" | sha256sum -c - \
     && addgroup -g 1000 mio && adduser -D -u 1000 -G mio mio \
     && mkdir /workspace && chown mio:mio /workspace
-ENV PATH="/opt/mio/bin:$PATH" MIO_BUNKO="/opt/mio/bunko" HOME="/home/mio"
+ENV PATH="/opt/mio/bin:$PATH" HOME="/home/mio"
 WORKDIR /workspace
 USER 1000:1000
 CMD ["/bin/sh"]

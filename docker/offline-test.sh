@@ -2,7 +2,6 @@
 set -eu
 [ "$(id -u)" != 0 ]
 [ "$PWD" = /workspace ]
-[ "$MIO_BUNKO" = /opt/mio/bunko ]
 ! command -v go
 ! command -v python
 ! command -v python3
@@ -11,11 +10,11 @@ printf 'chant("offline hello");\n' > hello.mio
 mio build hello.mio --target=linux-amd64 -o hello
 [ "$(./hello)" = 'offline hello' ]
 [ "$(mio run hello.mio --target=linux-amd64)" = 'offline hello' ]
-cp /opt/mio/examples/math.mio math.mio
+printf 'yobu "kiso/math";\nchant(math.abs(-9));\n' > math.mio
 mio check math.mio
 mio build math.mio --target=linux-amd64 -o math
 [ "$(./math)" = 9 ]
-# Verify executable-relative lookup too, with the environment override removed.
+# Verify the embedded table with the environment override removed.
 env -u MIO_BUNKO mio check math.mio
 mio build hello.mio --emit=mochi -o hello.mochi
 mio disasm hello.mochi > hello.disasm

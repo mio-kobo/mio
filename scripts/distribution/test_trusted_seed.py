@@ -50,7 +50,7 @@ class TrustedSeedTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         self.inputs = self.root / 'distribution-input.json'
-        self.inputs.write_text(json.dumps(dict(source_sha=SOURCE, version=VERSION, embedded_bunko=False)))
+        self.inputs.write_text(json.dumps(dict(source_sha=SOURCE, version=VERSION, embedded_bunko=True)))
         for target, value in [('native_platforms.ROOT', self.root), ('seed_evidence.GF4_SOURCE', None),
                               ('native_platforms.platform.system', 'Darwin'),
                               ('native_platforms.platform.machine', 'arm64')]:

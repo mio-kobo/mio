@@ -17,7 +17,7 @@ from stable_release import (BUNDLE, EVIDENCE_SCHEMAS, REPORT, archives, assemble
 SOURCE = 'a' * 40
 VERSION = '2.1.0'
 RUN = dict(id='123', attempt='1')
-INPUTS = dict(version=VERSION, source_sha=SOURCE, embedded_bunko=False)
+INPUTS = dict(version=VERSION, source_sha=SOURCE, embedded_bunko=True)
 SEED_REPORT = 'trusted-gf4-report.json'
 SEED_LOG_DIR = 'trusted-gf4-logs'
 
@@ -74,15 +74,22 @@ class ReleaseTests(unittest.TestCase):
         import tarfile
         import zipfile
         release = dict(tag_name='v2.1.0', draft=False, prerelease=False, published_at='date', assets=[])
-        compiler_sha = __import__('hashlib').sha256(b'native fixture').hexdigest()
+        compiler_sha = __import__('hashlib').sha256(b'native Full fixture').hexdigest()
+        core_sha = __import__('hashlib').sha256(b'native Core fixture').hexdigest()
         seed = self.seed_fixture(base, compiler_sha, kind)
         seed_path = base / seed_identity(kind).report_name
         sums = []
         for target in ['darwin-arm64', 'linux-amd64', 'windows-amd64']:
+            checks = [dict(name='cli-fixed-point', status='PASS', engine='native', required=True),
+                      dict(name='core-cli-fixed-point', status='PASS', engine='native', required=True)]
+            checks += [dict(name=name, status='PASS', engine='native', required=True) for name in
+                       ('full-embedded-runtime', 'full-embedded-transitive', 'core-no-embedded',
+                        'core-external-root', 'explicit-root-precedence', 'invalid-module-diagnostic')]
             report = dict(target=target, status='PASS', source_sha='a'*40,
                           seed=dict(status='NOT_RUN', sha256=GF4_SEED_SHA256), distribution_input=INPUTS, run=RUN,
-                          hashes={f'cli-{s}': compiler_sha for s in 'BCD'},
-                          checks=[dict(name='cli-fixed-point', status='PASS', engine='native', required=True)])
+                          hashes=dict({f'cli-{s}': compiler_sha for s in 'BCD'},
+                                      **{f'core-cli-{s}': core_sha for s in 'BCD'}),
+                          checks=checks)
             report_path = base / (target+'-native-report.json')
             write_json(report_path, report)
             archives = {}
@@ -91,15 +98,15 @@ class ReleaseTests(unittest.TestCase):
                 root = base / name
                 (root / 'bin').mkdir(parents=True)
                 binary = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
-                binary.write_bytes(b'native fixture')
+                binary.write_bytes(b'native Full fixture' if flavor == 'full' else b'native Core fixture')
                 (root / 'LICENSE').write_text('MIT fixture')
                 (root / 'README.md').write_text('test fixture only')
-                if flavor == 'full':
-                    (root / 'bunko/kiso').mkdir(parents=True)
-                    (root / 'bunko/kiso/math.mio').write_text('fixture')
-                provenance = dict(version='2.1.0', target=target, flavor=flavor, source_sha='a'*40, embedded_bunko=False,
-                                  compiler_sha256=compiler_sha, native_report_sha256=digest(report_path),
-                                  trusted_seed=seed_binding(seed, report, INPUTS, target, compiler_sha, digest(seed_path), kind))
+                binding = seed_binding(seed, report, INPUTS, target, compiler_sha, digest(seed_path), kind)
+                binding['core_compiler_sha256'] = core_sha
+                provenance = dict(INPUTS, target=target, flavor=flavor, embedded_bunko=flavor == 'full',
+                                  compiler_sha256=compiler_sha if flavor == 'full' else core_sha,
+                                  core_compiler_sha256=core_sha, native_report_sha256=digest(report_path),
+                                  trusted_seed=binding)
                 write_json(root / 'provenance.json', provenance)
                 write_json(root / 'manifest.json', dict(version='2.1.0', source_sha='a'*40, target=target, flavor=flavor, files=inventory(root)))
                 archive = base / (name + ('.zip' if target == 'windows-amd64' else '.tar.gz'))
@@ -150,7 +157,7 @@ class ReleaseTests(unittest.TestCase):
             for change in ['wrong-run', 'wrong-input', 'fixed-not-run', 'hash', 'source']:
                 report = json.loads(original_report)
                 if change == 'wrong-run': report['run']['attempt'] = '2'
-                if change == 'wrong-input': report['distribution_input']['embedded_bunko'] = True
+                if change == 'wrong-input': report['distribution_input']['embedded_bunko'] = False
                 if change == 'fixed-not-run': report['checks'][0]['status'] = 'NOT_RUN'
                 if change == 'hash': report['hashes']['cli-C'] = '0'*64
                 if change == 'source': report['source_sha'] = 'b'*40

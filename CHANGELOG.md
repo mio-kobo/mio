@@ -4,6 +4,15 @@
 
 # Changelog
 
+## 2.1.1 — Unreleased
+
+- The **Full** distribution is now a single self-contained native compiler with the complete Bunko standard library embedded. It works without an external `bunko/` directory, supports all `kiso/...` imports immediately, and can be copied alone to another directory or compatible computer.
+- **Core** remains a smaller compiler without embedded Bunko. Existing Core behavior and explicit external Bunko support are unchanged.
+- Bunko resolution order is now `--bunko-root`, `MIO_BUNKO`, embedded Full Bunko, then executable-relative `../bunko` for Core and legacy layouts. Invalid explicit roots still fail without fallback.
+- The Mio-native resource generator includes every production `kiso/` source (excluding tests and historical dotted snapshots). Full and Core are built through separate native fixed-point chains; their binaries intentionally have different SHA-256 hashes.
+- Release archives, Docker images and package-manager validation now expect embedded Full Bunko and no external library tree. Automated checks compile and execute programs importing `kiso/math`, `string`, `array`, `bytes`, `io`, `fs`, `encoding/json`, `regexp`, `crypto/sha256`, `os` and `net/tcp` from a relocated Full executable.
+- No language syntax, Mochi format, Native AOT output or user-program packaging behavior was changed.
+
 ## 2.1.0 — Unreleased
 
 - Windows AMD64 supports blocking IPv4 TCP through Winsock. Native CI requires the TCP package and two-process echo tests.

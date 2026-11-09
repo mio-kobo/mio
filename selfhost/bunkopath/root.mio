@@ -2,6 +2,7 @@ yobu "kiso/fs";
 yobu "kiso/os";
 yobu "kiso/path";
 yobu "kiso/string";
+yobu "selfhost/resources";
 
 koukai kata Result { root: string; error: string; }
 koukai waza validate(root: string) -> Result {
@@ -15,6 +16,9 @@ koukai waza resolve(explicit: string) -> Result {
     moshi(explicit!=""){kaesu validate(explicit);}
     kaku environment=os.environment("MIO_BUNKO");
     moshi(environment!=mu){kaesu validate(environment);}
+    // Full embeds Bunko and prefers it over a legacy executable-relative tree.
+    // Core has no embedded table and keeps the existing adjacent lookup.
+    moshi(resources.available()){kaesu Result {root:"",error:""};}
     kaku executable=os.executable_path();
     moshi(executable!=mu){
         kaku bundled=path.join(path.dir(executable),"../bunko");

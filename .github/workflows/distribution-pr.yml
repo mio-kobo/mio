@@ -118,9 +118,11 @@ jobs:
         - target: darwin-arm64
           runner: macos-15
           compiler: mio-B
+          core_compiler: mio-core-B
         - target: windows-amd64
           runner: windows-2025
           compiler: mio-B.exe
+          core_compiler: mio-core-B.exe
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -147,7 +149,7 @@ jobs:
         path: build/trusted-native-v21
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }} --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
     - name: Install current official WinGet client
@@ -310,7 +312,9 @@ jobs:
       if: success()
       with:
         name: distribution-compiler-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/native/linux-amd64/work/mio-B
+        path: |
+          build/native/linux-amd64/work/mio-B
+          build/native/linux-amd64/work/mio-core-B
         if-no-files-found: error
         retention-days: 7
   follower:
@@ -375,7 +379,9 @@ jobs:
       if: success()
       with:
         name: distribution-compiler-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: build/native/${{ matrix.target }}/work/mio-B*
+        path: |
+          build/native/${{ matrix.target }}/work/mio-B*
+          build/native/${{ matrix.target }}/work/mio-core-B*
         if-no-files-found: error
         retention-days: 7
   summary:
@@ -482,7 +488,7 @@ jobs:
         path: build/trusted-native-v21
     - name: Package verified native B as Core and Full
       shell: bash
-      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
+      run: python scripts/distribution/package.py --source build/distribution-source --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B --report build/evidence/report.json --target linux-amd64 --output build/candidates ${{ inputs.stable_version && '--seed native-v21 --seed-report build/trusted-native-v21/trusted-native-v21-report.json' || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
     - name: Install current official WinGet client
@@ -622,9 +628,10 @@ jobs:
         required: false
         type: string
       rc_version:
-        description: Optional RC version (e.g. 2.1.0-rc.1); dispatch only on its existing v-prefixed tag
+        description: Optional RC version (e.g. 2.1.1-rc.1); dispatch only on its existing v-prefixed tag
         required: false
         type: string
   pull_request:
     branches:
     - Mio-2.1
+    - Mio-2.1.1

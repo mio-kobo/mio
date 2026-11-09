@@ -2,12 +2,12 @@
 
 Package manager publication is **not enabled yet**. The commands below apply only
 after maintainers publish a verified stable Release and approve the distribution
-repository PRs. `2.1.0-pr.<sha>` archives are test candidates, not stable packages.
+repository PRs. `2.1.1-pr.<sha>` archives are test candidates, not stable packages.
 
 | Package | Contents |
 | --- | --- |
-| Full (`mio`, `MioKobo.Mio`) | Native compiler, supported Bunko sources and integrated CLI tools |
-| Core (`mio-core`, `MioKobo.Mio.Core`) | The identical compiler, license and package records; no importable Bunko or standalone tools |
+| Full (`mio`, `MioKobo.Mio`) | One self-contained native compiler with the complete Bunko standard library embedded and integrated CLI tools |
+| Core (`mio-core`, `MioKobo.Mio.Core`) | A smaller native compiler without embedded Bunko; it needs an external Bunko tree for `kiso/` imports |
 
 Neither installation needs a runtime download. Full supports offline development.
 Core builds programs without standard library imports. No standalone development
@@ -25,7 +25,8 @@ brew uninstall mio
 
 Full and Core conflict because both provide `mio`; uninstall one before switching.
 Homebrew installs the complete tree under `libexec` and links its executable into
-PATH. Bunko stays next to `bin`, so upgrades and relocation retain normal lookup.
+PATH. Full is self-contained; Core resolves an explicitly configured external
+Bunko tree.
 
 ## Windows AMD64 / WinGet
 
@@ -39,9 +40,11 @@ winget install --id MioKobo.Mio.Core --exact
 mio-core version
 ```
 
-Self-contained Inno installers retain `bunko/kiso` and add the real `bin` directory
-to the user PATH. Full provides `mio`; Core provides `mio-core`. Separate install
-directories allow both packages to coexist without overwriting files. Use the same package ID for upgrades/removal.
+Self-contained Inno installers add the real `bin` directory to the user PATH.
+Full provides `mio` with embedded Bunko; Core provides `mio-core` and needs an
+external tree. Upgrades remove any legacy `bunko/` and `examples/` directories
+left by pre-2.1.1 Full packages. Separate install directories allow both packages
+to coexist without overwriting files. Use the same package ID for upgrades/removal.
 The Windows runner verifies the complete installed payload before manifests
 are submitted. These manifests are prepared for human review; automation does not
 submit to `microsoft/winget-pkgs`.
@@ -64,7 +67,7 @@ mio-core version
 
 Full and Core can coexist with distinct commands. Verified official ZIPs are
 installed under Chocolatey's managed `lib` directory; process shims in its `bin`
-launch the real compiler with its adjacent Bunko tree. Reopen the terminal after
+launch the real compiler. Full embeds Bunko, so no adjacent tree is required. Reopen the terminal after
 installing Chocolatey to refresh PATH. Do not install the same flavor through
 WinGet and Chocolatey together, since PATH would select only one version.
 Full works offline after installation; Core has no bundled standard library.
@@ -90,8 +93,9 @@ sudo apt-get remove mio
 
 Only Linux AMD64 is supported. Full/Core declare `Conflicts` and `Replaces`; review
 APT's proposed removal when switching. Packages contain no build-host dependencies.
-A symlink from `/usr/bin/mio` points into the package's private directory, preserving
-executable-relative Bunko lookup. Do not use `apt-key` or disable signature checks.
+A symlink from `/usr/bin/mio` points into the package's private directory.
+Full is self-contained; Core needs `--bunko-root` or `MIO_BUNKO`.
+Do not use `apt-key` or disable signature checks.
 
 ## Offline use and platform limits
 
@@ -106,10 +110,18 @@ for those targets; `run` and `exec` require the host target. The integrated
 check/build/run/exec/test/lsp/disasm tools are tested on all three platforms.
 The Windows AMD64 native compiler supports blocking IPv4 `kiso/net/tcp` through Winsock.
 
-Bunko lookup remains: `--bunko-root`, then `MIO_BUNKO`, then `../bunko` relative to
-the real executable. Invalid explicit/environment roots are errors, including an
-empty `MIO_BUNKO`. Remove that variable to use bundled Full sources. Copy the whole
-installation tree when relocating; moving only the executable loses Full's library.
+Bunko lookup order is: `--bunko-root`, then `MIO_BUNKO`, then embedded Bunko in a
+Full executable, then `../bunko` relative to the real executable for Core and older
+trees. Invalid explicit/environment roots are errors, including an empty
+`MIO_BUNKO`. The Full `mio` executable can be copied alone to another directory or
+computer with a compatible OS and CPU and still import `kiso/...`; Core requires
+an external Bunko tree.
+
+If an older shell, service or package left `MIO_BUNKO` pointing at a missing or
+incomplete Bunko tree, Full treats it as an explicit override and fails with
+`E_BUNKO_ROOT` rather than silently using embedded Bunko. Unset the variable to
+return to the embedded library, or point it at a complete compatible tree. An
+existing empty `MIO_BUNKO` remains an error.
 
 See [简体中文](README.zh-CN.md), [日本語](README.ja.md) and
 [release operations](../../scripts/package_managers/README.md).

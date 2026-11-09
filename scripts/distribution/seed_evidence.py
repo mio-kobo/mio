@@ -108,7 +108,7 @@ def validate_seed(seed, source, version, run, kind=GF4):
             or seed['target'] != 'darwin-arm64' or seed['source_sha'] != source
             or seed['distribution_input']['source_sha'] != source
             or seed['distribution_input']['version'] != version
-            or seed['distribution_input']['embedded_bunko'] is not False
+            or not isinstance(seed['distribution_input'].get('embedded_bunko'), bool)
             or any(seed['run'].get(key) != run[key] for key in ('id', 'attempt'))
             or seed.get('authorization') != release_context(version)):
         raise ValueError('Trusted seed report must PASS for the pinned source, exact tag and Actions attempt')

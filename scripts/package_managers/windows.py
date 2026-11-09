@@ -2,7 +2,8 @@
 """Build self-contained Inno installers from the verified native ZIP archives.
 
 WinGet ZIP Portable aliases change GetModuleFileNameW's location and break the
-compiler's existing Bunko lookup. Install the real bin directory on user PATH.
+Core compiler's executable-relative Bunko lookup. Install the real bin directory
+on user PATH; Full does not depend on that lookup because Bunko is embedded.
 """
 import argparse
 import json

@@ -25,7 +25,7 @@
 
 Mio 2.1 のネイティブ AOT コンパイル対象は macOS ARM64、Linux AMD64、Windows AMD64 です。
 
-> 最新の安定版は [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) で、macOS ARM64 で検証済みです。公開済みの最新リリース候補は [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) です。[開発ブランチ `Mio-2.1`](https://github.com/mio-kobo/mio/tree/Mio-2.1) では、未公開の安定版 v2.1.0 に向けて開発を進めています。
+> 最新の安定版は [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) で、macOS ARM64 で検証済みです。公開済みの最新リリース候補は [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) です。[開発ブランチ `Mio-2.1.1`](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) では、未公開の v2.1.1 に向けて開発を進めています。
 
 変更点とリリースに向けた検証状況は、[v2.1.0 リリースノートの草案](releases/v2.1.0.md)を参照してください。
 
@@ -43,7 +43,7 @@ Mio と Mochi はプロジェクトのマスコットでもあります。上の
 
 ### Mio の入手
 
-公開済みの配布物は [GitHub Releases](https://github.com/mio-kobo/mio/releases) から入手できます。Mio 2.1 の **Core** にはネイティブコンパイラが含まれ、**Full** にはさらに外部標準ライブラリ Bunko とサンプルが付属します。どちらも `test` や `lsp` などの開発用コマンドを備えた同じコンパイラを同梱します。Bunko はコンパイラから独立しています。Core でも別途インストールした Bunko を利用できます。
+公開済みの配布物は [GitHub Releases](https://github.com/mio-kobo/mio/releases) から入手できます。Mio 2.1.1 の **Full** は、Bunko 標準ライブラリー全体を組み込んだ単一の自己完結型 `mio` 実行ファイル（Windows では `mio.exe`）です。**Core** は Bunko を組み込まない小型のコンパイラーです。どちらも `test` や `lsp` などの統合開発コマンドを備えます。Full は外部 Bunko を必要とせず、Core は `--bunko-root` または `MIO_BUNKO` で別途インストールした Bunko を利用できます。
 
 ビルド済みの配布物は Go、Python、外部の開発ツールチェーンなしで動作します。macOS のリリース候補には ad-hoc 署名が使われています。Apple の公証は受けていないため、Gatekeeper によって制限される場合があります。ソースからのブートストラップとネイティブ検証については [テストガイド](testing.md)を参照してください。
 

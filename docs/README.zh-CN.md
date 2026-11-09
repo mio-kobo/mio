@@ -25,7 +25,7 @@
 
 Mio 2.1 的原生 AOT 编译目标为 macOS ARM64、Linux AMD64 和 Windows AMD64。
 
-> 最新稳定版为 [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0)，已在 macOS ARM64 上通过验证。最新公开发布的候选版为 [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1)。[`Mio-2.1` 开发分支](https://github.com/mio-kobo/mio/tree/Mio-2.1) 正在筹备 v2.1.0，稳定版尚未发布。
+> 最新稳定版为 [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0)，已在 macOS ARM64 上通过验证。最新公开发布的候选版为 [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1)。[`Mio-2.1.1` 开发分支](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) 正在筹备 v2.1.1，正式版尚未发布。
 
 改动与发布验证进度见 [v2.1.0 发布说明草案](releases/v2.1.0.md)。
 
@@ -43,7 +43,7 @@ Mio 与 Mochi 也是项目中的两位角色：Mio 是上方的少女，Mochi �
 
 ### 获取 Mio
 
-可从 [GitHub Releases](https://github.com/mio-kobo/mio/releases) 下载已发布的版本。Mio 2.1 的 **Core** 包含原生编译器，**Full** 另附外置 Bunko 标准库和示例。两种发行包使用同一编译器，均提供 `test` 和 `lsp` 等内置开发命令。Bunko 独立于编译器。Core 也可以使用单独安装的 Bunko。
+可从 [GitHub Releases](https://github.com/mio-kobo/mio/releases) 下载已发布的版本。Mio 2.1.1 的 **Full** 是内嵌完整 Bunko 标准库的单个自包含 `mio` 可执行文件（Windows 为 `mio.exe`）。**Core** 是不内嵌 Bunko 的精简编译器。两者均提供 `test` 和 `lsp` 等内置开发命令。Full 无需外部 Bunko 目录；Core 可通过 `--bunko-root` 或 `MIO_BUNKO` 使用单独安装的 Bunko。
 
 预编译发行包无需 Go、Python 或外部开发工具链。macOS 候选版使用 ad-hoc 签名，未经过 Apple 公证，可能受到 Gatekeeper 限制。源码自举与原生验证详见[测试指南](testing.md)。
 

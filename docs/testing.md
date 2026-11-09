@@ -231,10 +231,14 @@ a separate GitHub-hosted Darwin ARM64 job.
    the executable in the production sandbox.
 2. A maintainer dispatches `distribution-pr.yml` on an existing stable tag
    on `Mio-2.1` history with `stable_version` set to the unprefixed version.
-   Every job prepares identical committed inputs with external Bunko. The seed
+   Every job prepares the same committed Full inputs with embedded Bunko. The seed
    builds Darwin CLI A, then A builds B, B builds C, and C builds D. Darwin B,
-   C, and D must match byte for byte. Darwin B and C independently build Linux
-   and Windows outputs, which must match for each target.
+   C, and D must match byte for byte. The verified Full compiler also builds a
+   disposable Core source with an empty resource table; Core B, C, and D must
+   match. Darwin B and C independently build Linux and Windows outputs, which
+   must match for each target. The native suite additionally checks embedded
+   imports, transitive imports, Core's missing-Bunko diagnostic, external
+   overrides, and that an invalid explicit root never falls back.
 3. Each packaging job compares the seed-derived hash with its own native
    B/C/D. After the remaining distribution checks pass, the workflow attests
    the inventory for the exact tag, commit, and run attempt. The
