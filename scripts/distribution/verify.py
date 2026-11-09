@@ -48,7 +48,7 @@ def verify(output, target):
                 log.append(dict(argv=[str(x) for x in argv], code=proc.returncode, output=text))
                 write_json(output / 'execution-log.json', log)
                 return proc.returncode, text
-            binaries = []
+            binaries, roots = {}, {}
             for archive in archives:
                 unpacked = extract(archive, base / archive.stem)
                 # Also relocate after unpacking: installation cannot depend on original path.
@@ -60,9 +60,13 @@ def verify(output, target):
                 check(flavor + ' exact inventory', inventory(root) == manifest['files'])
                 check(flavor + ' identity', manifest['target'] == target and
                       manifest['source_sha'] == provenance['source_sha'] and
-                      bool(re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-(?:pr\.[0-9a-f]{12}|rc\.[1-9]\d*))?', manifest['version'])) and provenance['embedded_bunko'] is False)
+                      bool(re.fullmatch(r'2\.[1-9]\d*\.(?:0|[1-9]\d*)(?:-(?:pr\.[0-9a-f]{12}|rc\.[1-9]\d*))?', manifest['version'])) and
+                      provenance['embedded_bunko'] is (flavor == 'full'))
+                check(flavor + ' payload', {p.parts[0] for p in map(Path, manifest['files'])} ==
+                      {'bin', 'LICENSE', 'README.md', 'provenance.json'})
                 cli = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
-                binaries.append(cli)
+                binaries[flavor] = cli
+                roots[flavor] = root
                 check(flavor + ' compiler provenance', digest(cli) == provenance['compiler_sha256'])
                 code, text = run([cli, 'version'])
                 version_line = f"mio v{manifest['version']} "
@@ -80,12 +84,9 @@ def verify(output, target):
                 code, text = run([cli, 'check', math])
                 if flavor == 'core':
                     check('Core missing Bunko diagnostic', code != 0 and 'E_BUNKO_MISSING' in text and 'kiso/math' in text)
-                    check('Core payload', {p.parts[0] for p in map(Path, manifest['files'])} == {'bin', 'LICENSE', 'README.md', 'provenance.json'})
                 else:
                     check('Full automatic Bunko check', code == 0)
                     path_env = dict(PATH=str(cli.parent) + os.pathsep + env.get('PATH', ''))
-                    # Windows CreateProcess ignores the child environment's PATH
-                    # for executable search; cmd resolves PATH inside that child.
                     launch = [cli.name, 'check', math]
                     if target == 'windows-amd64':
                         launch = [env.get('COMSPEC', 'cmd.exe'), '/d', '/c', cli.name, 'check', math]
@@ -121,20 +122,89 @@ def verify(output, target):
                         wire += f'Content-Length: {len(body)}\r\n\r\n'.encode() + body
                     code, text = run([cli, 'lsp', '--stdio'], stdin=wire, timeout=30)
                     check('Full lsp handshake', code == 0 and 'capabilities' in text)
-                    # Invalid CLI override must beat valid env and bundled paths.
-                    code, text = run([cli, 'check', math, '--bunko-root', cwd / 'missing'], dict(MIO_BUNKO=str(root / 'bunko')))
+                    # Invalid CLI override must beat valid env and embedded paths.
+                    code, text = run([cli, 'check', math, '--bunko-root', cwd / 'missing'], dict(MIO_BUNKO=str(roots['core'] / 'bunko')))
                     check('explicit invalid root does not fall back', code != 0 and 'E_BUNKO_ROOT' in text)
                     for command in ([cli, 'check', math], [cli, 'build', hello], [cli, 'test', 'sample'], [cli, 'lsp', '--stdio']):
                         code, text = run(command, dict(MIO_BUNKO=str(cwd / 'missing')))
                         check('invalid env root ' + str(command[1]), code != 0 and 'E_BUNKO_ROOT' in text)
-                    # Core can use the Full library via either explicit channel.
-                    core = next(p for p in binaries if '-core' in str(p)) if any('-core' in str(p) for p in binaries) else None
-                    if core:
-                        code, text = run([core, 'check', math, '--bunko-root', root / 'bunko'], dict(MIO_BUNKO=str(cwd / 'missing')))
-                        check('CLI override beats env', code == 0)
-                        code, text = run([core, 'check', math], dict(MIO_BUNKO=str(root / 'bunko')))
-                        check('Core external environment root', code == 0)
-            check('Core/Full identical compiler SHA256', len(binaries) == 2 and digest(binaries[0]) == digest(binaries[1]))
+                    missing = cwd / 'missing.mio'
+                    missing.write_text('yobu "kiso/not/a/package";\n', encoding='utf-8')
+                    code, text = run([cli, 'check', missing])
+                    check('Full missing module diagnostic', code != 0 and 'kiso/not/a/package' in text)
+            check('Core and Full compiler SHA256 differ', digest(binaries['core']) != digest(binaries['full']))
+            # A minimal external Bunko overrides embedded resolution for both flavors.
+            override = cwd / 'external-bunko'
+            (override / 'kiso/override').mkdir(parents=True)
+            (override / 'kiso/override/override.mio').write_text(
+                'koukai waza answer() -> int64 { kaesu 42; }\n', encoding='utf-8')
+            external = cwd / 'external.mio'
+            external.write_text('yobu "kiso/override"; chant(override.answer());\n', encoding='utf-8')
+            for flavor in ('core', 'full'):
+                cli = binaries[flavor]
+                image = cwd / (flavor + '-external')
+                code, text = run([cli, 'build', external, '--target=' + target, '--bunko-root', override, '-o', image])
+                check(flavor + ' explicit external Bunko build', code == 0)
+                code, text = run([image])
+                check(flavor + ' explicit external Bunko execute', code == 0 and text.strip() == '42')
+                code, text = run([cli, 'build', external, '--target=' + target, '-o', image], dict(MIO_BUNKO=str(override)))
+                check(flavor + ' environment external Bunko build', code == 0)
+                code, text = run([image])
+                check(flavor + ' environment external Bunko execute', code == 0 and text.strip() == '42')
+            # Core adjacent executable-relative lookup still works; embedded Full prefers its own table.
+            shutil.copytree(override, roots['core'] / 'bunko')
+            code, text = run([binaries['core'], 'check', external])
+            check('Core adjacent Bunko check', code == 0)
+            (roots['full'] / 'bunko/kiso').mkdir(parents=True)
+            code, text = run([binaries['full'], 'check', math])
+            check('Full embedded Bunko precedence over adjacent tree', code == 0)
+            # Full works as a lone executable and imports every supported kiso module.
+            lonely = base / 'lonely full'
+            lonely.mkdir()
+            lone = lonely / ('mio.exe' if target == 'windows-amd64' else 'mio')
+            shutil.copyfile(binaries['full'], lone)
+            if target != 'windows-amd64':
+                lone.chmod(0o755)
+            code, text = run([lone, 'check', math])
+            check('Full lone executable check', code == 0)
+            all_source = cwd / 'all.mio'
+            all_source.write_text("""yobu "kiso/math";
+yobu "kiso/string";
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/io";
+yobu "kiso/fs";
+yobu "kiso/encoding/json";
+yobu "kiso/regexp";
+yobu "kiso/crypto/sha256";
+yobu "kiso/os";
+yobu "kiso/net/tcp";
+chant(math.abs(-9));
+chant(string.concat("a","b"));
+kaku xs: []int64=[1,2]; array.push(xs,3); chant(len(xs));
+kaku data: []uint8=[uint8(104),uint8(105)]; chant(bytes.equal(data,data));
+kaku reader=io.reader_from_bytes(data); kaku dst: []uint8=[uint8(0),uint8(0)]; chant(io.read_full(reader,dst,0,2).count);
+chant(fs.exists("all.mio"));
+chant(json.parse(string.to_bytes("{}")).error);
+chant(regexp.matches(regexp.compile("a+"),"aaa"));
+chant(len(sha256.sum(data)));
+chant(os.monotonic_ms()>=0);
+chant(len(tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),0).octets));
+""", encoding='utf-8')
+            image = cwd / ('all.exe' if target == 'windows-amd64' else 'all')
+            code, text = run([lone, 'build', all_source, '--target=' + target, '-o', image])
+            check('Full lone executable all-module build', code == 0)
+            code, text = run([image])
+            expected = ["9", "ab", "3", "hai", "2", "hai", "", "hai", "32", "hai", "4"]
+            check('Full lone executable all-module run', code == 0 and [line.strip() for line in text.splitlines()] == expected)
+            code, text = run([lone, 'check', math], dict(MIO_BUNKO=str(cwd / 'missing')))
+            check('Full lone executable invalid env root', code != 0 and 'E_BUNKO_ROOT' in text)
+            lonely_core = lonely / ('mio-core.exe' if target == 'windows-amd64' else 'mio-core')
+            shutil.copyfile(binaries['core'], lonely_core)
+            if target != 'windows-amd64':
+                lonely_core.chmod(0o755)
+            code, text = run([lonely_core, 'check', math])
+            check('Core lone executable missing Bunko diagnostic', code != 0 and 'E_BUNKO_MISSING' in text)
         results['status'] = 'PASS'
     finally:
         write_json(output / 'verification.json', results)

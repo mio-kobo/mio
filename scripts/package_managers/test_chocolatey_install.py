@@ -139,12 +139,12 @@ def install(assets, stable_packages=None):
                     with offline():
                         smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=(ignore,))
                     passed(flavor + ' repeated and forced install')
-                assert digest(installed['core'][0] / 'bin/mio-core.exe') == digest(installed['full'][0] / 'bin/mio.exe')
+                assert digest(installed['core'][0] / 'bin/mio-core.exe') != digest(installed['full'][0] / 'bin/mio.exe')
                 with offline():
                     for flavor, (payload, shim) in installed.items():
                         ignore = 'bin/' + ('mio-core' if flavor == 'core' else 'mio') + '.exe.ignore'
                         smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=(ignore,))
-                passed('Core/Full coexist, distinct commands, identical compiler bytes')
+                passed('Core/Full coexist, distinct commands, distinct embedded-Bunko compiler bytes')
                 for flavor, (payload, shim) in installed.items():
                     name = 'mio' if flavor == 'full' else 'mio-core'
                     run('choco', 'uninstall', name, '--yes', '--no-progress')
