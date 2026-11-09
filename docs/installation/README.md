@@ -117,5 +117,11 @@ trees. Invalid explicit/environment roots are errors, including an empty
 computer with a compatible OS and CPU and still import `kiso/...`; Core requires
 an external Bunko tree.
 
+If an older shell, service or package left `MIO_BUNKO` pointing at a missing or
+incomplete Bunko tree, Full treats it as an explicit override and fails with
+`E_BUNKO_ROOT` rather than silently using embedded Bunko. Unset the variable to
+return to the embedded library, or point it at a complete compatible tree. An
+existing empty `MIO_BUNKO` remains an error.
+
 See [简体中文](README.zh-CN.md), [日本語](README.ja.md) and
 [release operations](../../scripts/package_managers/README.md).

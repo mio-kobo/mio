@@ -95,4 +95,9 @@ Bunko 按 `--bunko-root`、`MIO_BUNKO`、Full 可执行文件内嵌 Bunko、Core
 `MIO_BUNKO` 也是错误。Full 的 `mio` 可执行文件可以单独复制到其他目录，或在兼容
 OS 与 CPU 的电脑上继续导入 `kiso/...`；Core 需要外部 Bunko。
 
+若旧 shell、服务或安装包留下的 `MIO_BUNKO` 指向不存在或不完整的 Bunko 目录，
+Full 会将其视为显式覆盖并以 `E_BUNKO_ROOT` 失败，而不会静默改用内嵌 Bunko。
+请取消该变量以使用内嵌库，或将其指向完整兼容的目录。已有的空 `MIO_BUNKO`
+仍视为错误。
+
 [English](README.md) · [日本語](README.ja.md)

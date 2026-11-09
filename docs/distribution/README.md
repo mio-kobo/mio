@@ -60,7 +60,9 @@ Bunko resolution for build/check/run/test/lsp is:
 
 Invalid explicit/environment roots fail without falling back. Full therefore
 prefers its own library over a legacy adjacent tree, while explicit overrides
-still select a different one. Core keeps the v2.1.0 external behavior. LSP clients
+still select a different one. An outdated `MIO_BUNKO` pointing at a missing or incomplete tree is still an
+error for Full; unset it or point it at a complete compatible tree to use the
+embedded library. Core keeps the v2.1.0 external behavior. LSP clients
 should pass the CLI option or environment; `initializationOptions.bunkoRoot` does
 not introduce a separate lookup path. The executable identity uses Linux
 `/proc/self/exe`, Darwin `proc_info(PROC_PIDPATHINFO)`, and Windows

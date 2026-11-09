@@ -105,4 +105,9 @@ Bunko は `--bunko-root`、`MIO_BUNKO`、Full 実行ファイル内蔵の Bunko�
 単体で別のディレクトリーや互換 OS・CPU のコンピューターへ移動しても `kiso/...` を
 インポートできます。Core には外部 Bunko が必要です。
 
+古いシェルやサービスが存在しない・不完全な Bunko を指す `MIO_BUNKO` を設定している
+場合、Full は明示指定として扱い、内蔵 Bunko へ黙って切り替えず `E_BUNKO_ROOT` で
+失敗します。組み込みライブラリーを使うには変数を解除するか、完全な互換ツリーを
+指定してください。空の `MIO_BUNKO` は従来どおりエラーです。
+
 [English](README.md) · [简体中文](README.zh-CN.md)
