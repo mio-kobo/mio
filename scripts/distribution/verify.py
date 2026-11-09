@@ -42,7 +42,8 @@ def verify(output, target):
             env = dict(os.environ)
             env.pop('MIO_BUNKO', None)
             def run(argv, extra=None, stdin=None, timeout=300):
-                proc = subprocess.run([str(a) for a in argv], cwd=cwd, env=dict(env, **(extra or {})),
+                overrides = {key: str(value) for key, value in (extra or {}).items()}
+                proc = subprocess.run([str(a) for a in argv], cwd=cwd, env=dict(env, **overrides),
                                       input=stdin, capture_output=True, timeout=timeout)
                 text = (proc.stdout + proc.stderr).decode('utf-8', errors='replace')
                 log.append(dict(argv=[str(x) for x in argv], code=proc.returncode, output=text))
