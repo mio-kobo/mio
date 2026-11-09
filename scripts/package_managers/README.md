@@ -182,13 +182,15 @@ WinGet/Inno and Chocolatey lifecycles. Manual manager regression keeps all manag
 enabled by default. Reused
 fixtures are never stable release inputs. `.nupkg` files and JSON evidence are
 Actions artifacts. Unit tests cover package metadata, immutable generation,
-untrusted inputs, release gating, dry run, duplicate and collision rejection.
+untrusted inputs, release gating, dry runs, and moderation-aware submission.
 
 Maintainer submission:
 
 1. Confirm ownership of both CCR IDs and inspect both exact versions in the
-   signed-in moderation queue. Stop if either version is already in moderation.
-   The public package download endpoint may miss a private queue entry.
+   signed-in moderation queue. For a first submission, confirm that neither
+   version is already present. Public CCR endpoints may miss private entries.
+   For the v2.1.0 repair, check both entries and confirm that any package whose
+   content needs updating is Waiting, Pending, Responded, or Updated.
 2. Dry-run `package-managers.yml` on `Mio-2.1` with the existing published tag.
    Inspect the generated nupkg files, hashes and Windows lifecycle evidence.
    Dry runs verify locally generated packages without contacting CCR.
@@ -197,14 +199,20 @@ Maintainer submission:
    `CHOCOLATEY_API_KEY` as that environment's secret. Enable
    `MIO_CHOCOLATEY_PUBLISH_ENABLED` after maintainer review.
 4. Dispatch `package-managers.yml` from `Mio-2.1` with the tag and
-   `submit_chocolatey` enabled, then approve the protected environment.
+   `submit_chocolatey` enabled, then approve the protected environment. Enable
+   `resubmit_chocolatey_v2_1_0` only to authorize the repair of `mio` and
+   `mio-core` v2.1.0.
    Each submission needs a fresh dispatch after checking moderation. The job
    uploads to `https://push.chocolatey.org/` for normal community review.
 
-`chocolatey_publish.py` preflights both versions. Existing identical bytes are
-skipped. Differing content stops submission. If a push fails or times out, check the signed-in queue before
-deciding whether another submission is appropriate. Logs show bounded HTTP
-diagnostics without printing the key, command arguments or raw process output.
+`chocolatey_publish.py` checks the exact CCR records for both packages before
+uploading either. It skips matching SHA-512 digests, blocks changes to approved
+versions, and requires a recognized review status and explicit authorization
+for any repair. A missing CCR record stops a repair. If a push fails or times
+out, check both entries in the signed-in queue before a fresh dispatch. A
+package already uploaded with the expected digest is skipped on that dispatch.
+Logs show bounded HTTP diagnostics without printing the key, command arguments
+or raw process output.
 
 References: [Chocolatey setup](https://docs.chocolatey.org/en-us/choco/setup/),
 [Install-BinFile](https://docs.chocolatey.org/en-us/create/functions/install-binfile/),

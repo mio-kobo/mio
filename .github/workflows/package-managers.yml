@@ -10,6 +10,10 @@ on:
         description: Submit to CCR after checking both exact versions in the signed-in moderation queue
         type: boolean
         default: false
+      resubmit_chocolatey_v2_1_0:
+        description: Authorize the mio and mio-core v2.1.0 moderation repair after checking both in CCR
+        type: boolean
+        default: false
   release:
     types: [published]
 permissions:
@@ -39,9 +43,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          CCR_REPAIR: ${{ inputs.resubmit_chocolatey_v2_1_0 }}
+          CCR_SUBMIT: ${{ inputs.submit_chocolatey }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$CCR_REPAIR" == true && ( "$TAG" != v2.1.0 || "$CCR_SUBMIT" != true || "$GITHUB_REF" != refs/heads/Mio-2.1 ) ]]; then
+            echo 'CCR repair requires v2.1.0 and submit_chocolatey on Mio-2.1' >&2
+            exit 1
+          fi
           python -c 'import sys; sys.path.insert(0,"scripts/package_managers"); from release import stable; import os; stable(os.environ["TAG"])'
           git merge-base --is-ancestor "refs/tags/$TAG" origin/Mio-2.1
           mkdir -p build/release-assets
@@ -175,11 +185,14 @@ jobs:
         with:
           name: package-manager-inputs
           path: build
-      - name: Immutable submission to Chocolatey community moderation
+      - name: Submit to Chocolatey community moderation
         env:
           CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          CCR_REPAIR: ${{ inputs.resubmit_chocolatey_v2_1_0 }}
         shell: pwsh
         run: |
-          python scripts/package_managers/chocolatey_publish.py --packages build/generated/chocolatey --version $env:TAG.Substring(1) --push --moderation-checked
+          $publishArgs = @('--packages', 'build/generated/chocolatey', '--version', $env:TAG.Substring(1), '--push', '--moderation-checked')
+          if ($env:CCR_REPAIR -eq 'true') { $publishArgs += '--resubmit-v2-1-0' }
+          python scripts/package_managers/chocolatey_publish.py @publishArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

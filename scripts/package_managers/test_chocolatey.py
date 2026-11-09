@@ -1,5 +1,6 @@
+from base64 import b64encode
 from contextlib import redirect_stderr, redirect_stdout
-from hashlib import sha256
+from hashlib import sha256, sha512
 import io
 import json
 from pathlib import Path
@@ -8,19 +9,25 @@ import subprocess
 import sys
 import traceback
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 from urllib.error import HTTPError
 import zipfile
 
 from chocolatey import build, package_files
-from chocolatey_publish import existing, publish
+from chocolatey_publish import existing, moderation_record, publish
 
 
 class ChocolateyTests(unittest.TestCase):
     def record(self, flavor='full'):
         root = f'mio-2.1.0-windows-amd64-{flavor}'
         return dict(root=root, url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{root}.zip', sha='a' * 64)
+
+    def publish_packages(self, folder):
+        return {
+            name: sha512(build('2.1.0', flavor, self.record(flavor), folder).read_bytes()).digest()
+            for name, flavor in (('mio-core', 'core'), ('mio', 'full'))
+        }
 
     def test_packages_and_inventory(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -106,22 +113,26 @@ class ChocolateyTests(unittest.TestCase):
     def test_publish_dry_run_duplicate_collision_and_no_secret_output(self):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
-            for name in ('mio-core', 'mio'):
-                (folder / f'{name}.2.1.0.nupkg').write_bytes(name.encode())
+            digests = self.publish_packages(folder)
             with patch('chocolatey_publish.subprocess.run') as run:
                 with patch('chocolatey_publish.urlopen') as urlopen:
                     publish(folder, '2.1.0')
                     urlopen.assert_not_called()
                 run.assert_not_called()
-                publish(folder, '2.1.0', push=True, fetch=lambda n, v: n.encode())
+                with patch('chocolatey_publish.moderation_record', side_effect=lambda n, v: (digests[n], 'Approved')):
+                    publish(folder, '2.1.0', push=True)
                 run.assert_not_called()
-                with self.assertRaises(ValueError):
-                    publish(folder, '2.1.0', push=True, fetch=lambda n, v: b'different' if n == 'mio' else None)
+                with patch('chocolatey_publish.moderation_record', return_value=(sha512(b'old').digest(), 'Waiting')):
+                    with self.assertRaisesRegex(ValueError, 'repair authorization required'):
+                        publish(folder, '2.1.0', push=True)
                 run.assert_not_called()
-            with patch.dict('os.environ', CHOCOLATEY_API_KEY='secret-test-value'), patch('chocolatey_publish.subprocess.run') as run:
+            with patch.dict('os.environ', CHOCOLATEY_API_KEY='secret-test-value'), \
+                 patch('chocolatey_publish.moderation_record', return_value=None), \
+                 patch('chocolatey_publish.existing', return_value=False), \
+                 patch('chocolatey_publish.subprocess.run') as run:
                 run.side_effect = subprocess.TimeoutExpired(['choco', '--api-key=secret-test-value'], 300)
                 with self.assertRaises(RuntimeError) as error:
-                    publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
+                    publish(folder, '2.1.0', push=True)
                 self.assertNotIn('secret-test-value', str(error.exception))
                 self.assertTrue(error.exception.__suppress_context__)
 
@@ -133,6 +144,129 @@ class ChocolateyTests(unittest.TestCase):
                     existing('mio-core', '2.1.0')
                 self.assertTrue(error.exception.__suppress_context__)
                 self.assertNotIn('private', str(error.exception))
+
+    def test_moderation_record_reads_exact_version_and_review_state(self):
+        digest = sha512(b'old').digest()
+        template = '''<entry xmlns="http://www.w3.org/2005/Atom"
+          xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"
+          xmlns:d="http://schemas.microsoft.com/ado/2007/08/dataservices">
+          <title>mio-core</title>
+          <m:properties>
+            <d:Version>2.1.0</d:Version>
+            <d:PackageHashAlgorithm>SHA512</d:PackageHashAlgorithm>
+            <d:PackageHash>{digest}</d:PackageHash>
+            <d:IsApproved>{approved}</d:IsApproved>
+            <d:PackageStatus>{status}</d:PackageStatus>
+            <d:PackageSubmittedStatus>Waiting</d:PackageSubmittedStatus>
+          </m:properties>
+        </entry>'''
+        with patch('chocolatey_publish.urlopen') as urlopen:
+            response = urlopen.return_value.__enter__.return_value
+            for approved, status, expected in (
+                ('false', 'Submitted', 'Waiting'),
+                ('true', 'Submitted', 'Approved'),
+                ('false', 'Approved', 'Approved'),
+                ('false', 'Rejected', None),
+                ('', 'Submitted', None),
+            ):
+                with self.subTest(approved=approved, status=status):
+                    response.read.return_value = template.format(
+                        digest=b64encode(digest).decode(), approved=approved, status=status,
+                    ).encode()
+                    self.assertEqual(moderation_record('mio-core', '2.1.0'), (digest, expected))
+            request = urlopen.call_args.args[0]
+            self.assertTrue(request.full_url.endswith("Packages(Id='mio-core',Version='2.1.0')"))
+            self.assertEqual(request.get_header('Cache-control'), 'no-cache')
+            for body in (b'<private-malformed', response.read.return_value.replace(b'2.1.0', b'2.1.1')):
+                response.read.return_value = body
+                with self.assertRaisesRegex(RuntimeError, 'CCR metadata preflight failed') as error:
+                    moderation_record('mio-core', '2.1.0')
+                self.assertTrue(error.exception.__suppress_context__)
+            urlopen.side_effect = HTTPError('private-url', 503, 'private-body', None, None)
+            with self.assertRaisesRegex(RuntimeError, 'HTTP status=503') as error:
+                moderation_record('mio-core', '2.1.0')
+            self.assertNotIn('private', str(error.exception))
+            urlopen.side_effect = HTTPError('private-url', 404, 'private-body', None, None)
+            self.assertIsNone(moderation_record('mio-core', '2.1.0'))
+
+    def test_first_upload_and_scoped_moderation_repair(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.dict('os.environ', CHOCOLATEY_API_KEY='secret-test-value'), \
+             patch('chocolatey_publish.moderation_record') as lookup, \
+             patch('chocolatey_publish.existing', return_value=False) as download, \
+             patch('chocolatey_publish.subprocess.run', return_value=Mock(returncode=0)) as run:
+            folder = Path(temp)
+            self.publish_packages(folder)
+            for status in (None, 'Waiting', 'Pending', 'Responded', 'Updated'):
+                with self.subTest(status=status):
+                    run.reset_mock()
+                    download.reset_mock()
+                    lookup.return_value = (sha512(b'old').digest(), status) if status else None
+                    publish(folder, '2.1.0', push=True, resubmit=status is not None)
+                    self.assertEqual([Path(call.args[0][2]).name for call in run.call_args_list],
+                                     ['mio-core.2.1.0.nupkg', 'mio.2.1.0.nupkg'])
+                    self.assertEqual(download.call_count, 0 if status else 2)
+
+    def test_blocked_second_package_prevents_any_upload(self):
+        old = sha512(b'old').digest()
+        with tempfile.TemporaryDirectory() as temp, \
+             patch('chocolatey_publish.moderation_record') as lookup, \
+             patch('chocolatey_publish.existing', return_value=True), \
+             patch('chocolatey_publish.subprocess.run') as run:
+            folder = Path(temp)
+            self.publish_packages(folder)
+            for record, message in (
+                ((old, 'Approved'), 'approved and cannot be overwritten'),
+                ((old, 'Rejected'), 'does not permit a repair'),
+                ((old, None), 'does not permit a repair'),
+                (None, 'could not be confirmed'),
+            ):
+                with self.subTest(record=record):
+                    lookup.side_effect = [(old, 'Waiting'), record]
+                    with self.assertRaisesRegex(ValueError, message):
+                        publish(folder, '2.1.0', push=True, resubmit=True)
+                    run.assert_not_called()
+            lookup.side_effect = [None, None]
+            with self.assertRaisesRegex(ValueError, 'could not be confirmed'):
+                publish(folder, '2.1.0', push=True)
+            with self.assertRaisesRegex(ValueError, 'requires a push for v2.1.0'):
+                publish(folder, '2.1.1', push=True, resubmit=True)
+            run.assert_not_called()
+
+    def test_repair_retry_skips_successful_upload_after_partial_failure(self):
+        old = sha512(b'old').digest()
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.dict('os.environ', CHOCOLATEY_API_KEY='secret-test-value'), \
+             patch('chocolatey_publish.moderation_record') as lookup, \
+             patch('chocolatey_publish.subprocess.run') as run:
+            folder = Path(temp)
+            digests = self.publish_packages(folder)
+            lookup.side_effect = [(old, 'Waiting'), (old, 'Waiting'),
+                                  (digests['mio-core'], 'Updated'), (old, 'Waiting')]
+            ok = subprocess.CompletedProcess([], 0)
+            failed = subprocess.CompletedProcess([], 1, stderr=b'HTTP 503')
+            run.side_effect = [ok, failed, ok]
+            with self.assertRaisesRegex(RuntimeError, 'failed for mio.2.1.0.nupkg.*503'):
+                publish(folder, '2.1.0', push=True, resubmit=True)
+            self.assertEqual(run.call_count, 2)
+            publish(folder, '2.1.0', push=True, resubmit=True)
+            self.assertEqual([Path(call.args[0][2]).name for call in run.call_args_list],
+                             ['mio-core.2.1.0.nupkg', 'mio.2.1.0.nupkg', 'mio.2.1.0.nupkg'])
+
+    def test_repair_rejects_mismatched_nuspec_identity(self):
+        with tempfile.TemporaryDirectory() as temp, \
+             patch('chocolatey_publish.moderation_record', return_value=(sha512(b'old').digest(), 'Waiting')), \
+             patch('chocolatey_publish.subprocess.run') as run:
+            folder = Path(temp)
+            self.publish_packages(folder)
+            for name, version in (('other-package', '2.1.0'), ('mio', '2.1.1')):
+                with self.subTest(name=name, version=version):
+                    with zipfile.ZipFile(folder / 'mio.2.1.0.nupkg', 'w') as archive:
+                        archive.writestr('mio.nuspec', f'<package><metadata><id>{name}</id>'
+                                         f'<version>{version}</version></metadata></package>')
+                    with self.assertRaisesRegex(ValueError, 'invalid Chocolatey package identity'):
+                        publish(folder, '2.1.0', push=True, resubmit=True)
+                    run.assert_not_called()
 
     def test_push_requires_moderation_confirmation(self):
         script = Path(__file__).with_name('chocolatey_publish.py')
@@ -161,8 +295,7 @@ class ChocolateyTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
-            for name in ('mio-core', 'mio'):
-                (folder / f'{name}.2.1.0.nupkg').write_bytes(name.encode())
+            self.publish_packages(folder)
 
             for stdout, stderr, status in cases:
                 with self.subTest(status=status):
@@ -174,9 +307,11 @@ class ChocolateyTests(unittest.TestCase):
                     )
                     log = io.StringIO()
                     with patch.dict('os.environ', CHOCOLATEY_API_KEY=key), \
+                         patch('chocolatey_publish.moderation_record', return_value=None), \
+                         patch('chocolatey_publish.existing', return_value=False), \
                          patch('chocolatey_publish.subprocess.run', return_value=result) as run, \
                          redirect_stdout(log), redirect_stderr(log), self.assertRaises(RuntimeError) as error:
-                        publish(folder, '2.1.0', push=True, fetch=lambda n, v: None)
+                        publish(folder, '2.1.0', push=True)
 
                     run.assert_called_once()
                     self.assertEqual(log.getvalue(), '')
