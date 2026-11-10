@@ -101,12 +101,12 @@ koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
     lx_save_pair(c, 10, 11, 64); lx_save_pair(c, 12, 13, 80); lx_save_pair(c, 14, 15, 96); lx_save_pair(c, 17, 30, 112);
     lx(c, arm64.str_x(1, 31, 128));
     // ---- direct translations (number only)
-    kaku direct = [1, 94, 3, 63, 4, 64, 6, 57, 7, 260, 20, 172, 30, 202, 59, 221, 73, 215, 83, 103, 97, 198, 106, 201, 195, 164, 74, 226];
+    kaku direct = [1, 94, 3, 63, 4, 64, 6, 57, 7, 260, 20, 172, 30, 202, 59, 221, 83, 103, 97, 198, 106, 201, 195, 164, 74, 226];
     kaku at = 0;
     aida (at < len(direct)) { lx_direct(c, direct[at], direct[at + 1], at); at = at + 2; }
     // ---- translated calls
-    kaku calls = [5, 197, 338, 344, 136, 137, 10, 15, 2, 90, 92, 105, 104, 98, 230, 336, 202, 274, 194];
-    kaku names = ["lx_open", "lx_mmap", "lx_stat", "lx_dirents", "lx_mkdir", "lx_rmdir", "lx_unlink", "lx_chmod", "lx_fork", "lx_dup2",
+    kaku calls = [73, 5, 197, 338, 344, 136, 137, 10, 15, 2, 90, 92, 105, 104, 98, 230, 336, 202, 274, 194];
+    kaku names = ["lx_munmap", "lx_open", "lx_mmap", "lx_stat", "lx_dirents", "lx_mkdir", "lx_rmdir", "lx_unlink", "lx_chmod", "lx_fork", "lx_dup2",
         "lx_fcntl", "lx_setsockopt", "lx_bind", "lx_connect", "lx_poll", "lx_procinfo", "lx_sysctl", "lx_sysctlbyname", "lx_getrlimit"];
     at = 0;
     aida (at < len(calls)) { lx_dispatch(c, calls[at], names[at], at); at = at + 1; }
@@ -130,15 +130,37 @@ koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
     lx_flags(c, 1, 9, [512, 64, 1024, 512, 8, 1024, 2048, 128, 4, 2048, 1048576, 16384, 16777216, 524288, 32768, 2097152], "lx_open_skip_");
     lx_mov(c, 1, 0); lx_mov(c, 2, 9); lx_li(c, 0, -100); lx_li(c, 8, 56); lx_b(c, "lx_svc");
 
-    // ---- mmap: MAP_ANON 0x1000 -> 0x20; very large reservations are MAP_NORESERVE (0x4000)
+    // ---- mmap: the Darwin kernel works in 16 KiB pages (mappings are 16 KiB aligned and their length is rounded up to
+    // 16 KiB; the runtime protects and releases ranges up to that rounded end), Linux in 4 KiB pages. Length is rounded
+    // to 16 KiB here; mappings of 64 KiB or more are also aligned to 16 KiB by over-allocating and trimming the slack.
+    // MAP_ANON 0x1000 -> 0x20; very large reservations are MAP_NORESERVE (0x4000).
     lx_label(c, "lx_mmap");
     lx_li(c, 10, 4096); lx(c, arm64.and_x(11, 3, 10)); lx_cbz(c, 11, "lx_mmap_flags_done");
     lx(c, arm64.sub_imm_x(3, 3, 1, hai)); lx(c, arm64.add_imm_x(3, 3, 32, iie));
     lx_label(c, "lx_mmap_flags_done");
-    lx_li(c, 10, 268435456); lx(c, arm64.cmp_x(1, 10)); lx_bcc(c, 3, "lx_mmap_go");
+    lx_li(c, 10, 16383); lx(c, arm64.add_x(1, 1, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(1, 1, 11));
+    lx_li(c, 10, 268435456); lx(c, arm64.cmp_x(1, 10)); lx_bcc(c, 3, "lx_mmap_reserve_done");
     lx_li(c, 11, 16384); lx(c, arm64.orr_x(3, 3, 11));
-    lx_label(c, "lx_mmap_go");
+    lx_label(c, "lx_mmap_reserve_done");
+    lx_cbnz(c, 0, "lx_mmap_plain");
+    lx_li(c, 10, 65536); lx(c, arm64.cmp_x(1, 10)); lx_bcc(c, 3, "lx_mmap_plain");
+    // aligned path: map len + 16 KiB at a kernel-chosen address, keep the 16 KiB-aligned window, unmap the slack
+    lx_mov(c, 13, 1); lx(c, arm64.add_imm_x(1, 13, 4, hai)); lx_li(c, 8, 222); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx_mov(c, 12, 0); lx_li(c, 10, 16383); lx(c, arm64.add_x(9, 12, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(9, 9, 11));
+    lx(c, arm64.sub_x(1, 9, 12)); lx_cbz(c, 1, "lx_mmap_head_done");
+    lx_mov(c, 0, 12); lx_li(c, 8, 215); lx(c, arm64.svc(0));
+    lx_label(c, "lx_mmap_head_done");
+    lx(c, arm64.add_x(0, 9, 13)); lx(c, arm64.sub_x(1, 9, 12)); lx_li(c, 10, 16384); lx(c, arm64.sub_x(1, 10, 1));
+    lx_li(c, 8, 215); lx(c, arm64.svc(0));
+    lx_mov(c, 0, 9); lx_b(c, "lx_norm");
+    lx_label(c, "lx_mmap_plain");
     lx_li(c, 8, 222); lx_b(c, "lx_svc");
+
+    // ---- munmap: ranges are released in whole 16 KiB pages, matching the mapping lengths created above
+    lx_label(c, "lx_munmap");
+    lx_li(c, 10, 16383); lx(c, arm64.add_x(1, 1, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(1, 1, 11));
+    lx_li(c, 8, 215); lx_b(c, "lx_svc");
 
     // ---- stat64(path, buf) -> newfstatat(AT_FDCWD, path, tmp, 0), then rebuild the Darwin stat64 layout in buf
     lx_label(c, "lx_stat");

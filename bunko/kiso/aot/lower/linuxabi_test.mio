@@ -37,3 +37,21 @@ waza test_linux_adapter_saves_and_restores_the_callee_state() -> unit {
 waza test_linux_target_rejects_bad_capacity_like_darwin() -> unit {
     testing.expect(compile_linux_arm64(empty_v14([]), 63, iie).error != mu, "capacity below the minimum fails closed");
 }
+
+// Darwin maps in 16 KiB pages: the runtime protects and releases ranges up to the 16 KiB-rounded end of a mapping, which
+// the 4 KiB Linux kernel does not provide by itself (mprotect past the mapping fails with ENOMEM and the runtime reports
+// out of memory). The adapter therefore rounds mmap/munmap lengths to 16 KiB and aligns large mappings.
+waza test_linux_adapter_keeps_the_darwin_16k_mapping_contract() -> unit {
+    kaku lin = compile_linux_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(lin.error == mu, "the adapter assembles (every immediate encodes)");
+    kaku mmap_at = label_word(lin.labels, "lx_mmap"); kaku munmap_at = label_word(lin.labels, "lx_munmap");
+    testing.expect(mmap_at >= 0 && munmap_at >= 0 && label_word(lin.labels, "lx_mmap_plain") > mmap_at, "mmap has a plain and an aligned path; munmap is translated");
+    // munmap: x1 = (x1 + 16383) & ~16383 before the Linux call
+    testing.expect(lin.words[munmap_at] == arm64.movz_x(10, 16383, 0).word, "movz x10, #16383");
+    testing.expect(lin.words[munmap_at + 1] == arm64.add_x(1, 1, 10).word, "add x1, x1, x10");
+    testing.expect(lin.words[munmap_at + 2] == arm64.movn_x(11, 16383, 0).word, "movn x11, #16383 (= ~16383)");
+    testing.expect(lin.words[munmap_at + 3] == arm64.and_x(1, 1, 11).word, "and x1, x1, x11");
+    testing.expect(lin.words[munmap_at + 3] == uint32(2315255808 + 11 * 65536 + 1 * 32 + 1), "and x1, x1, x11 encoding");
+    // direct translation table no longer contains munmap: its dispatch goes to lx_munmap, not straight to number 215
+    testing.expect(label_word(lin.labels, "lx_direct_next_0") >= 0, "direct translations remain");
+}
