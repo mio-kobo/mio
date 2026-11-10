@@ -784,10 +784,10 @@ waza operation_name(operation: string) -> string {
 }
 
 waza native_operation(name: string) -> string {
-    kaku prefixes: []string = ["$mma::mio/fs/runtime::", "$mma::mio/os/runtime::"];
-    kaku labels: []string = ["fs:", "os:"];
+    kaku prefixes: []string = ["$mma::mio/fs/runtime::", "$mma::mio/os/runtime::", "$mma::mio/thread/runtime::"];
+    kaku labels: []string = ["fs:", "os:", "thread:"];
     kaku which = 0;
-    aida (which < 2) {
+    aida (which < 3) {
         moshi (string.has_prefix(name, prefixes[which])) {
             kaku bytes = string.to_bytes(name);
             kaku at = string.byte_len(prefixes[which]);
@@ -805,6 +805,17 @@ waza native_operation(name: string) -> string {
 // Routine of a native operation, or "" when it is not implemented.
 waza native_routine(operation: string) -> string {
     moshi (string.has_prefix(operation, "os:")) { kaesu os_routine(string.concat("", operation_name(operation))); }
+    moshi (string.has_prefix(operation, "thread:")) {
+        kaku operation_bytes = string.to_bytes(operation);
+        kaku operation_text: []uint8 = [];
+        kaku operation_at = 7;
+        aida (operation_at < len(operation_bytes)) { array.push(operation_text, operation_bytes[operation_at]); operation_at = operation_at + 1; }
+        kaku thread_operation = string.from_utf8(operation_text);
+        moshi (thread_operation == mu) { kaesu ""; }
+        moshi (thread_operation == "start") { kaesu "rt.thread_start"; }
+        moshi (thread_operation == "join") { kaesu "rt.thread_join"; }
+        kaesu "";
+    }
     kaku name = operation_name(operation);
     moshi (name == "open") { kaesu "rt.fs_open"; }
     moshi (name == "file_status") { kaesu "rt.fs_file_status"; }

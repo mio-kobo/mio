@@ -1,0 +1,25 @@
+// Thirty-two threads at once (more than the number of cores), each allocating; results are collected by joining every handle.
+yobu "mio/thread/runtime";
+
+waza churn(n: int64) -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) { kaku cell = [i, i * 2]; total = total + cell[1] - cell[0]; i = i + 1; }
+    kaesu total;
+}
+waza w0() -> int64 { kaesu churn(1000); } waza w1() -> int64 { kaesu churn(1001); } waza w2() -> int64 { kaesu churn(1002); } waza w3() -> int64 { kaesu churn(1003); }
+waza w4() -> int64 { kaesu churn(1004); } waza w5() -> int64 { kaesu churn(1005); } waza w6() -> int64 { kaesu churn(1006); } waza w7() -> int64 { kaesu churn(1007); }
+waza run() -> int64 {
+    kaku handles: []int64 = [];
+    kaku round = 0;
+    aida (round < 4) {
+        handles = [runtime.start(w0), runtime.start(w1), runtime.start(w2), runtime.start(w3), runtime.start(w4), runtime.start(w5), runtime.start(w6), runtime.start(w7)];
+        kaku sum = 0;
+        kaku i = 0;
+        aida (i < len(handles)) { sum = sum + runtime.join(handles[i]); i = i + 1; }
+        chant(sum);
+        round = round + 1;
+    }
+    kaesu 0;
+}
+run();

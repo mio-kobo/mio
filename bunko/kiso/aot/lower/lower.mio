@@ -1606,6 +1606,7 @@ waza emit_function_epilogue(code: arm64.Assembler, id: int64) -> unit {
 waza emit_native_body(code: arm64.Assembler, patches: []macho.AddressPatch, analysis: types.TypeAnalysis,
     function: mochi.Function, op: int64) -> bool {
     moshi (nativefs.parameter_count(op) != function.parameter_count || !function.returns_value) { kaesu iie; }
+    moshi (nativefs.entry_label(op) == "") { kaesu iie; }   // operations without an arm64 routine (the OS thread natives) fail closed
     kaku roots = 0; kaku index = 0;
     aida (index < function.parameter_count) { moshi (nativefs.parameter_is_root(op, index)) { roots = roots + 1; } index = index + 1; }
     kaku shadow_bytes = (roots + 2) * 8; moshi (shadow_bytes - (shadow_bytes / 16) * 16 != 0) { shadow_bytes = shadow_bytes + 8; }
@@ -2328,7 +2329,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     kaku patches: []macho.AddressPatch = [];
     array.reserve(patches, file.global_count * 2);
     kaku native_fs = file_uses_nativefs(file);
-    kaku socket_runtime = iie; kaku si = 0; aida (si < len(file.functions)) { kaku sop = nativefs.operation(file.functions[si].name); moshi (sop >= 32 && sop <= 42) { socket_runtime = hai; } si = si + 1; }
+    kaku socket_runtime = iie; kaku si = 0; aida (si < len(file.functions)) { kaku sop = nativefs.operation(file.functions[si].name); moshi ((sop >= 32 && sop <= 40) || sop == 43 || sop == 44) { socket_runtime = hai; } si = si + 1; }
     kaku testing = uses_testing(file);
     moshi(attached){arm64.assembler_label(code,"attached_roots_enabled");}
     moshi(len(worker_bindings)>0){arm64.assembler_label(code,"worker_roots_enabled");}

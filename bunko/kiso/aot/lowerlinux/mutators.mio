@@ -1,0 +1,459 @@
+yobu "kiso/aot/elf";
+yobu "kiso/aot/x86_64";
+yobu "kiso/array";
+
+// Multi-mutator runtime for the Linux x86-64 backend (docs/concurrency.md, RA-2 draft).
+//
+// Enabled only when the program references the thread natives: the lowering then defines the label `mutators` before any code is
+// emitted, and every function below is emitted instead of (or in addition to) the single-mutator runtime. Programs that do not use
+// the thread natives compile to exactly the images they always did.
+//
+// Model: one shared non-moving heap, stop-the-world collection, cooperative safepoints (function entry and loop back-edges).
+//   * Mutator record (128 bytes, in the thread's own stack mapping; the main thread's lives in the collector state area).
+//     It is also the thread's TLS block: word 0 points to itself and the FS base is the record, so `mov r, fs:[0]` finds it.
+//       +0 self  +8 next  +16 state  +24 saved rbp  +32 saved call-site id  +40 entry closure (a GC root)
+//       +48 tid word (the kernel clears it and wakes futex waiters when the thread ends)  +56 result  +64 stack base  +72 stack size
+//   * States: 0 running, 1 parked at a safepoint, 2 blocked in thread_join (roots published), 3 collecting.
+//     A thread publishes its frame chain (rbp and the call-site id that identifies the frame's descriptor) BEFORE it leaves the
+//     running state, and re-checks the stop flag AFTER it re-enters it; the collector sets the flag BEFORE it reads any state.
+//     With xchg (sequentially consistent) on both sides, either the collector sees the thread as not running or the thread sees
+//     the stop request: a running thread is never scanned and never missed.
+//   * Heap lock: a spinlock word serialises rt.alloc (and registry changes). Runtime routines never collect, so a thread is never
+//     parked while holding it.
+//   * Collection: the first thread whose poll finds the allocation volume over the threshold (or the stop flag already set) wins
+//     the flag with lock cmpxchg, waits until no other registered mutator is running, marks the globals, every mutator's published
+//     frame chain and every mutator's entry closure, sweeps, clears the flag and wakes the parked threads (futex).
+//   * Thread exit unlinks the record under the lock; the joiner unmaps the stack after the kernel cleared the tid word.
+// Blocking OS calls other than thread_join are NOT safepoint-aware: a collection waits until such a thread returns.
+
+// gc_state() + 72 is the saved initial stack pointer and + 80 the testing failure counter: these words are free.
+koukai teisu mut_lock = 88;
+koukai teisu mut_stop = 96;
+koukai teisu mut_count = 104;
+koukai teisu mut_registry = 112;
+koukai teisu mut_main_record = 256;      // offset from gc_state(): the main thread's record
+
+koukai teisu rec_self = 0;
+koukai teisu rec_next = 8;
+koukai teisu rec_state = 16;
+koukai teisu rec_rbp = 24;
+koukai teisu rec_ret = 32;
+koukai teisu rec_entry = 40;
+koukai teisu rec_tid = 48;
+koukai teisu rec_result = 56;
+koukai teisu rec_base = 64;
+koukai teisu rec_size = 72;
+
+koukai teisu thread_stack_bytes = 1048576;
+koukai teisu thread_guard_bytes = 4096;
+koukai teisu clone_flags = 4001536;      // VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID
+
+koukai waza mutators_enabled(code: x86_64.Assembler) -> bool { kaesu x86_64.label_offset(code, "mutators") >= 0; }
+
+waza mut_state_address() -> int64 { kaesu elf.data_base + 3600; }
+
+// mov dst, fs:[0]  (the current thread's record)
+waza fs_self(code: x86_64.Assembler, dst: int64) -> unit {
+    x86_64.byte(code, 100);
+    moshi (dst >= 8) { x86_64.byte(code, 76); } sore { x86_64.byte(code, 72); }
+    x86_64.byte(code, 139);
+    x86_64.byte(code, (dst - (dst / 8) * 8) * 8 + 4);
+    x86_64.byte(code, 37); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
+}
+
+// rt.mut_lock_acquire / release: clobber rcx, rdx only.
+waza emit_lock_routines(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.mut_lock_acquire");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.label(code, "rt.mut_lock_acquire.try");
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.xchg_store(code, x86_64.rcx, x86_64.rdx);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_lock_acquire.done");
+    x86_64.byte(code, 243); x86_64.byte(code, 144);     // pause
+    x86_64.jmp(code, "rt.mut_lock_acquire.try");
+    x86_64.label(code, "rt.mut_lock_acquire.done");
+    x86_64.ret(code);
+    x86_64.label(code, "rt.mut_lock_release");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rdx);
+    x86_64.ret(code);
+}
+
+// rt.alloc (mutator mode): take the heap lock around the unchanged single-mutator allocator, which is emitted as rt.alloc.locked.
+waza emit_alloc_wrapper(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.alloc");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.label(code, "rt.alloc.acquire");
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.xchg_store(code, x86_64.rcx, x86_64.rdx);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.alloc.held");
+    x86_64.byte(code, 243); x86_64.byte(code, 144);
+    x86_64.jmp(code, "rt.alloc.acquire");
+    x86_64.label(code, "rt.alloc.held");
+    x86_64.call(code, "rt.alloc.locked");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rdx);
+    x86_64.ret(code);
+}
+
+// rt.mut_init: register the main thread (record in the collector state area) and point FS at it.
+waza emit_mut_init(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.mut_init");
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_main_record);
+    x86_64.mov_store(code, x86_64.rdi, rec_self, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rdx, mut_state_address());
+    x86_64.mov_store(code, x86_64.rdx, mut_registry, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.mov_store(code, x86_64.rdx, mut_count, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rdi, 4098);               // ARCH_SET_FS
+    x86_64.mov_eax_imm(code, 158);                       // arch_prctl
+    x86_64.syscall(code);
+    x86_64.ret(code);
+}
+
+// Park the calling thread at a safepoint. Entered by jump from rt.gc or by call from the thread entry / join paths with
+// r10 = frame pointer and r11 = call-site id of the frame to publish (0, 0 = no managed frames yet). Returns once no collection is
+// in progress and the thread is running again.
+waza emit_park(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.gc.park");
+    fs_self(code, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rax, rec_rbp, x86_64.r10);
+    x86_64.mov_store(code, x86_64.rax, rec_ret, x86_64.r11);
+    x86_64.label(code, "rt.gc.park.again");
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stop);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc.park.resume");
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);
+    x86_64.mov_ri(code, x86_64.rsi, 128);                // FUTEX_WAIT_PRIVATE
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.mov_ri(code, x86_64.r10, 0);
+    x86_64.mov_eax_imm(code, 202);
+    x86_64.syscall(code);
+    fs_self(code, x86_64.rax);
+    x86_64.jmp(code, "rt.gc.park.again");
+    x86_64.label(code, "rt.gc.park.resume");
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stop);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.gc.park.again");
+    x86_64.ret(code);
+}
+
+// rt.mgc.chain: r10 = frame pointer, r11 = call-site id. Marks every reference slot of the chain. Clobbers rax, rcx, rdx, rsi, rdi, r9, r10, r11.
+waza emit_chain_scan(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.mgc.chain");
+    x86_64.label(code, "rt.mgc.frames");
+    x86_64.test_rr(code, x86_64.r10, x86_64.r10);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.chain_done");
+    x86_64.lea(code, x86_64.rsi, x86_64.r11, 5);
+    x86_64.mov_load(code, x86_64.r9, x86_64.rsi, 0);
+    x86_64.add_ri(code, x86_64.rsi, 8);
+    x86_64.label(code, "rt.mgc.slots");
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.next_frame");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 0);
+    x86_64.add_rr(code, x86_64.rax, x86_64.r10);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rax, 0);
+    x86_64.call(code, "rt.gc_mark");
+    x86_64.add_ri(code, x86_64.rsi, 8);
+    x86_64.sub_ri(code, x86_64.r9, 1);
+    x86_64.jmp(code, "rt.mgc.slots");
+    x86_64.label(code, "rt.mgc.next_frame");
+    x86_64.mov_load(code, x86_64.r11, x86_64.r10, 8);
+    x86_64.mov_load(code, x86_64.r10, x86_64.r10, 0);
+    x86_64.jmp(code, "rt.mgc.frames");
+    x86_64.label(code, "rt.mgc.chain_done");
+    x86_64.ret(code);
+}
+
+// rt.gc (mutator mode): called from a poll site; [rsp] = call-site id, rbp = the polling frame.
+koukai waza emit_collect_mutators(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.gc");
+    x86_64.mov_load(code, x86_64.r11, x86_64.rsp, 0);
+    x86_64.mov_rr(code, x86_64.r10, x86_64.rbp);
+    x86_64.label(code, "rt.gc.retry");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_stop);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.gc.park");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 16);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_b, "rt.gc.out");
+    // become the collector
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 1);
+    x86_64.lock_cmpxchg(code, x86_64.rdi, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.gc.retry");
+    fs_self(code, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rsi, rec_rbp, x86_64.r10);
+    x86_64.mov_store(code, x86_64.rsi, rec_ret, x86_64.r11);
+    x86_64.mov_ri(code, x86_64.rdx, 3);
+    x86_64.mov_store(code, x86_64.rsi, rec_state, x86_64.rdx);
+    // wait until no other registered mutator is running
+    x86_64.label(code, "rt.gc.wait");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_registry);
+    x86_64.label(code, "rt.gc.wait_scan");
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc.stopped");
+    x86_64.cmp_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc.wait_next");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rdx, rec_state);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc.wait_yield");
+    x86_64.label(code, "rt.gc.wait_next");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdx, rec_next);
+    x86_64.jmp(code, "rt.gc.wait_scan");
+    x86_64.label(code, "rt.gc.wait_yield");
+    x86_64.mov_eax_imm(code, 24);                        // sched_yield
+    x86_64.syscall(code);
+    fs_self(code, x86_64.rsi);
+    x86_64.jmp(code, "rt.gc.wait");
+    x86_64.label(code, "rt.gc.stopped");
+    // roots 1: the Mochi globals
+    x86_64.lea_label(code, x86_64.rsi, "rt.globals_map");
+    x86_64.mov_load(code, x86_64.r9, x86_64.rsi, 0);
+    x86_64.add_ri(code, x86_64.rsi, 8);
+    x86_64.mov_ri(code, x86_64.r8, globals_base());
+    x86_64.label(code, "rt.mgc.globals");
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.threads");
+    x86_64.mov_load8(code, x86_64.rax, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.globals_skip");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.r8, 0);
+    x86_64.call(code, "rt.gc_mark");
+    x86_64.label(code, "rt.mgc.globals_skip");
+    x86_64.add_ri(code, x86_64.rsi, 1);
+    x86_64.add_ri(code, x86_64.r8, 8);
+    x86_64.sub_ri(code, x86_64.r9, 1);
+    x86_64.jmp(code, "rt.mgc.globals");
+    // roots 2: every registered mutator: its entry closure, and (for the others) the frame chain it published
+    x86_64.label(code, "rt.mgc.threads");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.r9, x86_64.rcx, mut_registry);
+    x86_64.label(code, "rt.mgc.thread_loop");
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.marked");
+    x86_64.push_r(code, x86_64.r9);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.r9, rec_entry);
+    x86_64.call(code, "rt.gc_mark");
+    x86_64.pop_r(code, x86_64.r9);
+    x86_64.mov_load(code, x86_64.r10, x86_64.r9, rec_rbp);
+    x86_64.mov_load(code, x86_64.r11, x86_64.r9, rec_ret);
+    x86_64.push_r(code, x86_64.r9);
+    x86_64.call(code, "rt.mgc.chain");
+    x86_64.pop_r(code, x86_64.r9);
+    x86_64.mov_load(code, x86_64.r9, x86_64.r9, rec_next);
+    x86_64.jmp(code, "rt.mgc.thread_loop");
+    x86_64.label(code, "rt.mgc.marked");
+    x86_64.call(code, "rt.gc_drain");
+    emit_gc_sweep(code);
+    // resume the world
+    fs_self(code, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.rsi, rec_state, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);     // stop = 0 (sequentially consistent)
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);
+    x86_64.mov_ri(code, x86_64.rsi, 129);                // FUTEX_WAKE_PRIVATE
+    x86_64.mov_ri(code, x86_64.rdx, 2147483647);
+    x86_64.mov_eax_imm(code, 202);
+    x86_64.syscall(code);
+    x86_64.label(code, "rt.gc.out");
+    x86_64.ret(code);
+}
+
+// rt.thread_start: rdi = closure (0 parameters, returns int64). Returns a handle (the new thread's record) or a negative errno.
+waza emit_thread_start(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.thread_start");
+    x86_64.push_r(code, x86_64.r12);
+    x86_64.push_r(code, x86_64.r13);
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
+    x86_64.mov_ri(code, x86_64.rdx, 3);
+    x86_64.mov_ri(code, x86_64.r10, 147490);             // MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_STACK
+    x86_64.mov_ri(code, x86_64.r8, -1);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    x86_64.mov_eax_imm(code, 9);
+    x86_64.syscall(code);
+    x86_64.mov_ri(code, x86_64.rcx, -4096);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.thread_start.return");
+    x86_64.mov_rr(code, x86_64.r13, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r13);
+    x86_64.mov_ri(code, x86_64.rsi, thread_guard_bytes);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_eax_imm(code, 10);                        // mprotect(PROT_NONE) on the lowest page: the stack guard
+    x86_64.syscall(code);
+    // the record at the top of the mapping, 16-byte aligned
+    x86_64.lea(code, x86_64.r8, x86_64.r13, thread_stack_bytes - 256);
+    x86_64.mov_ri(code, x86_64.rcx, -16);
+    x86_64.and_rr(code, x86_64.r8, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.r8, rec_self, x86_64.r8);
+    x86_64.mov_store(code, x86_64.r8, rec_entry, x86_64.r12);
+    x86_64.mov_store(code, x86_64.r8, rec_base, x86_64.r13);
+    x86_64.mov_ri(code, x86_64.rcx, thread_stack_bytes);
+    x86_64.mov_store(code, x86_64.r8, rec_size, x86_64.rcx);
+    x86_64.lea(code, x86_64.rsi, x86_64.r8, -16);
+    x86_64.mov_store(code, x86_64.rsi, 0, x86_64.r8);
+    // register under the lock (a running creator keeps any collection from starting its scan before the record is visible)
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_registry);
+    x86_64.mov_store(code, x86_64.r8, rec_next, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rcx, mut_registry, x86_64.r8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_count);
+    x86_64.add_ri(code, x86_64.rdx, 1);
+    x86_64.mov_store(code, x86_64.rcx, mut_count, x86_64.rdx);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.mov_ri(code, x86_64.rdi, clone_flags);
+    x86_64.lea(code, x86_64.rdx, x86_64.r8, rec_tid);
+    x86_64.mov_rr(code, x86_64.r10, x86_64.rdx);
+    x86_64.mov_eax_imm(code, 56);                        // clone: rsi = child stack, rdx = ptid, r10 = ctid, r8 = tls (the record)
+    x86_64.syscall(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.thread_child");
+    x86_64.jcc(code, x86_64.cc_l, "rt.thread_start.failed");
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r8);
+    x86_64.jmp(code, "rt.thread_start.return");
+    x86_64.label(code, "rt.thread_start.failed");
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r8);
+    x86_64.call(code, "rt.mut_unlink");
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r13);
+    x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
+    x86_64.mov_eax_imm(code, 11);                        // munmap
+    x86_64.syscall(code);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r12);
+    x86_64.label(code, "rt.thread_start.return");
+    x86_64.pop_r(code, x86_64.r13);
+    x86_64.pop_r(code, x86_64.r12);
+    x86_64.ret(code);
+    // the new thread: rsp = child stack with the record at [rsp]
+    x86_64.label(code, "rt.thread_child");
+    x86_64.mov_ri(code, x86_64.rbp, 0);
+    x86_64.mov_load(code, x86_64.r12, x86_64.rsp, 0);
+    x86_64.mov_ri(code, x86_64.r10, 0);
+    x86_64.mov_ri(code, x86_64.r11, 0);
+    x86_64.call(code, "rt.gc.park");                     // enters the running state, honouring a collection already in progress
+    x86_64.mov_load(code, x86_64.rax, x86_64.r12, rec_entry);
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call_memory(code, x86_64.rax, 48);
+    x86_64.add_ri(code, x86_64.rsp, 8);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.r12, rec_entry);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rcx, 32);   // closure returns a value?
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.thread_child.store");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.label(code, "rt.thread_child.store");
+    x86_64.mov_store(code, x86_64.r12, rec_result, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r12);
+    x86_64.call(code, "rt.mut_unlink");
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_eax_imm(code, 60);                        // exit this thread only; the kernel clears the tid word and wakes joiners
+    x86_64.syscall(code);
+}
+
+// rt.mut_unlink: rdi = record. Removes it from the registry and decrements the mutator count under the lock.
+waza emit_unlink(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.mut_unlink");
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rsi, mut_state_address() + mut_registry);
+    x86_64.label(code, "rt.mut_unlink.scan");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_unlink.done");
+    x86_64.cmp_rr(code, x86_64.rdx, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_unlink.found");
+    x86_64.lea(code, x86_64.rsi, x86_64.rdx, rec_next);
+    x86_64.jmp(code, "rt.mut_unlink.scan");
+    x86_64.label(code, "rt.mut_unlink.found");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdx, rec_next);
+    x86_64.mov_store(code, x86_64.rsi, 0, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_count);
+    x86_64.sub_ri(code, x86_64.rdx, 1);
+    x86_64.mov_store(code, x86_64.rcx, mut_count, x86_64.rdx);
+    x86_64.label(code, "rt.mut_unlink.done");
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.ret(code);
+}
+
+// rt.thread_join: rdi = handle. Called from the native wrapper frame, so the managed chain to publish starts at [rbp] / [rbp+8].
+waza emit_thread_join(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.thread_join");
+    x86_64.push_r(code, x86_64.r12);
+    x86_64.push_r(code, x86_64.r13);
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rdi);
+    fs_self(code, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 0);
+    x86_64.mov_store(code, x86_64.rax, rec_rbp, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 8);
+    x86_64.mov_store(code, x86_64.rax, rec_ret, x86_64.rcx);
+    x86_64.label(code, "rt.thread_join.loop");
+    fs_self(code, x86_64.rax);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 2);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_load32(code, x86_64.rax, x86_64.r12, rec_tid);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.thread_join.done");
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.lea(code, x86_64.rdi, x86_64.r12, rec_tid);
+    x86_64.mov_ri(code, x86_64.rsi, 0);                  // FUTEX_WAIT on the kernel-cleared tid word
+    x86_64.mov_ri(code, x86_64.r10, 0);
+    x86_64.mov_eax_imm(code, 202);
+    x86_64.syscall(code);
+    x86_64.jmp(code, "rt.thread_join.loop");
+    x86_64.label(code, "rt.thread_join.done");
+    fs_self(code, x86_64.rax);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stop);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.thread_join.ready");
+    x86_64.mov_load(code, x86_64.r10, x86_64.rax, rec_rbp);
+    x86_64.mov_load(code, x86_64.r11, x86_64.rax, rec_ret);
+    x86_64.call(code, "rt.gc.park");
+    x86_64.label(code, "rt.thread_join.ready");
+    x86_64.mov_load(code, x86_64.r13, x86_64.r12, rec_result);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.r12, rec_base);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.r12, rec_size);
+    x86_64.mov_eax_imm(code, 11);                        // munmap the stack (the record lives in it)
+    x86_64.syscall(code);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r13);
+    x86_64.pop_r(code, x86_64.r13);
+    x86_64.pop_r(code, x86_64.r12);
+    x86_64.ret(code);
+}
+
+koukai waza emit_mutator_support(code: x86_64.Assembler) -> unit {
+    emit_lock_routines(code);
+    emit_alloc_wrapper(code);
+    emit_mut_init(code);
+    emit_park(code);
+    emit_chain_scan(code);
+    emit_unlink(code);
+    emit_thread_start(code);
+    emit_thread_join(code);
+}

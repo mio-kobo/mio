@@ -568,6 +568,27 @@ def native_mio_test(report, cli, skips_allowed, target=""):
     return not failures
 
 
+def thread_checks(report, cli, target, work):
+    """OS threads registered with the collector exist on linux-amd64 only; every other target must reject them (never run them single-threaded)."""
+    if target == "linux-amd64":
+        code, out, err, seconds = run(report, "linux-thread-gc", [sys.executable, ROOT / "tests/threads/run.py", "--mio", str(cli)], timeout=3600)
+        executed = "execution: NOT_RUN" not in out + err
+        report.check("linux-thread-gc", "PASS" if code == 0 and executed else "FAIL", "native",
+                     "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
+                     note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
+        return
+    image = Path(work) / ("thread-program" + EXE.get(target, ""))
+    Path(work).mkdir(parents=True, exist_ok=True)
+    built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads/basic.mio"), target, image)
+    if not built:
+        return report.check("thread-natives-fail-closed", "PASS", "native", "", note="rejected at compile time: " + brief(reason, 120))
+    code, out, err, _ = run(report, "thread-natives-run", [image], cwd=work, timeout=120)
+    silently_ran = code == 0 and out.startswith("hai\n7\n")
+    report.check("thread-natives-fail-closed", "FAIL" if silently_ran else "PASS", "native",
+                 "a program that starts OS threads ran on a target without them" if silently_ran else "",
+                 note="rejected at run time (exit %s)" % code)
+
+
 def contract(report, cli, target, reference="", suite="contract"):
     """tests/runtime-abi/run.py --suite contract (RA-1 cases) or differential (former pureLowerPrograms corpus)."""
     output = report.output / ("runtime-abi" if suite == "contract" else "native-differential")
@@ -670,7 +691,9 @@ def linux(args, target="linux-amd64"):
     contract(report, cli, target, reference=str(refvm), suite="differential")
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
+        thread_checks(report, cli, target, work / "threads")
         return finish(report, cli)
+    thread_checks(report, cli, target, work / "threads")
     chain = work / "runtime-chain"
     chain.mkdir(exist_ok=True)
     code, out, err, seconds = run(report, "linux-runtime-chain", [sys.executable, ROOT / "bunko/kiso/runtime/os/linux/check_chain.py"],
@@ -766,6 +789,7 @@ def follower(args, target):
         # darwin-arm64 is the primary target: every test must run there. Elsewhere a test may skip with its own reason
         # (Mach-O images that need a macOS host); skips are reported separately and never count as passes.
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64", target=target)
+        thread_checks(report, cli, target, work / "threads")
         if target == "windows-amd64":
             windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)

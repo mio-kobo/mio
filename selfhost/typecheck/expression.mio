@@ -227,6 +227,13 @@ waza check_native_call(env: TypeEnvironment, file_id: int64, node_id: int64, pac
     moshi (package_path == "mio/testing/runtime" && name == "report") {
         moshi (len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "bool")); check_native_argument(env, file_id, arguments[1], builtin_type(env, "string")); kaesu builtin_type(env, "unit"); }
     }
+    moshi (package_path == "mio/thread/runtime") {
+        // OS threads on Linux x86-64 (docs/concurrency.md): start(entry: () -> int64) -> handle or -errno; join(handle) -> result.
+        kaku integer = builtin_type(env, "int64");
+        kaku no_parameters: []int64 = [];
+        moshi (name == "start" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], function_type(env.result, no_parameters, integer)); kaesu integer; }
+        moshi (name == "join" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], integer); kaesu integer; }
+    }
     moshi (package_path == "mio/os/runtime") {
         kaku integer = builtin_type(env, "int64");
         moshi ((name == "argc" || name == "pid" || name == "monotonic_ms" || name == "stdin_ready") && len(arguments) == 0) { kaesu integer; }

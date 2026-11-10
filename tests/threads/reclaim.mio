@@ -1,0 +1,30 @@
+// Four threads and the main thread together allocate about 19 GiB of short-lived arrays in a heap that is reserved at 8 GiB. The program
+// can only finish if collections triggered by whichever thread crosses the threshold reclaim what the other threads dropped.
+yobu "mio/thread/runtime";
+yobu "kiso/array";
+
+waza garbage(rounds: int64) -> int64 {
+    kaku kept = 0;
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku block = array.make[int64](8192, r);
+        kept = kept + block[8191] - r + 1;
+        r = r + 1;
+    }
+    kaesu kept;
+}
+waza t1() -> int64 { kaesu garbage(60000); }
+waza t2() -> int64 { kaesu garbage(60000); }
+waza t3() -> int64 { kaesu garbage(60000); }
+waza t4() -> int64 { kaesu garbage(60000); }
+
+waza run() -> int64 {
+    kaku a = runtime.start(t1);
+    kaku b = runtime.start(t2);
+    kaku c = runtime.start(t3);
+    kaku d = runtime.start(t4);
+    kaku mine = garbage(60000);
+    chant(mine + runtime.join(a) + runtime.join(b) + runtime.join(c) + runtime.join(d));
+    kaesu 0;
+}
+run();
