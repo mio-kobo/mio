@@ -1,0 +1,27 @@
+// OS threads on Linux x86-64: start, run on their own stack, return a value through join.
+yobu "mio/thread/runtime";
+
+waza seven() -> int64 { kaesu 7; }
+
+waza sum_to(limit: int64) -> int64 {
+    kaku i = 0;
+    kaku sum = 0;
+    aida (i < limit) { kaku cell = [i, i + 1]; sum = sum + cell[0] + len(cell) - 1; i = i + 1; }
+    kaesu sum;
+}
+waza first() -> int64 { kaesu sum_to(2000); }
+waza second() -> int64 { kaesu sum_to(3000); }
+
+waza run() -> int64 {
+    kaku h = runtime.start(seven);
+    chant(h > 0);
+    chant(runtime.join(h));
+    kaku a = runtime.start(first);
+    kaku b = runtime.start(second);
+    kaku mine = sum_to(1000);
+    chant(mine);
+    chant(runtime.join(a));
+    chant(runtime.join(b));
+    kaesu 0;
+}
+run();

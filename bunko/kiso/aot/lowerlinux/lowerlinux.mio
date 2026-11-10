@@ -1209,16 +1209,31 @@ koukai waza compile_darwin_amd64(file: mochi.File, gc_threshold: int64) -> Lower
     kaesu compile_target(file, gc_threshold, hai);
 }
 
+// A program that references the thread natives gets the multi-mutator runtime (mutators.mio); every other program keeps the
+// single-mutator runtime and compiles to exactly the image it always did.
+waza uses_threads(file: mochi.File) -> bool {
+    kaku index = 0;
+    aida (index < len(file.functions)) {
+        moshi (string.has_prefix(file.functions[index].name, "$mma::mio/thread/runtime::")) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
 waza compile_target(file: mochi.File, gc_threshold: int64, darwin: bool) -> LowerResult {
     moshi (gc_threshold < 4096) { kaesu failed("INVALID_GC_THRESHOLD"); }
+    kaku threads = uses_threads(file);
+    moshi (threads && darwin) { kaesu failed("UNSUPPORTED_THREADS_TARGET"); }
     kaku analysis = types.analyze_types(file);
     kaku code = x86_64.assembler();
+    moshi (threads) { x86_64.label(code, "mutators"); }
     // dyld enters at LC_MAIN with main(argc, argv, envp): rsi = argv, and argc sits just below it, exactly where the Linux
     // entry expects its stack pointer. The label darwin_abi makes every x86_64.syscall a call of darwin_syscall.
     moshi (darwin) { x86_64.label(code, "darwin_abi"); x86_64.lea(code, x86_64.rsp, x86_64.rsi, -8); }
     x86_64.mov_ri(code, x86_64.rcx, initial_sp_cell());
     x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rsp);
     x86_64.call(code, "rt.init");
+    moshi (threads) { x86_64.call(code, "rt.mut_init"); }
     x86_64.mov_ri(code, x86_64.rcx, gc_state());
     x86_64.mov_ri(code, x86_64.rax, gc_threshold);
     x86_64.mov_store(code, x86_64.rcx, 16, x86_64.rax);

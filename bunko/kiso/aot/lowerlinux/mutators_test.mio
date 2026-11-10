@@ -1,0 +1,36 @@
+yobu "kiso/encoding/mochi";
+yobu "kiso/testing";
+
+waza plain_program() -> mochi.File { kaesu mochi.File { version: 14, constants: [], global_count: 0, instructions: [], functions: [] }; }
+
+// A program that only declares the thread natives (never calls them): enough to select the multi-mutator runtime.
+waza threaded_program() -> mochi.File {
+    kaku name = "$mma::mio/thread/runtime::start::a3d1240461811d5cb81abc2a8540289381e974014b9673e90fde86ab68e0b5a0";
+    kaku start = mochi.Function { id: 0, name: name, name_bytes: [], parameter_count: 1, local_count: 1, returns_value: hai, captures: [], instructions: [] };
+    kaesu mochi.File { version: 14, constants: [], global_count: 0, instructions: [], functions: [start] };
+}
+
+waza test_programs_without_thread_natives_keep_the_single_mutator_runtime() -> unit {
+    kaku first = compile(plain_program());
+    kaku second = compile(plain_program());
+    testing.expect(first.error == "" && second.error == "", "plain programs lower");
+    testing.expect(len(first.bytes) == len(second.bytes), "plain lowering is deterministic");
+    kaku threaded = compile(threaded_program());
+    testing.expect(threaded.error == "", "a program that references the thread natives lowers on Linux x86-64");
+    testing.expect(len(threaded.bytes) > len(first.bytes), "the multi-mutator runtime (registry, safepoint park, thread start/join) is added only then");
+}
+
+waza test_threads_fail_closed_on_macos_x86_64() -> unit {
+    kaku macos = compile_darwin_amd64(threaded_program(), 33554432);
+    testing.expect(macos.error == "UNSUPPORTED_THREADS_TARGET", "the Darwin lowering rejects OS threads instead of running them single-threaded");
+    testing.expect(len(macos.bytes) == 0, "no image is produced");
+}
+
+waza test_mutator_record_layout_is_consistent() -> unit {
+    testing.expect(rec_self == 0 && rec_next == 8 && rec_state == 16 && rec_rbp == 24 && rec_ret == 32 && rec_entry == 40, "record words");
+    testing.expect(rec_tid == 48 && rec_result == 56 && rec_base == 64 && rec_size == 72, "record words (join and stack)");
+    testing.expect(mut_lock != 72 && mut_lock != 80 && mut_stop != 72 && mut_stop != 80 && mut_count != 72 && mut_count != 80 && mut_registry != 72 && mut_registry != 80,
+        "gc_state()+72 is the saved initial stack pointer and +80 the testing counter: the mutator words must not alias them");
+    testing.expect(mut_main_record + 128 <= 4096 - 3600, "the main record fits between the collector state and the free-list bins");
+    testing.expect(clone_flags == 4001536, "CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID");
+}

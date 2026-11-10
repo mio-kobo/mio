@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Real compiled multi-threaded Mio programs on Linux x86-64 (OS threads registered with the collector).
+
+Each program in this directory is built with the native CLI ($MIO_CI_MIO or --mio) for linux-amd64, normally and with --gc-stress, and
+executed repeatedly. Every run must exit 0 and print exactly the expected output; a hang (timeout), a crash or one differing byte fails.
+Repetition is deliberate: a race in registration, the stop-the-world handshake or the heap lock shows up as an occasional wrong total,
+a deadlock or a crash, not as a deterministic failure. On any other host the result is NOT_RUN (never PASS).
+
+Programs (expected output):
+  basic        start / join / result through a handle
+  gc_stress    5 mutators building linked structures; threaded total == sequential total; main blocked in join during collections
+  captures     entry closures and the data they capture survive collections after the creator dropped every other reference
+  nested       threads starting and joining threads, three levels deep
+  many         32 thread lifetimes (8 at a time x 4 rounds), more than the cores
+  reclaim      ~19 GiB of garbage through an 8 GiB heap from 5 threads: only finishes if concurrent collections reclaim memory
+"""
+import argparse
+import os
+from pathlib import Path
+import platform
+import subprocess
+import sys
+import tempfile
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+PROGRAMS = {
+    "basic": b"hai\n7\n500500\n2001000\n4501500\n",
+    "gc_stress": b"hai\n84768000\n",
+    "captures": b"80000\n4950\n31950\n",
+    "nested": b"776050\nhai\n",
+    "many": b"4024056\n" * 4,
+    "reclaim": b"300000\n",
+}
+STRESS_SKIPPED = {"reclaim"}   # stress collects on every allocation: 19 GiB of garbage would take far too long
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--mio", default=os.environ.get("MIO_CI_MIO", "mio"))
+    parser.add_argument("--runs", type=int, default=25)
+    parser.add_argument("--bunko-root", default=str(ROOT / "bunko"))
+    args = parser.parse_args()
+    if not (platform.system() == "Linux" and platform.machine() in ("x86_64", "amd64")):
+        print("execution: NOT_RUN (host is %s %s, not Linux x86_64)" % (platform.system(), platform.machine()))
+        return 0
+    failures = []
+    with tempfile.TemporaryDirectory() as work:
+        for name, expected in PROGRAMS.items():
+            for mode in ("", "--gc-stress"):
+                if mode and name in STRESS_SKIPPED:
+                    continue
+                image = Path(work) / (name + (".stress" if mode else ""))
+                command = [args.mio, "build", str(HERE / (name + ".mio")), "--target=linux-amd64", "--bunko-root", args.bunko_root, "-o", str(image)]
+                if mode:
+                    command.insert(3, mode)
+                built = subprocess.run(command, capture_output=True, text=True, timeout=900)
+                if built.returncode != 0 or not image.is_file():
+                    failures.append("%s%s: build failed: %s" % (name, " " + mode if mode else "", (built.stderr or built.stdout)[-400:]))
+                    continue
+                runs = 3 if name == "reclaim" else args.runs
+                for index in range(runs):
+                    try:
+                        result = subprocess.run([str(image)], capture_output=True, timeout=120)
+                    except subprocess.TimeoutExpired:
+                        failures.append("%s%s run %d: timeout (hang)" % (name, " " + mode if mode else "", index))
+                        break
+                    if (result.returncode, result.stdout, result.stderr) != (0, expected, b""):
+                        failures.append("%s%s run %d: exit=%s stdout=%r stderr=%r want %r" % (
+                            name, " " + mode if mode else "", index, result.returncode, result.stdout[:200], result.stderr[:200], expected))
+                        break
+                else:
+                    print("%s%s: PASS (%d runs)" % (name, " " + mode if mode else "", runs))
+    if failures:
+        for line in failures:
+            print("FAIL " + line, file=sys.stderr)
+        return 1
+    print("execution: PASS (every program, normal and --gc-stress, repeated)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

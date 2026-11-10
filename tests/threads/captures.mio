@@ -1,0 +1,41 @@
+// The entry closure and everything it captured must stay alive for as long as the thread runs, even after the creator dropped
+// every other reference and the collector ran many times.
+yobu "mio/thread/runtime";
+
+waza churn(rounds: int64) -> int64 {
+    kaku total = 0;
+    kaku r = 0;
+    aida (r < rounds) { kaku junk = [r, r, r, r]; total = total + len(junk); r = r + 1; }
+    kaesu total;
+}
+
+waza make_entry(base: int64) -> () -> int64 {
+    kaku data = [base, base + 1, base + 2, base + 3];
+    kaku hits = 0;
+    kaesu waza () -> int64 {
+        kaku again = 0;
+        kaku sum = 0;
+        aida (again < 300) {
+            hits = hits + 1;
+            sum = sum + data[again - (again / 4) * 4] + len(data);
+            again = again + 1;
+            kaku pressure = [again, hits];
+            sum = sum + len(pressure) - 2;
+        }
+        kaesu sum + hits;
+    };
+}
+
+waza run() -> int64 {
+    kaku h1 = runtime.start(make_entry(10));
+    kaku h2 = runtime.start(make_entry(100));
+    // the creator drops its references and allocates heavily while both threads are still working on the captured data
+    kaku noise = churn(20000);
+    kaku r1 = runtime.join(h1);
+    kaku r2 = runtime.join(h2);
+    chant(noise);
+    chant(r1);
+    chant(r2);
+    kaesu 0;
+}
+run();

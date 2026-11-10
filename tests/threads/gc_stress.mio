@@ -1,0 +1,40 @@
+// Concurrent allocation under (stress) collection: five mutators build and walk linked structures; the threaded total must equal
+// the sequential total, and the main thread blocks in join (a safepoint-aware wait) while the others force collections.
+yobu "mio/thread/runtime";
+
+kata Node { value: int64; next: []Node; }
+
+waza churn(seed: int64, rounds: int64) -> int64 {
+    kaku total = 0;
+    kaku round = 0;
+    aida (round < rounds) {
+        kaku head: []Node = [];
+        kaku i = 0;
+        aida (i < 40) {
+            kaku node = Node { value: seed + round + i, next: head };
+            head = [node];
+            i = i + 1;
+        }
+        kaku cursor = head;
+        aida (len(cursor) > 0) { total = total + cursor[0].value; cursor = cursor[0].next; }
+        round = round + 1;
+    }
+    kaesu total;
+}
+waza worker_a() -> int64 { kaesu churn(1, 200); }
+waza worker_b() -> int64 { kaesu churn(1000, 200); }
+waza worker_c() -> int64 { kaesu churn(2000, 200); }
+waza worker_d() -> int64 { kaesu churn(3000, 200); }
+
+waza run() -> int64 {
+    kaku a = runtime.start(worker_a);
+    kaku b = runtime.start(worker_b);
+    kaku c = runtime.start(worker_c);
+    kaku d = runtime.start(worker_d);
+    kaku mine = churn(4000, 200);
+    kaesu mine + runtime.join(a) + runtime.join(b) + runtime.join(c) + runtime.join(d);
+}
+kaku threaded = run();
+kaku sequential = churn(1, 200) + churn(1000, 200) + churn(2000, 200) + churn(3000, 200) + churn(4000, 200);
+chant(threaded == sequential);
+chant(threaded);
