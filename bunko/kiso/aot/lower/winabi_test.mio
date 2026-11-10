@@ -35,9 +35,9 @@ waza test_windows_adapter_calls_win32_through_iat_patches() -> unit {
         }
         at = at + 1;
     }
-    testing.expect(len(slots) == 33, "every one of the 33 imports is called by the adapter");
+    testing.expect(len(slots) == 42, "every one of the 42 imports is called by the adapter");
     kaku imports = windows_imports();
-    testing.expect(len(imports) == 66 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[64] == "shell32.dll" && imports[65] == "CommandLineToArgvW", "import list: (library, symbol) pairs in IAT order, kernel32 first");
+    testing.expect(len(imports) == 84 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[64] == "ws2_32.dll" && imports[65] == "WSAStartup" && imports[82] == "shell32.dll" && imports[83] == "CommandLineToArgvW", "import list: (library, symbol) pairs grouped by library in IAT order");
 }
 
 waza array_push_slot(slots: []int64, value: int64) -> unit { array.push(slots, value); }
@@ -124,4 +124,18 @@ waza test_windows_resume_restores_callee_saved_registers_and_frame_pointer() -> 
     kaku fork = win_label(win.labels, "wx_fork"); kaku saved = iie; at = fork;
     aida (at < fork + 120) { moshi (win.words[at] == arm64.str_x(29, 11, 200).word) { saved = hai; } at = at + 1; }
     testing.expect(saved, "wx_fork stores x29 in the context");
+}
+
+// Sockets: Darwin socket/bind/connect/listen/accept/setsockopt become Winsock calls, close() of a socket uses closesocket,
+// and the WSAE* codes (10013..10065, above the 4095 compare-immediate limit) are mapped through a register compare.
+waza test_windows_adapter_has_winsock_blocks_and_wsa_error_mapping() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(win.error == mu, "the adapter assembles (no out-of-range compare immediates)");
+    kaku names = ["wx_socket", "wx_bind", "wx_connect", "wx_listen", "wx_accept", "wx_setsockopt", "wx_close_socket", "wx_net_failed"];
+    kaku at = 0; kaku missing = 0;
+    aida (at < len(names)) { moshi (win_label(win.labels, names[at]) < 0) { missing = missing + 1; } at = at + 1; }
+    testing.expect(missing == 0, "every socket block exists");
+    kaku imports = windows_imports(); kaku seen = 0; at = 0;
+    aida (at < len(imports)) { moshi (imports[at] == "ws2_32.dll") { seen = seen + 1; } at = at + 2; }
+    testing.expect(seen == 9, "nine ws2_32 imports, grouped after kernel32");
 }

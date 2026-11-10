@@ -26,6 +26,9 @@ koukai waza windows_imports() -> []string {
         "GetExitCodeProcess", "TerminateProcess", "SetHandleInformation", "GetStartupInfoW", "GetFileType", "PeekNamedPipe", "Sleep"];
     kaku pairs: []string = []; kaku at = 0;
     aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
+    kaku sockets = ["WSAStartup", "WSASocketW", "bind", "connect", "listen", "accept", "setsockopt", "closesocket", "WSAGetLastError"];
+    at = 0;
+    aida (at < len(sockets)) { array.push(pairs, "ws2_32.dll"); array.push(pairs, sockets[at]); at = at + 1; }
     array.push(pairs, "shell32.dll"); array.push(pairs, "CommandLineToArgvW");
     kaesu pairs;
 }
@@ -34,7 +37,7 @@ koukai waza windows_imports() -> []string {
 // at word 0 (entries 0..2 are the standard handles); per-descriptor "directory enumeration started" flags at word 64.
 // Process emulation state (see the fork/execve blocks): word 128 mode (1 while the emulated child runs), 129 timeout seconds,
 // 130 last child exit code, 131 child pid, 132 saved sp, 133 saved return address, 134 saved caller lr, 136..149 saved x2-x15,
-// 150 saved x17, 151..160 saved x19-x28, 161 saved x29, 192..255 snapshot of the descriptor table taken at fork.
+// 150 saved x17, 151..160 saved x19-x28, 161 saved x29, 162 Winsock started, 192..255 snapshot of the descriptor table taken at fork.
 koukai waza windows_adapter_words() -> int64 { kaesu 256; }
 
 waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
@@ -106,11 +109,13 @@ waza wx_free(c: arm64.Assembler, size: int64) -> unit {
 // Win32 error code (x0) -> Darwin errno (x0). Leaf routine, clobbers x9-x10.
 waza wx_map_error(c: arm64.Assembler) -> unit {
     wx_label(c, "wx_map_error");
-    kaku pairs = [2, 2, 3, 2, 5, 13, 6, 9, 32, 13, 80, 17, 183, 17, 267, 20, 145, 66, 87, 22, 123, 63, 161, 63, 206, 63];
+    kaku pairs = [2, 2, 3, 2, 5, 13, 6, 9, 32, 13, 80, 17, 183, 17, 267, 20, 145, 66, 87, 22, 123, 63, 161, 63, 206, 63,
+        10013, 13, 10022, 22, 10035, 35, 10036, 36, 10038, 38, 10040, 40, 10047, 47, 10048, 48, 10049, 49, 10051, 51, 10053, 53, 10054, 54, 10056, 56,
+        10057, 57, 10060, 60, 10061, 61, 10065, 65, 64, 54];
     kaku at = 0;
     aida (at < len(pairs)) {
         kaku next = wx_name("wx_map_error_next_", at);
-        wx_cmpi(c, 0, pairs[at]); wx_bcc(c, 1, next); wx_li(c, 0, pairs[at + 1]); wx(c, arm64.ret());
+        wx_li(c, 9, pairs[at]); wx(c, arm64.cmp_x(0, 9)); wx_bcc(c, 1, next); wx_li(c, 0, pairs[at + 1]); wx(c, arm64.ret());
         wx_label(c, next);
         at = at + 2;
     }
@@ -168,10 +173,10 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_save(c, 2, 3, 0); wx_save(c, 4, 5, 16); wx_save(c, 6, 7, 32); wx_save(c, 8, 9, 48);
     wx_save(c, 10, 11, 64); wx_save(c, 12, 13, 80); wx_save(c, 14, 15, 96); wx_save(c, 17, 30, 112);
     wx(c, arm64.str_x(1, 31, 128));
-    kaku calls = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 59, 73, 74, 83, 90, 92, 136, 137, 194, 195, 197, 202, 230, 274, 336, 338, 344];
-    kaku names = ["wx_exit", "wx_fork", "wx_read", "wx_write", "wx_open", "wx_close", "wx_wait4", "wx_unlink", "wx_chmod", "wx_getpid", "wx_execve", "wx_munmap",
-        "wx_mprotect", "wx_setitimer", "wx_dup2", "wx_fcntl", "wx_mkdir", "wx_rmdir", "wx_getrlimit", "wx_setrlimit", "wx_mmap", "wx_sysctl", "wx_poll",
-        "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
+    kaku calls = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 30, 59, 73, 74, 83, 90, 92, 97, 98, 104, 105, 106, 136, 137, 194, 195, 197, 202, 230, 274, 336, 338, 344];
+    kaku names = ["wx_exit", "wx_fork", "wx_read", "wx_write", "wx_open", "wx_close", "wx_wait4", "wx_unlink", "wx_chmod", "wx_getpid", "wx_accept", "wx_execve", "wx_munmap",
+        "wx_mprotect", "wx_setitimer", "wx_dup2", "wx_fcntl", "wx_socket", "wx_connect", "wx_bind", "wx_setsockopt", "wx_listen", "wx_mkdir", "wx_rmdir", "wx_getrlimit",
+        "wx_setrlimit", "wx_mmap", "wx_sysctl", "wx_poll", "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
     kaku at = 0;
     aida (at < len(calls)) {
         kaku next = wx_name("wx_dispatch_next_", at);
@@ -234,7 +239,10 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_close_scan");
     wx_label(c, "wx_close_shared"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_close_last");
-    wx(c, arm64.ldr_x(0, 31, 152)); wx_call(c, patches, "CloseHandle"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_data(c, patches, base, 10, 64); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.ldr_x(12, 10, 0));
+    wx(c, arm64.str_x(31, 10, 0)); wx(c, arm64.ldr_x(0, 31, 152)); wx_cmpi(c, 12, 2); wx_bcc(c, 0, "wx_close_socket");
+    wx_call(c, patches, "CloseHandle"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_close_socket"); wx_call(c, patches, "closesocket"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ---- open(path, flags, mode): "/dev/stdin|stdout|stderr" are descriptors 0..2, "/dev/null" is NUL; files via CreateFileW
     wx_label(c, "wx_open");
@@ -599,6 +607,83 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_poll_timeout"); wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.strh_w(31, 9, 6)); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_poll_ready"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 1); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
     wx_label(c, "wx_poll_invalid"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 32); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+
+    // ================= sockets (Winsock) =================
+    // A socket is a SOCKET handle kept in the descriptor table (flag word = 2), so read/write go through ReadFile/WriteFile
+    // and close through closesocket. Darwin and Windows agree on SOL_SOCKET, SO_REUSEADDR and the AF/SOCK/IPPROTO values.
+    wx_label(c, "wx_socket");
+    wx_alloc(c, 2304); wx_str(c, 0, 2048); wx_str(c, 1, 2056); wx_str(c, 2, 2064);
+    wx_get(c, patches, base, 9, 162); wx_cbnz(c, 9, "wx_socket_started");
+    wx_li(c, 0, 514); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx_call(c, patches, "WSAStartup"); wx_bool(c); wx_cbnz(c, 0, "wx_socket_wsa_failed");
+    wx_li(c, 9, 1); wx_put(c, patches, base, 9, 162);
+    wx_label(c, "wx_socket_started");
+    wx_ldr(c, 0, 2048); wx_ldr(c, 1, 2056); wx_ldr(c, 2, 2064); wx_li(c, 3, 0); wx_li(c, 4, 0); wx_li(c, 5, 0);
+    wx_call(c, patches, "WSASocketW"); wx(c, arm64.cmn_imm_x(0, 1, iie)); wx_bcc(c, 0, "wx_socket_failed");
+    wx_str(c, 0, 2072);
+    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 3);
+    wx_label(c, "wx_socket_scan");
+    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_socket_full");
+    wx(c, arm64.ldr_x_register_scaled(12, 10, 11)); wx_cbz(c, 12, "wx_socket_found");
+    wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_socket_scan");
+    wx_label(c, "wx_socket_found");
+    wx_ldr(c, 0, 2072); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(0, 12, 0));
+    wx(c, arm64.str_x(11, 31, 2080));
+    wx_data(c, patches, base, 10, 64); wx_ldr(c, 11, 2080); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx_li(c, 13, 2); wx(c, arm64.str_x(13, 12, 0));
+    wx_ldr(c, 0, 2080); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx_label(c, "wx_socket_full"); wx_ldr(c, 0, 2072); wx_call(c, patches, "closesocket"); wx_free(c, 2304); wx_li(c, 0, 24); wx_b(c, "wx_error");
+    wx_label(c, "wx_socket_wsa_failed"); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
+    wx_label(c, "wx_socket_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
+
+    // bind / connect (fd, sockaddr_in, length): Darwin's sin_len + 8-bit family becomes Windows' 16-bit family
+    wx_label(c, "wx_bind"); wx_li(c, 9, 0); wx_b(c, "wx_sockaddr");
+    wx_label(c, "wx_connect"); wx_li(c, 9, 1);
+    wx_label(c, "wx_sockaddr");
+    wx_alloc(c, 2304); wx_str(c, 9, 2048);
+    wx(c, arm64.ldp_x(10, 11, 1, 0)); wx(c, arm64.stp_x(10, 11, 31, 16));
+    wx_li(c, 10, 2); wx(c, arm64.strb_w(10, 31, 16)); wx(c, arm64.strb_w(31, 31, 17));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_sockaddr_badfd");
+    wx(c, arm64.add_imm_x(1, 31, 16, iie)); wx_li(c, 2, 16); wx_ldr(c, 9, 2048);
+    wx_cbz(c, 9, "wx_sockaddr_bind"); wx_call(c, patches, "connect"); wx_b(c, "wx_sockaddr_result");
+    wx_label(c, "wx_sockaddr_bind"); wx_call(c, patches, "bind");
+    wx_label(c, "wx_sockaddr_result");
+    wx_bool(c); wx_cbnz(c, 0, "wx_sockaddr_failed");
+    wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_sockaddr_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
+    wx_label(c, "wx_sockaddr_badfd"); wx_free(c, 2304); wx_b(c, "wx_badfd");
+
+    // listen(fd, backlog)
+    wx_label(c, "wx_listen");
+    wx(c, arm64.str_x(1, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx_call(c, patches, "listen"); wx_bool(c); wx_cbnz(c, 0, "wx_net_failed");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_net_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_b(c, "wx_error");
+
+    // accept(fd, NULL, NULL): the new SOCKET gets a descriptor of its own
+    wx_label(c, "wx_accept");
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx_li(c, 1, 0); wx_li(c, 2, 0); wx_call(c, patches, "accept"); wx(c, arm64.cmn_imm_x(0, 1, iie)); wx_bcc(c, 0, "wx_net_failed");
+    wx(c, arm64.str_x(0, 31, 144));
+    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 3);
+    wx_label(c, "wx_accept_scan");
+    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_accept_full");
+    wx(c, arm64.ldr_x_register_scaled(12, 10, 11)); wx_cbz(c, 12, "wx_accept_found");
+    wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_accept_scan");
+    wx_label(c, "wx_accept_found");
+    wx(c, arm64.ldr_x(0, 31, 144)); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(0, 12, 0));
+    wx(c, arm64.str_x(11, 31, 152));
+    wx_data(c, patches, base, 10, 64); wx(c, arm64.ldr_x(11, 31, 152)); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx_li(c, 13, 2); wx(c, arm64.str_x(13, 12, 0));
+    wx(c, arm64.ldr_x(0, 31, 152)); wx_b(c, "wx_ok");
+    wx_label(c, "wx_accept_full"); wx(c, arm64.ldr_x(0, 31, 144)); wx_call(c, patches, "closesocket"); wx_li(c, 0, 24); wx_b(c, "wx_error");
+
+    // setsockopt(fd, level, name, value, length): SO_NOSIGPIPE (0x1022) has no Windows counterpart and is ignored
+    wx_label(c, "wx_setsockopt");
+    wx_li(c, 9, 4130); wx(c, arm64.cmp_x(2, 9)); wx_bcc(c, 1, "wx_setsockopt_real"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_setsockopt_real");
+    wx(c, arm64.stp_x(1, 2, 31, 144)); wx(c, arm64.stp_x(3, 4, 31, 160));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldp_x(1, 2, 31, 144)); wx(c, arm64.ldp_x(3, 4, 31, 160));
+    wx_call(c, patches, "setsockopt"); wx_bool(c); wx_cbnz(c, 0, "wx_net_failed");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ---- memory. Darwin pages are 16 KiB: lengths are rounded up to 16 KiB (VirtualAlloc returns 64 KiB-aligned regions).
     // mmap -> VirtualAlloc(NULL, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
