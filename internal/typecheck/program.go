@@ -101,6 +101,15 @@ func (c *Checker) CheckProgramIncremental(program *ast.Program, keys map[*ast.Fu
 		}
 	}
 
+	// yuzuru 所有权转移的流敏感验证（没有 yuzuru 的程序不受任何影响）
+	if errs := c.checkOwnership(program); len(errs) > 0 {
+		if c.lenient {
+			c.errors = append(c.errors, errs...)
+		} else {
+			return stats, errs[0]
+		}
+	}
+
 	return stats, nil
 }
 

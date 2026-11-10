@@ -88,6 +88,8 @@ func walkMathExpression(expression ast.Expression, visit func(string)) {
 		walkMathExpression(node.Expr, visit)
 	case *ast.PrefixExpression:
 		walkMathExpression(node.Right, visit)
+	case *ast.TransferExpression:
+		walkMathExpression(node.Operand, visit)
 	case *ast.CallExpression:
 		walkMathExpression(node.Function, visit)
 		for _, argument := range node.Arguments {

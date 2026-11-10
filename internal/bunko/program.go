@@ -395,7 +395,7 @@ func parseSources(sources []Source) (*ast.Program, []string, error) {
 	combined := &ast.Program{}
 	files := make([]string, 0)
 	for _, source := range sources {
-		lex, err := lexer.NewChecked(string(source.Content), token.V05)
+		lex, err := lexer.NewChecked(string(source.Content), token.CurrentVersion)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -786,6 +786,15 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 		n.Left = left
 	case *ast.GroupedExpression:
 		return r.expression(&n.Expr, scope)
+	case *ast.TransferExpression:
+		operand := ast.Expression(n.Operand)
+		if err := r.expression(&operand, scope); err != nil {
+			return err
+		}
+		if renamed, ok := operand.(*ast.Identifier); ok {
+			n.Operand = renamed
+		}
+		return nil
 	case *ast.PrefixExpression:
 		return r.expression(&n.Right, scope)
 	case *ast.InfixExpression:

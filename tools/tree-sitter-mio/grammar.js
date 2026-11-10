@@ -46,6 +46,11 @@ module.exports = grammar({
 
   word: ($) => $.identifier,
 
+  // yuzuru is fully reserved (decision D-3): it is never accepted where an identifier is expected, in any parse state.
+  reserved: {
+    global: () => ['yuzuru'],
+  },
+
   supertypes: ($) => [$._statement, $._expression, $._type],
 
   conflicts: ($) => [
@@ -259,6 +264,7 @@ module.exports = grammar({
       $.function_literal,
       $.parenthesized_expression,
       $.unary_expression,
+      $.transfer_expression,
       $.binary_expression,
       $.call_expression,
       $.index_expression,
@@ -272,6 +278,10 @@ module.exports = grammar({
       field('operator', choice('-', '!')),
       field('operand', $._expression),
     )),
+
+    // `yuzuru name`: explicit ownership transfer. The operand is exactly one variable name (decision D-1); yuzuru is a
+    // fully reserved keyword (D-3), so it can never be an identifier.
+    transfer_expression: ($) => seq('yuzuru', field('operand', $.identifier)),
 
     binary_expression: ($) => choice(
       ...[

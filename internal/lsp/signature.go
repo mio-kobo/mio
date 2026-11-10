@@ -151,7 +151,7 @@ func incompleteCallContext(text string, offset int) (string, int, int, bool) {
 	if offset < 0 || offset > len(text) {
 		return "", 0, 0, false
 	}
-	lex := lexer.New(text, token.V05)
+	lex := lexer.New(text, token.CurrentVersion)
 	tokens := make([]token.Token, 0, 64)
 	for {
 		current := lex.NextToken()

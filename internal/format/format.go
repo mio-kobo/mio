@@ -59,7 +59,7 @@ func tokenize(text string) ([]piece, error) {
 	if !utf8.ValidString(text) {
 		return nil, errors.New("source is not valid UTF-8")
 	}
-	lex, err := lexer.NewChecked(text, token.V05)
+	lex, err := lexer.NewChecked(text, token.CurrentVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func formatOnce(src []byte) ([]byte, error) {
 		return nil, errors.New("bare carriage return in source")
 	}
 	// The source must be a valid program; formatting never "fixes" errors.
-	if _, err := parser.New(lexer.New(text, token.V05)).ParseProgram(); err != nil {
+	if _, err := parser.New(lexer.New(text, token.CurrentVersion)).ParseProgram(); err != nil {
 		return nil, fmt.Errorf("source does not parse: %w", err)
 	}
 	pieces, err := tokenize(text)

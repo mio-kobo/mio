@@ -1,9 +1,21 @@
 # Mio 2.2 native concurrency and zero-copy ownership transfer — Phase 0 specification
 
-Status: **design proposal (Phase 0)**. Nothing in this document is implemented yet; "exists" below always means a
+Status: **design proposal (Phase 0)**; D-1 and D-3 were decided by the project owner (see the box below). Nothing in this document is implemented yet; "exists" below always means a
 statement about the Mio-2.2.0 tree at the time of writing (commit `4f347fd`). Language-design points that are not decided by
 the project owner are marked **DECISION NEEDED** with a recommendation and alternatives; work that does not depend on them
 proceeds.
+
+> **Decisions recorded (project owner):**
+> * **D-1 = Option A, prefix expression.** `yuzuru expr` is an explicit prefix ownership-transfer operator (`thread.send(ch, yuzuru graph);`,
+>   `kaku mine = yuzuru graph;`). For the initial implementation: the operand must be an identifiable, statically tracked ownership variable (a local
+>   variable or parameter, not an element path, global or call result); unsafe aliases, live borrows and escaping references are rejected; use after
+>   transfer is rejected; there are **no implicit moves** through arguments or returns (`b = a`, `f(a)`, `kaesu a` are unchanged); a failed transfer
+>   preserves ownership; fallible send operations are explicit ownership-state transitions with defined success and failure paths. **No `own x: T`
+>   parameter annotation in this milestone**; function parameter semantics stay compatible and ownership effects come from the compiler's semantic
+>   analysis. Any further annotation is proposed separately.
+> * **D-3 = Option A, fully reserved keyword.** `yuzuru` is no longer an ordinary identifier anywhere (variables, functions, fields, parameters, imports);
+>   there is no contextual-keyword behaviour. Lexer, parser, AST, semantic analysis, diagnostics, formatter/LSP keyword lists, docs and tests are updated;
+>   the Tree-sitter grammar and highlighting live in ecosystem repositories and are listed as required follow-up in the PR (they are not edited from this tree).
 
 Fixed by the project owner (not reopened here): ordinary assignment, initialisation, argument passing and `kaesu` keep their
 current semantics; `yuzuru` is the only ownership transfer and there is no implicit move; arbitrary object graphs are
@@ -287,9 +299,9 @@ RA-2 is **additive to RA-1** and is gated per target by `target.TargetInfo`:
 
 | id | question | recommendation | alternatives |
 |---|---|---|---|
-| D-1 | exact `yuzuru` grammar | prefix unary on a place (§4) | statement form; parameter modes |
+| D-1 | exact `yuzuru` grammar | **DECIDED: prefix expression, operand is a tracked variable** | statement form; parameter modes (not this milestone) |
 | D-2 | library names/package | `kiso/thread` with `start/join/Channel/send/recv/close/cancel` | split `kiso/channel`; `go`-style statement |
-| D-3 | keyword reservation | reserve `yuzuru` in the next language version table (V06) and reject it as an identifier; repo scan found no existing use | contextual keyword |
+| D-3 | keyword reservation | **DECIDED: fully reserved keyword** (new language version table V06 is the current one); repo scan found no existing use | contextual keyword (rejected) |
 | D-4 | failure semantics | ownership returns inside the error value (§2.2) | restore variable on failure edge |
 | D-5 | globals in threads | forbid mutable globals reachable from thread entries | allow atomics/mutex-protected globals later |
 | D-6 | isolation proof | static (§3) only; optional debug audit pass under `--gc-stress` that recomputes reachability and aborts on violation | runtime check always on (O(heap) per transfer) |

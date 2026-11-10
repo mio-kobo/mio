@@ -82,7 +82,7 @@ func Run(path, bunkoRoot string, registry *mma.ModuleRegistry) ([]Finding, error
 	}
 	// Syntactic rules inspect the user's own tokens, so they use a fresh parse
 	// that is not affected by constant folding or package rewriting.
-	lex, err := lexer.NewChecked(string(text), token.V05)
+	lex, err := lexer.NewChecked(string(text), token.CurrentVersion)
 	if err != nil {
 		return nil, err
 	}

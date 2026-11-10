@@ -285,6 +285,9 @@ func (r *Resolver) resolveExpression(expr ast.Expression) error {
 		return r.resolveExpression(n.Right)
 
 	// 一元表达式
+	case *ast.TransferExpression:
+		return r.resolveExpression(n.Operand)
+
 	case *ast.PrefixExpression:
 		return r.resolveExpression(n.Right)
 

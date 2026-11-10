@@ -52,10 +52,10 @@ func validRenameIdentifier(name string) bool {
 	if name == "" {
 		return false
 	}
-	if _, err := lexer.NewChecked(name, token.V05); err != nil {
+	if _, err := lexer.NewChecked(name, token.CurrentVersion); err != nil {
 		return false
 	}
-	lex := lexer.New(name, token.V05)
+	lex := lexer.New(name, token.CurrentVersion)
 	first := lex.NextToken()
 	if first.Type != token.Ident || first.Literal != name {
 		return false

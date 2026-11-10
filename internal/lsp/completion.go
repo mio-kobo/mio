@@ -476,7 +476,7 @@ func splitTypeList(input string) []string {
 
 // keywordCompletions 返回当前语言版本的全部关键字。
 func keywordCompletions() []CompletionItem {
-	keywords := token.Keywords(token.V05)
+	keywords := token.Keywords(token.CurrentVersion)
 	items := make([]CompletionItem, 0, len(keywords))
 	for _, keyword := range keywords {
 		items = append(items, completionItem{

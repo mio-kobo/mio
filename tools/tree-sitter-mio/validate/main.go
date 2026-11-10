@@ -19,7 +19,7 @@ func main() {
 			fmt.Printf("REJECT %s\n", path)
 			continue
 		}
-		lex, err := lexer.NewChecked(string(data), token.V05)
+		lex, err := lexer.NewChecked(string(data), token.CurrentVersion)
 		if err != nil {
 			fmt.Printf("REJECT %s\n", path)
 			continue
