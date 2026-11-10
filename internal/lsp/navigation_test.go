@@ -34,8 +34,8 @@ func TestServerSemanticCapabilities(t *testing.T) {
 		"definitionProvider",
 		"referencesProvider",
 		"documentHighlightProvider",
-		"documentSymbolProvider",
 		"workspaceSymbolProvider",
+		"documentSymbolProvider",
 		"completionProvider",
 		"signatureHelpProvider",
 	} {
@@ -626,6 +626,59 @@ waza main() -> int64 {
 	h.exit()
 }
 
+func TestServerDocumentHighlightUsesSymbolIdentity(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.initialize()
+
+	// 内层 sum 遮蔽外层 sum；字符串与注释里的 "sum" 不是引用。
+	text := `waza f(a: int64) -> int64 {
+    kaku sum = a;
+    // sum in a comment
+    kaku s = "sum";
+    kaesu sum + sum;
+}
+`
+	uri := uriFromPath(filepath.Join(t.TempDir(), "highlight.mio"))
+	h.open(uri, text, 1)
+
+	position := requestPosition(text, offsetOf(t, text, "kaesu sum")+len("kaesu "))
+	response := h.request(2, "textDocument/documentHighlight", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     position,
+	})
+	if response.Error != nil {
+		t.Fatalf("documentHighlight failed: %#v", response.Error)
+	}
+	var highlights []DocumentHighlight
+	if err := json.Unmarshal(response.Result, &highlights); err != nil {
+		t.Fatal(err)
+	}
+	// 声明 + 两处使用，且全部在第 1 或第 4 行。
+	if len(highlights) != 3 {
+		t.Fatalf("highlights = %#v", highlights)
+	}
+	for _, item := range highlights {
+		if item.Range.Start.Line != 1 && item.Range.Start.Line != 4 {
+			t.Fatalf("unexpected highlight line: %#v", item)
+		}
+	}
+
+	// 空白位置返回空数组而不是 null。
+	empty := h.request(3, "textDocument/documentHighlight", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"position":     Position{Line: 0, Character: 0},
+	})
+	if string(empty.Result) == "null" {
+		t.Fatalf("empty result must be [], got null")
+	}
+	missing := h.request(4, "textDocument/documentHighlight", map[string]any{"position": Position{}})
+	if missing.Error == nil || missing.Error.Code != codeInvalidParams {
+		t.Fatalf("missing uri error = %#v", missing.Error)
+	}
+	h.shutdown()
+	h.exit()
+}
+
 func TestServerWorkspaceSymbols(t *testing.T) {
 	root := t.TempDir()
 	// 路径含空格与中日文字符，另有应被跳过的隐藏目录与产物目录。
@@ -694,55 +747,6 @@ func TestServerWorkspaceSymbols(t *testing.T) {
 	}
 	if got := query(6, "other"); len(got) != 0 {
 		t.Fatalf("stale on-disk symbol returned: %#v", got)
-
-func TestServerDocumentHighlightUsesSymbolIdentity(t *testing.T) {
-	h := newHarness(t, Options{})
-	h.initialize()
-
-	// 内层 sum 遮蔽外层 sum；字符串与注释里的 "sum" 不是引用。
-	text := `waza f(a: int64) -> int64 {
-    kaku sum = a;
-    // sum in a comment
-    kaku s = "sum";
-    kaesu sum + sum;
-}
-`
-	uri := uriFromPath(filepath.Join(t.TempDir(), "highlight.mio"))
-	h.open(uri, text, 1)
-
-	position := requestPosition(text, offsetOf(t, text, "kaesu sum")+len("kaesu "))
-	response := h.request(2, "textDocument/documentHighlight", map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     position,
-	})
-	if response.Error != nil {
-		t.Fatalf("documentHighlight failed: %#v", response.Error)
-	}
-	var highlights []DocumentHighlight
-	if err := json.Unmarshal(response.Result, &highlights); err != nil {
-		t.Fatal(err)
-	}
-	// 声明 + 两处使用，且全部在第 1 或第 4 行。
-	if len(highlights) != 3 {
-		t.Fatalf("highlights = %#v", highlights)
-	}
-	for _, item := range highlights {
-		if item.Range.Start.Line != 1 && item.Range.Start.Line != 4 {
-			t.Fatalf("unexpected highlight line: %#v", item)
-		}
-	}
-
-	// 空白位置返回空数组而不是 null。
-	empty := h.request(3, "textDocument/documentHighlight", map[string]any{
-		"textDocument": map[string]any{"uri": uri},
-		"position":     Position{Line: 0, Character: 0},
-	})
-	if string(empty.Result) == "null" {
-		t.Fatalf("empty result must be [], got null")
-	}
-	missing := h.request(4, "textDocument/documentHighlight", map[string]any{"position": Position{}})
-	if missing.Error == nil || missing.Error.Code != codeInvalidParams {
-		t.Fatalf("missing uri error = %#v", missing.Error)
 	}
 	h.shutdown()
 	h.exit()
