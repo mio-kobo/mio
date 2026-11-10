@@ -59,6 +59,10 @@ EXE = {"windows-amd64": ".exe", "windows-arm64": ".exe"}
 def is_windows(target):
     return target in ("windows-amd64", "windows-arm64")
 TCP_PACKAGE = "bunko/kiso/net/tcp"
+# Packages whose native primitives exist only on some targets (the other targets reject the program at build time or
+# report the operation unsupported). On every other target the package is reported NOT_RUN -- never PASS -- and is not a
+# required check; it becomes required there only when that target's backend lands (see docs/async-networking.md).
+TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64",)}
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
@@ -526,12 +530,17 @@ def count(pattern, text):
     return int(match.group(1)) if match else 0
 
 
-def native_mio_test(report, cli, skips_allowed):
+def native_mio_test(report, cli, skips_allowed, target=""):
     """Every package with *_test.mio. A skipped test is never a pass: skips are reported separately (SKIP, with the
     test's own reason). Where every test must run (darwin-arm64, the primary target) a skip is a required failure."""
     failures = []
     for package in test_packages():
         label = "mio-test-" + package.replace("/", "_")
+        only = TARGET_ONLY_PACKAGES.get(package)
+        if only and target and target not in only:
+            report.check("mio-test " + package, "NOT_RUN", "native",
+                         "no native backend for this package on %s yet (runs on %s)" % (target, ", ".join(only)), required=False)
+            continue
         allow_skip = skips_allowed and package != TCP_PACKAGE
         if time.monotonic() - STARTED > BUDGET_SECONDS:
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
@@ -656,7 +665,7 @@ def linux(args, target="linux-amd64"):
     mio_run_protocol(report, cli, work)
     os_process_protocol(report, cli, work)
     mio_test_protocol(report, cli, work)
-    native_mio_test(report, cli, skips_allowed=True)
+    native_mio_test(report, cli, skips_allowed=True, target=target)
     contract(report, cli, target, reference=str(refvm))
     contract(report, cli, target, reference=str(refvm), suite="differential")
     if target != "linux-amd64":
@@ -756,7 +765,7 @@ def follower(args, target):
         mio_test_protocol(report, cli, work)
         # darwin-arm64 is the primary target: every test must run there. Elsewhere a test may skip with its own reason
         # (Mach-O images that need a macOS host); skips are reported separately and never count as passes.
-        native_mio_test(report, cli, skips_allowed=target != "darwin-arm64")
+        native_mio_test(report, cli, skips_allowed=target != "darwin-arm64", target=target)
         if target == "windows-amd64":
             windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)

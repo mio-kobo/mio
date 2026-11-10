@@ -5,7 +5,8 @@ yobu "kiso/string";
 
 // Linux IPv4 stream sockets for the body-less "mio/sys/socket" functions (kiso/net/tcp). Sockets share the NativeFS
 // generation-checked handle table. Status codes: 0 ok, 1 invalid argument, 2 closed, 3 timed out, 4 connection refused,
-// 5 connection reset, 6 address in use, 7 permission denied, 8 would block, 9 other.
+// 5 connection reset, 6 address in use, 7 permission denied, 8 would block, 9 other, 10 operation in progress
+// (a nonblocking connect that has not completed yet; only produced for EINPROGRESS).
 waza socket_message_text(code: int64) -> string {
     moshi (code == 1) { kaesu "invalid argument"; }
     moshi (code == 2) { kaesu "socket closed"; }
@@ -15,13 +16,14 @@ waza socket_message_text(code: int64) -> string {
     moshi (code == 6) { kaesu "address already in use"; }
     moshi (code == 7) { kaesu "permission denied"; }
     moshi (code == 8) { kaesu "operation would block"; }
+    moshi (code == 10) { kaesu "operation in progress"; }
     kaesu "socket error";
 }
 waza socket_message_label(code: int64) -> string { kaesu string.concat("rt.sock.message.", convert.format_int(code)); }
 
 waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     kaku code_number = 0;
-    aida (code_number < 10) {
+    aida (code_number < 11) {
         kaku text = "";
         moshi (code_number != 0) { text = socket_message_text(code_number); }
         emit_string_object(code, socket_message_label(code_number), text);
@@ -29,8 +31,8 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     }
     // rt.sock_classify: rax = positive errno -> rax = socket status code
     x86_64.label(code, "rt.sock_classify");
-    kaku errnos: []int64 = [22, 97, 9, 88, 110, 111, 104, 32, 98, 13, 1, 11];
-    kaku codes: []int64 = [1, 1, 2, 2, 3, 4, 5, 5, 6, 7, 7, 8];
+    kaku errnos: []int64 = [22, 97, 9, 88, 110, 111, 104, 32, 98, 13, 1, 11, 115];
+    kaku codes: []int64 = [1, 1, 2, 2, 3, 4, 5, 5, 6, 7, 7, 8, 10];
     kaku at = 0;
     aida (at < len(errnos)) {
         kaku next = string.concat("rt.sock_classify.next.", convert.format_int(at));
@@ -56,6 +58,11 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
         x86_64.label(code, next);
         at = at + 1;
     }
+    x86_64.cmp_ri(code, x86_64.rax, 10);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_message.other");
+    x86_64.lea_label(code, x86_64.rax, socket_message_label(10));
+    x86_64.ret(code);
+    x86_64.label(code, "rt.sock_message.other");
     x86_64.lea_label(code, x86_64.rax, socket_message_label(9));
     x86_64.ret(code);
 
@@ -297,6 +304,115 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.call(code, "rt.sock_status_one");
     x86_64.ret(code);
 
+    // rt.sock_nonblock: rdi = token, rsi = 0 or 1, rdx = status array -> message. ioctl(FIONBIO) switches O_NONBLOCK.
+    x86_64.label(code, "rt.sock_nonblock");
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 32);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rsi);
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_nonblock.state");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -16);
+    x86_64.cmp_ri(code, x86_64.rcx, 0);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_nonblock.invalid");
+    x86_64.cmp_ri(code, x86_64.rcx, 1);
+    x86_64.jcc(code, x86_64.cc_g, "rt.sock_nonblock.invalid");
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rcx);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rsi, 21537);
+    x86_64.lea(code, x86_64.rdx, x86_64.rbp, -24);
+    x86_64.mov_eax_imm(code, 16);
+    x86_64.syscall(code);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, "rt.sock_nonblock.done");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.jmp(code, "rt.sock_nonblock.done");
+    x86_64.label(code, "rt.sock_nonblock.invalid");
+    x86_64.mov_ri(code, x86_64.rsi, 1);
+    x86_64.jmp(code, "rt.sock_nonblock.done");
+    x86_64.label(code, "rt.sock_nonblock.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.sock_nonblock.done");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+
+    // rt.sock_finish: rdi = token, rsi = status array -> message. Completes a nonblocking connect: poll(POLLOUT, 0 ms)
+    // says whether it finished (not yet -> code 10, in progress, and the call may be repeated); then SO_ERROR is the result.
+    x86_64.label(code, "rt.sock_finish");
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 48);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_finish.state");
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+    // struct pollfd { int fd; short events = POLLOUT (4); short revents }
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rdx, 4);
+    x86_64.shl_ri(code, x86_64.rdx, 32);
+    x86_64.add_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rcx);
+    x86_64.label(code, "rt.sock_finish.poll");
+    x86_64.lea(code, x86_64.rdi, x86_64.rbp, -24);
+    x86_64.mov_ri(code, x86_64.rsi, 1);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_eax_imm(code, 7);
+    x86_64.syscall(code);
+    x86_64.cmp_ri(code, x86_64.rax, -4);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_finish.poll");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_finish.errno");
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_finish.pending");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, 4);
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -16);
+    x86_64.mov_ri(code, x86_64.rsi, 1);
+    x86_64.mov_ri(code, x86_64.rdx, 4);
+    x86_64.lea(code, x86_64.r10, x86_64.rbp, -32);
+    x86_64.lea(code, x86_64.r8, x86_64.rbp, -40);
+    x86_64.mov_eax_imm(code, 55);
+    x86_64.syscall(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_finish.errno");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -32);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967295);
+    x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_finish.done");
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.pending");
+    x86_64.mov_ri(code, x86_64.rsi, 10);
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.errno");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.sock_finish.done");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+
     // rt.sock_accept: rdi = token -> token of the accepted connection (a failed handle carries the error)
     x86_64.label(code, "rt.sock_accept");
     x86_64.call(code, "rt.sock_fd");
@@ -476,5 +592,7 @@ waza socket_routine(function_name: string) -> string {
     moshi (name == "read") { kaesu "rt.sock_read"; }
     moshi (name == "write") { kaesu "rt.sock_write"; }
     moshi (name == "close") { kaesu "rt.sock_close"; }
+    moshi (name == "set_nonblocking") { kaesu "rt.sock_nonblock"; }
+    moshi (name == "finish_connect") { kaesu "rt.sock_finish"; }
     kaesu "";
 }

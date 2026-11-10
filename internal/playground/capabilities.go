@@ -42,6 +42,7 @@ var (
 			{"listen", []mma.Type{r, i, b}, s}, {"accept", []mma.Type{r}, r},
 			{"read", []mma.Type{r, b, i, i, b}, s}, {"write", []mma.Type{r, b, i, i, b}, s},
 			{"close", []mma.Type{r, b}, s},
+			{"set_nonblocking", []mma.Type{r, i, b}, s}, {"finish_connect", []mma.Type{r, b}, s},
 		},
 	}
 )
