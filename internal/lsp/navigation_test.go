@@ -34,6 +34,7 @@ func TestServerSemanticCapabilities(t *testing.T) {
 		"definitionProvider",
 		"referencesProvider",
 		"documentSymbolProvider",
+		"workspaceSymbolProvider",
 		"completionProvider",
 		"signatureHelpProvider",
 	} {
@@ -620,6 +621,79 @@ waza main() -> int64 {
 		t.Fatalf("cross-document field references in main = %d, want 2 (%#v)", mainLocations, locations)
 	}
 
+	h.shutdown()
+	h.exit()
+}
+
+func TestServerWorkspaceSymbols(t *testing.T) {
+	root := t.TempDir()
+	// 路径含空格与中日文字符，另有应被跳过的隐藏目录与产物目录。
+	dir := filepath.Join(root, "src 日本語")
+	writeMioFile(t, filepath.Join(dir, "a.mio"), "waza helloWorld() -> unit {\n}\nkata Point { x: int64; }\n")
+	writeMioFile(t, filepath.Join(dir, "b.mio"), "waza other() -> unit {\n}\n")
+	writeMioFile(t, filepath.Join(root, ".hidden", "c.mio"), "waza hiddenFn() -> unit {\n}\n")
+	writeMioFile(t, filepath.Join(root, "node_modules", "d.mio"), "waza vendored() -> unit {\n}\n")
+
+	h := newHarness(t, Options{})
+	response := h.request(1, "initialize", map[string]any{
+		"processId":    nil,
+		"rootUri":      uriFromPath(root),
+		"capabilities": map[string]any{},
+	})
+	if response.Error != nil {
+		t.Fatalf("initialize failed: %#v", response.Error)
+	}
+	h.notify("initialized", map[string]any{})
+
+	query := func(id int, q string) []SymbolInformation {
+		t.Helper()
+		r := h.request(id, "workspace/symbol", map[string]any{"query": q})
+		if r.Error != nil {
+			t.Fatalf("workspace/symbol failed: %#v", r.Error)
+		}
+		var out []SymbolInformation
+		if err := json.Unmarshal(r.Result, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	names := func(symbols []SymbolInformation) string {
+		list := make([]string, len(symbols))
+		for i, s := range symbols {
+			list[i] = s.Name
+		}
+		return strings.Join(list, ",")
+	}
+
+	all := query(3, "")
+	if got := names(all); got != "helloWorld,other,Point" && got != "Point,helloWorld,other" {
+		t.Fatalf("all symbols = %q", got)
+	}
+	for _, symbol := range all {
+		if symbol.Name == "hiddenFn" || symbol.Name == "vendored" {
+			t.Fatalf("skipped directory leaked: %#v", symbol)
+		}
+	}
+	fuzzy := query(4, "hw")
+	if len(fuzzy) != 1 || fuzzy[0].Name != "helloWorld" {
+		t.Fatalf("fuzzy = %#v", fuzzy)
+	}
+	if point := query(7, "Point"); len(point) != 1 || point[0].Kind != symbolKindStruct {
+		t.Fatalf("struct symbol = %#v", point)
+	}
+	if !strings.HasSuffix(fuzzy[0].Location.URI, "a.mio") || fuzzy[0].Location.Range.Start.Line != 0 {
+		t.Fatalf("location = %#v", fuzzy[0].Location)
+	}
+
+	// 未保存的打开文档优先于磁盘内容。
+	uri := uriFromPath(filepath.Join(dir, "b.mio"))
+	h.open(uri, "waza renamedInEditor() -> unit {\n}\n", 1)
+	if got := query(5, "renamedInEditor"); len(got) != 1 {
+		t.Fatalf("unsaved symbol missing: %#v", got)
+	}
+	if got := query(6, "other"); len(got) != 0 {
+		t.Fatalf("stale on-disk symbol returned: %#v", got)
+	}
 	h.shutdown()
 	h.exit()
 }

@@ -54,11 +54,12 @@ type server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu             sync.Mutex
-	initialized    bool
-	shutdown       bool
-	exited         bool
-	workspaceRoots []string
+	mu               sync.Mutex
+	initialized      bool
+	shutdown         bool
+	exited           bool
+	workspaceRoots   []string
+	workspaceSymbols workspaceSymbolCache
 
 	diagnosticsEnabled bool
 	diagnosticsDelay   time.Duration
@@ -139,6 +140,7 @@ func (s *server) registerHandlers() {
 		"textDocument/definition":     s.requestDefinition,
 		"textDocument/references":     s.requestReferences,
 		"textDocument/documentSymbol": s.requestDocumentSymbol,
+		"workspace/symbol":            s.requestWorkspaceSymbol,
 		"textDocument/completion":     s.requestCompletion,
 		"textDocument/signatureHelp":  s.requestSignatureHelp,
 	}
@@ -344,10 +346,11 @@ func (s *server) handleInitialize(ctx context.Context, msg message) {
 				Change:    textDocumentSyncKindIncremental,
 				Save:      &SaveOptions{IncludeText: false},
 			},
-			HoverProvider:          true,
-			DefinitionProvider:     true,
-			ReferencesProvider:     true,
-			DocumentSymbolProvider: true,
+			HoverProvider:           true,
+			DefinitionProvider:      true,
+			ReferencesProvider:      true,
+			DocumentSymbolProvider:  true,
+			WorkspaceSymbolProvider: true,
 			CompletionProvider: &CompletionOptions{
 				TriggerCharacters: []string{"."},
 			},
