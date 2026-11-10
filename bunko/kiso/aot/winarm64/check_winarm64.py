@@ -24,7 +24,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[4]
 PROGRAM = 'chant("hello from windows-arm64");\nchant(40 + 2);\n'
 EXPECTED_STDOUT = "hello from windows-arm64\n42\n"
-EXPECTED_IMPORTS = {"ExitProcess", "GetStdHandle", "WriteFile", "VirtualAlloc", "VirtualFree"}
+EXPECTED_IMPORTS = {"ExitProcess", "GetStdHandle", "WriteFile", "VirtualAlloc", "VirtualFree", "CommandLineToArgvW", "GetEnvironmentStringsW"}
 
 
 def expect(condition, message):
@@ -86,7 +86,7 @@ def check_pe(data):
         lookup, _t, _c, name_rva, first_thunk = struct.unpack_from("<IIIII", data, at)
         if name_rva == 0:
             break
-        expect(data[offset(name_rva):].split(b"\0")[0] in (b"kernel32.dll", b"ws2_32.dll"), "imports come from kernel32.dll / ws2_32.dll")
+        expect(data[offset(name_rva):].split(b"\0")[0] in (b"kernel32.dll", b"shell32.dll", b"ws2_32.dll"), "imports come from kernel32.dll / shell32.dll / ws2_32.dll")
         entry = 0
         while True:
             value = struct.unpack_from("<Q", data, offset(lookup) + 8 * entry)[0]

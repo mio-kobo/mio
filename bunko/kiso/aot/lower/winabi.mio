@@ -22,9 +22,10 @@ koukai waza windows_imports() -> []string {
     kaku names = ["ExitProcess", "GetStdHandle", "WriteFile", "ReadFile", "CloseHandle", "VirtualAlloc", "VirtualFree", "CreateFileW",
         "GetLastError", "MultiByteToWideChar", "WideCharToMultiByte", "GetFileAttributesExW", "CreateDirectoryW", "RemoveDirectoryW",
         "DeleteFileW", "GetFileInformationByHandleEx", "GetCurrentProcessId", "GetFinalPathNameByHandleW", "GetModuleFileNameW",
-        "SetConsoleOutputCP", "SetConsoleCP"];
+        "SetConsoleOutputCP", "SetConsoleCP", "GetCommandLineW", "GetEnvironmentStringsW"];
     kaku pairs: []string = []; kaku at = 0;
     aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
+    array.push(pairs, "shell32.dll"); array.push(pairs, "CommandLineToArgvW");
     kaesu pairs;
 }
 
@@ -423,16 +424,76 @@ koukai waza emit_windows_init(c: arm64.Assembler, patches: []macho.AddressPatch,
     wx(c, arm64.ldp_post_x(29, 30, 31, 16)); wx(c, arm64.ret());
 }
 
-// PE entry point: the loader calls it with no arguments. Slice 2 still provides argc = 1, argv = {"mio.exe"} and an empty
-// environment, after initialising the adapter, then continues at the first lowered word (label windows_main).
+// Process arguments and environment as the Darwin entry expects them: x0 = argc, x1 = argv (UTF-8, NULL-terminated array),
+// x2 = envp (UTF-8 "NAME=VALUE" strings, NULL-terminated array). Everything lives in a 4 MiB arena that is never freed.
+// The command line is split by CommandLineToArgvW (the Windows quoting rules), then each argument is converted to UTF-8;
+// the environment block (a double-NUL-terminated UTF-16 list) is converted in one call and indexed.
+koukai waza emit_windows_args(c: arm64.Assembler, patches: []macho.AddressPatch) -> unit {
+    wx_label(c, "windows_args");
+    wx(c, arm64.stp_pre_x(29, 30, 31, -128));
+    // arena
+    wx_li(c, 0, 0); wx_li(c, 1, 4194304); wx_li(c, 2, 12288); wx_li(c, 3, 4); wx_call(c, patches, "VirtualAlloc");
+    wx_cbz(c, 0, "windows_args_fail"); wx_str(c, 0, 16); wx_str(c, 0, 24);
+    // argc / wide argv
+    wx_call(c, patches, "GetCommandLineW"); wx(c, arm64.add_imm_x(1, 31, 32, iie)); wx_call(c, patches, "CommandLineToArgvW");
+    wx_cbz(c, 0, "windows_args_fail"); wx_str(c, 0, 40);
+    wx(c, arm64.ldr_w(9, 31, 32)); wx_str(c, 9, 32);
+    // the argv pointer array
+    wx_ldr(c, 10, 24); wx_str(c, 10, 48); wx(c, arm64.add_imm_x(11, 9, 1, iie)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx_str(c, 10, 24);
+    wx_str(c, 31, 56);
+    wx_label(c, "windows_args_next");
+    wx_ldr(c, 9, 56); wx_ldr(c, 10, 32); wx(c, arm64.cmp_x(9, 10)); wx_bcc(c, 2, "windows_args_done");
+    wx_ldr(c, 11, 40); wx(c, arm64.ldr_x_register_scaled(2, 11, 9));
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 4, 24);
+    wx_ldr(c, 9, 16); wx_li(c, 12, 4194304); wx(c, arm64.add_x(9, 9, 12)); wx(c, arm64.sub_x(5, 9, 4)); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "windows_args_fail");
+    wx_ldr(c, 9, 56); wx_ldr(c, 10, 48); wx_ldr(c, 11, 24); wx(c, arm64.lsl_x(12, 9, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(11, 12, 0));
+    wx(c, arm64.add_x(11, 11, 0)); wx_str(c, 11, 24);
+    wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx_str(c, 9, 56); wx_b(c, "windows_args_next");
+    wx_label(c, "windows_args_done");
+    wx_ldr(c, 9, 32); wx_ldr(c, 10, 48); wx(c, arm64.lsl_x(9, 9, 3)); wx(c, arm64.add_x(10, 10, 9)); wx(c, arm64.str_x(31, 10, 0));
+    // the environment block
+    wx_ldr(c, 11, 24); wx(c, arm64.add_imm_x(11, 11, 7, iie)); wx(c, arm64.movn_x(12, 7, 0)); wx(c, arm64.and_x(11, 11, 12)); wx_str(c, 11, 24);
+    wx_call(c, patches, "GetEnvironmentStringsW"); wx_str(c, 0, 64); wx_cbz(c, 0, "windows_args_noenv");
+    // length in UTF-16 units: up to and including the terminating pair of NULs
+    wx_mov(c, 9, 0);
+    wx_label(c, "windows_args_scan");
+    wx(c, arm64.ldrh_w(10, 9, 0)); wx_cbnz(c, 10, "windows_args_advance");
+    wx(c, arm64.ldrh_w(10, 9, 2)); wx_cbz(c, 10, "windows_args_scanned");
+    wx_label(c, "windows_args_advance"); wx(c, arm64.add_imm_x(9, 9, 2, iie)); wx_b(c, "windows_args_scan");
+    wx_label(c, "windows_args_scanned");
+    wx_ldr(c, 10, 64); wx(c, arm64.sub_x(9, 9, 10)); wx(c, arm64.lsr_x(3, 9, 1)); wx(c, arm64.add_imm_x(3, 3, 2, iie));
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx_ldr(c, 2, 64); wx_ldr(c, 4, 24);
+    wx_ldr(c, 9, 16); wx_li(c, 12, 4194304); wx(c, arm64.add_x(9, 9, 12)); wx(c, arm64.sub_x(5, 9, 4)); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "windows_args_noenv");
+    wx_str(c, 0, 80); wx_ldr(c, 9, 24); wx_str(c, 9, 72);
+    wx_ldr(c, 10, 80); wx(c, arm64.add_x(9, 9, 10)); wx(c, arm64.add_imm_x(9, 9, 7, iie)); wx(c, arm64.movn_x(12, 7, 0)); wx(c, arm64.and_x(9, 9, 12)); wx_str(c, 9, 88);
+    // envp[k] = start of each non-empty string
+    wx_li(c, 11, 0); wx_li(c, 12, 1); wx_li(c, 13, 0);
+    wx_label(c, "windows_args_env_loop");
+    wx_ldr(c, 10, 80); wx(c, arm64.cmp_x(11, 10)); wx_bcc(c, 2, "windows_args_env_end");
+    wx_ldr(c, 9, 72); wx(c, arm64.add_x(9, 9, 11)); wx(c, arm64.ldrb_w(14, 9, 0));
+    wx_cbz(c, 14, "windows_args_env_nul"); wx_cbz(c, 12, "windows_args_env_cont");
+    wx_ldr(c, 15, 88); wx(c, arm64.lsl_x(16, 13, 3)); wx(c, arm64.add_x(15, 15, 16)); wx(c, arm64.str_x(9, 15, 0)); wx(c, arm64.add_imm_x(13, 13, 1, iie));
+    wx_label(c, "windows_args_env_cont"); wx_li(c, 12, 0); wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "windows_args_env_loop");
+    wx_label(c, "windows_args_env_nul"); wx_li(c, 12, 1); wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "windows_args_env_loop");
+    wx_label(c, "windows_args_env_end");
+    wx_ldr(c, 15, 88); wx(c, arm64.lsl_x(16, 13, 3)); wx(c, arm64.add_x(15, 15, 16)); wx(c, arm64.str_x(31, 15, 0));
+    wx_b(c, "windows_args_return");
+    wx_label(c, "windows_args_noenv");
+    wx_ldr(c, 9, 24); wx_str(c, 9, 88); wx(c, arm64.str_x(31, 9, 0));
+    wx_label(c, "windows_args_return");
+    wx_ldr(c, 0, 32); wx_ldr(c, 1, 48); wx_ldr(c, 2, 88);
+    wx(c, arm64.ldp_post_x(29, 30, 31, 128)); wx(c, arm64.ret());
+    wx_label(c, "windows_args_fail"); wx_li(c, 0, 3); wx_call(c, patches, "ExitProcess");
+    wx_label(c, "windows_args_hang"); wx_b(c, "windows_args_hang");
+}
+
+// PE entry point: the loader calls it with no arguments. It initialises the adapter, builds argc/argv/envp from the real
+// command line and environment, and continues at the first lowered word (label windows_main) with the Darwin entry registers.
 koukai waza emit_windows_start(c: arm64.Assembler) -> unit {
     wx_label(c, "windows_start");
-    wx(c, arm64.sub_imm_x(31, 31, 48, iie));
     wx_bl(c, "windows_init");
-    wx(c, arm64.adr(3, 32));
-    wx(c, arm64.str_x(3, 31, 0)); wx(c, arm64.str_x(31, 31, 8)); wx(c, arm64.str_x(31, 31, 16));
-    wx_li(c, 0, 1); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx(c, arm64.add_imm_x(2, 31, 16, iie));
+    wx_bl(c, "windows_args");
     wx_b(c, "windows_main");
-    // "mio.exe\0"
-    wx(c, arm64.Instruction { word: uint32(779053421), error: mu }); wx(c, arm64.Instruction { word: uint32(6649957), error: mu });
 }
