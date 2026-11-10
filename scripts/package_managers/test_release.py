@@ -7,7 +7,8 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release import stable, immutable, formula, winget, validate, windows_product_code
+from release import (stable, immutable, formula, winget, validate, restore_pinned,
+                     windows_product_code)
 from package import digest, inventory, write_json
 from seed_evidence import (GF4, GF4_LOGS, GF4_SEED_SHA256, GF4_SOURCE, NATIVE_V21, SEED_KINDS,
                            TARGETS, release_context, seed_binding, seed_identity, seed_record)
@@ -375,6 +376,54 @@ class ReleaseTests(unittest.TestCase):
                 gh.side_effect = subprocess.CalledProcessError(1, 'gh')
                 with self.assertRaisesRegex(ValueError, 'missing or invalid'):
                     authenticate(base, tag, SOURCE)
+
+    @patch('stable_release.subprocess.run')
+    def test_pinned_evidence_restores_only_digest_bound_verification_reports(self, gh):
+        for kind in SEED_KINDS:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                base = Path(temp)
+                version = version_for(kind)
+                tag = 'v' + version
+                release = self.fixture(base, kind)
+                for name in evidence_files(version, kind):
+                    path = base / name
+                    if not path.exists():
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(b'verification evidence')
+                evidence = dict(schema_version=EVIDENCE_SCHEMAS[kind], status='PASS', source_sha=SOURCE,
+                                version=version, run=RUN,
+                                files={name: digest(base / name) for name in evidence_files(version, kind)})
+                write_json(base / REPORT, evidence)
+                omitted = 'windows-amd64-verification.json'
+                saved = (base / omitted).read_bytes()
+                pinned = base / 'pinned'
+                (pinned / tag).mkdir(parents=True)
+                (pinned / tag / omitted).write_bytes(saved)
+                def restore(assets, value):
+                    restore_pinned(assets, tag, value, pinned)
+                gh.return_value = subprocess.CompletedProcess([], 0)
+
+                (base / omitted).unlink()
+                with self.assertRaisesRegex(ValueError, 'asset is missing'):
+                    authenticate(base, tag, SOURCE)
+                self.assertEqual(authenticate(base, tag, SOURCE, restore=restore), (RUN, kind))
+                self.assertEqual((base / omitted).read_bytes(), saved)
+                with patch('release.PINNED_EVIDENCE', pinned):
+                    self.assertEqual(validate(base, tag, release, SOURCE)[0], version)
+
+                (base / omitted).unlink()
+                (pinned / tag / omitted).write_bytes(b'tampered')
+                with self.assertRaisesRegex(ValueError, 'does not match signed'):
+                    authenticate(base, tag, SOURCE, restore=restore)
+                self.assertFalse((base / omitted).exists())
+
+                (pinned / tag / omitted).write_bytes(saved)
+                payload = archives(version, 'linux-amd64')[0]
+                original = (base / payload).read_bytes()
+                (base / payload).unlink()
+                with self.assertRaisesRegex(ValueError, 'asset is missing'):
+                    authenticate(base, tag, SOURCE, restore=restore)
+                (base / payload).write_bytes(original)
 
     def test_layout_conflicts_and_distinct_windows_aliases(self):
         r = dict(url='https://github.com/mio-kobo/mio/releases/download/v2.1.0/a.zip', sha='a'*64, root='mio-2.1.0-windows-amd64-full')

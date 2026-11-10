@@ -120,10 +120,15 @@ def authenticate_report(assets, tag, source):
     return evidence, kind
 
 
-def authenticate(assets, tag, source):
+def authenticate(assets, tag, source, *, restore=None):
     evidence, kind = authenticate_report(assets, tag, source)
+    if restore is not None:
+        restore(assets, evidence)
     for name, sha in evidence['files'].items():
-        if digest(assets / name) != sha:
+        path = assets / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('signed release evidence asset is missing: ' + name)
+        if digest(path) != sha:
             raise ValueError('asset does not match signed release evidence: ' + name)
     identity = seed_identity(kind)
     check_seed_artifact(assets / identity.report_name, assets / identity.log_dir, source, tag[1:], evidence['run'], kind)
