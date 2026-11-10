@@ -207,6 +207,9 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_read");
     wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    // POSIX: a zero-length read returns 0 at once; ReadFile(0 bytes) on a socket or pipe would wait for data
+    wx(c, arm64.ldr_x(2, 31, 152)); wx_cbnz(c, 2, "wx_read_nonzero"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_read_nonzero");
     wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
     wx_call(c, patches, "ReadFile"); wx_bool(c); wx_cbz(c, 0, "wx_read_failed");
     wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
@@ -220,6 +223,8 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_write");
     wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldr_x(2, 31, 152)); wx_cbnz(c, 2, "wx_write_nonzero"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_write_nonzero");
     wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
     wx_call(c, patches, "WriteFile"); wx_bool(c); wx_cbz(c, 0, "wx_io_error");
     wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
@@ -679,6 +684,10 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_setsockopt");
     wx_li(c, 9, 4130); wx(c, arm64.cmp_x(2, 9)); wx_bcc(c, 1, "wx_setsockopt_real"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_setsockopt_real");
+    // Darwin's SO_REUSEADDR only allows reuse of a port in TIME_WAIT; on Windows it would let a second socket take over a live
+    // port, so (like the Windows amd64 runtime) it becomes SO_EXCLUSIVEADDRUSE (0xFFFFFFFB): a second bind reports AddressInUse
+    wx_cmpi(c, 2, 4); wx_bcc(c, 1, "wx_setsockopt_pass"); wx_li(c, 2, 4294967291);
+    wx_label(c, "wx_setsockopt_pass");
     wx(c, arm64.stp_x(1, 2, 31, 144)); wx(c, arm64.stp_x(3, 4, 31, 160));
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx(c, arm64.ldp_x(1, 2, 31, 144)); wx(c, arm64.ldp_x(3, 4, 31, 160));

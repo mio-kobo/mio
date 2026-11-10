@@ -139,3 +139,21 @@ waza test_windows_adapter_has_winsock_blocks_and_wsa_error_mapping() -> unit {
     aida (at < len(imports)) { moshi (imports[at] == "ws2_32.dll") { seen = seen + 1; } at = at + 2; }
     testing.expect(seen == 9, "nine ws2_32 imports, grouped after kernel32");
 }
+
+// POSIX semantics: read(fd, buf, 0) and write(fd, buf, 0) return 0 immediately; ReadFile with 0 bytes on a socket would block
+// until data arrives (the net/tcp test reads zero bytes from an idle connection and expects count 0, not EOF).
+waza test_windows_zero_length_io_returns_without_a_win32_call() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(win_label(win.labels, "wx_read_nonzero") > win_label(win.labels, "wx_read") && win_label(win.labels, "wx_write_nonzero") > win_label(win.labels, "wx_write"), "read and write test for a zero length before calling ReadFile/WriteFile");
+}
+
+// SO_REUSEADDR (Darwin 4) becomes SO_EXCLUSIVEADDRUSE (0xFFFFFFFB = movz #65531; movk #65535, lsl #16) so a live port cannot be hijacked.
+waza test_windows_reuseaddr_becomes_exclusiveaddruse() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku at = win_label(win.labels, "wx_setsockopt_real"); kaku found = iie; kaku end = at + 40;
+    aida (at < end) {
+        moshi (win.words[at] == arm64.movz_x(2, 65531, 0).word && win.words[at + 1] == arm64.movk_x(2, 65535, 1).word) { found = hai; }
+        at = at + 1;
+    }
+    testing.expect(found, "x2 = 0xFFFFFFFB (SO_EXCLUSIVEADDRUSE) is loaded when the option is SO_REUSEADDR");
+}
