@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from package import digest, write_json
-from seed_evidence import NATIVE_V21, REPOSITORY, SEED_LOGS
+from seed_evidence import NATIVE_V21, REPOSITORY, SEED_LOGS, seed_identity
 from stable_release import EVIDENCE_SCHEMAS, REPORT, evidence_files
 from supplemental_evidence import ARCHIVE, EVIDENCE_TAG, LOG_DIR, RELEASE_PURL, STABLE_TAG, restore_logs
 
@@ -118,11 +118,6 @@ class SupplementalEvidenceTests(unittest.TestCase):
         self.assertEqual(partial.read_bytes(), b'existing modified log')
         self.github.assert_not_called()
 
-    def test_other_versions_do_not_retrieve_evidence(self):
-        restore_logs(self.assets, 'v2.1.1', SOURCE)
-        self.github.assert_not_called()
-        self.sigstore.assert_not_called()
-
     def test_original_sigstore_failure_prevents_download(self):
         self.sigstore.side_effect = subprocess.CalledProcessError(1, 'gh')
         self.assert_rejected('stable release verification attestation')
@@ -212,11 +207,14 @@ class SupplementalEvidenceTests(unittest.TestCase):
     def test_rejects_malformed_archives(self):
         data = self.payload.read_bytes()
         tar = gzip.decompress(data)
+        zero = next(offset for offset in range(0, len(tar), tarfile.BLOCKSIZE)
+                    if tar[offset:offset + tarfile.BLOCKSIZE] == bytes(tarfile.BLOCKSIZE))
+        ending = tar[:zero + tarfile.BLOCKSIZE]
         for payload, reason in [
             (data[:-1], 'malformed supplemental gzip'),
             (gzip.compress(b'x' + tar[1:]), 'malformed supplemental tar header'),
             (gzip.compress(tar + bytes(511)), 'invalid supplemental tar archive size'),
-            (gzip.compress(tar[:(2 * len(self.logs) + 4) * 512]), 'malformed supplemental tar archive ending'),
+            (gzip.compress(ending), 'malformed supplemental tar archive ending'),
             (gzip.compress(tar + b'x' * 512), 'malformed supplemental tar archive ending'),
         ]:
             with self.subTest(reason=reason):
@@ -224,6 +222,186 @@ class SupplementalEvidenceTests(unittest.TestCase):
                 self.bind_archive()
                 self.assert_rejected(reason)
 
+
+
+
+GENERIC_TAG = 'v2.1.1'
+GENERIC_VERSION = '2.1.1'
+GENERIC_LOG_DIR = seed_identity(NATIVE_V21).log_dir
+GENERIC_ARCHIVE = GENERIC_LOG_DIR + '.tar.gz'
+
+
+class GenericLogArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.assets = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.logs = {f'{GENERIC_LOG_DIR}/{name}': name.encode() for name in SEED_LOGS}
+        self.payload = self.assets / GENERIC_ARCHIVE
+        self.write_archive()
+        hashes = {name: 'b' * 64 for name in evidence_files(GENERIC_VERSION, NATIVE_V21)}
+        hashes.update({name: hashlib.sha256(content).hexdigest() for name, content in self.logs.items()})
+        self.report = dict(schema_version=EVIDENCE_SCHEMAS[NATIVE_V21], status='PASS',
+                           version=GENERIC_VERSION, source_sha=SOURCE, files=hashes)
+        write_json(self.assets / REPORT, self.report)
+        (self.assets / 'release-verification.sigstore.json').write_text('{}')
+        self.release = dict(id=43, tag_name=GENERIC_TAG, immutable=True, draft=False,
+                            prerelease=False, published_at='2026-11-10T04:01:37Z', assets=[dict(
+                                name=GENERIC_ARCHIVE, state='uploaded',
+                                browser_download_url=f'https://github.com/{REPOSITORY}/releases/download/{GENERIC_TAG}/{GENERIC_ARCHIVE}',
+                            ), dict(name='unrelated-asset', state='uploaded',
+                                    browser_download_url='https://example.invalid/unrelated')])
+        self.sigstore = self.enterContext(patch('stable_release.subprocess.run'))
+        self.github = self.enterContext(patch('supplemental_evidence.subprocess.check_output', side_effect=self.gh))
+
+    def write_archive(self, extra=(), omitted=None, changed=None, pax=None):
+        with tarfile.open(self.payload, 'w:gz', format=tarfile.USTAR_FORMAT) as archive:
+            if pax is not None:
+                self.add_file(archive, f'PaxHeader/{GENERIC_LOG_DIR}', pax, tarfile.XHDTYPE)
+            self.add_file(archive, GENERIC_LOG_DIR, b'', tarfile.DIRTYPE)
+            for name, content in self.logs.items():
+                if name != omitted:
+                    self.add_file(archive, name, b'changed' if name == changed else content)
+            for name, kind, link in extra:
+                self.add_file(archive, name, b'', kind, link)
+
+    def add_file(self, archive, name, content, kind=tarfile.REGTYPE, link=''):
+        entry = tarfile.TarInfo(name)
+        entry.type = kind
+        entry.linkname = link
+        entry.size = len(content)
+        archive.addfile(entry, io.BytesIO(content))
+
+    def bind_archive(self):
+        sha = digest(self.payload)
+        self.release['assets'][0].update(size=self.payload.stat().st_size, digest=f'sha256:{sha}')
+
+    def gh(self, command, *, text):
+        self.assertEqual(command[0], 'gh')
+        self.assertTrue(text)
+        if command[1] == 'api':
+            self.assertEqual(command[2:4], ['--hostname', 'github.com'])
+            self.assertEqual(command[4], f'repos/{REPOSITORY}/releases/tags/{GENERIC_TAG}')
+            return json.dumps(self.release)
+        self.assertEqual(command[1], 'release')
+        if command[2] == 'download':
+            self.assertTrue(self.sigstore.called, 'attestation must be verified before extraction')
+            self.assertEqual(command[3], GENERIC_TAG)
+            self.assertEqual(command[command.index('--pattern') + 1], GENERIC_ARCHIVE)
+            self.assertEqual(command[command.index('--repo') + 1], f'github.com/{REPOSITORY}')
+            (Path(command[-1]) / GENERIC_ARCHIVE).write_bytes(self.payload.read_bytes())
+            return ''
+        self.fail('unexpected dependency call: ' + repr(command))
+
+    def restore(self):
+        restore_logs(self.assets, GENERIC_TAG, SOURCE)
+
+    def assert_rejected(self, reason):
+        with self.assertRaisesRegex(ValueError, reason):
+            self.restore()
+        self.assertFalse((self.assets / GENERIC_LOG_DIR).exists())
+
+    def test_restores_signed_logs_after_attestation(self):
+        self.bind_archive()
+        self.restore()
+        self.assertEqual(self.sigstore.call_count, 1)
+        args = self.sigstore.call_args.args[0]
+        self.assertEqual(args[:3], ['gh', 'attestation', 'verify'])
+        self.assertEqual(args[args.index('--source-ref') + 1], f'refs/tags/{GENERIC_TAG}')
+        self.assertEqual(args[args.index('--source-digest') + 1], SOURCE)
+        restored = {f'{GENERIC_LOG_DIR}/{path.name}': path.read_bytes() for path in (self.assets / GENERIC_LOG_DIR).iterdir()}
+        self.assertEqual(restored, self.logs)
+
+    def test_missing_or_modified_log_is_rejected(self):
+        name = next(iter(self.logs))
+        for change, error in [('omitted', 'missing expected logs'), ('changed', 'does not match signed release evidence')]:
+            with self.subTest(change=change):
+                self.write_archive(**{change: name})
+                self.bind_archive()
+                self.assert_rejected(error)
+
+    def test_malicious_archive_entries_are_rejected(self):
+        duplicate = next(iter(self.logs))
+        for name, kind, link, error in [
+            (f'{GENERIC_LOG_DIR}/../escape.log', tarfile.REGTYPE, '', 'unexpected'),
+            ('/escape.log', tarfile.REGTYPE, '', 'unexpected'),
+            (f'{GENERIC_LOG_DIR}/extra.log', tarfile.REGTYPE, '', 'unexpected'),
+            (duplicate, tarfile.REGTYPE, '', 'duplicate'),
+            (GENERIC_LOG_DIR, tarfile.DIRTYPE, '', 'duplicate'),
+            (f'{GENERIC_LOG_DIR}/link.log', tarfile.SYMTYPE, '../escape.log', 'unexpected'),
+            (f'{GENERIC_LOG_DIR}/hard.log', tarfile.LNKTYPE, duplicate, 'unexpected'),
+            ('global-pax', tarfile.XGLTYPE, '', 'unexpected'),
+        ]:
+            with self.subTest(name=name, kind=kind):
+                self.write_archive(extra=[(name, kind, link)])
+                self.bind_archive()
+                self.assert_rejected(error)
+        self.write_archive(pax=b'22 path=../escape.log\n')
+        self.bind_archive()
+        self.assert_rejected('invalid supplemental archive PAX record')
+        name = next(iter(self.logs))
+        self.write_archive(omitted=name, extra=[(name, tarfile.SYMTYPE, '../escape.log')])
+        self.bind_archive()
+        self.assert_rejected('unexpected supplemental archive member')
+
+    def test_malformed_or_oversized_archive_is_rejected(self):
+        tar = gzip.decompress(self.payload.read_bytes())
+        zero = next(offset for offset in range(0, len(tar), tarfile.BLOCKSIZE)
+                    if tar[offset:offset + tarfile.BLOCKSIZE] == bytes(tarfile.BLOCKSIZE))
+        ending = tar[:zero + tarfile.BLOCKSIZE]
+        for payload, reason in [
+            (self.payload.read_bytes()[:-1], 'malformed supplemental gzip'),
+            (gzip.compress(b'x' + tar[1:]), 'malformed supplemental tar header'),
+            (gzip.compress(tar + bytes(511)), 'invalid supplemental tar archive size'),
+            (gzip.compress(ending), 'malformed supplemental tar archive ending'),
+            (gzip.compress(tar + b'x' * 512), 'malformed supplemental tar archive ending'),
+        ]:
+            with self.subTest(reason=reason):
+                self.payload.write_bytes(payload)
+                self.bind_archive()
+                self.assert_rejected(reason)
+
+    def test_release_and_asset_metadata_are_enforced(self):
+        self.bind_archive()
+        original = copy.deepcopy(self.release)
+        for field, value in [('tag_name', 'v2.1.0'), ('immutable', False), ('draft', True),
+                             ('prerelease', True), ('published_at', None), ('id', '43')]:
+            with self.subTest(field=field):
+                self.release = dict(original, **{field: value})
+                self.assert_rejected('published immutable stable release')
+        self.release = copy.deepcopy(original)
+        self.release['assets'] = None
+        self.assert_rejected('invalid stable release asset list')
+        self.release = copy.deepcopy(original)
+        self.release['assets'] = [original['assets'][1]]
+        self.assert_rejected('expected exactly one supplemental log archive asset')
+        self.release = copy.deepcopy(original)
+        self.release['assets'].append(dict(original['assets'][0]))
+        self.assert_rejected('expected exactly one supplemental log archive asset')
+        self.release = copy.deepcopy(original)
+        self.release['assets'][0]['browser_download_url'] = 'https://github.com/other/mio/asset'
+        self.assert_rejected('invalid supplemental log archive asset metadata')
+        self.release = copy.deepcopy(original)
+        self.release['assets'][0]['size'] = 0
+        self.assert_rejected('invalid supplemental log archive asset metadata')
+        self.release = copy.deepcopy(original)
+        self.release['assets'][0]['digest'] = 'sha256:' + 'c' * 64
+        self.assert_rejected('supplemental log archive digest mismatch')
+
+    def test_signature_failure_prevents_download(self):
+        self.bind_archive()
+        self.sigstore.side_effect = subprocess.CalledProcessError(1, 'gh')
+        self.assert_rejected('stable release verification attestation')
+        self.github.assert_not_called()
+
+    def test_existing_destination_is_not_replaced(self):
+        destination = self.assets / GENERIC_LOG_DIR
+        destination.mkdir()
+        partial = destination / SEED_LOGS[0]
+        partial.write_bytes(b'existing modified log')
+        self.bind_archive()
+        self.restore()
+        self.assertEqual(list(destination.iterdir()), [partial])
+        self.assertEqual(partial.read_bytes(), b'existing modified log')
+        self.github.assert_not_called()
 
 if __name__ == '__main__':
     unittest.main()
