@@ -25,8 +25,16 @@ koukai teisu slot_mprotect = 4;
 koukai teisu slot_madvise = 5;
 koukai teisu slot_clock_gettime = 6;
 koukai teisu slot_futex = 7;
-koukai teisu slot_count = 8;
-koukai waza syscall_numbers() -> []int64 { kaesu [1, 231, 9, 11, 10, 28, 228, 202]; }
+koukai teisu slot_clone = 8;
+koukai teisu slot_arch_prctl = 9;
+koukai teisu slot_gettid = 10;
+koukai teisu slot_count = 11;
+// Slot 8 (clone, number 56) is not a plain stub: the child resumes on the new stack and runs its entry function (link.mio).
+koukai waza syscall_numbers() -> []int64 { kaesu [1, 231, 9, 11, 10, 28, 228, 202, 56, 158, 186]; }
+koukai teisu clone_thread_flags = 4001536;   // VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID (0x3D0F00)
+koukai teisu arch_set_fs = 4098;             // ARCH_SET_FS 0x1002
+koukai teisu arch_get_fs = 4099;             // ARCH_GET_FS 0x1003
+koukai teisu thread_guard_bytes = 4096;
 
 koukai teisu clock_monotonic = 1;
 koukai teisu futex_wait_private = 128;
@@ -49,14 +57,21 @@ koukai waza bindings() -> []ir.Binding {
         ir.Binding { operation: 202, slot: 4, arguments: [0, 1, 2], result_bits: 64 },
         ir.Binding { operation: 203, slot: 5, arguments: [0, 1, 2], result_bits: 64 },
         ir.Binding { operation: 204, slot: 7, arguments: [0, -129, 1, 2], result_bits: 64 },
-        ir.Binding { operation: 205, slot: 7, arguments: [0, -130, 1], result_bits: 64 }
+        ir.Binding { operation: 205, slot: 7, arguments: [0, -130, 1], result_bits: 64 },
+        // 206 clone(flags, child_stack, parent_tid*, child_tid*, tls); 207 arch_prctl(code, address); 208 gettid()
+        ir.Binding { operation: 206, slot: 8, arguments: [0, 1, 2, 3, 4], result_bits: 64 },
+        ir.Binding { operation: 207, slot: 9, arguments: [0, 1], result_bits: 64 },
+        ir.Binding { operation: 208, slot: 10, arguments: [], result_bits: 64 }
     ];
 }
 
-// What this adapter really provides. Threads, TLS and precise roots are NOT claimed (no clone, no TLS
-// register, no root registry), and neither is park_wake: that capability means the portable condition/
-// mutex protocol (see above), of which only raw futex wait/wake exist. So the target still fails closed
-// for the concurrent collector (target.concurrent_error != "") and for mutex/condition/park/wake operations.
+// What this adapter really provides. OS thread primitives now exist (raw clone with a guarded stack, futex join on the
+// kernel-cleared tid word, FS-base TLS: platform_thread_*, platform_tls_*; witnessed natively by check_threads.py), but a thread
+// started this way is NOT known to the collector: there is no root registry, no safepoint handshake and no multi-mutator heap
+// on this target, so managed code must not run on it. The capability descriptor therefore still claims no threads, no tls, no
+// precise roots and no park_wake (that capability means the portable condition/mutex protocol, of which only raw futex wait/wake
+// exist). The target keeps failing closed for the concurrent collector and for mutex/condition/park/wake operations; the flags
+// change only in the PR that integrates the threads with the collector and passes its safety witnesses (docs/concurrency.md).
 koukai waza capabilities() -> target.TargetInfo {
     kaesu target.TargetInfo { os: "linux", arch: "amd64", abi: "sysv", pointer_bits: 64, little_endian: hai,
         page_size_query: hai, atomic64: hai, threads: iie, tls: iie, park_wake: iie,
@@ -125,5 +140,48 @@ koukai waza platform_program() -> []ir.Function {
     ir.call(release, 201, 2, [0, 1]); ir.put(release, ir.result, 0, 2, 0, 0);
     kaku protect = ir.function("platform_protect");
     ir.call(protect, 202, 3, [0, 1, 2]); ir.put(protect, ir.result, 0, 3, 0, 0);
-    kaesu [wait, clock, wake, wake_all, reserve, commit, decommit, release, protect];
+
+    // ---- Native threads (raw clone, no libc). These are OS primitives only: the thread is NOT registered with the
+    // collector and must not run managed code (capabilities() keeps threads/tls false until that is integrated).
+    // platform_thread_stack(size) -> usable stack start or -errno: a PROT_NONE guard page followed by `size` RW bytes.
+    kaku thread_stack = ir.function("platform_thread_stack");
+    ir.put(thread_stack, ir.constant, 1, 0, 0, thread_guard_bytes); ir.put(thread_stack, ir.add, 2, 0, 1, 0);
+    ir.invoke_function(thread_stack, "platform_reserve", 3, [2]);
+    ir.put(thread_stack, ir.constant, 4, 0, 0, -4095); ir.put(thread_stack, ir.less_unsigned, 5, 3, 4, 0); ir.branch(thread_stack, ir.zero, 5, "done");
+    ir.put(thread_stack, ir.add, 6, 3, 1, 0); ir.invoke_function(thread_stack, "platform_commit", 7, [6, 0]); ir.branch(thread_stack, ir.zero, 7, "ready");
+    ir.invoke_function(thread_stack, "platform_release", 8, [3, 2]); ir.put(thread_stack, ir.copy, 3, 7, 0, 0); ir.branch(thread_stack, ir.jump, 0, "done");
+    ir.branch(thread_stack, ir.label, 0, "ready"); ir.put(thread_stack, ir.copy, 3, 6, 0, 0);
+    ir.branch(thread_stack, ir.label, 0, "done"); ir.put(thread_stack, ir.result, 0, 3, 0, 0);
+    // platform_thread_stack_release(usable_start, size) -> 0 or -errno
+    kaku thread_stack_release = ir.function("platform_thread_stack_release");
+    ir.put(thread_stack_release, ir.constant, 2, 0, 0, thread_guard_bytes); ir.put(thread_stack_release, ir.subtract, 3, 0, 2, 0);
+    ir.put(thread_stack_release, ir.add, 4, 1, 2, 0); ir.invoke_function(thread_stack_release, "platform_release", 5, [3, 4]);
+    ir.put(thread_stack_release, ir.result, 0, 5, 0, 0);
+    // platform_thread_create(entry, argument, stack_start, stack_size, tid_word*, tls) -> thread id or -errno.
+    // The child runs entry(argument) on the given stack with the import table installed, then exits the thread. The kernel stores
+    // the id in *tid_word before either side runs and clears it (waking futex waiters) when the thread ends: that is the join word.
+    kaku thread_create = ir.function("platform_thread_create");
+    ir.put(thread_create, ir.add, 6, 2, 3, 0); ir.put(thread_create, ir.constant, 7, 0, 0, 16); ir.put(thread_create, ir.divide_unsigned, 6, 6, 7, 0);
+    ir.put(thread_create, ir.multiply, 6, 6, 7, 0); ir.put(thread_create, ir.subtract, 6, 6, 7, 0);
+    ir.put(thread_create, ir.store, 0, 6, 0, 0); ir.put(thread_create, ir.store, 0, 6, 1, 8);
+    ir.put(thread_create, ir.constant, 8, 0, 0, clone_thread_flags);
+    ir.call(thread_create, 206, 9, [8, 6, 4, 4, 5]); ir.put(thread_create, ir.result, 0, 9, 0, 0);
+    // platform_thread_join(tid_word*) -> 0 once the thread has ended, or -errno. Waits on the kernel-cleared id word.
+    kaku thread_join = ir.function("platform_thread_join");
+    ir.put(thread_join, ir.constant, 3, 0, 0, 1000000000);
+    ir.branch(thread_join, ir.label, 0, "again"); ir.put(thread_join, ir.acquire_load, 1, 0, 0, 0); ir.branch(thread_join, ir.zero, 1, "done");
+    ir.invoke_function(thread_join, "platform_futex_wait", 2, [0, 1, 3]);
+    ir.put(thread_join, ir.constant, 4, 0, 0, -4095); ir.put(thread_join, ir.less_unsigned, 5, 2, 4, 0); ir.branch(thread_join, ir.nonzero, 5, "again");
+    ir.put(thread_join, ir.result, 0, 2, 0, 0);
+    ir.branch(thread_join, ir.label, 0, "done"); ir.put(thread_join, ir.constant, 1, 0, 0, 0); ir.put(thread_join, ir.result, 0, 1, 0, 0);
+    kaku thread_id = ir.function("platform_thread_id");
+    ir.call(thread_id, 208, 0, []); ir.put(thread_id, ir.result, 0, 0, 0, 0);
+    // TLS: the FS base. platform_tls_set(address) -> 0/-errno; platform_tls_get() -> address (0 on failure).
+    kaku tls_set = ir.function("platform_tls_set");
+    ir.put(tls_set, ir.constant, 1, 0, 0, arch_set_fs); ir.call(tls_set, 207, 2, [1, 0]); ir.put(tls_set, ir.result, 0, 2, 0, 0);
+    kaku tls_get = ir.function("platform_tls_get");
+    ir.put(tls_get, ir.scratch_address, 1, 0, 0, 0); ir.put(tls_get, ir.constant, 2, 0, 0, arch_get_fs); ir.call(tls_get, 207, 3, [2, 1]);
+    ir.branch(tls_get, ir.nonzero, 3, "failed"); ir.put(tls_get, ir.load, 4, 1, 0, 0); ir.put(tls_get, ir.result, 0, 4, 0, 0);
+    ir.branch(tls_get, ir.label, 0, "failed"); ir.put(tls_get, ir.constant, 4, 0, 0, 0); ir.put(tls_get, ir.result, 0, 4, 0, 0);
+    kaesu [wait, clock, wake, wake_all, reserve, commit, decommit, release, protect, thread_stack, thread_stack_release, thread_create, thread_join, thread_id, tls_set, tls_get];
 }

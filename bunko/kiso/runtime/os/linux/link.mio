@@ -33,7 +33,17 @@ koukai waza executable(functions: []ir.Function, bindings: []ir.Binding, entry: 
     slot = 0;
     aida (slot < len(numbers)) {
         x86_64.label(c, string_stub(slot));
-        x86_64.mov_eax_imm(c, numbers[slot]); x86_64.mov_rr(c, x86_64.r10, x86_64.rcx); x86_64.syscall(c); x86_64.ret(c);
+        x86_64.mov_eax_imm(c, numbers[slot]); x86_64.mov_rr(c, x86_64.r10, x86_64.rcx); x86_64.syscall(c);
+        moshi (slot == slot_clone) {
+            // clone: the parent returns the child id (or -errno). The child starts here with rax = 0 on the stack the caller built
+            // ([entry][argument] at its top): install the import table, call entry(argument), then end only this thread (exit, 60).
+            x86_64.test_rr(c, x86_64.rax, x86_64.rax); x86_64.jcc(c, x86_64.cc_ne, string_clone_parent());
+            x86_64.xor_rr(c, x86_64.rbp, x86_64.rbp); x86_64.mov_ri(c, x86_64.r11, elf.data_base);
+            x86_64.pop_r(c, x86_64.rax); x86_64.pop_r(c, x86_64.rdi); x86_64.call_r(c, x86_64.rax);
+            x86_64.mov_rr(c, x86_64.rdi, x86_64.rax); x86_64.mov_eax_imm(c, 60); x86_64.syscall(c);
+            x86_64.label(c, string_clone_parent());
+        }
+        x86_64.ret(c);
         slot = slot + 1;
     }
     kaku failure = amd64.emit_program(c, functions, bindings, len(numbers), "rt");
@@ -45,5 +55,6 @@ koukai waza executable(functions: []ir.Function, bindings: []ir.Binding, entry: 
     kaesu LinkedImage { bytes: image.bytes, error: "" };
 }
 
+waza string_clone_parent() -> string { kaesu "clone_parent"; }
 waza string_stub(slot: int64) -> string { kaesu string.concat("stub_", convert.format_int(slot)); }
 waza string_function(prefix: string, name: string) -> string { kaesu string.concat(prefix, string.concat("_", name)); }
