@@ -244,3 +244,26 @@ waza test_sse_scalar_golden() -> unit {
     a = assembler(); movq_xmm_r(a, 9, r10);
     testing.expect(same(bytes_of(a), [102, 77, 15, 110, 202]), "movq xmm9,r10");
 }
+
+// Golden encodings for the 16/32-bit memory moves; each sequence was decoded with GNU objdump (Intel syntax shown).
+// The encoder always uses a disp32 form and a (redundant) REX prefix, which is valid for every operand.
+waza test_narrow_memory_moves_golden() -> unit {
+    kaku a = assembler(); mov_load32(a, rax, rdi, 8);
+    testing.expect(same(bytes_of(a), [64, 139, 135, 8, 0, 0, 0]), "mov eax,[rdi+8]");
+    a = assembler(); mov_store32(a, rsi, 16, r9);
+    testing.expect(same(bytes_of(a), [68, 137, 142, 16, 0, 0, 0]), "mov [rsi+16],r9d");
+    a = assembler(); mov_load16(a, rcx, rbx, 4);
+    testing.expect(same(bytes_of(a), [64, 15, 183, 139, 4, 0, 0, 0]), "movzx ecx,word [rbx+4]");
+    a = assembler(); mov_store16(a, rdx, 2, rax);
+    testing.expect(same(bytes_of(a), [102, 64, 137, 130, 2, 0, 0, 0]), "mov [rdx+2],ax");
+    a = assembler(); mov_load32(a, rax, rsp, 0);
+    testing.expect(same(bytes_of(a), [64, 139, 132, 36, 0, 0, 0, 0]), "mov eax,[rsp+0] needs a SIB byte");
+}
+
+// SYSCALL becomes a call of darwin_syscall only when the label darwin_abi exists.
+waza test_syscall_is_rewritten_only_in_darwin_mode() -> unit {
+    kaku plain = assembler(); label(plain, "darwin_syscall"); syscall(plain);
+    testing.expect(same(bytes_of(plain), [15, 5]), "plain SYSCALL is 0F 05");
+    kaku darwin = assembler(); label(darwin, "darwin_abi"); label(darwin, "darwin_syscall"); syscall(darwin); syscall_raw(darwin);
+    testing.expect(same(bytes_of(darwin), [232, 251, 255, 255, 255, 15, 5]), "call darwin_syscall (rel32 = -5), raw SYSCALL kept");
+}

@@ -1,0 +1,128 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/pe";
+yobu "kiso/array";
+yobu "kiso/string";
+
+// PE32+ (IMAGE_FILE_MACHINE_ARM64, 0xAA64) packaging for the lowered Windows ARM64 words (kiso/aot/lower,
+// compile_windows_arm64). Layout from kiso/aot/pe: `.data` first at RVA 0x1000 (zero-fill, the program's globals), then
+// `.text`, `.rdata` (constants), `.idata` (imports; the loader fills the IAT) and `.reloc`. The preferred image base is
+// 0x140000000; the image is ASLR-capable (see build) and the code is PC-relative, so it needs no relocation of its own:
+// ADRP/ADD patches are resolved here from the final section RVAs.
+//
+// AddressPatch.target kinds: 0 text (byte offset), 1 constants (.rdata), 2 globals (.data), 3 IAT slot (offset = flattened
+// import index * 8). The generated code uses no structured exception handling and no unwinding, so the image carries no
+// .pdata/.xdata; Win32 calls are plain leaf-style AAPCS64 calls made through the IAT.
+teisu stack_reserve = 67108864;
+teisu data_rva = 4096;
+
+koukai kata ImageResult { bytes: []uint8; error: string; }
+waza failed(message: string) -> ImageResult { kaesu ImageResult { bytes: [], error: message }; }
+
+// Code word of the label `windows_start` (the PE entry routine emitted by lower.compile_windows_arm64), or -1.
+koukai waza start_word(labels: []arm64.Label) -> int64 {
+    kaku at = 0;
+    aida (at < len(labels)) { moshi (labels[at].name == "windows_start") { kaesu labels[at].word; } at = at + 1; }
+    kaesu -1;
+}
+
+waza push_word(out: []uint8, word: uint32) -> unit {
+    kaku value = int64(word); kaku i = 0;
+    aida (i < 4) { array.push(out, uint8(value - (value / 256) * 256)); value = value / 256; i = i + 1; }
+}
+
+// imports: pairs (library, symbol), grouped by library, in IAT order.
+waza libraries(imports: []string) -> []pe.ImportLibrary {
+    kaku result: []pe.ImportLibrary = []; kaku at = 0;
+    aida (at + 1 < len(imports)) {
+        kaku last = len(result) - 1;
+        moshi (last >= 0 && result[last].name == imports[at]) { array.push(result[last].symbols, imports[at + 1]); }
+        sore { array.push(result, pe.ImportLibrary { name: imports[at], symbols: [imports[at + 1]] }); }
+        at = at + 2;
+    }
+    kaesu result;
+}
+
+// IAT slot of flattened import `index` (each library's IAT ends with a zero entry).
+waza iat_slot(imports: []string, iat_rva: int64, index: int64) -> int64 {
+    kaku libs = 0; kaku at = 0; kaku previous = "";
+    aida (at / 2 <= index) {
+        moshi (imports[at] != previous) { libs = libs + 1; previous = imports[at]; }
+        at = at + 2;
+    }
+    kaesu iat_rva + (index + libs - 1) * 8;
+}
+
+waza section_rva(layout: pe.Layout, kind: int64) -> int64 {
+    kaku at = 0;
+    aida (at < len(layout.sections)) { moshi (layout.sections[at].kind == kind) { kaesu layout.sections[at].rva; } at = at + 1; }
+    kaesu -1;
+}
+
+// Windows on ARM64 only runs ASLR-capable images (IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE with a base-relocation table).
+// The generated code is entirely PC-relative (ADRP/ADD; the loader fills the IAT), so it is position independent and the
+// image may be relocated freely. pe.executable emits DYNAMIC_BASE and a .reloc section as soon as one DIR64 relocation
+// exists; that relocation covers an unused, zero-initialised 8-byte slot appended to .rdata, which no code ever reads.
+waza build(words: []uint32, constants: []uint8, globals: int64, entry_word: int64, imports: []string) -> pe.ImageResult {
+    kaku text: []uint8 = array.with_capacity[uint8](len(words) * 4);
+    kaku i = 0;
+    aida (i < len(words)) { push_word(text, words[i]); i = i + 1; }
+    kaku rdata = array.clone(constants);
+    aida (len(rdata) - (len(rdata) / 8) * 8 != 0) { array.push(rdata, uint8(0)); }
+    kaku slot = len(rdata);
+    i = 0; aida (i < 8) { array.push(rdata, uint8(0)); i = i + 1; }
+    kaku relocation = pe.Patch { section: pe.rdata_section, offset: slot, kind: pe.va64, target: pe.text_section, target_offset: 0 };
+    kaesu pe.executable_machine(pe.ImageSpec { text: text, rdata: rdata, data: [], zero_fill: globals * 8, entry: entry_word * 4,
+        imports: libraries(imports), patches: [relocation], unwind: [] }, [], stack_reserve, data_rva, pe.machine_arm64);
+}
+
+koukai waza image(spec: macho.ImageSpec, entry_word: int64, imports: []string) -> ImageResult {
+    moshi (len(spec.words) == 0) { kaesu failed("EMPTY_TEXT"); }
+    moshi (entry_word < 0 || entry_word >= len(spec.words)) { kaesu failed("INVALID_ENTRY"); }
+    moshi (spec.globals < 0 || spec.globals > 10244) { kaesu failed("TOO_MANY_GLOBALS"); }
+    moshi (len(imports) == 0 || len(imports) - (len(imports) / 2) * 2 != 0) { kaesu failed("INVALID_IMPORTS"); }
+    // pass 1 fixes the section RVAs (they depend only on sizes); pass 2 carries the patched words
+    kaku first = build(spec.words, spec.constants, spec.globals, entry_word, imports);
+    moshi (first.error != mu) { kaesu failed("PE_LAYOUT"); }
+    kaku layout = first.layout;
+    kaku base = pe.image_base;
+    kaku text_rva = section_rva(layout, pe.text_section);
+    kaku words = array.clone(spec.words);
+    kaku index = 0;
+    aida (index < len(spec.patches)) {
+        kaku patch = spec.patches[index];
+        moshi (patch.at_word < 0 || patch.at_word >= len(words) || patch.target_offset < 0 || patch.target.kind < 0 || patch.target.kind > 3) { kaesu failed("INVALID_PATCH"); }
+        kaku target = 0;
+        moshi (patch.target.kind == 0) {
+            moshi (patch.target_offset >= len(words) * 4) { kaesu failed("INVALID_PATCH"); }
+            target = base + text_rva + patch.target_offset;
+        }
+        moshi (patch.target.kind == 1) {
+            moshi (patch.target_offset >= len(spec.constants) || section_rva(layout, pe.rdata_section) < 0) { kaesu failed("INVALID_PATCH"); }
+            target = base + section_rva(layout, pe.rdata_section) + patch.target_offset;
+        }
+        moshi (patch.target.kind == 2) {
+            moshi (patch.target_offset >= spec.globals * 8 || section_rva(layout, pe.data_section) < 0) { kaesu failed("INVALID_PATCH"); }
+            target = base + section_rva(layout, pe.data_section) + patch.target_offset;
+        }
+        moshi (patch.target.kind == 3) {
+            kaku slot = patch.target_offset / 8;
+            moshi (patch.target_offset - slot * 8 != 0 || slot >= len(imports) / 2) { kaesu failed("INVALID_PATCH"); }
+            target = base + iat_slot(imports, layout.iat_rva, slot);
+        }
+        kaku encoded = arm64.adrp_offset(patch.register, base + text_rva + patch.at_word * 4, target);
+        moshi (encoded.error != mu) { kaesu failed("ENCODE"); }
+        words[patch.at_word] = encoded.word;
+        moshi (patch.add_at_word >= 0) {
+            moshi (patch.add_at_word >= len(words) || patch.add_at_word == patch.at_word) { kaesu failed("INVALID_PATCH"); }
+            kaku addition = arm64.add_imm_x(patch.register, patch.register, target - (target / 4096) * 4096, iie);
+            moshi (addition.error != mu) { kaesu failed("ENCODE"); }
+            words[patch.add_at_word] = addition.word;
+        }
+        index = index + 1;
+    }
+    kaku second = build(words, spec.constants, spec.globals, entry_word, imports);
+    moshi (second.error != mu) { kaesu failed("PE_LAYOUT"); }
+    moshi (second.layout.image_size != layout.image_size || second.layout.iat_rva != layout.iat_rva) { kaesu failed("LAYOUT_CHANGED"); }
+    kaesu ImageResult { bytes: second.bytes, error: "" };
+}

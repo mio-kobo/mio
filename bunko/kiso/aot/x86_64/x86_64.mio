@@ -123,6 +123,24 @@ koukai waza mov_load8(a: Assembler, dst: int64, base: int64, disp: int64) -> uni
     moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
     rex(a, dst, base); byte(a, 15); byte(a, 182); memory(a, dst, base, disp);
 }
+// mov dst32, dword [base + disp32] (zero-extends into dst), mov dword [base + disp32], src32.
+koukai waza mov_load32(a: Assembler, dst: int64, base: int64, disp: int64) -> unit {
+    moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
+    byte(a, 64 + high(dst) * 4 + high(base)); byte(a, 139); memory(a, dst, base, disp);
+}
+koukai waza mov_store32(a: Assembler, base: int64, disp: int64, src: int64) -> unit {
+    moshi (!valid_register(a, src) || !valid_register(a, base)) { kaesu; }
+    byte(a, 64 + high(src) * 4 + high(base)); byte(a, 137); memory(a, src, base, disp);
+}
+// movzx dst, word [base + disp32] and mov word [base + disp32], src16.
+koukai waza mov_load16(a: Assembler, dst: int64, base: int64, disp: int64) -> unit {
+    moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
+    byte(a, 64 + high(dst) * 4 + high(base)); byte(a, 15); byte(a, 183); memory(a, dst, base, disp);
+}
+koukai waza mov_store16(a: Assembler, base: int64, disp: int64, src: int64) -> unit {
+    moshi (!valid_register(a, src) || !valid_register(a, base)) { kaesu; }
+    byte(a, 102); byte(a, 64 + high(src) * 4 + high(base)); byte(a, 137); memory(a, src, base, disp);
+}
 koukai waza mov_ri(a: Assembler, dst: int64, value: int64) -> unit {
     moshi (!valid_register(a, dst)) { kaesu; }
     rex(a, 0, dst); byte(a, 184 + low3(dst)); imm64(a, value);
@@ -236,7 +254,16 @@ koukai waza mov_eax_imm(a: Assembler, value: int64) -> unit {
 }
 // mov eax,eax: zero-extends a 32-bit native result into rax.
 koukai waza zero_extend_eax(a: Assembler) -> unit { byte(a, 137); byte(a, 192); }
-koukai waza syscall(a: Assembler) -> unit { byte(a, 15); byte(a, 5); }
+// The SYSCALL instruction itself (0F 05).
+koukai waza syscall_raw(a: Assembler) -> unit { byte(a, 15); byte(a, 5); }
+// Darwin (macOS x86-64) mode, chosen by defining the label "darwin_abi" before any code is emitted: a Linux-convention
+// system call (number in eax, arguments in rdi rsi rdx r10 r8 r9, result or -errno in rax) becomes `call darwin_syscall`,
+// a runtime routine that performs the equivalent Darwin BSD call. Without the label this is the plain SYSCALL instruction,
+// so Linux images stay byte-identical.
+koukai waza syscall(a: Assembler) -> unit {
+    moshi (find_label(a, "darwin_abi") >= 0) { call(a, "darwin_syscall"); kaesu; }
+    syscall_raw(a);
+}
 koukai waza mfence(a: Assembler) -> unit { byte(a, 15); byte(a, 174); byte(a, 240); }
 // xchg [base], reg (implicitly locked): sequentially consistent store.
 koukai waza xchg_store(a: Assembler, base: int64, reg: int64) -> unit {

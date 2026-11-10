@@ -10,17 +10,19 @@ yobu "kiso/convert";
 waza operand(code: []uint8, op: int64, value: int64) -> unit {
     array.push(code,uint8(op));array.push(code,uint8(value/256));array.push(code,uint8(value-(value/256)*256));
 }
-// The AArch64 backend's image for the host: a signed Mach-O image on macOS ARM64, an ELF image on Linux ARM64. Both come from
+// The AArch64 backend's image for the host: a signed Mach-O image on macOS ARM64, an ELF image on Linux ARM64, a PE image on
+// Windows ARM64. All come from
 // the same lowering (private OS/testing state, 2048 user globals); only the container and the OS adapter differ.
 waza build_boundary_image(host: string, data: []uint8) -> NativeBuildResult {
     moshi (host == "linux-arm64") { kaesu build_linux_arm64_test(data); }
+    moshi (host == "windows-arm64") { kaesu build_windows_arm64_test(data); }
     kaesu build_signed_test(data);
 }
 waza test_full_global_capacity_with_private_os_and_testing_state() -> unit {
-    // This test builds and executes the host's AArch64 image (Mach-O on macOS ARM64, ELF on Linux ARM64). Other hosts cannot
+    // This test builds and executes the host's AArch64 image (Mach-O on macOS ARM64, ELF on Linux ARM64, PE on Windows ARM64). Other hosts cannot
     // execute either image; the x86-64 and Windows backends have their own coverage of the same properties.
     kaku host = host_target();
-    moshi (host != "darwin-arm64" && host != "linux-arm64") { testing.skip("the AArch64 test image needs a macOS ARM64 or Linux ARM64 host"); kaesu; }
+    moshi (host != "darwin-arm64" && host != "linux-arm64" && host != "windows-arm64") { testing.skip("the AArch64 test image needs a macOS ARM64, Linux ARM64 or Windows ARM64 host"); kaesu; }
     kaku code: []uint8=[];kaku at=0;
     aida(at<2048){operand(code,1,0);operand(code,19,at);at=at+1;}
     operand(code,25,0);array.push(code,uint8(22));operand(code,20,2047);array.push(code,uint8(22));
@@ -30,7 +32,7 @@ waza test_full_global_capacity_with_private_os_and_testing_state() -> unit {
     kaku file=mochi.File {version:14,constants:constants,global_count:2048,instructions:code,functions:functions};
     kaku built=build_boundary_image(host,mochi.canonical_bytes(file));
     moshi(built.error!=""){testing.fail(built.error);kaesu;}
-    kaku directory=string.concat("/tmp/mio-globals-",convert.format_int(os.pid()));kaku created=fs.create_dir(directory);
+    kaku directory=string.concat(temporary_root(),string.concat("/mio-globals-",convert.format_int(os.pid())));kaku created=fs.create_dir(directory);
     moshi(created.error!=mu){testing.fail("create boundary directory");kaesu;}
     moshi(os.chmod(directory,448)!=0){os.remove_dir(directory);testing.fail("protect boundary directory");kaesu;}
     kaku image=string.concat(directory,"/program");kaku stdout=string.concat(directory,"/stdout");kaku stderr=string.concat(directory,"/stderr");kaku packets=string.concat(directory,"/records");
