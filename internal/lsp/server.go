@@ -134,13 +134,14 @@ func newServer(stdin io.Reader, stdout io.Writer, logWriter io.Writer, options O
 
 func (s *server) registerHandlers() {
 	s.requests = map[string]requestHandler{
-		"shutdown":                    s.requestShutdown,
-		"textDocument/hover":          s.requestHover,
-		"textDocument/definition":     s.requestDefinition,
-		"textDocument/references":     s.requestReferences,
-		"textDocument/documentSymbol": s.requestDocumentSymbol,
-		"textDocument/completion":     s.requestCompletion,
-		"textDocument/signatureHelp":  s.requestSignatureHelp,
+		"shutdown":                       s.requestShutdown,
+		"textDocument/hover":             s.requestHover,
+		"textDocument/definition":        s.requestDefinition,
+		"textDocument/references":        s.requestReferences,
+		"textDocument/documentSymbol":    s.requestDocumentSymbol,
+		"textDocument/documentHighlight": s.requestDocumentHighlight,
+		"textDocument/completion":        s.requestCompletion,
+		"textDocument/signatureHelp":     s.requestSignatureHelp,
 	}
 	s.notifications = map[string]notificationHandler{
 		"initialized":                      s.notificationInitialized,
@@ -344,10 +345,11 @@ func (s *server) handleInitialize(ctx context.Context, msg message) {
 				Change:    textDocumentSyncKindIncremental,
 				Save:      &SaveOptions{IncludeText: false},
 			},
-			HoverProvider:          true,
-			DefinitionProvider:     true,
-			ReferencesProvider:     true,
-			DocumentSymbolProvider: true,
+			HoverProvider:             true,
+			DefinitionProvider:        true,
+			ReferencesProvider:        true,
+			DocumentHighlightProvider: true,
+			DocumentSymbolProvider:    true,
 			CompletionProvider: &CompletionOptions{
 				TriggerCharacters: []string{"."},
 			},

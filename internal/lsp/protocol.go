@@ -182,14 +182,15 @@ type ServerInfo struct {
 // ServerCapabilities 声明真正实现的语言能力。
 // 未实现的功能（Rename、SemanticTokens、Formatting）绝不在此声明。
 type ServerCapabilities struct {
-	PositionEncoding       string                  `json:"positionEncoding,omitempty"`
-	TextDocumentSync       TextDocumentSyncOptions `json:"textDocumentSync"`
-	HoverProvider          bool                    `json:"hoverProvider,omitempty"`
-	DefinitionProvider     bool                    `json:"definitionProvider,omitempty"`
-	ReferencesProvider     bool                    `json:"referencesProvider,omitempty"`
-	DocumentSymbolProvider bool                    `json:"documentSymbolProvider,omitempty"`
-	CompletionProvider     *CompletionOptions      `json:"completionProvider,omitempty"`
-	SignatureHelpProvider  *SignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
+	PositionEncoding          string                  `json:"positionEncoding,omitempty"`
+	TextDocumentSync          TextDocumentSyncOptions `json:"textDocumentSync"`
+	HoverProvider             bool                    `json:"hoverProvider,omitempty"`
+	DefinitionProvider        bool                    `json:"definitionProvider,omitempty"`
+	ReferencesProvider        bool                    `json:"referencesProvider,omitempty"`
+	DocumentHighlightProvider bool                    `json:"documentHighlightProvider,omitempty"`
+	DocumentSymbolProvider    bool                    `json:"documentSymbolProvider,omitempty"`
+	CompletionProvider        *CompletionOptions      `json:"completionProvider,omitempty"`
+	SignatureHelpProvider     *SignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
 }
 
 // CompletionOptions 表示补全能力选项
