@@ -87,3 +87,22 @@ waza test_wake_all_requests_int_max_waiters() -> unit {
     }
     testing.expect(found, "wake_all passes INT_MAX as the count");
 }
+
+// Thread primitives: raw clone / arch_prctl / gettid slots and the IR functions built on them. They are OS-level only
+// (witnessed natively by check_threads.py); the capability descriptor must keep refusing managed threads.
+waza test_thread_slots_and_functions_exist() -> unit {
+    kaku numbers = syscall_numbers();
+    testing.expect(numbers[slot_clone] == 56 && numbers[slot_arch_prctl] == 158 && numbers[slot_gettid] == 186, "clone, arch_prctl, gettid slots");
+    testing.expect(clone_thread_flags == 4001536, "CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID");
+    kaku functions = platform_program();
+    kaku wanted = ["platform_thread_stack", "platform_thread_stack_release", "platform_thread_create", "platform_thread_join", "platform_thread_id", "platform_tls_set", "platform_tls_get"];
+    kaku found = 0; kaku i = 0;
+    aida (i < len(wanted)) {
+        kaku j = 0;
+        aida (j < len(functions)) { moshi (functions[j].name == wanted[i]) { found = found + 1; } j = j + 1; }
+        i = i + 1;
+    }
+    testing.expect(found == len(wanted), "every thread primitive is defined exactly once");
+    kaku t = capabilities();
+    testing.expect(!t.threads && !t.tls && !t.concurrent_collector && !t.precise_roots, "managed threads stay unclaimed until the collector knows the threads");
+}

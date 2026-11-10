@@ -670,6 +670,15 @@ def linux(args, target="linux-amd64"):
     report.check("linux-runtime-chain", "PASS" if code == 0 and executed else "FAIL", "native",
                  "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                  note="kiso/runtime/ir -> cpu/amd64 -> x86_64 -> elf image built by a native Mio program and executed")
+    # OS thread primitives (raw clone, futex join, FS-base TLS): a real multi-threaded image built by a native Mio program.
+    threads = work / "thread-witness"
+    threads.mkdir(exist_ok=True)
+    code, out, err, seconds = run(report, "linux-thread-witness", [sys.executable, ROOT / "bunko/kiso/runtime/os/linux/check_threads.py"],
+                                  env=dict(MIO_CI_MIO=str(cli), MIO_CI_MODULE_DIR=str(threads)), timeout=1800)
+    executed = "execution: NOT_RUN" not in out + err
+    report.check("linux-thread-witness", "PASS" if code == 0 and executed else "FAIL", "native",
+                 "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
+                 note="OS threads only (not managed by the collector): 4 clone threads, futex join, per-thread TLS, exact contended counter, release/acquire, 20 runs")
     # Stage A of the other targets, cross-built by two native generations that must agree
     seeds = report.output / "stage-a"
     seeds.mkdir(exist_ok=True)
