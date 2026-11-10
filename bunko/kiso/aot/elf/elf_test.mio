@@ -81,3 +81,25 @@ waza test_invalid_specs_fail_closed() -> unit {
     testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "bss above maximum_bss_size");
     testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435456 }).error == "", "bss exactly at maximum_bss_size is accepted");
 }
+
+// AArch64: exit_group(0): mov x0,#0 ; mov x8,#94 ; svc #0
+waza exit_code_aarch64() -> []uint8 {
+    kaesu [uint8(0), uint8(0), uint8(128), uint8(210), uint8(200), uint8(11), uint8(128), uint8(210), uint8(1), uint8(0), uint8(0), uint8(212)];
+}
+
+waza test_aarch64_machine_and_alignment() -> unit {
+    kaku image = executable_aarch64(ImageSpec { code: exit_code_aarch64(), entry_offset: 0, bss_size: 4104 });
+    testing.expect(image.error == "", "aarch64 image built");
+    kaku b = image.bytes;
+    testing.expect(word(b, 16, 2) == 2 && word(b, 18, 2) == 183, "ET_EXEC EM_AARCH64");
+    testing.expect(word(b, 24, 8) == 4198400, "entry = 0x401000");
+    testing.expect(word(b, 64 + 48, 8) == 65536 && word(b, 64 + 56 + 48, 8) == 65536, "PT_LOAD 64 KiB aligned");
+    testing.expect(word(b, 4096, 1) == 0 && word(b, 4096 + 4, 1) == 200, "code placed at 0x1000");
+}
+
+waza test_machine_selection_is_explicit() -> unit {
+    kaku x86 = executable(ImageSpec { code: exit_code(), entry_offset: 0, bss_size: 0 });
+    testing.expect(word(x86.bytes, 18, 2) == 62 && word(x86.bytes, 64 + 48, 8) == 4096, "x86-64 output keeps EM_X86_64 and 4 KiB alignment");
+    kaku bad = executable_for(ImageSpec { code: exit_code(), entry_offset: 0, bss_size: 0 }, 3);
+    testing.expect(bad.error == "UNSUPPORTED_MACHINE", "unknown machine fails closed");
+}
