@@ -58,3 +58,13 @@ waza test_windows_adapter_reserves_its_data_words() -> unit {
     testing.expect(windows_adapter_words() == 128, "64 descriptor entries and 64 enumeration flags");
     testing.expect(win.globals == dar.globals + windows_adapter_words(), "the adapter words follow the program's globals");
 }
+
+// close(): descriptors above 2 are really closed (unsigned "higher" test); 0..2 stay open. Condition code 8 is HI; the
+// inverted LS (9) leaked every descriptor, so the 64-entry table filled up and opens failed with EMFILE.
+waza test_windows_close_tests_descriptors_above_two() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku close = win_label(win.labels, "wx_close");
+    testing.expect(close >= 0, "wx_close exists");
+    testing.expect(win.words[close] == arm64.cmp_imm_x(0, 2, iie).word, "cmp x0, #2");
+    testing.expect(win.words[close + 1] == arm64.b_cond(8, win_label(win.labels, "wx_close_real") - (close + 1)).word, "b.hi wx_close_real (condition 8, not 9)");
+}
