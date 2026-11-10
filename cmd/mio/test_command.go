@@ -208,6 +208,7 @@ func parseTestArgs(args []string, fallback i18n.Language) (testCommandOptions, b
 	} else {
 		options.lang = i18n.Select(explicitLanguage, os.Getenv)
 	}
+	options.diag.language = options.lang
 	return options, true
 }
 

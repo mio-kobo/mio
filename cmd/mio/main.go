@@ -93,12 +93,12 @@ func runCLI(
 
 	switch args[0] {
 	case "lsp":
-		return runLSP(args[1:], os.Stdin, stdout, stderr)
+		return runLSP(args[1:], os.Stdin, stdout, stderr, language)
 
 	case "lint":
-		return runLint(args[1:], stdout, stderr)
+		return runLint(args[1:], stdout, stderr, language)
 	case "fmt":
-		return runFmt(args[1:], os.Stdin, stdout, stderr)
+		return runFmt(args[1:], os.Stdin, stdout, stderr, language)
 
 	case "test":
 		return runTestCommand(args[1:], stdout, stderr, language, colorMode)
@@ -109,6 +109,7 @@ func runCLI(
 			printUsage(stderr, language, theme)
 			return 2
 		}
+		options.language = language
 		if globals.color != "" {
 			options.color = diagnostic.ColorMode(globals.color)
 		}
@@ -153,7 +154,7 @@ func runCLI(
 
 		program, r, err := parseAndCheckFile(sourcePath)
 		if err != nil {
-			renderCLIError(stderr, sourcePath, err, cliDiagnosticOptions{}, false)
+			renderCLIError(stderr, sourcePath, err, cliDiagnosticOptions{language: language}, false)
 			return 1
 		}
 		bytecode, err := compileProgram(program, r)
@@ -190,7 +191,7 @@ func runCLI(
 		runtimeError, err := executeBytecode(bytecode, stdout)
 		if err != nil {
 			if runtimeError {
-				renderCLIError(stderr, "", err, cliDiagnosticOptions{}, true)
+				renderCLIError(stderr, "", err, cliDiagnosticOptions{language: language}, true)
 			} else {
 				fmt.Fprintln(stderr, "mio:", err)
 			}
@@ -199,15 +200,17 @@ func runCLI(
 		return 0
 
 	default:
+		fmt.Fprintf(stderr, "E_COMMAND %s\n", i18n.Format(language, i18n.KeyErrUnknownCommand, args[0]))
 		printUsage(stderr, language, theme)
 		return 2
 	}
 }
 
 type cliDiagnosticOptions struct {
-	color   diagnostic.ColorMode
-	format  diagnostic.Format
-	verbose bool
+	color    diagnostic.ColorMode
+	format   diagnostic.Format
+	verbose  bool
+	language i18n.Language
 }
 
 func parseDiagnosticArgs(args []string) (string, cliDiagnosticOptions, bool) {
@@ -250,7 +253,7 @@ func renderCLIError(out io.Writer, path string, err error, options cliDiagnostic
 	if d.Path == "" {
 		d.Path = path
 	}
-	renderer := diagnostic.Renderer{Writer: out, Source: source, Path: path, Color: options.color, Format: options.format, Verbose: options.verbose}
+	renderer := diagnostic.Renderer{Writer: out, Source: source, Path: path, Color: options.color, Format: options.format, Verbose: options.verbose, Language: options.language}
 	if renderErr := renderer.Render(d); renderErr != nil {
 		fmt.Fprintln(out, "mio:", err)
 	}
@@ -266,10 +269,11 @@ func diagnosticFromError(err error, runtime bool) *diagnostic.Diagnostic {
 		end := lexical.Position
 		end.Offset++
 		end.Column++
-		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err)
+		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err).WithDisplayMessage(i18n.KeyDiagLexical)
 	}
 	if runtime {
 		d := &diagnostic.Diagnostic{Code: "E0501", Severity: diagnostic.SeverityError, Message: "运行时错误: mio: runtime: " + err.Error(), Cause: err}
+		d.WithRuntimeDisplayMessage(err)
 		var runtimeErr *vm.RuntimeError
 		if errors.As(err, &runtimeErr) {
 			for index, frame := range runtimeErr.Stack {
@@ -282,7 +286,12 @@ func diagnosticFromError(err error, runtime bool) *diagnostic.Diagnostic {
 		}
 		return d
 	}
-	return (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
+	d := (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
+	var dependency *bunko.DependencyError
+	if errors.As(err, &dependency) {
+		return d.WithDisplayMessage(i18n.KeyBunkoDependency, dependency.ImportPath)
+	}
+	return d.WithDisplayMessage(i18n.KeyTestCompileFailed)
 }
 
 // compileProgram 将经过检查的 AST 编译为字节码
@@ -515,16 +524,17 @@ func printValue(out io.Writer, v value.Value) error {
 }
 
 // runLSP 启动 MioCore 内置语言服务器；stdout 只用于 JSON-RPC 帧
-func runLSP(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
+func runLSP(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer, language i18n.Language) int {
+	usage := i18n.Text(language, i18n.KeyHelpUsage) + ": mio lsp [--stdio]"
 	for _, arg := range args {
 		switch arg {
 		case "--stdio":
 		case "help", "-h", "--help":
-			fmt.Fprintln(stdout, "Usage: mio lsp [--stdio]")
+			fmt.Fprintln(stdout, usage)
 			return 0
 		default:
-			fmt.Fprintf(stderr, "mio lsp: unknown argument %q\n", arg)
-			fmt.Fprintln(stderr, "Usage: mio lsp [--stdio]")
+			fmt.Fprintf(stderr, "mio lsp: %s\n", i18n.Format(language, i18n.KeyCliLspUnknown, strconv.Quote(arg)))
+			fmt.Fprintln(stderr, usage)
 			return 2
 		}
 	}

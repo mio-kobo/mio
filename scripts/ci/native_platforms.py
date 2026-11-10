@@ -237,6 +237,13 @@ def cli_checks(report, cli, target, work):
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
           contains=('"code":', '"severity":"error"'), absent=(ansi, "不明な"))
+    check("lsp-help-fr", ["--lang=fr-FR", "lsp", "--help"],
+          contains=("Utilisation: mio lsp", "--bunko-root"), absent=(ansi,))
+    missing_bunko = work / "i18n-nonexistent-bunko"
+    check("bunko-root-de", ["--lang=de-DE", "check", str(bad), "--bunko-root", str(missing_bunko)], code=2,
+          contains=("E_BUNKO_ROOT", "Bunko-Verzeichnis", "kiso/", str(missing_bunko)), absent=(ansi,))
+    check("diagnostic-fr", ["--lang=fr-FR", "--color=never", "check", str(bad)], code=1,
+          contains=("erreur[", "missing_symbol"), absent=(ansi,))
     # Frontend accepts this source; the native backend rejects the 600-value
     # expression frame. The original E_LOWER detail must survive localization.
     backend = work / "i18n-backend-failure.mio"

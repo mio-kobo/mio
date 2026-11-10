@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Mio/internal/i18n"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 func runFmtCLI(t *testing.T, stdin string, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	status := runFmt(args, strings.NewReader(stdin), &stdout, &stderr)
+	status := runFmt(args, strings.NewReader(stdin), &stdout, &stderr, i18n.English)
 	return status, stdout.String(), stderr.String()
 }
 

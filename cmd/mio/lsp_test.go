@@ -15,7 +15,7 @@ import (
 
 func TestRunLSPHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if exit := runLSP([]string{"--help"}, strings.NewReader(""), &stdout, &stderr); exit != 0 {
+	if exit := runLSP([]string{"--help"}, strings.NewReader(""), &stdout, &stderr, i18n.English); exit != 0 {
 		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Usage: mio lsp") {
@@ -25,7 +25,7 @@ func TestRunLSPHelp(t *testing.T) {
 
 func TestRunCLILSPCommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if exit := runCLI([]string{"lsp", "--help"}, &stdout, &stderr); exit != 0 {
+	if exit := runCLI([]string{"--lang=en-US", "lsp", "--help"}, &stdout, &stderr); exit != 0 {
 		t.Fatalf("exit = %d, stderr = %s", exit, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Usage: mio lsp [--stdio]") {
@@ -40,17 +40,17 @@ func TestRunCLILSPCommand(t *testing.T) {
 
 func TestRunLSPRejectsUnknownArgument(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if exit := runLSP([]string{"--tcp"}, strings.NewReader(""), &stdout, &stderr); exit != 2 {
+	if exit := runLSP([]string{"--tcp"}, strings.NewReader(""), &stdout, &stderr, i18n.English); exit != 2 {
 		t.Fatalf("exit = %d", exit)
 	}
-	if !strings.Contains(stderr.String(), "unknown argument") {
+	if !strings.Contains(stderr.String(), "unknown lsp argument") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
 func TestRunLSPExitsNonZeroWithoutShutdown(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if exit := runLSP([]string{"--stdio"}, strings.NewReader(""), &stdout, &stderr); exit != 1 {
+	if exit := runLSP([]string{"--stdio"}, strings.NewReader(""), &stdout, &stderr, i18n.English); exit != 1 {
 		t.Fatalf("exit = %d", exit)
 	}
 	if stdout.Len() != 0 {
@@ -67,7 +67,7 @@ func TestRunLSPServesInitializeAndShutdown(t *testing.T) {
 	done := make(chan int, 1)
 	go func() {
 		var stderr bytes.Buffer
-		code := runLSP([]string{"--stdio"}, serverIn, serverOut, &stderr)
+		code := runLSP([]string{"--stdio"}, serverIn, serverOut, &stderr, i18n.English)
 		serverOut.Close()
 		done <- code
 	}()

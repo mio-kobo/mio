@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"Mio/internal/i18n"
 )
 
 // ColorMode 控制 ANSI 颜色输出
@@ -38,6 +40,7 @@ type Renderer struct {
 	Format   Format
 	Verbose  bool
 	TabWidth int
+	Language i18n.Language
 }
 
 type sourceLine struct {
@@ -87,7 +90,7 @@ func (r Renderer) Render(d *Diagnostic) error {
 		if displayPath == "" {
 			displayPath = "<runtime>"
 		}
-		_, err := fmt.Fprintf(r.Writer, "%s:%d:%d: %s[%s]: %s\n", displayPath, location.Line, location.Column, d.Severity, d.Code, d.Message)
+		_, err := fmt.Fprintf(r.Writer, "%s:%d:%d: %s[%s]: %s\n", displayPath, location.Line, location.Column, r.severity(d.Severity), d.Code, d.messageFor(r.Language))
 		return err
 	case FormatJSON:
 		value := jsonDiagnostic{Code: d.Code, Severity: d.Severity, Message: d.Message, Path: path, Location: location, Labels: d.Labels, Notes: d.Notes, Helps: d.Helps, Expected: d.Expected, Actual: d.Actual}
@@ -99,13 +102,24 @@ func (r Renderer) Render(d *Diagnostic) error {
 	}
 }
 
+func (r Renderer) severity(severity Severity) string {
+	switch severity {
+	case SeverityError:
+		return i18n.Text(r.Language, i18n.KeyDiagError)
+	case SeverityWarning:
+		return i18n.Text(r.Language, i18n.KeyDiagWarning)
+	default:
+		return string(severity)
+	}
+}
+
 func (r Renderer) renderHuman(d *Diagnostic, path string, location SourceLocation, hasLabel bool) error {
 	color := r.useColor()
-	header := fmt.Sprintf("%s[%s]", d.Severity, d.Code)
+	header := fmt.Sprintf("%s[%s]", r.severity(d.Severity), d.Code)
 	if color {
 		header = "\x1b[1;31m" + header + "\x1b[0m"
 	}
-	if _, err := fmt.Fprintf(r.Writer, "%s: %s\n", header, d.Message); err != nil {
+	if _, err := fmt.Fprintf(r.Writer, "%s: %s\n", header, d.messageFor(r.Language)); err != nil {
 		return err
 	}
 	if hasLabel {
@@ -119,32 +133,32 @@ func (r Renderer) renderHuman(d *Diagnostic, path string, location SourceLocatio
 		}
 	}
 	if d.Expected != "" || d.Actual != "" {
-		detail := fmt.Sprintf("期望 %s，实际 %s", d.Expected, d.Actual)
+		detail := i18n.Format(r.Language, i18n.KeyDiagExpectedActual, d.Expected, d.Actual)
 		if len(d.Helps) > 0 {
-			detail += "；建议: " + d.Helps[0].Message
+			detail += " | " + i18n.Text(r.Language, i18n.KeyDiagSuggestion) + ": " + d.Helps[0].Message
 		}
 		if _, err := fmt.Fprintf(r.Writer, "  = %s\n", detail); err != nil {
 			return err
 		}
 	}
 	if len(d.Helps) > 0 && d.Expected == "" && d.Actual == "" {
-		if _, err := fmt.Fprintf(r.Writer, "  = 建议: %s\n", d.Helps[0].Message); err != nil {
+		if _, err := fmt.Fprintf(r.Writer, "  = %s: %s\n", i18n.Text(r.Language, i18n.KeyDiagSuggestion), d.Helps[0].Message); err != nil {
 			return err
 		}
 	}
 	if len(d.Notes) > 0 {
-		if _, err := fmt.Fprintf(r.Writer, "  = 说明: %s\n", d.Notes[0].Message); err != nil {
+		if _, err := fmt.Fprintf(r.Writer, "  = %s: %s\n", i18n.Text(r.Language, i18n.KeyDiagNote), d.Notes[0].Message); err != nil {
 			return err
 		}
 	}
 	if r.Verbose {
 		for _, note := range d.Notes[1:] {
-			if _, err := fmt.Fprintf(r.Writer, "  = 说明: %s\n", note.Message); err != nil {
+			if _, err := fmt.Fprintf(r.Writer, "  = %s: %s\n", i18n.Text(r.Language, i18n.KeyDiagNote), note.Message); err != nil {
 				return err
 			}
 		}
 		if d.Cause != nil {
-			if _, err := fmt.Fprintf(r.Writer, "  = 原因: %v\n", d.Cause); err != nil {
+			if _, err := fmt.Fprintf(r.Writer, "  = %s: %v\n", i18n.Text(r.Language, i18n.KeyDiagCause), d.Cause); err != nil {
 				return err
 			}
 		}

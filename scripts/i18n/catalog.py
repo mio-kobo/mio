@@ -8,6 +8,7 @@ scripts/i18n/test_catalog.py.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -26,12 +27,33 @@ TAG = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z]{4})?(?:-[A-Za-z]{2}|-[0-9]{3})?$")
 C0_OR_C1 = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 BIDI_CONTROLS = set("\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 OPTION_TOKEN = re.compile(r"--[a-z][a-z0-9-]*")
-TARGET_TOKEN = re.compile(r"(?:darwin-arm64|linux-amd64|windows-amd64)")
+EXACT_TERMS = {
+    "bunko.root_layout": ("kiso/",),
+    "bunko.missing": ("MIO_BUNKO",),
+    "lint.finding_if": ("moshi",),
+    "lint.finding_loop": ("aida", "iie"),
+}
 PRODUCTS = ("Mio", "Bunko", "Mochi", "Native AOT", "BCP 47")
 
 
 class CatalogError(ValueError):
     """A locale catalog or generated artifact is inconsistent."""
+
+
+def load_native_targets():
+    """Read the native CI target registry without importing the runner."""
+    path = ROOT / "scripts" / "ci" / "native_platforms.py"
+    for statement in ast.parse(path.read_text(encoding="utf-8")).body:
+        if isinstance(statement, ast.Assign) and any(
+                isinstance(name, ast.Name) and name.id == "TARGETS" for name in statement.targets):
+            return frozenset(ast.literal_eval(statement.value).values())
+    raise CatalogError("native_platforms.py has no TARGETS registry")
+
+
+NATIVE_TARGETS = load_native_targets()
+TARGET_TOKEN = re.compile(r"(?<![A-Za-z0-9_])(?:"
+                          + "|".join(map(re.escape, sorted(NATIVE_TARGETS)))
+                          + r")(?![A-Za-z0-9_])")
 
 
 def fail(message):
@@ -94,7 +116,7 @@ def normalize_tag(value):
 
 def load_manifest():
     manifest = read_json(MANIFEST)
-    if manifest.get("schema") != 1:
+    if not isinstance(manifest, dict) or manifest.get("schema") != 1:
         fail("languages.json schema must be 1")
     languages = manifest.get("languages")
     if not isinstance(languages, list) or not languages:
@@ -156,6 +178,15 @@ def load_manifest():
     return manifest, locales
 
 
+def validate_placeholders(tag, key, value):
+    remaining = PLACEHOLDER.sub("", value)
+    if "{" in remaining or "}" in remaining:
+        fail("%s.%s has malformed placeholders" % (tag, key))
+    indexes = set(PLACEHOLDER.findall(value))
+    if indexes != {str(index) for index in range(len(indexes))}:
+        fail("%s.%s has non-contiguous or non-canonical placeholders" % (tag, key))
+
+
 def load_catalogs(manifest, locales):
     files = {path.stem: path for path in LOCALES.glob("*.json")}
     if set(files) != set(locales):
@@ -165,7 +196,7 @@ def load_catalogs(manifest, locales):
     catalogs = {}
     for tag in sorted(locales):
         data = read_json(files[tag])
-        if data.get("schema") != 1:
+        if not isinstance(data, dict) or data.get("schema") != 1:
             fail("%s schema must be 1" % tag)
         if data.get("locale") != tag:
             fail("%s declares locale %r" % (tag, data.get("locale")))
@@ -186,11 +217,12 @@ def load_catalogs(manifest, locales):
                 fail("%s.%s contains a control character or ANSI escape" % (tag, key))
             if "\ufffd" in value or any(control in value for control in BIDI_CONTROLS):
                 fail("%s.%s contains a replacement or bidi control character" % (tag, key))
-            indexes = [int(index) for index in PLACEHOLDER.findall(value)]
-            if indexes and indexes != list(range(len(indexes))):
-                fail("%s.%s has non-contiguous placeholders" % (tag, key))
+            validate_placeholders(tag, key, value)
         catalogs[tag] = messages
     source = catalogs[manifest["default"]]
+    for key in ("opt.target", "err.target"):
+        if set(TARGET_TOKEN.findall(source.get(key, ""))) != NATIVE_TARGETS:
+            fail("%s must list every native CI target" % key)
     for tag, messages in catalogs.items():
         if set(messages) != set(source):
             missing = sorted(set(source) - set(messages))
@@ -209,6 +241,9 @@ def load_catalogs(manifest, locales):
                 fail("%s.%s changes option tokens %s -> %s" % (tag, key, sorted(theirs), sorted(ours)))
             if set(TARGET_TOKEN.findall(value)) != set(TARGET_TOKEN.findall(source[key])):
                 fail("%s.%s changes platform target tokens" % (tag, key))
+            for term in EXACT_TERMS.get(key, ()):
+                if term not in value:
+                    fail("%s.%s drops the technical token %r" % (tag, key, term))
             for product in PRODUCTS:
                 if product in source[key] and product not in value and product.replace(" ", "-") not in value:
                     fail("%s.%s drops the untranslated name %r" % (tag, key, product))

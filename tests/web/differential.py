@@ -137,10 +137,10 @@ def write_fixtures(directory, work, native_mochi, capability_mochi, report):
     directory = directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     index = []
+    env = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"), MIO_LANG="en-US")
     for name in BROWSER_CASES:
         case_dir = work / name
         source = (case_dir / "main.mio").read_text(encoding="utf-8")
-        env = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"))
         code, out, err = run([REFERENCE[0], "run", "--color=never", "main.mio"], case_dir, env)
         entry = dict(name=name, source=source, exitCode=code, stdout=out, stderr=err)
         if (case_dir / "go.mochi").is_file():
@@ -181,7 +181,8 @@ def main():
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     web = Web(Path(args.web).resolve(), output.with_name("wasm-host.log"))
-    env = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"))
+    # Render the CLI in the playground renderer's default locale for byte comparisons.
+    env = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"), MIO_LANG="en-US")
     work = Path(tempfile.mkdtemp(prefix="mio-web-diff-"))
     try:
         native_mochi = {}

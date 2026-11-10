@@ -3,6 +3,7 @@ package diagnostic
 import (
 	"fmt"
 
+	"Mio/internal/i18n"
 	"Mio/internal/token"
 )
 
@@ -56,6 +57,31 @@ type Diagnostic struct {
 	Expected string   `json:"expected,omitempty"`
 	Actual   string   `json:"actual,omitempty"`
 	Cause    error    `json:"-"`
+
+	displayMessage func(i18n.Language) string
+}
+
+// WithDisplayMessage provides terminal text while keeping Message stable for JSON.
+func (d *Diagnostic) WithDisplayMessage(key i18n.Key, args ...any) *Diagnostic {
+	d.displayMessage = func(language i18n.Language) string {
+		return i18n.Format(language, key, args...)
+	}
+	return d
+}
+
+// WithRuntimeDisplayMessage localizes the runtime label and retains the VM detail.
+func (d *Diagnostic) WithRuntimeDisplayMessage(err error) *Diagnostic {
+	d.displayMessage = func(language i18n.Language) string {
+		return i18n.Text(language, i18n.KeyTestRuntime) + ": mio: runtime: " + err.Error()
+	}
+	return d
+}
+
+func (d *Diagnostic) messageFor(language i18n.Language) string {
+	if d.displayMessage == nil {
+		return d.Message
+	}
+	return d.displayMessage(language)
 }
 
 // Error 返回不含源码片段的简短错误
