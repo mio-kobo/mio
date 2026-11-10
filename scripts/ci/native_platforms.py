@@ -229,11 +229,11 @@ def cli_checks(report, cli, target, work):
     backend.write_text("kaku values = [%s];\nchant(values[0]);\n" % ",".join(str(index) for index in range(600)),
                        encoding="utf-8")
     output = work / "i18n-backend-failure.bin"
-    check("backend-error", ["--lang", "en-US", "build", str(backend), "-o", str(output)], code=1,
+    check("backend-error", ["--lang", "en-US", "build", str(backend), "--target=darwin-arm64", "-o", str(output)], code=1,
           contains=("E_LOWER 6 / 0",))
-    check("backend-verbose", ["--lang", "en-US", "build", str(backend), "--verbose", "-o", str(output)], code=1,
+    check("backend-verbose", ["--lang", "en-US", "build", str(backend), "--target=darwin-arm64", "--verbose", "-o", str(output)], code=1,
           contains=("E_LOWER 6 / 0", "cause: source analysis failed"))
-    check("backend-json", ["--lang", "en-US", "--color=always", "build", str(backend), "--format=json", "-o", str(output)],
+    check("backend-json", ["--lang", "en-US", "--color=always", "build", str(backend), "--target=darwin-arm64", "--format=json", "-o", str(output)],
           code=1, contains=('"code":"E0401"', '"message":"E_LOWER 6 / 0"'), absent=(ansi,))
 
 
