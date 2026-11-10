@@ -69,7 +69,7 @@ class ChocolateyTests(unittest.TestCase):
                     self.assertEqual(meta.find('n:version', ns).text, '2.1.0')
                     self.assertIsNone(meta.find('n:dependencies', ns))
                     for field, url in {
-                        'iconUrl': 'https://raw.githubusercontent.com/mio-kobo/mio-docs/07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
+                        'iconUrl': 'https://cdn.jsdelivr.net/gh/mio-kobo/mio-docs@07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
                         'packageSourceUrl': 'https://github.com/mio-kobo/mio/tree/Mio-2.1/scripts/package_managers',
                         'releaseNotes': 'https://github.com/mio-kobo/mio/releases/tag/v2.1.0',
                         'docsUrl': 'https://mio.kaelexvp.cc/docs/',
