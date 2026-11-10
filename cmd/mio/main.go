@@ -95,6 +95,9 @@ func runCLI(
 	case "lsp":
 		return runLSP(args[1:], os.Stdin, stdout, stderr)
 
+	case "lint":
+		return runLint(args[1:], stdout, stderr)
+
 	case "test":
 		return runTestCommand(args[1:], stdout, stderr, language, colorMode)
 
