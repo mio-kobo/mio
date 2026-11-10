@@ -244,23 +244,6 @@ func parseDiagnosticArgs(args []string) (string, cliDiagnosticOptions, bool) {
 
 func renderCLIError(out io.Writer, path string, err error, options cliDiagnosticOptions, runtime bool) {
 	d := diagnosticFromError(err, runtime)
-	if options.format != diagnostic.FormatJSON {
-		var dependency *bunko.DependencyError
-		var lexical *lexer.LexicalError
-		var existing *diagnostic.Diagnostic
-		switch {
-		case errors.As(err, &existing):
-			// Its detail comes from the compiler and may also be consumed by LSP.
-		case runtime:
-			d.Message = i18n.Text(options.language, i18n.KeyTestRuntime) + ": mio: runtime: " + err.Error()
-		case errors.As(err, &lexical):
-			d.Message = i18n.Text(options.language, i18n.KeyDiagLexical)
-		case errors.As(err, &dependency):
-			d.Message = i18n.Format(options.language, i18n.KeyBunkoDependency, dependency.ImportPath)
-		default:
-			d.Message = i18n.Text(options.language, i18n.KeyTestCompileFailed)
-		}
-	}
 	source := ""
 	if path != "" {
 		if content, readErr := os.ReadFile(path); readErr == nil {
@@ -286,10 +269,11 @@ func diagnosticFromError(err error, runtime bool) *diagnostic.Diagnostic {
 		end := lexical.Position
 		end.Offset++
 		end.Column++
-		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err)
+		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err).WithDisplayMessage(i18n.KeyDiagLexical)
 	}
 	if runtime {
 		d := &diagnostic.Diagnostic{Code: "E0501", Severity: diagnostic.SeverityError, Message: "运行时错误: mio: runtime: " + err.Error(), Cause: err}
+		d.WithRuntimeDisplayMessage(err)
 		var runtimeErr *vm.RuntimeError
 		if errors.As(err, &runtimeErr) {
 			for index, frame := range runtimeErr.Stack {
@@ -302,7 +286,12 @@ func diagnosticFromError(err error, runtime bool) *diagnostic.Diagnostic {
 		}
 		return d
 	}
-	return (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
+	d := (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
+	var dependency *bunko.DependencyError
+	if errors.As(err, &dependency) {
+		return d.WithDisplayMessage(i18n.KeyBunkoDependency, dependency.ImportPath)
+	}
+	return d.WithDisplayMessage(i18n.KeyTestCompileFailed)
 }
 
 // compileProgram 将经过检查的 AST 编译为字节码

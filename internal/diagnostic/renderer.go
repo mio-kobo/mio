@@ -90,7 +90,7 @@ func (r Renderer) Render(d *Diagnostic) error {
 		if displayPath == "" {
 			displayPath = "<runtime>"
 		}
-		_, err := fmt.Fprintf(r.Writer, "%s:%d:%d: %s[%s]: %s\n", displayPath, location.Line, location.Column, r.severity(d.Severity), d.Code, d.Message)
+		_, err := fmt.Fprintf(r.Writer, "%s:%d:%d: %s[%s]: %s\n", displayPath, location.Line, location.Column, r.severity(d.Severity), d.Code, d.messageFor(r.Language))
 		return err
 	case FormatJSON:
 		value := jsonDiagnostic{Code: d.Code, Severity: d.Severity, Message: d.Message, Path: path, Location: location, Labels: d.Labels, Notes: d.Notes, Helps: d.Helps, Expected: d.Expected, Actual: d.Actual}
@@ -119,7 +119,7 @@ func (r Renderer) renderHuman(d *Diagnostic, path string, location SourceLocatio
 	if color {
 		header = "\x1b[1;31m" + header + "\x1b[0m"
 	}
-	if _, err := fmt.Fprintf(r.Writer, "%s: %s\n", header, d.Message); err != nil {
+	if _, err := fmt.Fprintf(r.Writer, "%s: %s\n", header, d.messageFor(r.Language)); err != nil {
 		return err
 	}
 	if hasLabel {

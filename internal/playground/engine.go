@@ -23,6 +23,7 @@ import (
 	"Mio/internal/compiler"
 	"Mio/internal/constant"
 	"Mio/internal/diagnostic"
+	"Mio/internal/i18n"
 	"Mio/internal/lexer"
 	"Mio/internal/mochi"
 	"Mio/internal/resolver"
@@ -302,14 +303,16 @@ func compileDiagnostic(err error) *diagnostic.Diagnostic {
 		end := lexical.Position
 		end.Offset++
 		end.Column++
-		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err)
+		return diagnostic.NewError("E0001", "无法识别此处的源码", diagnostic.FromPositions(lexical.Position, end)).WithCause(err).WithDisplayMessage(i18n.KeyDiagLexical)
 	}
-	return (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).WithNote(err.Error())
+	return (&diagnostic.Diagnostic{Code: "E0401", Severity: diagnostic.SeverityError, Message: "编译失败", Cause: err}).
+		WithNote(err.Error()).WithDisplayMessage(i18n.KeyTestCompileFailed)
 }
 
 // runtimeDiagnostic mirrors the reference CLI (cmd/mio diagnosticFromError, runtime branch).
 func runtimeDiagnostic(err error) *diagnostic.Diagnostic {
 	d := &diagnostic.Diagnostic{Code: "E0501", Severity: diagnostic.SeverityError, Message: "运行时错误: mio: runtime: " + err.Error(), Cause: err}
+	d.WithRuntimeDisplayMessage(err)
 	var runtimeErr *vm.RuntimeError
 	if errors.As(err, &runtimeErr) {
 		for index, frame := range runtimeErr.Stack {
