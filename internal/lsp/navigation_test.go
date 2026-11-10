@@ -35,6 +35,7 @@ func TestServerSemanticCapabilities(t *testing.T) {
 		"referencesProvider",
 		"documentHighlightProvider",
 		"workspaceSymbolProvider",
+		"renameProvider",
 		"documentSymbolProvider",
 		"completionProvider",
 		"signatureHelpProvider",
@@ -48,7 +49,6 @@ func TestServerSemanticCapabilities(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"renameProvider",
 		"semanticTokensProvider",
 		"documentFormattingProvider",
 		"documentRangeFormattingProvider",
@@ -747,6 +747,133 @@ func TestServerWorkspaceSymbols(t *testing.T) {
 	}
 	if got := query(6, "other"); len(got) != 0 {
 		t.Fatalf("stale on-disk symbol returned: %#v", got)
+	}
+	h.shutdown()
+	h.exit()
+}
+
+func TestServerRename(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.initialize()
+	text := `waza f(a: int64) -> int64 {
+    kaku sum = a;
+    // sum in a comment
+    kaku s = "sum";
+    kaesu sum + sum;
+}
+`
+	uri := uriFromPath(filepath.Join(t.TempDir(), "rename.mio"))
+	h.open(uri, text, 1)
+	position := requestPosition(text, offsetOf(t, text, "kaesu sum")+len("kaesu "))
+	params := func(name string) map[string]any {
+		return map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     position,
+			"newName":      name,
+		}
+	}
+
+	prepare := h.request(2, "textDocument/prepareRename", params(""))
+	if prepare.Error != nil {
+		t.Fatalf("prepareRename: %#v", prepare.Error)
+	}
+	var prepared prepareRenameResult
+	if err := json.Unmarshal(prepare.Result, &prepared); err != nil || prepared.Placeholder != "sum" {
+		t.Fatalf("prepare = %s (%v)", prepare.Result, err)
+	}
+
+	response := h.request(3, "textDocument/rename", params("total"))
+	if response.Error != nil {
+		t.Fatalf("rename: %#v", response.Error)
+	}
+	var edit WorkspaceEdit
+	if err := json.Unmarshal(response.Result, &edit); err != nil {
+		t.Fatal(err)
+	}
+	edits := edit.Changes[uri]
+	if len(edits) != 3 {
+		t.Fatalf("edits = %#v", edits)
+	}
+	for _, item := range edits {
+		if item.NewText != "total" || (item.Range.Start.Line != 1 && item.Range.Start.Line != 4) {
+			t.Fatalf("unexpected edit %#v", item)
+		}
+	}
+
+	for index, bad := range []string{"", "kaku", "1abc", "a b", "a.b"} {
+		r := h.request(10+index, "textDocument/rename", params(bad))
+		if r.Error == nil || r.Error.Code != codeInvalidParams {
+			t.Fatalf("newName %q must be rejected, got %#v", bad, r.Error)
+		}
+	}
+	// 与同作用域已有符号冲突（参数 a）。
+	conflict := h.request(20, "textDocument/rename", params("a"))
+	if conflict.Error == nil || conflict.Error.Code != codeRequestFailed {
+		t.Fatalf("conflict must be refused: %#v", conflict.Error)
+	}
+	// 导出的顶层函数不能重命名（其它文件可能使用）。
+	exportedText := "koukai waza g() -> unit {\n}\n"
+	exportedURI := uriFromPath(filepath.Join(t.TempDir(), "exported.mio"))
+	h.open(exportedURI, exportedText, 1)
+	exported := h.request(21, "textDocument/rename", map[string]any{
+		"textDocument": map[string]any{"uri": exportedURI},
+		"position":     requestPosition(exportedText, offsetOf(t, exportedText, "g()")),
+		"newName":      "h",
+	})
+	if exported.Error == nil || exported.Error.Code != codeRequestFailed {
+		t.Fatalf("exported rename must be refused: %#v", exported.Error)
+	}
+	// 有语法错误的文件拒绝重命名。
+	brokenText := "waza f() -> unit {\n    kaku x = ;\n}\n"
+	brokenURI := uriFromPath(filepath.Join(t.TempDir(), "broken.mio"))
+	h.open(brokenURI, brokenText, 1)
+	broken := h.request(22, "textDocument/rename", map[string]any{
+		"textDocument": map[string]any{"uri": brokenURI},
+		"position":     requestPosition(brokenText, offsetOf(t, brokenText, "f()")),
+		"newName":      "g",
+	})
+	if broken.Error == nil || broken.Error.Code != codeRequestFailed {
+		t.Fatalf("rename in broken file must be refused: %#v", broken.Error)
+	}
+	h.shutdown()
+	h.exit()
+}
+
+func TestServerRenameTopLevelAndFields(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.initialize()
+	text := `kata Point { x: int64; }
+waza helper(p: Point) -> int64 {
+    kaesu p.x;
+}
+waza main2() -> int64 {
+    kaku p = Point { x: 1 };
+    kaesu helper(p);
+}
+`
+	uri := uriFromPath(filepath.Join(t.TempDir(), "top.mio"))
+	h.open(uri, text, 1)
+	rename := func(id int, anchor string, delta int, name string) []TextEdit {
+		t.Helper()
+		r := h.request(id, "textDocument/rename", map[string]any{
+			"textDocument": map[string]any{"uri": uri},
+			"position":     requestPosition(text, offsetOf(t, text, anchor)+delta),
+			"newName":      name,
+		})
+		if r.Error != nil {
+			t.Fatalf("rename %q: %#v", anchor, r.Error)
+		}
+		var edit WorkspaceEdit
+		if err := json.Unmarshal(r.Result, &edit); err != nil {
+			t.Fatal(err)
+		}
+		return edit.Changes[uri]
+	}
+	if got := rename(2, "helper(p)", 0, "assist"); len(got) != 2 {
+		t.Fatalf("function rename edits = %#v", got)
+	}
+	if got := rename(3, "x: int64", 0, "px"); len(got) != 3 {
+		t.Fatalf("field rename edits = %#v", got)
 	}
 	h.shutdown()
 	h.exit()

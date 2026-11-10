@@ -142,6 +142,8 @@ func (s *server) registerHandlers() {
 		"textDocument/documentSymbol":    s.requestDocumentSymbol,
 		"textDocument/documentHighlight": s.requestDocumentHighlight,
 		"workspace/symbol":               s.requestWorkspaceSymbol,
+		"textDocument/rename":            s.requestRename,
+		"textDocument/prepareRename":     s.requestPrepareRename,
 		"textDocument/completion":        s.requestCompletion,
 		"textDocument/signatureHelp":     s.requestSignatureHelp,
 	}
@@ -352,6 +354,7 @@ func (s *server) handleInitialize(ctx context.Context, msg message) {
 			ReferencesProvider:        true,
 			DocumentHighlightProvider: true,
 			WorkspaceSymbolProvider:   true,
+			RenameProvider:            &RenameOptions{PrepareProvider: true},
 			DocumentSymbolProvider:    true,
 			CompletionProvider: &CompletionOptions{
 				TriggerCharacters: []string{"."},
