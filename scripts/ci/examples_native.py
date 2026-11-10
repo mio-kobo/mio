@@ -70,6 +70,8 @@ def host_target():
         return "darwin-amd64"
     if host in {("Linux", "aarch64"), ("Linux", "arm64")}:
         return "linux-arm64"
+    if host in {("Windows", "arm64"), ("Windows", "aarch64")}:
+        return "windows-arm64"
     if host[1] in {"amd64", "x86_64"}:
         return {"Linux": "linux-amd64", "Windows": "windows-amd64"}.get(host[0])
     return None
@@ -84,7 +86,7 @@ def exclusions(target):
     excluded = {}
     if reason := tcp_exclusion(target):
         excluded.update(dict.fromkeys(TCP, reason))
-    if target != "windows-amd64":
+    if target not in ("windows-amd64", "windows-arm64"):
         excluded[PE_EXECUTION] = "The generated AMD64 PE requires Windows to execute. The host-native generator is checked separately."
     return excluded
 
@@ -97,7 +99,7 @@ def check_inventory(examples):
 
 
 def image_path(work, target):
-    return work / ("program.exe" if target == "windows-amd64" else "program")
+    return work / ("program.exe" if target in ("windows-amd64", "windows-arm64") else "program")
 
 
 def compare(code, stdout, stderr, expected):
@@ -228,7 +230,7 @@ class Suite:
                         log.write(f"--- {stream}\n".encode() + path.read_bytes())
         if code != 0 or not image.is_file():
             raise ValueError(f"build exit {code}, image {'present' if image.is_file() else 'missing'}")
-        if self.target != "windows-amd64":
+        if self.target not in ("windows-amd64", "windows-arm64"):
             image.chmod(0o755)
         self.results[name]["image_built"] = True
         return image
@@ -379,7 +381,7 @@ def run_suite(cli, target, output, deadline, bunko=ROOT / "bunko", unavailable="
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mio", default="mio", help="native Mio CLI executable")
-    parser.add_argument("--target", choices=("linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64", "windows-amd64"), default=host_target())
+    parser.add_argument("--target", choices=("linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), default=host_target())
     parser.add_argument("--output", type=Path)
     parser.add_argument("--bunko-root", type=Path, default=Path(os.environ.get("MIO_BUNKO", ROOT / "bunko")))
     args = parser.parse_args()
