@@ -421,6 +421,26 @@ sub-objects, cycles, a 2000-deep chain and a 20000-node tree arriving intact wit
 consumers; three programs that must be rejected at compile time), each normally and with `--gc-stress`; 450 additional stress runs
 of the three most concurrent programs had no mismatch.
 
+### Measurements (benchmarks/threads/transfer.mio)
+
+Linux x86-64 (8 hardware threads, kernel 6.12), two OS threads, a 1-slot channel, wall-clock milliseconds on the sender's thread, three
+consecutive runs shown as min-max. "construct" builds a fresh graph per message with no channel traffic; "construct + transfer" builds it and
+hands it over with `yuzuru`; "copy + transfer" deep-copies a prebuilt graph and sends the copy (what a copying design pays when the sender
+keeps its graph).
+
+| nodes per graph | messages | construct | construct + transfer | copy + transfer |
+|---|---|---|---|---|
+| 10 | 20000 | 59-68 | 152-161 | 129-154 |
+| 1000 | 2000 | 441-505 | 445-545 | 459-486 |
+| 100000 | 40 | 1249-1620 | 1250-1421 | 1254-1325 |
+
+Reading: the transfer step itself (construct + transfer minus construct) is about 4.5 us per message for tiny graphs (the lock and futex
+handoff between two threads dominates) and is within run-to-run noise at 1000 and 100000 nodes, i.e. it does not grow with the graph, while a deep copy costs about
+as much as constructing the graph again (about 31 ms per 100000-node message). That is what "zero-copy" means here: no object is copied and the
+cost of the handoff is independent of the payload size in the measured range. The numbers are time only: there is no allocation or memory counter
+in the runtime yet, the variance between runs is large for the big graphs (the collector runs concurrently), and the figures are one machine's, not a
+cross-platform result. No claim is made for other targets.
+
 ## 11. PR plan
 
 1. **PR-0 (this document)**: audit + specification, no behaviour change.
