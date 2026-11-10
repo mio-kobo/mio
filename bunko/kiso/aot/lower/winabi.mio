@@ -22,17 +22,20 @@ koukai waza windows_imports() -> []string {
     kaku names = ["ExitProcess", "GetStdHandle", "WriteFile", "ReadFile", "CloseHandle", "VirtualAlloc", "VirtualFree", "CreateFileW",
         "GetLastError", "MultiByteToWideChar", "WideCharToMultiByte", "GetFileAttributesExW", "CreateDirectoryW", "RemoveDirectoryW",
         "DeleteFileW", "GetFileInformationByHandleEx", "GetCurrentProcessId", "GetFinalPathNameByHandleW", "GetModuleFileNameW",
-        "SetConsoleOutputCP", "SetConsoleCP", "GetCommandLineW", "GetEnvironmentStringsW"];
+        "SetConsoleOutputCP", "SetConsoleCP", "GetCommandLineW", "GetEnvironmentStringsW", "CreateProcessW", "WaitForSingleObject",
+        "GetExitCodeProcess", "TerminateProcess", "SetHandleInformation", "GetStartupInfoW", "GetFileType", "PeekNamedPipe", "Sleep"];
     kaku pairs: []string = []; kaku at = 0;
     aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
     array.push(pairs, "shell32.dll"); array.push(pairs, "CommandLineToArgvW");
     kaesu pairs;
 }
 
-// Adapter data (64-bit words appended after the program's globals): word 0..2 standard handles are table entries 0..2;
-// the descriptor table has 64 entries (HANDLE or 0 = free) at word 0; per-descriptor "directory enumeration started" flags
-// at word 64.
-koukai waza windows_adapter_words() -> int64 { kaesu 128; }
+// Adapter data (64-bit words appended after the program's globals): the descriptor table has 64 entries (HANDLE or 0 = free)
+// at word 0 (entries 0..2 are the standard handles); per-descriptor "directory enumeration started" flags at word 64.
+// Process emulation state (see the fork/execve blocks): word 128 mode (1 while the emulated child runs), 129 timeout seconds,
+// 130 last child exit code, 131 child pid, 132 saved sp, 133 saved return address, 134 saved caller lr, 136..149 saved x2-x15,
+// 150 saved x17, 192..255 snapshot of the descriptor table taken at fork.
+koukai waza windows_adapter_words() -> int64 { kaesu 256; }
 
 waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
 waza wx_label(c: arm64.Assembler, name: string) -> unit { arm64.assembler_label(c, name); }
@@ -70,6 +73,10 @@ waza wx_data(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64, reg
     wx(c, arm64.Instruction { word: uint32(0), error: mu }); wx(c, arm64.Instruction { word: uint32(0), error: mu });
     array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: (base + word) * 8, register: reg });
 }
+
+// [adapter word] <-> register (clobbers x10)
+waza wx_get(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64, dst: int64, word: int64) -> unit { wx_data(c, patches, base, 10, word); wx(c, arm64.ldr_x(dst, 10, 0)); }
+waza wx_put(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64, src: int64, word: int64) -> unit { wx_data(c, patches, base, 10, word); wx(c, arm64.str_x(src, 10, 0)); }
 
 // BOOL results are 32-bit: clear the undefined upper half.
 waza wx_bool(c: arm64.Assembler) -> unit { wx(c, arm64.lsl_x(0, 0, 32)); wx(c, arm64.lsr_x(0, 0, 32)); }
@@ -159,9 +166,10 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_save(c, 2, 3, 0); wx_save(c, 4, 5, 16); wx_save(c, 6, 7, 32); wx_save(c, 8, 9, 48);
     wx_save(c, 10, 11, 64); wx_save(c, 12, 13, 80); wx_save(c, 14, 15, 96); wx_save(c, 17, 30, 112);
     wx(c, arm64.str_x(1, 31, 128));
-    kaku calls = [1, 3, 4, 5, 6, 10, 15, 20, 73, 74, 92, 136, 137, 194, 197, 202, 274, 336, 338, 344];
-    kaku names = ["wx_exit", "wx_read", "wx_write", "wx_open", "wx_close", "wx_unlink", "wx_chmod", "wx_getpid", "wx_munmap", "wx_mprotect", "wx_fcntl",
-        "wx_mkdir", "wx_rmdir", "wx_getrlimit", "wx_mmap", "wx_sysctl", "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
+    kaku calls = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 59, 73, 74, 83, 90, 92, 136, 137, 194, 195, 197, 202, 230, 274, 336, 338, 344];
+    kaku names = ["wx_exit", "wx_fork", "wx_read", "wx_write", "wx_open", "wx_close", "wx_wait4", "wx_unlink", "wx_chmod", "wx_getpid", "wx_execve", "wx_munmap",
+        "wx_mprotect", "wx_setitimer", "wx_dup2", "wx_fcntl", "wx_mkdir", "wx_rmdir", "wx_getrlimit", "wx_setrlimit", "wx_mmap", "wx_sysctl", "wx_poll",
+        "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
     kaku at = 0;
     aida (at < len(calls)) {
         kaku next = wx_name("wx_dispatch_next_", at);
@@ -182,7 +190,9 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_handle_routine(c, patches, base);
 
     // ---- exit(status) -> ExitProcess(status)
-    wx_label(c, "wx_exit"); wx_call(c, patches, "ExitProcess"); wx_b(c, "wx_unsupported");
+    wx_label(c, "wx_exit");
+    wx_get(c, patches, base, 9, 128); wx_cbz(c, 9, "wx_exit_process"); wx_b(c, "wx_child_done");
+    wx_label(c, "wx_exit_process"); wx_call(c, patches, "ExitProcess"); wx_b(c, "wx_unsupported");
     wx_label(c, "wx_badfd"); wx_li(c, 0, 9); wx_b(c, "wx_error");
     wx_label(c, "wx_inval"); wx_li(c, 0, 22); wx_b(c, "wx_error");
 
@@ -215,6 +225,13 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx(c, arm64.str_x(0, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx(c, arm64.str_x(0, 31, 152));
     wx_data(c, patches, base, 10, 0); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(31, 10, 0));
+    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 0); wx(c, arm64.ldr_x(12, 31, 152));
+    wx_label(c, "wx_close_scan");
+    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_close_last");
+    wx(c, arm64.ldr_x_register_scaled(13, 10, 11)); wx(c, arm64.cmp_x(13, 12)); wx_bcc(c, 0, "wx_close_shared");
+    wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_close_scan");
+    wx_label(c, "wx_close_shared"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_close_last");
     wx(c, arm64.ldr_x(0, 31, 152)); wx_call(c, patches, "CloseHandle"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ---- open(path, flags, mode): "/dev/stdin|stdout|stderr" are descriptors 0..2, "/dev/null" is NUL; files via CreateFileW
@@ -395,6 +412,187 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_getrlimit");
     wx(c, arm64.movn_x(9, 0, 0)); wx(c, arm64.lsr_x(9, 9, 1)); wx(c, arm64.str_x(9, 1, 0)); wx(c, arm64.str_x(9, 1, 8)); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
+    // ================= process emulation =================
+    // Windows has no fork. The Darwin runtime's spawn is fork; (redirect fds, set limits); execve in the child; wait4 in the
+    // parent. fork saves the caller's context and returns as the "child" in this same process; the child path only touches the
+    // descriptor table (dup2/close/open), the limits (setitimer/setrlimit, recorded) and then calls execve, which performs the
+    // real CreateProcessW, waits (killing the process with status 142 after the timeout), restores the descriptor table and
+    // resumes the parent at the saved context with the child's status for wait4. exit() in the child resumes the parent too.
+    wx_label(c, "wx_fork");
+    wx(c, arm64.add_imm_x(9, 31, 288, iie)); wx_put(c, patches, base, 9, 132);
+    wx(c, arm64.ldr_x(9, 31, 120)); wx_put(c, patches, base, 9, 133);
+    wx(c, arm64.ldr_x(9, 31, 288)); wx_put(c, patches, base, 9, 134);
+    wx_data(c, patches, base, 11, 136);
+    kaku reg = 0;
+    aida (reg < 14) { wx(c, arm64.ldr_x(9, 31, reg * 8)); wx(c, arm64.str_x(9, 11, reg * 8)); reg = reg + 1; }
+    wx(c, arm64.ldr_x(9, 31, 112)); wx(c, arm64.str_x(9, 11, 112));
+    wx_data(c, patches, base, 11, 0); wx_data(c, patches, base, 12, 192); wx_li(c, 13, 0);
+    wx_label(c, "wx_fork_snapshot");
+    wx(c, arm64.lsl_x(14, 13, 3)); wx(c, arm64.add_x(15, 11, 14)); wx(c, arm64.ldr_x(9, 15, 0)); wx(c, arm64.add_x(15, 12, 14)); wx(c, arm64.str_x(9, 15, 0));
+    wx(c, arm64.add_imm_x(13, 13, 1, iie)); wx_cmpi(c, 13, 64); wx_bcc(c, 3, "wx_fork_snapshot");
+    wx_li(c, 9, 1); wx_put(c, patches, base, 9, 128); wx_li(c, 9, 0); wx_put(c, patches, base, 9, 129);
+    wx_li(c, 9, 1); wx(c, arm64.str_x(9, 31, 128));
+    wx_li(c, 0, 4243); wx_b(c, "wx_ok");
+
+    // resume the parent after fork: x0 = child pid (x1 = 0, carry clear, x2-x15 and x17 restored, caller's lr slot rebuilt)
+    wx_label(c, "wx_resume");
+    wx_data(c, patches, base, 16, 132); wx(c, arm64.ldr_x(9, 16, 0)); wx(c, arm64.add_imm_x(31, 9, 0, iie));
+    wx_data(c, patches, base, 16, 134); wx(c, arm64.ldr_x(9, 16, 0)); wx(c, arm64.str_x(9, 31, 0)); wx(c, arm64.str_x(31, 31, 8));
+    wx_data(c, patches, base, 16, 136);
+    wx(c, arm64.ldp_x(2, 3, 16, 0)); wx(c, arm64.ldp_x(4, 5, 16, 16)); wx(c, arm64.ldp_x(6, 7, 16, 32)); wx(c, arm64.ldp_x(8, 9, 16, 48));
+    wx(c, arm64.ldp_x(10, 11, 16, 64)); wx(c, arm64.ldp_x(12, 13, 16, 80)); wx(c, arm64.ldp_x(14, 15, 16, 96)); wx(c, arm64.ldr_x(17, 16, 112));
+    wx_data(c, patches, base, 16, 133); wx(c, arm64.ldr_x(30, 16, 0));
+    wx_li(c, 1, 0); wx(c, arm64.cmn_imm_x(0, 0, iie)); wx(c, arm64.ret());
+
+    // the emulated child finished with exit code x0: record it, restore the descriptor table, resume the parent
+    wx_label(c, "wx_child_done");
+    wx_put(c, patches, base, 0, 130); wx_li(c, 9, 4243); wx_put(c, patches, base, 9, 131); wx(c, arm64.str_x(31, 31, 152));
+    wx_label(c, "wx_child_restore");
+    wx(c, arm64.ldr_x(9, 31, 152)); wx_cmpi(c, 9, 64); wx_bcc(c, 2, "wx_child_restored");
+    wx_data(c, patches, base, 11, 0); wx_data(c, patches, base, 12, 192);
+    wx(c, arm64.ldr_x(9, 31, 152)); wx(c, arm64.lsl_x(13, 9, 3)); wx(c, arm64.add_x(14, 11, 13)); wx(c, arm64.ldr_x(15, 14, 0));
+    wx(c, arm64.add_x(16, 12, 13)); wx(c, arm64.ldr_x(16, 16, 0)); wx(c, arm64.cmp_x(15, 16)); wx_bcc(c, 0, "wx_child_next");
+    wx(c, arm64.str_x(16, 14, 0)); wx_cbz(c, 15, "wx_child_next"); wx_mov(c, 0, 15); wx_call(c, patches, "CloseHandle");
+    wx_label(c, "wx_child_next"); wx(c, arm64.ldr_x(9, 31, 152)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.str_x(9, 31, 152)); wx_b(c, "wx_child_restore");
+    wx_label(c, "wx_child_restored");
+    wx_li(c, 9, 0); wx_put(c, patches, base, 9, 128); wx_get(c, patches, base, 0, 131); wx_b(c, "wx_resume");
+
+    // wait4(pid, &status, options, rusage): the child has already finished; status = exit code << 8 (Darwin layout)
+    wx_label(c, "wx_wait4");
+    wx_cbz(c, 1, "wx_wait4_pid");
+    wx_get(c, patches, base, 9, 130); wx_li(c, 10, 255); wx(c, arm64.and_x(9, 9, 10)); wx(c, arm64.lsl_x(9, 9, 8)); wx(c, arm64.str_w(9, 1, 0));
+    wx_label(c, "wx_wait4_pid"); wx_get(c, patches, base, 0, 131); wx_b(c, "wx_ok");
+
+    // dup2(old, new): the new descriptor shares the old one's handle (close() keeps a handle another descriptor still uses)
+    wx_label(c, "wx_dup2");
+    wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_badfd"); wx_cmpi(c, 1, 64); wx_bcc(c, 2, "wx_badfd");
+    wx(c, arm64.str_x(1, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx_data(c, patches, base, 10, 0); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(0, 10, 0));
+    wx(c, arm64.ldr_x(0, 31, 144)); wx_b(c, "wx_ok");
+
+    // setitimer(which, new, old): the wall deadline of the emulated child; setrlimit: accepted (a single-threaded program cannot
+    // use more CPU time than wall time)
+    wx_label(c, "wx_setitimer"); wx(c, arm64.ldr_x(9, 1, 16)); wx_put(c, patches, base, 9, 129); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_setrlimit"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+
+    // execve(path, argv, envp) -> CreateProcessW; in the emulated child the parent resumes with the child's status, otherwise
+    // this process exits with it (Windows has no exec). Frame 2304: 0 outgoing stack arguments, 16 UTF-16 path (2048 bytes),
+    // 2064 scratch buffer, 2072 argv, 2080 path, 2088 timeout, 2112 STARTUPINFOW (104), 2216 PROCESS_INFORMATION (24),
+    // 2240 lpReserved2 table (40), 2288 exit code.
+    wx_label(c, "wx_execve");
+    wx_alloc(c, 2304);
+    wx_str(c, 0, 2080); wx_str(c, 1, 2072);
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx_ldr(c, 2, 2080); wx(c, arm64.movn_x(3, 0, 0)); wx(c, arm64.add_imm_x(4, 31, 16, iie)); wx_li(c, 5, 1024);
+    wx_call(c, patches, "MultiByteToWideChar"); wx_bool(c); wx_cbz(c, 0, "wx_exec_inval");
+    wx_li(c, 0, 0); wx_li(c, 1, 262144); wx_li(c, 2, 12288); wx_li(c, 3, 4); wx_call(c, patches, "VirtualAlloc"); wx_cbz(c, 0, "wx_exec_nomem"); wx_str(c, 0, 2064);
+    // command line: every argument quoted with the CommandLineToArgvW rules, UTF-8, at the start of the scratch buffer
+    wx_mov(c, 9, 0); wx_ldr(c, 10, 2072); wx_li(c, 16, 1);
+    wx_label(c, "wx_quote_arg");
+    wx(c, arm64.ldr_x(11, 10, 0)); wx_cbz(c, 11, "wx_quote_done");
+    wx_cbnz(c, 16, "wx_quote_first"); wx_li(c, 17, 32); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie));
+    wx_label(c, "wx_quote_first"); wx_li(c, 16, 0);
+    wx_li(c, 14, 0); wx_mov(c, 15, 11);
+    wx(c, arm64.ldrb_w(12, 15, 0)); wx_cbnz(c, 12, "wx_quote_scan"); wx_li(c, 14, 1);
+    wx_label(c, "wx_quote_scan");
+    wx(c, arm64.ldrb_w(12, 15, 0)); wx_cbz(c, 12, "wx_quote_scanned");
+    wx_cmpi(c, 12, 32); wx_bcc(c, 0, "wx_quote_special"); wx_cmpi(c, 12, 9); wx_bcc(c, 0, "wx_quote_special"); wx_cmpi(c, 12, 34); wx_bcc(c, 0, "wx_quote_special");
+    wx_cmpi(c, 12, 10); wx_bcc(c, 0, "wx_quote_special"); wx_cmpi(c, 12, 11); wx_bcc(c, 1, "wx_quote_scan_next");
+    wx_label(c, "wx_quote_special"); wx_li(c, 14, 1);
+    wx_label(c, "wx_quote_scan_next"); wx(c, arm64.add_imm_x(15, 15, 1, iie)); wx_b(c, "wx_quote_scan");
+    wx_label(c, "wx_quote_scanned");
+    wx_cbz(c, 14, "wx_quote_nostart"); wx_li(c, 17, 34); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie));
+    wx_label(c, "wx_quote_nostart");
+    wx_li(c, 13, 0); wx_mov(c, 15, 11);
+    wx_label(c, "wx_quote_char");
+    wx(c, arm64.ldrb_w(12, 15, 0)); wx_cbz(c, 12, "wx_quote_end");
+    wx_cmpi(c, 12, 92); wx_bcc(c, 1, "wx_quote_not_bs"); wx(c, arm64.add_imm_x(13, 13, 1, iie)); wx(c, arm64.add_imm_x(15, 15, 1, iie)); wx_b(c, "wx_quote_char");
+    wx_label(c, "wx_quote_not_bs");
+    wx_cmpi(c, 12, 34); wx_bcc(c, 1, "wx_quote_plain");
+    wx(c, arm64.lsl_x(13, 13, 1)); wx(c, arm64.add_imm_x(13, 13, 1, iie));
+    wx_label(c, "wx_quote_q_bs"); wx_cbz(c, 13, "wx_quote_q_done"); wx_li(c, 17, 92); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.sub_imm_x(13, 13, 1, iie)); wx_b(c, "wx_quote_q_bs");
+    wx_label(c, "wx_quote_q_done"); wx_li(c, 17, 34); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.add_imm_x(15, 15, 1, iie)); wx_b(c, "wx_quote_char");
+    wx_label(c, "wx_quote_plain");
+    wx_label(c, "wx_quote_p_bs"); wx_cbz(c, 13, "wx_quote_p_done"); wx_li(c, 17, 92); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.sub_imm_x(13, 13, 1, iie)); wx_b(c, "wx_quote_p_bs");
+    wx_label(c, "wx_quote_p_done"); wx(c, arm64.strb_w(12, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.add_imm_x(15, 15, 1, iie)); wx_b(c, "wx_quote_char");
+    wx_label(c, "wx_quote_end");
+    wx_cbz(c, 14, "wx_quote_e_plain"); wx(c, arm64.lsl_x(13, 13, 1));
+    wx_label(c, "wx_quote_e_plain");
+    wx_label(c, "wx_quote_e_bs"); wx_cbz(c, 13, "wx_quote_e_done"); wx_li(c, 17, 92); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx(c, arm64.sub_imm_x(13, 13, 1, iie)); wx_b(c, "wx_quote_e_bs");
+    wx_label(c, "wx_quote_e_done");
+    wx_cbz(c, 14, "wx_quote_next"); wx_li(c, 17, 34); wx(c, arm64.strb_w(17, 9, 0)); wx(c, arm64.add_imm_x(9, 9, 1, iie));
+    wx_label(c, "wx_quote_next"); wx(c, arm64.add_imm_x(10, 10, 8, iie)); wx_b(c, "wx_quote_arg");
+    wx_label(c, "wx_quote_done"); wx(c, arm64.strb_w(31, 9, 0));
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx_ldr(c, 2, 2064); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 9, 2064); wx_li(c, 10, 32768); wx(c, arm64.add_x(4, 9, 10)); wx_li(c, 5, 32768);
+    wx_call(c, patches, "MultiByteToWideChar"); wx_bool(c); wx_cbz(c, 0, "wx_exec_badcmd");
+    // STARTUPINFOW and PROCESS_INFORMATION
+    kaku zero_at = 2112;
+    aida (zero_at < 2296) { wx(c, arm64.str_x(31, 31, zero_at)); zero_at = zero_at + 8; }
+    wx_li(c, 9, 104); wx(c, arm64.str_w(9, 31, 2112)); wx_li(c, 9, 256); wx(c, arm64.str_w(9, 31, 2172));
+    wx_data(c, patches, base, 10, 0);
+    wx(c, arm64.ldr_x(9, 10, 0)); wx_str(c, 9, 2192); wx(c, arm64.ldr_x(9, 10, 8)); wx_str(c, 9, 2200); wx(c, arm64.ldr_x(9, 10, 16)); wx_str(c, 9, 2208);
+    wx(c, arm64.ldr_x(9, 10, 24)); wx_cbz(c, 9, "wx_exec_no_records");
+    wx_data(c, patches, base, 11, 192); wx(c, arm64.ldr_x(12, 11, 24)); wx(c, arm64.cmp_x(9, 12)); wx_bcc(c, 0, "wx_exec_no_records");
+    wx_li(c, 13, 4); wx(c, arm64.str_w(13, 31, 2240)); wx_li(c, 13, 1); wx(c, arm64.strb_w(13, 31, 2247));
+    wx(c, arm64.movn_x(13, 0, 0)); wx_str(c, 13, 2248); wx_str(c, 13, 2256); wx_str(c, 13, 2264); wx_str(c, 9, 2272);
+    wx_li(c, 13, 40); wx(c, arm64.strh_w(13, 31, 2178)); wx(c, arm64.add_imm_x(13, 31, 2240, iie)); wx_str(c, 13, 2184);
+    wx_label(c, "wx_exec_no_records");
+    kaku fd = 0;
+    aida (fd < 4) {
+        kaku skip = wx_name("wx_exec_inherit_skip_", fd);
+        wx_data(c, patches, base, 10, 0); wx(c, arm64.ldr_x(0, 10, fd * 8)); wx_cbz(c, 0, skip); wx_li(c, 1, 1); wx_li(c, 2, 1); wx_call(c, patches, "SetHandleInformation");
+        wx_label(c, skip);
+        fd = fd + 1;
+    }
+    wx(c, arm64.add_imm_x(9, 31, 2112, iie)); wx_str(c, 9, 0); wx(c, arm64.add_imm_x(9, 31, 2216, iie)); wx_str(c, 9, 8);
+    wx(c, arm64.add_imm_x(0, 31, 16, iie)); wx_ldr(c, 9, 2064); wx_li(c, 10, 32768); wx(c, arm64.add_x(1, 9, 10));
+    wx_li(c, 2, 0); wx_li(c, 3, 0); wx_li(c, 4, 1); wx_li(c, 5, 0); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "CreateProcessW"); wx_bool(c); wx_cbz(c, 0, "wx_exec_start_failed");
+    wx_get(c, patches, base, 9, 129); wx_li(c, 10, 1000); wx(c, arm64.mul_x(9, 9, 10)); wx_cbnz(c, 9, "wx_exec_have_timeout"); wx_li(c, 9, 4294967295);
+    wx_label(c, "wx_exec_have_timeout"); wx_str(c, 9, 2088);
+    wx_ldr(c, 0, 2216); wx_ldr(c, 1, 2088); wx_call(c, patches, "WaitForSingleObject"); wx_bool(c);
+    wx_cmpi(c, 0, 258); wx_bcc(c, 1, "wx_exec_waited");
+    wx_ldr(c, 0, 2216); wx_li(c, 1, 142); wx_call(c, patches, "TerminateProcess");
+    wx_ldr(c, 0, 2216); wx_li(c, 1, 5000); wx_call(c, patches, "WaitForSingleObject");
+    wx_label(c, "wx_exec_waited");
+    wx_ldr(c, 0, 2216); wx(c, arm64.add_imm_x(1, 31, 2288, iie)); wx_call(c, patches, "GetExitCodeProcess");
+    wx_ldr(c, 0, 2224); wx_call(c, patches, "CloseHandle"); wx_ldr(c, 0, 2216); wx_call(c, patches, "CloseHandle");
+    wx_ldr(c, 0, 2064); wx_li(c, 1, 0); wx_li(c, 2, 32768); wx_call(c, patches, "VirtualFree");
+    wx(c, arm64.ldr_w(0, 31, 2288)); wx_free(c, 2304);
+    wx_get(c, patches, base, 9, 128); wx_cbz(c, 9, "wx_exec_exit"); wx_b(c, "wx_child_done");
+    wx_label(c, "wx_exec_exit"); wx_call(c, patches, "ExitProcess"); wx_b(c, "wx_unsupported");
+    // failures: release the scratch buffer and the frame, report the error to the caller (the emulated child then exits 127)
+    wx_label(c, "wx_exec_start_failed");
+    wx_call(c, patches, "GetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_str(c, 0, 2088);
+    wx_ldr(c, 0, 2064); wx_li(c, 1, 0); wx_li(c, 2, 32768); wx_call(c, patches, "VirtualFree");
+    wx_ldr(c, 0, 2088); wx_free(c, 2304); wx_b(c, "wx_error");
+    wx_label(c, "wx_exec_badcmd");
+    wx_ldr(c, 0, 2064); wx_li(c, 1, 0); wx_li(c, 2, 32768); wx_call(c, patches, "VirtualFree");
+    wx_label(c, "wx_exec_inval"); wx_free(c, 2304); wx_b(c, "wx_inval");
+    wx_label(c, "wx_exec_nomem"); wx_free(c, 2304); wx_b(c, "wx_nomem");
+
+    // poll(fds, nfds, timeout ms) for the standard input: files are always ready, a pipe is ready with data or at end of
+    // file (broken pipe), a console when its handle is signalled; the timeout is honoured in 10 ms steps
+    wx_label(c, "wx_poll");
+    wx(c, arm64.str_x(0, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx_label(c, "wx_poll_again");
+    wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.ldr_w(0, 9, 0)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_poll_invalid"); wx(c, arm64.str_x(0, 31, 160));
+    wx_call(c, patches, "GetFileType"); wx_bool(c);
+    wx_cmpi(c, 0, 2); wx_bcc(c, 0, "wx_poll_console"); wx_cmpi(c, 0, 3); wx_bcc(c, 0, "wx_poll_pipe"); wx_b(c, "wx_poll_ready");
+    wx_label(c, "wx_poll_console"); wx(c, arm64.ldr_x(0, 31, 160)); wx_li(c, 1, 0); wx_call(c, patches, "WaitForSingleObject"); wx_bool(c); wx_cbz(c, 0, "wx_poll_ready"); wx_b(c, "wx_poll_idle");
+    wx_label(c, "wx_poll_pipe");
+    wx(c, arm64.str_x(31, 31, 168)); wx(c, arm64.ldr_x(0, 31, 160)); wx_li(c, 1, 0); wx_li(c, 2, 0); wx_li(c, 3, 0); wx(c, arm64.add_imm_x(4, 31, 168, iie)); wx_li(c, 5, 0);
+    wx_call(c, patches, "PeekNamedPipe"); wx_bool(c); wx_cbz(c, 0, "wx_poll_pipe_failed");
+    wx(c, arm64.ldr_w(9, 31, 168)); wx_cbz(c, 9, "wx_poll_idle"); wx_b(c, "wx_poll_ready");
+    wx_label(c, "wx_poll_pipe_failed"); wx_b(c, "wx_poll_ready");
+    wx_label(c, "wx_poll_idle");
+    wx(c, arm64.ldr_x(2, 31, 152)); wx_cbz(c, 2, "wx_poll_timeout");
+    wx(c, arm64.cmp_imm_x(2, 0, iie)); wx_bcc(c, 11, "wx_poll_sleep");
+    wx_cmpi(c, 2, 10); wx_bcc(c, 9, "wx_poll_timeout"); wx(c, arm64.sub_imm_x(2, 2, 10, iie)); wx(c, arm64.str_x(2, 31, 152));
+    wx_label(c, "wx_poll_sleep"); wx_li(c, 0, 10); wx_call(c, patches, "Sleep"); wx_b(c, "wx_poll_again");
+    wx_label(c, "wx_poll_timeout"); wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.strh_w(31, 9, 6)); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_poll_ready"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 1); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+    wx_label(c, "wx_poll_invalid"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 32); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+
     // ---- memory. Darwin pages are 16 KiB: lengths are rounded up to 16 KiB (VirtualAlloc returns 64 KiB-aligned regions).
     // mmap -> VirtualAlloc(NULL, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
     wx_label(c, "wx_mmap");
@@ -435,6 +633,18 @@ koukai waza emit_windows_init(c: arm64.Assembler, patches: []macho.AddressPatch,
     }
     wx_li(c, 0, 65001); wx_call(c, patches, "SetConsoleOutputCP");
     wx_li(c, 0, 65001); wx_call(c, patches, "SetConsoleCP");
+    // a parent that passed a records channel (spawn_test) describes it in STARTUPINFO.lpReserved2 with the C runtime layout:
+    // count (4 bytes), count flag bytes, count handles; descriptor 3 becomes table entry 3
+    wx_alloc(c, 112);
+    wx(c, arm64.add_imm_x(0, 31, 0, iie)); wx_call(c, patches, "GetStartupInfoW");
+    wx(c, arm64.ldrh_w(9, 31, 66)); wx_cmpi(c, 9, 40); wx_bcc(c, 3, "windows_init_done");
+    wx(c, arm64.ldr_x(9, 31, 72)); wx_cbz(c, 9, "windows_init_done");
+    wx(c, arm64.ldr_w(10, 9, 0)); wx_cmpi(c, 10, 4); wx_bcc(c, 3, "windows_init_done");
+    wx(c, arm64.ldrb_w(11, 9, 7)); wx_li(c, 12, 1); wx(c, arm64.and_x(11, 11, 12)); wx_cbz(c, 11, "windows_init_done");
+    wx(c, arm64.add_x(12, 9, 10)); wx(c, arm64.add_imm_x(12, 12, 28, iie)); wx(c, arm64.ldr_x(13, 12, 0));
+    wx_data(c, patches, base, 14, 0); wx(c, arm64.str_x(13, 14, 24));
+    wx_label(c, "windows_init_done");
+    wx_free(c, 112);
     wx(c, arm64.ldp_post_x(29, 30, 31, 16)); wx(c, arm64.ret());
 }
 

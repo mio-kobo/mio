@@ -35,9 +35,9 @@ waza test_windows_adapter_calls_win32_through_iat_patches() -> unit {
         }
         at = at + 1;
     }
-    testing.expect(len(slots) == 24, "every one of the 24 imports is called by the adapter");
+    testing.expect(len(slots) == 33, "every one of the 33 imports is called by the adapter");
     kaku imports = windows_imports();
-    testing.expect(len(imports) == 48 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[46] == "shell32.dll" && imports[47] == "CommandLineToArgvW", "import list: (library, symbol) pairs in IAT order, kernel32 first");
+    testing.expect(len(imports) == 66 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[64] == "shell32.dll" && imports[65] == "CommandLineToArgvW", "import list: (library, symbol) pairs in IAT order, kernel32 first");
 }
 
 waza array_push_slot(slots: []int64, value: int64) -> unit { array.push(slots, value); }
@@ -55,7 +55,7 @@ waza test_windows_start_builds_argc_argv_envp_and_enters_the_lowered_code() -> u
 waza test_windows_adapter_reserves_its_data_words() -> unit {
     kaku dar = compile(empty_v14([]));
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
-    testing.expect(windows_adapter_words() == 128, "64 descriptor entries and 64 enumeration flags");
+    testing.expect(windows_adapter_words() == 256, "64 descriptor entries, 64 enumeration flags and the process-emulation state");
     testing.expect(win.globals == dar.globals + windows_adapter_words(), "the adapter words follow the program's globals");
 }
 
@@ -79,4 +79,23 @@ waza test_windows_adapter_normalises_path_separators() -> unit {
     testing.expect(win.words[loop + 3] == arm64.cmp_imm_x(10, 92, iie).word, "cmp x10, #92 ('\\')");
     kaku store = loop + 6;
     testing.expect(win.words[store] == arm64.movz_x(11, 47, 0).word && win.words[store + 1] == arm64.strb_w(11, 9, 0).word, "mov x11, #47 ('/'); strb w11, [x9]");
+}
+
+// Process emulation: fork saves a context and runs the child path in-process; execve does CreateProcessW; exit in the child and
+// the end of execve resume the parent. x18 is the Windows platform register (TEB) and must never be written.
+waza test_windows_process_emulation_exists_and_never_writes_x18() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(win_label(win.labels, "wx_fork") > 0 && win_label(win.labels, "wx_resume") > win_label(win.labels, "wx_fork"), "fork and the parent resume routine exist");
+    testing.expect(win_label(win.labels, "wx_execve") > 0 && win_label(win.labels, "wx_child_done") > 0 && win_label(win.labels, "wx_wait4") > 0 && win_label(win.labels, "wx_poll") > 0, "execve, child completion, wait4 and poll exist");
+    kaku at = win_label(win.labels, "windows_syscall"); kaku bad = 0;
+    aida (at < len(win.words)) {
+        // the destination register Rd/Rt is bits 0..4: no instruction of the adapter region may target x18 as a plain
+        // destination of ADD/SUB/MOV/LDR immediate forms (the common encodings used here)
+        kaku w = int64(win.words[at]);
+        kaku rd = w - (w / 32) * 32;
+        kaku top = w / 16777216;
+        moshi (rd == 18 && (top == 145 || top == 209 || top == 210 || top == 242 || top == 249 || top == 56 || top == 57 || top == 184 || top == 185 || top == 170)) { bad = bad + 1; }
+        at = at + 1;
+    }
+    testing.expect(bad == 0, "no ADD/SUB/MOVZ/MOVK/LDR/STR-load form writes x18 in the Windows code");
 }
