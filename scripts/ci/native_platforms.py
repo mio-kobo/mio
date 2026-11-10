@@ -876,7 +876,7 @@ def summary(args):
             continue
         if data.get("suite") == "native-platforms":
             found[data.get("target")] = path
-    for target in ("linux-amd64", "darwin-arm64", "windows-amd64"):
+    for target in (args.targets.split(",") if args.targets else ("linux-amd64", "darwin-arm64", "windows-amd64")):
         path = found.get(target)
         if path is None:
             overall = "FAIL"
@@ -904,7 +904,9 @@ def summary(args):
             counts[item["status"]] = counts.get(item["status"], 0) + 1
         rows.append("| %s | %s | %s | %s |" % (target, status,
                     ", ".join("%s %d" % kv for kv in sorted(counts.items())), data["seed"]["status"]))
-    jobs = {name: result for name, variable in (("linux", "NATIVE_LINUX_JOB_RESULT"), ("follower", "NATIVE_FOLLOWER_JOB_RESULT"))
+    jobs = {name: result for name, variable in (("linux", "NATIVE_LINUX_JOB_RESULT"), ("follower", "NATIVE_FOLLOWER_JOB_RESULT"),
+                                   ("linux-arm64", "NATIVE_LINUX_ARM64_JOB_RESULT"), ("darwin-amd64", "NATIVE_DARWIN_AMD64_JOB_RESULT"),
+                                   ("windows-arm64", "NATIVE_WINDOWS_ARM64_JOB_RESULT"))
             if (result := os.environ.get(variable))}
     if any(result != "success" for result in jobs.values()):
         overall = "FAIL"
@@ -943,6 +945,7 @@ def main():
     p = sub.add_parser("summary")
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--targets", default="", help="comma-separated targets that must all have a report (default: the three release targets)")
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()

@@ -1,4 +1,4 @@
-name: Mio Native / 3 platforms
+name: Mio Native / 6 platforms
 # Native verification of the pure-Mio compiler, CLI and runtime on the three release targets.
 # Version archive branches (Mio-2.1.1, Mio-2.2.0, Mio-3.0.0, ...) are validated by the same workflow.
 # (scripts/ci/native_platforms.py). Engines are reported separately: Stage A of the Linux compiler is produced by the
@@ -145,10 +145,21 @@ jobs:
             build/native/${{ matrix.target }}/examples/
           if-no-files-found: error
           retention-days: 7
+  # The three additional targets live in their own reusable workflows (one native runner each) and are required here.
+  linux-arm64:
+    name: linux-arm64
+    uses: ./.github/workflows/native-arm64.yml
+  darwin-amd64:
+    name: darwin-amd64
+    uses: ./.github/workflows/native-darwin-amd64.yml
+  windows-arm64:
+    name: windows-arm64
+    uses: ./.github/workflows/native-windows-arm64.yml
+
   summary:
     name: Native / required
     if: always()
-    needs: [linux, follower]
+    needs: [linux, follower, linux-arm64, darwin-amd64, windows-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -166,14 +177,18 @@ jobs:
         env:
           NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}
           NATIVE_FOLLOWER_JOB_RESULT: ${{ needs.follower.result }}
+          NATIVE_LINUX_ARM64_JOB_RESULT: ${{ needs.linux-arm64.result }}
+          NATIVE_DARWIN_AMD64_JOB_RESULT: ${{ needs.darwin-amd64.result }}
+          NATIVE_WINDOWS_ARM64_JOB_RESULT: ${{ needs.windows-arm64.result }}
         run: >-
           python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary
+          --targets linux-amd64,darwin-arm64,windows-amd64,linux-arm64,darwin-amd64,windows-arm64
           ${{ inputs.run_examples && '--run-examples' || '' }}
       # Per-function Bunko matrix from the same native reports: every covered library function must be PASS (or have a
       # recorded UNSUPPORTED reason) on every platform; UNVERIFIED, SKIP and NOT_RUN fail.
       - name: Bunko public-function test matrix
         if: always()
-        run: python scripts/ci/bunko_matrix.py --check --reports build/native-reports --output build/native-summary --require-pass
+        run: python scripts/ci/bunko_matrix.py --check --reports build/native-reports --output build/native-summary --require-pass --platforms darwin-arm64,linux-amd64,windows-amd64,linux-arm64,darwin-amd64,windows-arm64
       - uses: actions/upload-artifact@v4
         if: always()
         with:
