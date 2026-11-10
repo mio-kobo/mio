@@ -46,7 +46,7 @@ named workflow), *Available on target X* (native execution evidence on X), *Expe
 ### 1.4 What requires compiler changes
 
 * Phase A: **none beyond declaring the two new primitives** (typechecker signature table, native-function layout list in each compiler driver,
-  Linux lowering routine, Go VM). Other targets deliberately fail closed (§1.6).
+  Linux lowering routine, Go VM). Other targets deliberately fail closed (§1.6). Every body-less function a program declares must be lowerable on every target, even when unreferenced, so each backend needs at least a fail-closed stub.
 * Phase C: a library-level task (closure/struct state machine) needs **no** compiler change. Automatic stackless lowering (`async waza`/`await`)
   would need a new keyword, a state-machine transform in the Mochi lowering, and a frame-liveness root description: this is a
   **language proposal that needs project-owner approval** and is *not* started.
@@ -64,7 +64,7 @@ named workflow), *Available on target X* (native execution evidence on X), *Expe
 | target | `tcp_async` | evidence |
 |---|---|---|
 | linux-amd64 | **Available**: nonblocking accept/connect/read/write, SO_ERROR completion | native `mio test` of `bunko/kiso/net/tcp_async` (5 tests, real loopback sockets) run locally on linux-amd64 with a compiler built from this tree; CI result recorded in the PR |
-| darwin-arm64 / linux-arm64 / windows-arm64 | not available: building a program that calls the new primitives is rejected by the AArch64 lowering (`E_LOWER`) — fail closed | **NOT_RUN** |
+| darwin-arm64 / linux-arm64 / windows-arm64 | not available: the AArch64 lowering declares the two primitives as fail-closed stubs (`native_socket_set_nonblocking`/`native_socket_finish_connect`) that report an `Other` (ENOSYS) status, so existing programs (including `kiso/net/tcp`) build and run unchanged while `tcp_async` operations fail with an error — never silently succeed | **NOT_RUN** |
 | darwin-amd64 | not available: reuses the Linux lowering through the `darwin_syscall` adapter; the unmapped syscalls return `ENOSYS`, so operations report an `Other` error — fail closed | **NOT_RUN** |
 | windows-amd64 | not available: unknown socket functions lower to `rt.os_unsupported` | **NOT_RUN** |
 

@@ -5,8 +5,7 @@ Every operation returns immediately; an operation that cannot make progress repo
 called again later. Nothing in this package waits, sleeps or spins: deciding *when* to retry is the job of a reactor
 (see [docs/async-networking.md](../../../../docs/async-networking.md), phase B).
 
-Status: **linux-amd64 only** (Implemented, tested locally with native loopback sockets). On other targets a program that
-imports this package is rejected at build time (AArch64 targets) or reports an error at run time; CI reports NOT_RUN there.
+Status: **linux-amd64 only** (Implemented, tested locally with native loopback sockets). On other targets the primitives fail closed (an `Other` error at run time, never a silent success); CI reports NOT_RUN there.
 
 ```mio
 yobu "kiso/array";
