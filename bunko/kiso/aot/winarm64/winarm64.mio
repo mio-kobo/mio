@@ -6,8 +6,9 @@ yobu "kiso/string";
 
 // PE32+ (IMAGE_FILE_MACHINE_ARM64, 0xAA64) packaging for the lowered Windows ARM64 words (kiso/aot/lower,
 // compile_windows_arm64). Layout from kiso/aot/pe: `.data` first at RVA 0x1000 (zero-fill, the program's globals), then
-// `.text`, `.rdata` (constants) and `.idata` (imports; the loader fills the IAT). The image base is fixed (no relocations)
-// and the code needs none: ADRP/ADD patches are resolved here from the final section RVAs.
+// `.text`, `.rdata` (constants), `.idata` (imports; the loader fills the IAT) and `.reloc`. The preferred image base is
+// 0x140000000; the image is ASLR-capable (see build) and the code is PC-relative, so it needs no relocation of its own:
+// ADRP/ADD patches are resolved here from the final section RVAs.
 //
 // AddressPatch.target kinds: 0 text (byte offset), 1 constants (.rdata), 2 globals (.data), 3 IAT slot (offset = flattened
 // import index * 8). The generated code uses no structured exception handling and no unwinding, so the image carries no
@@ -58,12 +59,21 @@ waza section_rva(layout: pe.Layout, kind: int64) -> int64 {
     kaesu -1;
 }
 
+// Windows on ARM64 only runs ASLR-capable images (IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE with a base-relocation table).
+// The generated code is entirely PC-relative (ADRP/ADD; the loader fills the IAT), so it is position independent and the
+// image may be relocated freely. pe.executable emits DYNAMIC_BASE and a .reloc section as soon as one DIR64 relocation
+// exists; that relocation covers an unused, zero-initialised 8-byte slot appended to .rdata, which no code ever reads.
 waza build(words: []uint32, constants: []uint8, globals: int64, entry_word: int64, imports: []string) -> pe.ImageResult {
     kaku text: []uint8 = array.with_capacity[uint8](len(words) * 4);
     kaku i = 0;
     aida (i < len(words)) { push_word(text, words[i]); i = i + 1; }
-    kaesu pe.executable_machine(pe.ImageSpec { text: text, rdata: constants, data: [], zero_fill: globals * 8, entry: entry_word * 4,
-        imports: libraries(imports), patches: [], unwind: [] }, [], stack_reserve, data_rva, pe.machine_arm64);
+    kaku rdata = array.clone(constants);
+    aida (len(rdata) - (len(rdata) / 8) * 8 != 0) { array.push(rdata, uint8(0)); }
+    kaku slot = len(rdata);
+    i = 0; aida (i < 8) { array.push(rdata, uint8(0)); i = i + 1; }
+    kaku relocation = pe.Patch { section: pe.rdata_section, offset: slot, kind: pe.va64, target: pe.text_section, target_offset: 0 };
+    kaesu pe.executable_machine(pe.ImageSpec { text: text, rdata: rdata, data: [], zero_fill: globals * 8, entry: entry_word * 4,
+        imports: libraries(imports), patches: [relocation], unwind: [] }, [], stack_reserve, data_rva, pe.machine_arm64);
 }
 
 koukai waza image(spec: macho.ImageSpec, entry_word: int64, imports: []string) -> ImageResult {

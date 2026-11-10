@@ -136,6 +136,9 @@ def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
         code, out, err = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as error:
         code, out, err = None, error.stdout or b"", (error.stderr or b"") + b"\n[timed out]"
+    except OSError as error:
+        # The image could not even be started (for example WinError 193, an invalid executable): a failure with its reason.
+        code, out, err = -1, b"", ("cannot start the process: %s" % error).encode()
     seconds = time.monotonic() - started
     with open(report.logs / (label + ".log"), "wb") as stream:
         stream.write(("$ %s\n[cwd %s] [exit %s] [%.1fs]\n" % (" ".join(str(a) for a in argv), cwd, code, seconds)).encode())

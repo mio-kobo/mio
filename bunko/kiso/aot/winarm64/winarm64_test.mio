@@ -21,7 +21,9 @@ waza test_machine_entry_and_sections() -> unit {
     kaku b = result.bytes;
     testing.expect(word(b, 0, 2) == 23117 && word(b, 128, 4) == 17744, "MZ and PE signatures");
     testing.expect(word(b, 132, 2) == 43620, "IMAGE_FILE_MACHINE_ARM64 (0xAA64)");
-    testing.expect(word(b, 134, 2) == 3, ".text, .rdata and .idata");
+    testing.expect(word(b, 134, 2) == 4, ".text, .rdata, .idata and .reloc");
+    testing.expect(word(b, 150, 2) == 34, "EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE, relocations present (not RELOCS_STRIPPED)");
+    testing.expect(word(b, 222, 2) == 352, "DllCharacteristics: HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT (Windows on ARM64 requires ASLR)");
     testing.expect(word(b, 152, 2) == 523, "PE32+ optional header");
     testing.expect(word(b, 168, 4) == 4096 + 16, "entry RVA = .text + 4 words");
     testing.expect(word(b, 176, 8) == 5368709120, "image base 0x140000000");
@@ -35,10 +37,10 @@ waza test_adrp_add_patches_target_constants_and_import_slots() -> unit {
     testing.expect(result.error == "", "image built");
     kaku b = result.bytes;
     // hand-computed from the A64 encodings: IAT slot 1 (GetStdHandle) at RVA 0x3070 from pc 0x140001000, constants at 0x140002001
-    testing.expect(word(b, 512, 4) == 3489660944, "adrp x16, <IAT page> (+2 pages)");
-    testing.expect(word(b, 516, 4) == 2432811536, "add x16, x16, #0x70 (slot 1)");
-    testing.expect(word(b, 520, 4) == 2952790025, "adrp x9, <.rdata page> (+1 page from the instruction's page)");
-    testing.expect(word(b, 524, 4) == 2432697641, "add x9, x9, #1 (constant offset 1)");
+    testing.expect(word(b, 1024, 4) == 3489660944, "adrp x16, <IAT page> (+2 pages)");
+    testing.expect(word(b, 1028, 4) == 2432811536, "add x16, x16, #0x70 (slot 1)");
+    testing.expect(word(b, 1032, 4) == 2952790025, "adrp x9, <.rdata page> (+1 page from the instruction's page)");
+    testing.expect(word(b, 1036, 4) == 2432697641, "add x9, x9, #1 (constant offset 1)");
     // data directories: import table at .idata (0x3000), IAT at 0x3068 with 5 entries (two terminators)
     testing.expect(word(b, 272, 4) == 12288 && word(b, 360, 4) == 12392 && word(b, 364, 4) == 40, "import directory 0x3000, IAT directory 0x3068 / 40 bytes");
 }
@@ -48,7 +50,7 @@ waza test_globals_come_first_at_rva_0x1000() -> unit {
     kaku result = image(macho.ImageSpec { words: words(), constants: [], globals: 4, patches: patches }, 4, imports());
     testing.expect(result.error == "", "image built with a zero-fill .data");
     kaku b = result.bytes;
-    testing.expect(word(b, 134, 2) == 3, ".data, .text and .idata");
+    testing.expect(word(b, 134, 2) == 5, ".data, .text, .rdata (relocation slot), .idata and .reloc");
     testing.expect(word(b, 168, 4) == 8192 + 16, ".data (RVA 0x1000, 32 bytes) comes first; .text starts at 0x2000");
 }
 

@@ -51,6 +51,18 @@ jobs:
         run: |
           set -o pipefail
           python bunko/kiso/aot/winarm64/check_winarm64.py --refvm build/refvm.exe --work build/winarm64 --require-execution | tee build/winarm64-report.txt
+      - name: Compare with an MSVC-built ARM64 executable (diagnostics)
+        if: always()
+        run: |
+          mkdir -p build/winarm64/compare && cd build/winarm64/compare
+          printf 'int main(void) { return 42; }\n' > good.c
+          vs="$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath | tr -d '\r')"
+          echo "Visual Studio: $vs"
+          printf '@echo off\r\ncall "%s\\VC\\Auxiliary\\Build\\vcvarsarm64.bat" >nul\r\ncl /nologo /Fe:good.exe good.c\r\ndumpbin /headers good.exe > good.txt\r\ndumpbin /headers ..\\hello.exe > ours.txt\r\ndumpbin /imports ..\\hello.exe > ours-imports.txt\r\n' "$(cygpath -w "$vs")" > compare.bat
+          cmd //c compare.bat || echo "compare.bat failed"
+          ./good.exe; echo "msvc-built ARM64 exe exit status: $?"
+          ../hello.exe; echo "our hello.exe exit status: $? (see check output)" || true
+          diff <(sed -n '1,200p' good.txt) <(sed -n '1,200p' ours.txt) | head -80 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -53,11 +53,13 @@ def check_pe(data):
     machine, nsec, _stamp, _symtab, _nsyms, optsize, characteristics = struct.unpack_from("<HHIIIHH", data, pe + 4)
     expect(machine == 0xAA64, f"IMAGE_FILE_MACHINE_ARM64 expected, got {machine:#x}")
     expect(characteristics & 0x2 and characteristics & 0x20, "EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE")
+    expect(not characteristics & 0x1, "relocations are present (not IMAGE_FILE_RELOCS_STRIPPED): Windows on ARM64 requires ASLR-capable images")
     opt = pe + 24
     expect(struct.unpack_from("<H", data, opt)[0] == 0x20B, "PE32+ optional header")
     entry_rva = struct.unpack_from("<I", data, opt + 16)[0]
     image_base, section_alignment, file_alignment = struct.unpack_from("<QII", data, opt + 24)
-    subsystem = struct.unpack_from("<H", data, opt + 68)[0]
+    subsystem, dll_characteristics = struct.unpack_from("<HH", data, opt + 68)
+    expect(dll_characteristics & 0x40, "IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE")
     expect(image_base == 0x140000000 and subsystem == 3, "image base 0x140000000, console subsystem")
     expect(section_alignment == 0x1000 and file_alignment == 0x200, "alignments")
     sections = []
@@ -65,7 +67,9 @@ def check_pe(data):
         name, vsize, rva, rsize, roff = struct.unpack_from("<8sIIII", data, opt + optsize + 40 * i)
         sections.append((name.rstrip(b"\0").decode(), rva, vsize, roff, rsize))
     by_name = {s[0]: s for s in sections}
-    expect(".text" in by_name and ".idata" in by_name, "sections .text and .idata")
+    expect(".text" in by_name and ".idata" in by_name and ".reloc" in by_name, "sections .text, .idata and .reloc")
+    reloc_rva, reloc_size = struct.unpack_from("<II", data, opt + 112 + 5 * 8)
+    expect(reloc_rva == by_name[".reloc"][1] and reloc_size >= 12, "base relocation directory")
     text = by_name[".text"]
     expect(text[1] <= entry_rva < text[1] + text[2], "entry point inside .text")
 
@@ -101,7 +105,7 @@ def main():
     parser.add_argument("--work", required=True)
     parser.add_argument("--require-execution", action="store_true")
     args = parser.parse_args()
-    image = build(args.refvm, Path(args.work))
+    image = build(Path(args.refvm).resolve(), Path(args.work).resolve())
     names = check_pe(image.read_bytes())
     print(f"struct parse: PASS (ARM64 PE32+, sections and {len(names)} imports compared: {', '.join(names)})")
     host = f"{platform.system()}/{platform.machine()}"
