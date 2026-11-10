@@ -34,7 +34,7 @@ koukai waza windows_imports() -> []string {
 // at word 0 (entries 0..2 are the standard handles); per-descriptor "directory enumeration started" flags at word 64.
 // Process emulation state (see the fork/execve blocks): word 128 mode (1 while the emulated child runs), 129 timeout seconds,
 // 130 last child exit code, 131 child pid, 132 saved sp, 133 saved return address, 134 saved caller lr, 136..149 saved x2-x15,
-// 150 saved x17, 192..255 snapshot of the descriptor table taken at fork.
+// 150 saved x17, 151..160 saved x19-x28, 161 saved x29, 192..255 snapshot of the descriptor table taken at fork.
 koukai waza windows_adapter_words() -> int64 { kaesu 256; }
 
 waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
@@ -428,6 +428,9 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     kaku reg = 0;
     aida (reg < 14) { wx(c, arm64.ldr_x(9, 31, reg * 8)); wx(c, arm64.str_x(9, 11, reg * 8)); reg = reg + 1; }
     wx(c, arm64.ldr_x(9, 31, 112)); wx(c, arm64.str_x(9, 11, 112));
+    // the callee-saved registers and the frame pointer: the emulated child path enters routines that never unwind
+    wx(c, arm64.stp_x(19, 20, 11, 120)); wx(c, arm64.stp_x(21, 22, 11, 136)); wx(c, arm64.stp_x(23, 24, 11, 152));
+    wx(c, arm64.stp_x(25, 26, 11, 168)); wx(c, arm64.stp_x(27, 28, 11, 184)); wx(c, arm64.str_x(29, 11, 200));
     wx_data(c, patches, base, 11, 0); wx_data(c, patches, base, 12, 192); wx_li(c, 13, 0);
     wx_label(c, "wx_fork_snapshot");
     wx(c, arm64.lsl_x(14, 13, 3)); wx(c, arm64.add_x(15, 11, 14)); wx(c, arm64.ldr_x(9, 15, 0)); wx(c, arm64.add_x(15, 12, 14)); wx(c, arm64.str_x(9, 15, 0));
@@ -443,6 +446,8 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_data(c, patches, base, 16, 136);
     wx(c, arm64.ldp_x(2, 3, 16, 0)); wx(c, arm64.ldp_x(4, 5, 16, 16)); wx(c, arm64.ldp_x(6, 7, 16, 32)); wx(c, arm64.ldp_x(8, 9, 16, 48));
     wx(c, arm64.ldp_x(10, 11, 16, 64)); wx(c, arm64.ldp_x(12, 13, 16, 80)); wx(c, arm64.ldp_x(14, 15, 16, 96)); wx(c, arm64.ldr_x(17, 16, 112));
+    wx(c, arm64.ldp_x(19, 20, 16, 120)); wx(c, arm64.ldp_x(21, 22, 16, 136)); wx(c, arm64.ldp_x(23, 24, 16, 152));
+    wx(c, arm64.ldp_x(25, 26, 16, 168)); wx(c, arm64.ldp_x(27, 28, 16, 184)); wx(c, arm64.ldr_x(29, 16, 200));
     wx_data(c, patches, base, 16, 133); wx(c, arm64.ldr_x(30, 16, 0));
     wx_li(c, 1, 0); wx(c, arm64.cmn_imm_x(0, 0, iie)); wx(c, arm64.ret());
 

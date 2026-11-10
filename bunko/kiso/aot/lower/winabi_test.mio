@@ -108,3 +108,20 @@ waza test_windows_adapter_allocates_16_byte_aligned_frames() -> unit {
     kaku init = win_label(win.labels, "windows_init");
     testing.expect(init > 0 && win.words[init] == arm64.stp_pre_x(29, 30, 31, -16).word, "windows_init pushes the frame pair first");
 }
+
+// fork saves x19-x29 and resume restores them: the emulated child enters routines (nativeos_exec) that never return, so their
+// frame pointer and callee-saved registers must not leak into the resumed parent (the parent's epilogue loaded lr = 0).
+waza test_windows_resume_restores_callee_saved_registers_and_frame_pointer() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku resume = win_label(win.labels, "wx_resume");
+    kaku found_x29 = iie; kaku found_x27 = iie; kaku at = resume;
+    aida (at < resume + 80) {
+        moshi (win.words[at] == arm64.ldr_x(29, 16, 200).word) { found_x29 = hai; }
+        moshi (win.words[at] == arm64.ldp_x(27, 28, 16, 184).word) { found_x27 = hai; }
+        at = at + 1;
+    }
+    testing.expect(found_x29 && found_x27, "wx_resume reloads x29 and x19-x28 from the fork context");
+    kaku fork = win_label(win.labels, "wx_fork"); kaku saved = iie; at = fork;
+    aida (at < fork + 120) { moshi (win.words[at] == arm64.str_x(29, 11, 200).word) { saved = hai; } at = at + 1; }
+    testing.expect(saved, "wx_fork stores x29 in the context");
+}
