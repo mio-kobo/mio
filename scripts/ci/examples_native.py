@@ -66,6 +66,8 @@ def host_target():
     host = (platform.system(), platform.machine().lower())
     if host in {("Darwin", "arm64"), ("Darwin", "aarch64")}:
         return "darwin-arm64"
+    if host in {("Darwin", "x86_64"), ("Darwin", "amd64")}:
+        return "darwin-amd64"
     if host in {("Linux", "aarch64"), ("Linux", "arm64")}:
         return "linux-arm64"
     if host[1] in {"amd64", "x86_64"}:
@@ -377,7 +379,7 @@ def run_suite(cli, target, output, deadline, bunko=ROOT / "bunko", unavailable="
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mio", default="mio", help="native Mio CLI executable")
-    parser.add_argument("--target", choices=("linux-amd64", "linux-arm64", "darwin-arm64", "windows-amd64"), default=host_target())
+    parser.add_argument("--target", choices=("linux-amd64", "linux-arm64", "darwin-arm64", "darwin-amd64", "windows-amd64"), default=host_target())
     parser.add_argument("--output", type=Path)
     parser.add_argument("--bunko-root", type=Path, default=Path(os.environ.get("MIO_BUNKO", ROOT / "bunko")))
     args = parser.parse_args()
