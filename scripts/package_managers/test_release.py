@@ -17,7 +17,18 @@ from stable_release import (BUNDLE, EVIDENCE_SCHEMAS, REPORT, archives, assemble
 SOURCE = 'a' * 40
 VERSION = '2.1.0'
 RUN = dict(id='123', attempt='1')
-INPUTS = dict(version=VERSION, source_sha=SOURCE, embedded_bunko=False)
+
+
+def version_for(kind):
+    """Historical v2.1.0 evidence uses GF4; the native v2.1 seed covers v2.1.1."""
+    return VERSION if kind == GF4 else '2.1.1'
+
+
+def inputs_for(kind):
+    return dict(version=version_for(kind), source_sha=SOURCE, embedded_bunko=kind != GF4)
+
+
+INPUTS = inputs_for(GF4)
 SEED_REPORT = 'trusted-gf4-report.json'
 SEED_LOG_DIR = 'trusted-gf4-logs'
 
@@ -25,6 +36,7 @@ SEED_LOG_DIR = 'trusted-gf4-logs'
 class ReleaseTests(unittest.TestCase):
     def seed_fixture(self, base, compiler_sha, kind=GF4):
         identity = seed_identity(kind)
+        inputs = inputs_for(kind)
         host = ['distribution-input', 'release-context', 'runner-os-arch', 'seed-source', 'seed-pin',
                 'seed-release-attestation', 'seed-signature']
         native = ['seed-build-A', 'cli-fixed-point', *['cli-stage-' + stage for stage in 'BCD'],
@@ -34,7 +46,8 @@ class ReleaseTests(unittest.TestCase):
         for name in GF4_LOGS:
             (logs / name).write_text('fixture execution log')
         seed = dict(schema_version=2, suite=identity.suite, status='PASS', target='darwin-arm64',
-                    source_sha=SOURCE, distribution_input=INPUTS, run=RUN, authorization=release_context(VERSION),
+                    source_sha=SOURCE, distribution_input=inputs, run=RUN,
+                    authorization=release_context(inputs['version']),
                     runner=dict(os='macOS', arch='ARM64', system='Darwin', machine='arm64'),
                     seed=seed_record(identity, kind),
                     checks=[dict(name=name, status='PASS', required=True, engine=engine)
@@ -53,6 +66,9 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 stable(tag)
         self.assertEqual(stable('v2.1.0'), '2.1.0')
+        for tag, version in [('v2.1.1', '2.1.1'), ('v2.1.2', '2.1.2'), ('v2.2.0', '2.2.0'), ('v3.0.0', '3.0.0')]:
+            with self.subTest(tag=tag):
+                self.assertEqual(stable(tag), version)
 
     def test_immutable_idempotent_and_rejects_replacement(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -73,35 +89,56 @@ class ReleaseTests(unittest.TestCase):
     def fixture(self, base, kind=GF4):
         import tarfile
         import zipfile
-        release = dict(tag_name='v2.1.0', draft=False, prerelease=False, published_at='date', assets=[])
-        compiler_sha = __import__('hashlib').sha256(b'native fixture').hexdigest()
+        version = version_for(kind)
+        tag = 'v' + version
+        inputs = inputs_for(kind)
+        embedded = kind != GF4
+        release = dict(tag_name=tag, draft=False, prerelease=False, published_at='date', assets=[])
+        full_bytes = b'native Full fixture'
+        # Legacy v2.1.0 distributions ship one compiler with an external Bunko
+        # tree; only the embedded Core/Full architecture has distinct bytes.
+        core_bytes = b'native Core fixture' if embedded else full_bytes
+        compiler_sha = __import__('hashlib').sha256(full_bytes).hexdigest()
+        core_sha = __import__('hashlib').sha256(core_bytes).hexdigest()
         seed = self.seed_fixture(base, compiler_sha, kind)
         seed_path = base / seed_identity(kind).report_name
         sums = []
         for target in ['darwin-arm64', 'linux-amd64', 'windows-amd64']:
+            checks = [dict(name='cli-fixed-point', status='PASS', engine='native', required=True),
+                      dict(name='core-cli-fixed-point', status='PASS', engine='native', required=True)]
+            checks += [dict(name=name, status='PASS', engine='native', required=True) for name in
+                       ('full-embedded-runtime', 'full-embedded-transitive', 'core-no-embedded',
+                        'core-external-root', 'explicit-root-precedence', 'invalid-module-diagnostic')]
             report = dict(target=target, status='PASS', source_sha='a'*40,
-                          seed=dict(status='NOT_RUN', sha256=GF4_SEED_SHA256), distribution_input=INPUTS, run=RUN,
-                          hashes={f'cli-{s}': compiler_sha for s in 'BCD'},
-                          checks=[dict(name='cli-fixed-point', status='PASS', engine='native', required=True)])
+                          seed=dict(status='NOT_RUN', sha256=GF4_SEED_SHA256), distribution_input=inputs, run=RUN,
+                          hashes=dict({f'cli-{s}': compiler_sha for s in 'BCD'},
+                                      **{f'core-cli-{s}': core_sha for s in 'BCD'}),
+                          checks=checks)
             report_path = base / (target+'-native-report.json')
             write_json(report_path, report)
             archives = {}
             for flavor in ['core', 'full']:
-                name = f'mio-2.1.0-{target}-{flavor}'
+                name = f'mio-{version}-{target}-{flavor}'
                 root = base / name
                 (root / 'bin').mkdir(parents=True)
                 binary = root / 'bin' / ('mio.exe' if target == 'windows-amd64' else 'mio')
-                binary.write_bytes(b'native fixture')
+                binary.write_bytes(full_bytes if flavor == 'full' else core_bytes)
                 (root / 'LICENSE').write_text('MIT fixture')
                 (root / 'README.md').write_text('test fixture only')
-                if flavor == 'full':
+                if not embedded and flavor == 'full':
                     (root / 'bunko/kiso').mkdir(parents=True)
-                    (root / 'bunko/kiso/math.mio').write_text('fixture')
-                provenance = dict(version='2.1.0', target=target, flavor=flavor, source_sha='a'*40, embedded_bunko=False,
-                                  compiler_sha256=compiler_sha, native_report_sha256=digest(report_path),
-                                  trusted_seed=seed_binding(seed, report, INPUTS, target, compiler_sha, digest(seed_path), kind))
+                    (root / 'bunko/kiso/math.mio').write_text('// fixture Bunko')
+                binding = seed_binding(seed, report, inputs, target, compiler_sha, digest(seed_path), kind)
+                if embedded:
+                    binding = dict(binding, core_compiler_sha256=core_sha)
+                provenance = dict(inputs, target=target, flavor=flavor,
+                                  embedded_bunko=embedded and flavor == 'full',
+                                  compiler_sha256=compiler_sha if flavor == 'full' else core_sha,
+                                  native_report_sha256=digest(report_path), trusted_seed=binding)
+                if embedded:
+                    provenance['core_compiler_sha256'] = core_sha
                 write_json(root / 'provenance.json', provenance)
-                write_json(root / 'manifest.json', dict(version='2.1.0', source_sha='a'*40, target=target, flavor=flavor, files=inventory(root)))
+                write_json(root / 'manifest.json', dict(version=version, source_sha='a'*40, target=target, flavor=flavor, files=inventory(root)))
                 archive = base / (name + ('.zip' if target == 'windows-amd64' else '.tar.gz'))
                 files = [p for p in root.rglob('*') if p.is_file()]
                 if target == 'windows-amd64':
@@ -116,15 +153,15 @@ class ReleaseTests(unittest.TestCase):
                 archives[archive.name] = sha
                 sums.append(sha+'  '+archive.name+'\n')
                 release['assets'].append(dict(name=archive.name, digest='sha256:'+sha,
-                    browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{archive.name}'))
+                    browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/{tag}/{archive.name}'))
             write_json(base / (target+'-verification.json'), dict(target=target, status='PASS', checks=[dict(status='PASS')], archives=archives))
         for flavor in ('core', 'full'):
-            filename = f'mio-2.1.0-windows-amd64-{flavor}-setup.exe'
+            filename = f'mio-{version}-windows-amd64-{flavor}-setup.exe'
             (base / filename).write_bytes(b'unit fixture only; not executable')
             sha = digest(base / filename)
             sums.append(sha+'  '+filename+'\n')
-            release['assets'].append(dict(name=filename, digest='sha256:'+sha, browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/v2.1.0/{filename}'))
-        image = docker_archive(VERSION)
+            release['assets'].append(dict(name=filename, digest='sha256:'+sha, browser_download_url=f'https://github.com/mio-kobo/mio/releases/download/{tag}/{filename}'))
+        image = docker_archive(version)
         (base / image).write_bytes(b'Docker test fixture')
         sums.append(f'{digest(base / image)}  {image}\n')
         (base / 'SHA256SUMS').write_text(''.join(sums))
@@ -150,7 +187,7 @@ class ReleaseTests(unittest.TestCase):
             for change in ['wrong-run', 'wrong-input', 'fixed-not-run', 'hash', 'source']:
                 report = json.loads(original_report)
                 if change == 'wrong-run': report['run']['attempt'] = '2'
-                if change == 'wrong-input': report['distribution_input']['embedded_bunko'] = True
+                if change == 'wrong-input': report['distribution_input']['version'] = '2.1.1'
                 if change == 'fixed-not-run': report['checks'][0]['status'] = 'NOT_RUN'
                 if change == 'hash': report['hashes']['cli-C'] = '0'*64
                 if change == 'source': report['source_sha'] = 'b'*40
@@ -186,7 +223,7 @@ class ReleaseTests(unittest.TestCase):
             for field, value in [
                 ('source_sha', 'b' * 40),
                 ('target', 'linux-amd64'),
-                ('distribution_input', dict(INPUTS, version='2.1.1')),
+                ('distribution_input', dict(inputs_for(GF4), version='2.1.1')),
                 ('seed', dict(status='NOT_RUN', sha256=GF4_SEED_SHA256)),
                 ('seed', dict(status='PASS', sha256='b' * 64)),
                 ('run', dict(RUN, attempt='2')),
@@ -201,7 +238,7 @@ class ReleaseTests(unittest.TestCase):
                 ('hashes', dict(seed['hashes'], **{'cli-D': 'b' * 64})),
             ]:
                 with self.subTest(field=field, value=value), self.assertRaises(ValueError):
-                    seed_binding(dict(seed, **{field: value}), report, INPUTS, 'linux-amd64', compiler, 'c' * 64)
+                    seed_binding(dict(seed, **{field: value}), report, inputs_for(GF4), 'linux-amd64', compiler, 'c' * 64)
 
     def test_assembly_rejects_pr_dispatch_and_stale_seed_before_creating_output(self):
         env = dict(GITHUB_REF='refs/tags/v2.1.0', GITHUB_REPOSITORY='mio-kobo/mio',
@@ -222,7 +259,8 @@ class ReleaseTests(unittest.TestCase):
 
     @patch('stable_release.subprocess.run')
     def test_assembly_requires_native_artifact_and_attests_its_inventory(self, _gh):
-        env = dict(GITHUB_REF='refs/tags/v2.1.0', GITHUB_REPOSITORY='mio-kobo/mio',
+        version = version_for(NATIVE_V21)
+        env = dict(GITHUB_REF='refs/tags/v' + version, GITHUB_REPOSITORY='mio-kobo/mio',
                    GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_SHA=SOURCE,
                    GITHUB_RUN_ID=RUN['id'], GITHUB_RUN_ATTEMPT=RUN['attempt'])
         suffix = f"{RUN['id']}-{RUN['attempt']}"
@@ -233,7 +271,7 @@ class ReleaseTests(unittest.TestCase):
             legacy.mkdir()
             self.seed_fixture(legacy, 'c' * 64)
             with self.assertRaises(FileNotFoundError):
-                assemble(base, output, VERSION, NATIVE_V21)
+                assemble(base, output, version, NATIVE_V21)
             self.assertFalse(output.exists())
 
             identity = seed_identity(NATIVE_V21)
@@ -244,11 +282,11 @@ class ReleaseTests(unittest.TestCase):
             for target in TARGETS:
                 artifact = base / f'mio-candidates-{target}-{suffix}'
                 artifact.mkdir()
-                for name in archives(VERSION, target) + ['native-report.json', 'verification.json',
-                                                         'package-manager-verification.json']:
+                for name in archives(version, target) + ['native-report.json', 'verification.json',
+                                                          'package-manager-verification.json']:
                     (artifact / name).write_bytes(b'fixture')
                 if target == 'windows-amd64':
-                    for name in installers(VERSION):
+                    for name in installers(version):
                         (artifact / name).write_bytes(b'fixture')
             docker = base / f'mio-docker-linux-amd64-candidate-{suffix}'
             docker.mkdir()
@@ -261,8 +299,8 @@ class ReleaseTests(unittest.TestCase):
                 path.mkdir()
                 (path / name).write_bytes(b'fixture')
 
-            assemble(base, output, VERSION, NATIVE_V21)
-            self.assertEqual(authenticate(output, 'v2.1.0', SOURCE), (RUN, NATIVE_V21))
+            assemble(base, output, version, NATIVE_V21)
+            self.assertEqual(authenticate(output, 'v' + version, SOURCE), (RUN, NATIVE_V21))
             self.assertFalse((output / SEED_REPORT).exists())
 
     def test_assembly_checks_executed_logs_against_seed_report(self):
@@ -281,15 +319,16 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
                 compiler = 'c' * 64
                 seed = self.seed_fixture(Path(temp), compiler, kind)
-                report = dict(run=RUN, distribution_input=INPUTS)
-                binding = seed_binding(seed, report, INPUTS, 'linux-amd64', compiler, 'd' * 64, kind)
+                inputs = inputs_for(kind)
+                report = dict(run=RUN, distribution_input=inputs)
+                binding = seed_binding(seed, report, inputs, 'linux-amd64', compiler, 'd' * 64, kind)
                 self.assertEqual(binding['sha256'], identity.sha256)
                 if kind == NATIVE_V21:
                     self.assertEqual(binding['kind'], NATIVE_V21)
                     self.assertEqual(binding['source'], identity.source)
                     self.assertEqual(binding['asset_name'], identity.asset_name)
                 with self.assertRaises(ValueError):
-                    seed_binding(seed, report, INPUTS, 'linux-amd64', compiler, 'd' * 64, other_kind)
+                    seed_binding(seed, report, inputs, 'linux-amd64', compiler, 'd' * 64, other_kind)
                 mixed = [dict(seed['seed'], source=dict(identity.source, **{field: value}))
                          for field, value in other.source.items()]
                 mixed.append(dict(seed['seed'], sha256=other.sha256))
@@ -297,7 +336,7 @@ class ReleaseTests(unittest.TestCase):
                     mixed.append(dict(seed['seed'], asset_name=other.asset_name))
                 for record in mixed:
                     with self.subTest(record=record), self.assertRaises(ValueError):
-                        seed_binding(dict(seed, seed=record), report, INPUTS, 'linux-amd64', compiler, 'd' * 64, kind)
+                        seed_binding(dict(seed, seed=record), report, inputs, 'linux-amd64', compiler, 'd' * 64, kind)
 
     @patch('stable_release.subprocess.run')
     def test_authentication_checks_signer_source_and_all_evidence_hashes(self, gh):
@@ -305,35 +344,37 @@ class ReleaseTests(unittest.TestCase):
             gh.reset_mock(side_effect=True)
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
                 base = Path(temp)
+                version = version_for(kind)
+                tag = 'v' + version
                 release = self.fixture(base, kind)
-                for name in evidence_files(VERSION, kind):
+                for name in evidence_files(version, kind):
                     path = base / name
                     if not path.exists():
                         path.parent.mkdir(exist_ok=True)
                         path.write_bytes(b'test evidence')
                 evidence = dict(schema_version=EVIDENCE_SCHEMAS[kind], status='PASS', source_sha=SOURCE,
-                                version=VERSION, run=RUN,
-                                files={name: digest(base / name) for name in evidence_files(VERSION, kind)})
+                                version=version, run=RUN,
+                                files={name: digest(base / name) for name in evidence_files(version, kind)})
                 write_json(base / REPORT, evidence)
-                self.assertEqual(authenticate(base, 'v2.1.0', SOURCE), (RUN, kind))
-                self.assertEqual(len(validate(base, 'v2.1.0', release, SOURCE)[1]), 8)
+                self.assertEqual(authenticate(base, tag, SOURCE), (RUN, kind))
+                self.assertEqual(len(validate(base, tag, release, SOURCE)[1]), 8)
                 args = gh.call_args.args[0]
                 self.assertIn(str(base / BUNDLE), args)
-                self.assertEqual(args[args.index('--source-ref') + 1], 'refs/tags/v2.1.0')
+                self.assertEqual(args[args.index('--source-ref') + 1], 'refs/tags/' + tag)
                 self.assertEqual(args[args.index('--signer-digest') + 1], SOURCE)
                 self.assertEqual(args[args.index('--source-digest') + 1], SOURCE)
                 self.assertIn('--deny-self-hosted-runners', args)
                 wrong_schema = EVIDENCE_SCHEMAS[NATIVE_V21 if kind == GF4 else GF4]
                 write_json(base / REPORT, dict(evidence, schema_version=wrong_schema))
                 with self.assertRaisesRegex(ValueError, 'describes different inputs'):
-                    authenticate(base, 'v2.1.0', SOURCE)
+                    authenticate(base, tag, SOURCE)
                 write_json(base / REPORT, evidence)
                 (base / seed_identity(kind).report_name).write_bytes(b'fabricated evidence')
                 with self.assertRaisesRegex(ValueError, 'does not match signed'):
-                    authenticate(base, 'v2.1.0', SOURCE)
+                    authenticate(base, tag, SOURCE)
                 gh.side_effect = subprocess.CalledProcessError(1, 'gh')
                 with self.assertRaisesRegex(ValueError, 'missing or invalid'):
-                    authenticate(base, 'v2.1.0', SOURCE)
+                    authenticate(base, tag, SOURCE)
 
     def test_layout_conflicts_and_distinct_windows_aliases(self):
         r = dict(url='https://github.com/mio-kobo/mio/releases/download/v2.1.0/a.zip', sha='a'*64, root='mio-2.1.0-windows-amd64-full')
