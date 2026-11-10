@@ -1,0 +1,58 @@
+name: Native / linux-arm64 groundwork
+# Native execution evidence for the Linux AArch64 backend while it is being built (v2.2.0 platform expansion).
+# linux-arm64 is NOT a supported compiler target yet (`mio build --target linux-arm64` is rejected with E_TARGET).
+# This job only proves what exists: the pure-Mio AArch64 encoder + ELF writer emit an image that the ARM64 kernel
+# executes natively. The image writer itself runs in the Go reference VM (go-hosted, as Stage A is on linux-amd64);
+# no emulation or translation is involved in executing the image. A required layer that did not run fails the job.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ['Mio-[0-9]*']
+    paths:
+      - 'bunko/kiso/aot/elf/**'
+      - 'bunko/kiso/aot/arm64/**'
+      - 'bunko/kiso/aot/linuxarm64/**'
+      - '.github/workflows/native-arm64.yml'
+permissions:
+  contents: read
+jobs:
+  linux-arm64:
+    name: Native / linux-arm64 groundwork
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Report the host architecture
+        run: |
+          uname -srm
+          test "$(uname -m)" = aarch64
+          python -c "import platform; print(platform.machine())"
+      - name: Build the reference VM (image writer host only)
+        run: go build -o build/mio ./cmd/mio
+      - name: Mio unit tests for the ELF writer and the AArch64 image builder
+        run: |
+          build/mio test bunko/kiso/aot/elf
+          build/mio test bunko/kiso/aot/linuxarm64
+      - name: Independent check and native execution of the generated image
+        env:
+          MIO_CI_MIO: ${{ github.workspace }}/build/mio
+          MIO_CI_MODULE_DIR: ${{ github.workspace }}/build/linuxarm64
+        run: python bunko/kiso/aot/linuxarm64/check_linuxarm64.py --reference-vm --require-execution | tee build/linuxarm64-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-linux-arm64-groundwork-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/linuxarm64-report.txt
+            build/linuxarm64/linuxarm64-hello.bin
+          if-no-files-found: warn
+          retention-days: 7

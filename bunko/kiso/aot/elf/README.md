@@ -1,6 +1,6 @@
 # kiso/aot/elf
 
-Pure Mio Linux x86-64 ELF64 (`ET_EXEC`) writer. Layout:
+Pure Mio Linux ELF64 (x86-64; AArch64 via `executable_aarch64`) (`ET_EXEC`) writer. Layout:
 
 - `0x0000`: ELF header and the program headers, inside the read/execute
   segment (`PT_LOAD`, `R+X`, base `0x400000`, `p_filesz == p_memsz == text_end`).

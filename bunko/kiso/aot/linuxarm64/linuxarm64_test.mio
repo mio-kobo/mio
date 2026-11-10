@@ -1,0 +1,33 @@
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0; kaku scale = 1; kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+waza test_hello_image_is_an_aarch64_elf() -> unit {
+    kaku image = hello_image("hi\n", 7);
+    testing.expect(image.error == "", "image built");
+    kaku b = image.bytes;
+    testing.expect(word(b, 18, 2) == 183, "EM_AARCH64");
+    testing.expect(word(b, 24, 8) == 4198400, "entry at the start of the code");
+}
+
+waza test_code_is_the_documented_aarch64_sequence() -> unit {
+    kaku p = hello_program("hi\n", 7);
+    testing.expect(p.error == "", "program built");
+    testing.expect(len(p.code) == 36, "eight instructions plus the padded message");
+    testing.expect(word(p.code, 0, 4) == 3531603968 + 1 * 32, "mov x0, #1");
+    testing.expect(word(p.code, 4, 4) == 268435456 + 7 * 32 + 1, "adr x1, message");
+    testing.expect(word(p.code, 12, 4) == 3531603968 + 64 * 32 + 8, "mov x8, #64 (write)");
+    testing.expect(word(p.code, 16, 4) == 3556769793, "svc #0");
+    testing.expect(word(p.code, 20, 4) == 3531603968 + 7 * 32, "mov x0, #7");
+    testing.expect(word(p.code, 24, 4) == 3531603968 + 94 * 32 + 8, "mov x8, #94 (exit_group)");
+    testing.expect(word(p.code, 32, 1) == 104 && word(p.code, 33, 1) == 105, "message bytes follow the code");
+}
+
+waza test_invalid_input_fails_closed() -> unit {
+    testing.expect(hello_image("", 0).error == "INVALID_MESSAGE", "empty message");
+    testing.expect(hello_image("x", 256).error == "INVALID_STATUS", "status out of range");
+}
