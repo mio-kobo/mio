@@ -2285,14 +2285,19 @@ waza compile_old_profile(file:mochi.File,capacity:int64,queue_slots:int64,gc_str
     kaesu compile_worker_impl(file,gc_stress,capacity,iie,iie,hai,bindings,hai,queue_slots,full_sweep,release_fault);
 }
 waza compile_worker_impl(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool) -> LowerResult {
-    kaesu compile_worker_target(input_file,gc_stress,capacity,observation,adaptive,attached,worker_bindings,old_proto,queue_slots,full_sweep,release_fault,iie);
+    kaesu compile_worker_target(input_file,gc_stress,capacity,observation,adaptive,attached,worker_bindings,old_proto,queue_slots,full_sweep,release_fault,0);
 }
 // Linux AArch64 target: the same lowering and runtime as Darwin, with every Darwin system call routed through the
 // linux_syscall adapter (linuxabi.mio). The caller links the words with an ELF container (kiso/aot/linuxarm64).
 koukai waza compile_linux_arm64(file: mochi.File, capacity: int64, gc_stress: bool) -> LowerResult {
-    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,hai);
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,1);
 }
-waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool, linux: bool) -> LowerResult {
+// Windows ARM64 target: the same lowering and runtime, with every Darwin system call routed through the windows_syscall adapter
+// (winabi.mio, Win32 imports) and a PE entry routine windows_start. The caller packages the words with kiso/aot/winarm64.
+koukai waza compile_windows_arm64(file: mochi.File, capacity: int64, gc_stress: bool) -> LowerResult {
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,2);
+}
+waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool, abi: int64) -> LowerResult {
     kaku file = input_file;
     kaku metadata_bytes = runtime_metadata_bytes;
     moshi (observation) { metadata_bytes = observation_metadata_bytes; }
@@ -2318,7 +2323,8 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     }
     kaku ids = string_ids(file.constants);
     kaku code = arm64.assembler();
-    moshi (linux) { arm64.assembler_label(code, "linux_abi"); }
+    moshi (abi == 1) { arm64.assembler_label(code, "linux_abi"); }
+    moshi (abi == 2) { arm64.assembler_label(code, "windows_abi"); arm64.assembler_label(code, "windows_main"); }
     kaku patches: []macho.AddressPatch = [];
     array.reserve(patches, file.global_count * 2);
     kaku native_fs = file_uses_nativefs(file);
@@ -2402,7 +2408,11 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     arm64.assembler_label(code, "runtime_gc_bad_count");
     moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_fatal_cleanup");}
     emit(code, arm64.movz_x(0, 5, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
-    moshi (linux) { emit_linux_abi_runtime(code); }
+    moshi (abi == 1) { emit_linux_abi_runtime(code); }
+    kaku adapter_base = file.global_count;
+    moshi (testing) { adapter_base = adapter_base + 1; }
+    moshi (os_state >= 0) { adapter_base = adapter_base + 3; }
+    moshi (abi == 2) { emit_windows_abi_runtime(code, patches, adapter_base); emit_windows_init(code, patches, adapter_base); emit_windows_args(code, patches); emit_windows_start(code); }
 
     kaku function_reachable = types.reachable_functions(file);
     kaku id = 0;
@@ -2448,6 +2458,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     kaku data_words = file.global_count;
     moshi (testing) { data_words = data_words + 1; }
     moshi (os_state >= 0) { data_words = data_words + 3; }
+    moshi (abi == 2) { data_words = data_words + windows_adapter_words(); }
     moshi(attached){kaku error=emit_attached_root_runtime(code,patches,data_words,queue_slots);moshi(error!=""){kaesu failed(LowerError.EncodeFailure());}}
     kaku pi = 0;
     aida (pi < len(patches)) {

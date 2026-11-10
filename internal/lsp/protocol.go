@@ -187,6 +187,7 @@ type ServerCapabilities struct {
 	HoverProvider              bool                    `json:"hoverProvider,omitempty"`
 	DefinitionProvider         bool                    `json:"definitionProvider,omitempty"`
 	ReferencesProvider         bool                    `json:"referencesProvider,omitempty"`
+	DocumentHighlightProvider  bool                    `json:"documentHighlightProvider,omitempty"`
 	WorkspaceSymbolProvider    bool                    `json:"workspaceSymbolProvider,omitempty"`
 	RenameProvider             *RenameOptions          `json:"renameProvider,omitempty"`
 	DocumentFormattingProvider bool                    `json:"documentFormattingProvider,omitempty"`

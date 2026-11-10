@@ -37,7 +37,14 @@ waza emit_process_runtime(code: arm64.Assembler, patches: []macho.AddressPatch, 
     arm64.assembler_label(code, "nativeos_env_next"); bits(code, 9, 65535); emit(code, arm64.cmp_x(8, 9)); arm64.assembler_b_cond(code, 2, "nativeos_env_missing"); emit(code, arm64.ldr_x(13, 12, 0)); arm64.assembler_cbz_x(code, 13, "nativeos_env_missing"); bits(code, 14, 0);
     arm64.assembler_label(code, "nativeos_env_compare"); emit(code, arm64.cmp_x(14, 11)); arm64.assembler_b_cond(code, 2, "nativeos_env_separator");
     emit(code, arm64.add_x(9, 10, 14)); emit(code, arm64.ldrb_w(15, 9, 0)); arm64.assembler_cbz_x(code, 15, "nativeos_env_missing"); emit(code, arm64.cmp_imm_x(15, 61, iie)); arm64.assembler_b_cond(code, 0, "nativeos_env_missing");
-    emit(code, arm64.add_x(9, 13, 14)); emit(code, arm64.ldrb_w(16, 9, 0)); emit(code, arm64.cmp_x(15, 16)); arm64.assembler_b_cond(code, 1, "nativeos_env_advance"); emit(code, arm64.add_imm_x(14, 14, 1, iie)); arm64.assembler_b(code, "nativeos_env_compare");
+    emit(code, arm64.add_x(9, 13, 14)); emit(code, arm64.ldrb_w(16, 9, 0));
+    // Windows environment variable names are case-insensitive: fold ASCII upper case on both sides (Windows ABI only; the
+    // label windows_abi does not exist in Darwin or Linux images, whose output is unchanged).
+    moshi (arm64.assembler_label_word(code, "windows_abi") >= 0) {
+        emit(code, arm64.sub_imm_x(17, 15, 65, iie)); emit(code, arm64.cmp_imm_x(17, 26, iie)); arm64.assembler_b_cond(code, 2, "nativeos_env_fold_name"); emit(code, arm64.add_imm_x(15, 15, 32, iie)); arm64.assembler_label(code, "nativeos_env_fold_name");
+        emit(code, arm64.sub_imm_x(17, 16, 65, iie)); emit(code, arm64.cmp_imm_x(17, 26, iie)); arm64.assembler_b_cond(code, 2, "nativeos_env_fold_entry"); emit(code, arm64.add_imm_x(16, 16, 32, iie)); arm64.assembler_label(code, "nativeos_env_fold_entry");
+    }
+    emit(code, arm64.cmp_x(15, 16)); arm64.assembler_b_cond(code, 1, "nativeos_env_advance"); emit(code, arm64.add_imm_x(14, 14, 1, iie)); arm64.assembler_b(code, "nativeos_env_compare");
     arm64.assembler_label(code, "nativeos_env_separator"); emit(code, arm64.add_x(9, 13, 14)); emit(code, arm64.ldrb_w(15, 9, 0)); emit(code, arm64.cmp_imm_x(15, 61, iie)); arm64.assembler_b_cond(code, 1, "nativeos_env_advance"); emit(code, arm64.add_imm_x(0, 9, 1, iie)); leave(code);
     arm64.assembler_label(code, "nativeos_env_advance"); emit(code, arm64.add_imm_x(12, 12, 8, iie)); emit(code, arm64.add_imm_x(8, 8, 1, iie)); arm64.assembler_b(code, "nativeos_env_next");
     arm64.assembler_label(code, "nativeos_env_missing"); bits(code, 0, 0); leave(code);

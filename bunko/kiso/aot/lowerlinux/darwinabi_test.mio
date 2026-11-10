@@ -1,0 +1,54 @@
+yobu "kiso/encoding/mochi";
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0; kaku scale = 1; kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+waza empty_program() -> mochi.File { kaesu mochi.File { version: 14, constants: [], global_count: 0, instructions: [], functions: [] }; }
+
+waza count_syscalls(bytes: []uint8) -> int64 {
+    kaku at = 0; kaku count = 0;
+    aida (at + 1 < len(bytes)) { moshi (bytes[at] == uint8(15) && bytes[at + 1] == uint8(5)) { count = count + 1; } at = at + 1; }
+    kaesu count;
+}
+
+waza test_linux_target_is_unchanged() -> unit {
+    kaku linux = compile(empty_program());
+    testing.expect(linux.error == "", "the Linux image still lowers");
+    testing.expect(word(linux.bytes, 0, 4) == 1179403647, "ELF magic 0x464C457F");
+    testing.expect(word(linux.bytes, 18, 2) == 62, "EM_X86_64");
+}
+
+waza test_darwin_target_is_a_macho_x86_64_executable() -> unit {
+    kaku macos = compile_darwin_amd64(empty_program(), 33554432);
+    testing.expect(macos.error == "", "the Darwin image lowers");
+    kaku b = macos.bytes;
+    testing.expect(word(b, 0, 4) == 4277009103, "Mach-O 64-bit magic 0xFEEDFACF");
+    testing.expect(word(b, 4, 4) == 16777223 && word(b, 8, 4) == 3 && word(b, 12, 4) == 2, "x86_64, ALL, executable");
+    // the entry converts dyld's main(argc, argv, envp) into the Linux entry state: lea rsp, [rsi - 8]
+    testing.expect(word(b, 4096, 4) == 4171664712 && word(b, 4100, 3) == 16777215, "entry begins with lea rsp, [rsi - 8] (48 8D A6 F8 FF FF FF)");
+    testing.expect(word(b, 4096 + 7, 1) == 72 && word(b, 4096 + 8, 1) == 185, "followed by the Linux entry (mov rcx, imm64 = 48 B9 ...)");
+}
+
+// Every Linux SYSCALL of the lowered program becomes a call of darwin_syscall; only the adapter itself executes SYSCALL
+// (with Darwin numbers), so the Darwin image has far fewer 0F 05 pairs than the Linux image.
+waza test_darwin_image_executes_syscall_only_inside_the_adapter() -> unit {
+    kaku linux = compile(empty_program());
+    kaku macos = compile_darwin_amd64(empty_program(), 33554432);
+    testing.expect(count_syscalls(linux.bytes) > 0, "the Linux image issues SYSCALL directly");
+    testing.expect(count_syscalls(macos.bytes) > 0, "the adapter issues the Darwin SYSCALL");
+    testing.expect(count_syscalls(macos.bytes) < count_syscalls(linux.bytes), "the lowered runtime no longer contains SYSCALL");
+}
+
+waza test_darwin_lowering_is_deterministic_and_rejects_bad_thresholds() -> unit {
+    kaku a = compile_darwin_amd64(empty_program(), 33554432);
+    kaku b = compile_darwin_amd64(empty_program(), 33554432);
+    testing.expect(len(a.bytes) == len(b.bytes) && len(a.bytes) > 8192, "same size");
+    kaku same = hai; kaku at = 0;
+    aida (at < len(a.bytes)) { moshi (a.bytes[at] != b.bytes[at]) { same = iie; } at = at + 1; }
+    testing.expect(same, "byte-identical output");
+    testing.expect(compile_darwin_amd64(empty_program(), 100).error != "", "a GC threshold below 4096 fails closed");
+}

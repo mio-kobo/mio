@@ -726,7 +726,7 @@ exit "$result"
             for target, status in (("linux-amd64", "PASS"), ("darwin-arm64", "PASS")):
                 report = native.Report(target, reports / ("native-report-" + target))
                 report.check("x", status, "native")
-            args = type("Args", (), dict(reports=str(reports), output=str(Path(directory) / "out"), run_examples=False))
+            args = type("Args", (), dict(reports=str(reports), output=str(Path(directory) / "out"), run_examples=False, targets=""))
             self.assertEqual(native.summary(args), 1)  # windows-amd64 is missing: NOT_RUN, never PASS
             report = native.Report("windows-amd64", reports / "native-report-windows-amd64")
             report.check("x", "PASS", "native")
@@ -739,6 +739,17 @@ exit "$result"
             self.assertEqual(native.summary(args), 1)
             for data in json.loads((Path(directory) / "out" / "native-summary.json").read_text())["targets"].values():
                 self.assertEqual(data["seed"]["status"], "NOT_RUN")
+            # The six-target Native workflow requires a report from every new target as well: a missing one is NOT_RUN, never PASS.
+            args.targets = "linux-amd64,darwin-arm64,windows-amd64,linux-arm64,darwin-amd64,windows-arm64"
+            report = native.Report("windows-amd64", reports / "native-report-windows-amd64")
+            report.check("x", "PASS", "native")
+            self.assertEqual(native.summary(args), 1)
+            for target in ("linux-arm64", "darwin-amd64", "windows-arm64"):
+                new = native.Report(target, reports / ("native-report-" + target))
+                new.check("x", "PASS", "native")
+                if target != "windows-arm64":
+                    self.assertEqual(native.summary(args), 1)  # still missing one
+            self.assertEqual(native.summary(args), 0)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

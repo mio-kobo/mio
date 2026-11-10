@@ -255,6 +255,7 @@ koukai waza assembler() -> Assembler {
     kaesu Assembler { words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), label_index: [array.make[int64](32, 0)], fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
 }
 
+// Windows ABI mode (label "windows_abi") works the same way with the routine windows_syscall (Win32 calls through the IAT).
 // Linux ABI mode (opt-in, chosen by defining the label "linux_abi" before any code is emitted): the Darwin system-call
 // instruction SVC #128 (number in x16) becomes `stp x30, xzr, [sp, #-16]!; bl linux_syscall; ldp x30, xzr, [sp], #16`.
 // linux_syscall is a runtime routine that translates the Darwin call into the Linux AArch64 call and restores the Darwin
@@ -263,11 +264,16 @@ koukai waza assembler() -> Assembler {
 koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeError? {
     kaku failure = encoded.error;
     moshi (failure != mu) { array.push(value.errors, failure); kaesu failure; }
-    moshi (encoded.word == uint32(3556773889) && find_label(value, "linux_abi") >= 0) {
-        array.push(value.words, stp_pre_x(30, 31, 31, -16).word);
-        kaku called = assembler_fixup(value, "linux_syscall", 1, 0);
-        array.push(value.words, ldp_post_x(30, 31, 31, 16).word);
-        kaesu called;
+    moshi (encoded.word == uint32(3556773889)) {
+        kaku adapter = "";
+        moshi (find_label(value, "linux_abi") >= 0) { adapter = "linux_syscall"; }
+        moshi (adapter == "" && find_label(value, "windows_abi") >= 0) { adapter = "windows_syscall"; }
+        moshi (adapter != "") {
+            array.push(value.words, stp_pre_x(30, 31, 31, -16).word);
+            kaku called = assembler_fixup(value, adapter, 1, 0);
+            array.push(value.words, ldp_post_x(30, 31, 31, 16).word);
+            kaesu called;
+        }
     }
     array.push(value.words, encoded.word);
     kaesu mu;

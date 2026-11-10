@@ -43,15 +43,21 @@ from prepare import EMPTY
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
 BUDGET_SECONDS = int(os.environ.get("MIO_NATIVE_BUDGET_SECONDS", "6600"))
-TARGETS = {"linux": "linux-amd64", "linux-arm64": "linux-arm64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
+TARGETS = {"linux": "linux-amd64", "linux-arm64": "linux-arm64", "darwin-amd64": "darwin-amd64", "windows-arm64": "windows-arm64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
 # Go-hosted Stage A programs per Linux target: the self-contained compiler program, its lowering driver and its messages.
 LINUX_PROFILES = {
     "linux-amd64": dict(compiler="selfhost/linux-compiler", stage_a="selfhost/native-aot-linux", tag="linux-compiler", aot="native-aot-linux"),
     "linux-arm64": dict(compiler="selfhost/linux-arm64-compiler", stage_a="selfhost/native-aot-linux-arm64", tag="linux-arm64-compiler", aot="native-aot-linux-arm64"),
+    "darwin-amd64": dict(compiler="selfhost/darwin-amd64-compiler", stage_a="selfhost/native-aot-darwin-amd64", tag="darwin-amd64-compiler", aot="native-aot-darwin-amd64"),
+    "windows-arm64": dict(compiler="selfhost/windows-arm64-compiler", stage_a="selfhost/native-aot-windows-arm64", tag="windows-arm64-compiler", aot="native-aot-windows-arm64"),
 }
-EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "linux-arm64": ("Linux", ("aarch64", "arm64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
+EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "linux-arm64": ("Linux", ("aarch64", "arm64")), "darwin-amd64": ("Darwin", ("x86_64", "amd64")), "windows-arm64": ("Windows", ("arm64", "aarch64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
                  "windows-amd64": ("Windows", ("amd64", "x86_64"))}
-EXE = {"windows-amd64": ".exe"}
+EXE = {"windows-amd64": ".exe", "windows-arm64": ".exe"}
+
+
+def is_windows(target):
+    return target in ("windows-amd64", "windows-arm64")
 TCP_PACKAGE = "bunko/kiso/net/tcp"
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
@@ -130,6 +136,9 @@ def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
         code, out, err = proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired as error:
         code, out, err = None, error.stdout or b"", (error.stderr or b"") + b"\n[timed out]"
+    except OSError as error:
+        # The image could not even be started (for example WinError 193, an invalid executable): a failure with its reason.
+        code, out, err = -1, b"", ("cannot start the process: %s" % error).encode()
     seconds = time.monotonic() - started
     with open(report.logs / (label + ".log"), "wb") as stream:
         stream.write(("$ %s\n[cwd %s] [exit %s] [%.1fs]\n" % (" ".join(str(a) for a in argv), cwd, code, seconds)).encode())
@@ -169,7 +178,7 @@ def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT):
         argv = ["/usr/bin/time", "-l", *argv]  # resource usage only; the build itself is unchanged
     code, out, err, seconds = run(report, label, argv, cwd=cwd, timeout=CLI_BUILD_TIMEOUT)
     ok = code == 0 and Path(output).is_file()
-    if ok and target != "windows-amd64":
+    if ok and not is_windows(target):
         os.chmod(output, 0o755)
     reason = "timed out after %ds" % CLI_BUILD_TIMEOUT if code is None else "exit %s: %s" % (code, brief(err or out))
     rss = peak_rss_mib(err)
@@ -279,9 +288,9 @@ def embedded_checks(report, full, core, target, work):
     def install(binary, name):
         root = base / name
         (root / "bin").mkdir(parents=True)
-        cli = root / "bin" / ("mio.exe" if target == "windows-amd64" else "mio")
+        cli = root / "bin" / ("mio.exe" if is_windows(target) else "mio")
         shutil.copyfile(binary, cli)
-        if target != "windows-amd64":
+        if not is_windows(target):
             cli.chmod(0o755)
         return root, cli
     full_root, full_cli = install(full, "full")
@@ -320,7 +329,7 @@ chant(len(tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),0).octets));
                             cwd=cwd, env={"MIO_BUNKO": None})
     executed = ""
     if code == 0 and image.is_file():
-        if target != "windows-amd64":
+        if not is_windows(target):
             image.chmod(0o755)
         run_code, executed, run_err, _ = run(report, "full-embedded-run", [image], cwd=cwd, env={"MIO_BUNKO": None})
         code = run_code if run_code != 0 else code
@@ -594,7 +603,8 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     lowering = work / "stage-a-lowering"
     lowering.mkdir(exist_ok=True)
-    compiler_a = work / "compiler-A"
+    suffix = EXE.get(target, "")
+    compiler_a = work / ("compiler-A" + suffix)
     (lowering / "input.config").write_text(str(mochi))
     (lowering / "output.config").write_text(str(compiler_a))
     code, out, err, seconds = run(report, "stage-a-lowering", [refvm, ROOT / "bunko", "run", ROOT / (profile["stage_a"] + "/main.mio")], cwd=lowering, timeout=3600)
@@ -607,7 +617,7 @@ def linux(args, target="linux-amd64"):
     # Native compiler fixed point
     paths = {"A": compiler_a}
     for previous, name in (("A", "B"), ("B", "C"), ("C", "D")):
-        output = work / ("compiler-" + name)
+        output = work / ("compiler-" + name + suffix)
         code, out, err, seconds = run(report, "compiler-" + name, [paths[previous]], stdin=("%s\n%s\n" % (profile["compiler"], output)).encode())
         ok = code == 0 and out == profile["tag"] + ": ok\n" and output.is_file()
         if not report.check("compiler-stage-" + name, "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)),
@@ -621,7 +631,7 @@ def linux(args, target="linux-amd64"):
     if not same:
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
-    cli_a = work / "mio-A"
+    cli_a = work / ("mio-A" + suffix)
     code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
     ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
     if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
@@ -710,7 +720,7 @@ def follower(args, target):
     report.hashes["cli-A"] = actual
     first = work / stage_a.name
     shutil.copyfile(stage_a, first)
-    if target != "windows-amd64":
+    if not is_windows(target):
         os.chmod(first, 0o755)
     # A quick signal that Stage A works on this host before the long self-builds.
     smoke(report, first, target, work / "smoke-A", label_prefix="stage-a-")
@@ -866,7 +876,7 @@ def summary(args):
             continue
         if data.get("suite") == "native-platforms":
             found[data.get("target")] = path
-    for target in ("linux-amd64", "darwin-arm64", "windows-amd64"):
+    for target in (args.targets.split(",") if args.targets else ("linux-amd64", "darwin-arm64", "windows-amd64")):
         path = found.get(target)
         if path is None:
             overall = "FAIL"
@@ -894,7 +904,9 @@ def summary(args):
             counts[item["status"]] = counts.get(item["status"], 0) + 1
         rows.append("| %s | %s | %s | %s |" % (target, status,
                     ", ".join("%s %d" % kv for kv in sorted(counts.items())), data["seed"]["status"]))
-    jobs = {name: result for name, variable in (("linux", "NATIVE_LINUX_JOB_RESULT"), ("follower", "NATIVE_FOLLOWER_JOB_RESULT"))
+    jobs = {name: result for name, variable in (("linux", "NATIVE_LINUX_JOB_RESULT"), ("follower", "NATIVE_FOLLOWER_JOB_RESULT"),
+                                   ("linux-arm64", "NATIVE_LINUX_ARM64_JOB_RESULT"), ("darwin-amd64", "NATIVE_DARWIN_AMD64_JOB_RESULT"),
+                                   ("windows-arm64", "NATIVE_WINDOWS_ARM64_JOB_RESULT"))
             if (result := os.environ.get(variable))}
     if any(result != "success" for result in jobs.values()):
         overall = "FAIL"
@@ -921,7 +933,7 @@ def summary(args):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("linux", "linux-arm64"):
+    for name in ("linux", "linux-arm64", "darwin-amd64", "windows-arm64"):
         p = sub.add_parser(name)
         p.add_argument("--refvm", required=True)
         p.add_argument("--output", required=True)
@@ -933,6 +945,7 @@ def main():
     p = sub.add_parser("summary")
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
+    p.add_argument("--targets", default="", help="comma-separated targets that must all have a report (default: the three release targets)")
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
@@ -940,6 +953,10 @@ def main():
         return linux(args)
     if args.command == "linux-arm64":
         return linux(args, "linux-arm64")
+    if args.command == "darwin-amd64":
+        return linux(args, "darwin-amd64")
+    if args.command == "windows-arm64":
+        return linux(args, "windows-arm64")
     if args.command == "summary":
         return summary(args)
     return follower(args, TARGETS[args.command])

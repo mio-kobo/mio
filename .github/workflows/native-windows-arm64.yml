@@ -1,0 +1,111 @@
+name: Native / windows-arm64
+# Native evidence for the Windows ARM64 backend while it is being built (v2.2.0 platform expansion).
+# `mio build --target windows-arm64` produces a PE32+ (ARM64) console executable from the Darwin/AArch64 lowering with a
+# Win32 adapter (kernel32/ws2_32 imports through the IAT). Everything here runs on a real Windows ARM64 runner
+# (windows-11-arm); no x64 emulation is used to execute the generated images. The go-hosted Stage A (Go reference VM runs
+# the pure-Mio lowering) builds compiler-A; every later stage and every test runs as a native PE ARM64 image. A required
+# layer that did not run fails the job.
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  image:
+    name: Native / windows-arm64 image
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Host facts
+        run: |
+          set -o pipefail
+          # Git Bash is an emulated x64 process here, so its PROCESSOR_ARCHITECTURE says AMD64: ask the native Python and Go.
+          python -c "import platform,sys; print(platform.system(), platform.machine(), platform.version()); sys.exit(0 if platform.system() == 'Windows' and platform.machine().lower() == 'arm64' else 1)"
+          echo "bash sees PROCESSOR_ARCHITECTURE=$PROCESSOR_ARCHITECTURE PROCESSOR_ARCHITEW6432=$PROCESSOR_ARCHITEW6432"
+          go env GOOS GOARCH
+          test "$(go env GOARCH)" = arm64
+      - name: Build the reference VM (Stage A host only)
+        run: go build -o build/refvm.exe ./tests/windows-amd64/refvm && go build -o build/mio.exe ./cmd/mio
+      - name: Mio unit tests for the PE writer, the ARM64 encoder, the lowering and the Windows image builder
+        run: |
+          set -e
+          build/mio.exe test bunko/kiso/aot/pe
+          build/mio.exe test bunko/kiso/aot/arm64
+          build/mio.exe test bunko/kiso/aot/winarm64
+          build/mio.exe test bunko/kiso/aot/lower
+      - name: Independent check and native execution of a generated PE image
+        run: |
+          set -o pipefail
+          python bunko/kiso/aot/winarm64/check_winarm64.py --refvm build/refvm.exe --work build/winarm64 --require-execution | tee build/winarm64-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-windows-arm64-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/winarm64-report.txt
+            build/winarm64/
+          if-no-files-found: warn
+          retention-days: 7
+  chain:
+    name: Native / windows-arm64 chain
+    runs-on: windows-11-arm
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
+        run: go build -o build/native/refvm.exe ./tests/windows-amd64/refvm
+      - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
+        run: python scripts/ci/native_platforms.py windows-arm64 --refvm build/native/refvm.exe --output build/native/windows-arm64
+      - name: Diagnose a failing native stage (compiler-A building compiler-B)
+        if: failure()
+        run: |
+          mkdir -p build/native/windows-arm64/diag
+          exe="build/native/windows-arm64/work/compiler-A.exe"
+          [ -f "$exe" ] || exit 0
+          printf 'selfhost/windows-arm64-compiler\nbuild/native/windows-arm64/diag/out.exe\n' | "$exe" >build/native/windows-arm64/diag/out.txt 2>build/native/windows-arm64/diag/err.txt
+          echo "compiler-A exit $?"; head -c 400 build/native/windows-arm64/diag/out.txt; head -c 800 build/native/windows-arm64/diag/err.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-report-windows-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/windows-arm64/report.json
+            build/native/windows-arm64/logs/
+            build/native/windows-arm64/runtime-abi/results.json
+            build/native/windows-arm64/runtime-abi/*.std*
+            build/native/windows-arm64/native-differential/results.json
+            build/native/windows-arm64/native-differential/*.std*
+            build/native/windows-arm64/diag/
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-compilers-windows-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/windows-arm64/work/compiler-*
+            build/native/windows-arm64/work/mio-*
+          if-no-files-found: warn
+          retention-days: 7

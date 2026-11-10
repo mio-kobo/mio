@@ -226,7 +226,11 @@ def main():
     parser.add_argument("--note", default="", help="provenance line written into the matrix (where the reports come from)")
     parser.add_argument("--require-pass", action="store_true",
                         help="with --reports: fail unless every covered library function is PASS or UNSUPPORTED on every platform")
+    parser.add_argument("--platforms", default="", help="comma-separated platform list overriding the default three (the six-target Native workflow passes all six)")
     args = parser.parse_args()
+    if args.platforms:
+        global PLATFORMS
+        PLATFORMS = tuple(item for item in args.platforms.split(",") if item)
     rows = build_inventory()
     problems = []
     if args.check:

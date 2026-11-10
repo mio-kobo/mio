@@ -135,17 +135,18 @@ func newServer(stdin io.Reader, stdout io.Writer, logWriter io.Writer, options O
 
 func (s *server) registerHandlers() {
 	s.requests = map[string]requestHandler{
-		"shutdown":                    s.requestShutdown,
-		"textDocument/hover":          s.requestHover,
-		"textDocument/definition":     s.requestDefinition,
-		"textDocument/references":     s.requestReferences,
-		"textDocument/documentSymbol": s.requestDocumentSymbol,
-		"workspace/symbol":            s.requestWorkspaceSymbol,
-		"textDocument/rename":         s.requestRename,
-		"textDocument/formatting":     s.requestFormatting,
-		"textDocument/prepareRename":  s.requestPrepareRename,
-		"textDocument/completion":     s.requestCompletion,
-		"textDocument/signatureHelp":  s.requestSignatureHelp,
+		"shutdown":                       s.requestShutdown,
+		"textDocument/hover":             s.requestHover,
+		"textDocument/definition":        s.requestDefinition,
+		"textDocument/references":        s.requestReferences,
+		"textDocument/documentSymbol":    s.requestDocumentSymbol,
+		"textDocument/documentHighlight": s.requestDocumentHighlight,
+		"workspace/symbol":               s.requestWorkspaceSymbol,
+		"textDocument/rename":            s.requestRename,
+		"textDocument/prepareRename":     s.requestPrepareRename,
+		"textDocument/formatting":        s.requestFormatting,
+		"textDocument/completion":        s.requestCompletion,
+		"textDocument/signatureHelp":     s.requestSignatureHelp,
 	}
 	s.notifications = map[string]notificationHandler{
 		"initialized":                      s.notificationInitialized,
@@ -352,10 +353,11 @@ func (s *server) handleInitialize(ctx context.Context, msg message) {
 			HoverProvider:              true,
 			DefinitionProvider:         true,
 			ReferencesProvider:         true,
-			DocumentSymbolProvider:     true,
+			DocumentHighlightProvider:  true,
 			WorkspaceSymbolProvider:    true,
 			RenameProvider:             &RenameOptions{PrepareProvider: true},
 			DocumentFormattingProvider: true,
+			DocumentSymbolProvider:     true,
 			CompletionProvider: &CompletionOptions{
 				TriggerCharacters: []string{"."},
 			},

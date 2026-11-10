@@ -1,0 +1,69 @@
+yobu "kiso/aot/macho";
+yobu "kiso/aot/arm64";
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0; kaku scale = 1; kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+waza nop() -> uint32 { kaesu uint32(3573751839); }
+waza words() -> []uint32 { kaesu [uint32(0), uint32(0), uint32(0), uint32(0), nop(), nop()]; }
+waza imports() -> []string { kaesu ["kernel32.dll", "ExitProcess", "kernel32.dll", "GetStdHandle", "ws2_32.dll", "WSAStartup"]; }
+
+// Layout without globals: .text 0x1000, .rdata 0x2000, .idata 0x3000. .idata: two import descriptors + terminator (60 bytes
+// -> 64), lookup tables (3 + 2 entries = 40 bytes), then the IATs at .idata + 104: kernel32 {ExitProcess, GetStdHandle, 0},
+// ws2_32 {WSAStartup, 0}: slot 0 = 0x3068, slot 1 (GetStdHandle) = 0x3070.
+waza test_machine_entry_and_sections() -> unit {
+    kaku result = image(macho.ImageSpec { words: words(), constants: [uint8(1), uint8(2), uint8(3)], globals: 0, patches: [] }, 4, imports());
+    testing.expect(result.error == "", "image built");
+    kaku b = result.bytes;
+    testing.expect(word(b, 0, 2) == 23117 && word(b, 128, 4) == 17744, "MZ and PE signatures");
+    testing.expect(word(b, 132, 2) == 43620, "IMAGE_FILE_MACHINE_ARM64 (0xAA64)");
+    testing.expect(word(b, 134, 2) == 4, ".text, .rdata, .idata and .reloc");
+    testing.expect(word(b, 150, 2) == 34, "EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE, relocations present (not RELOCS_STRIPPED)");
+    testing.expect(word(b, 222, 2) == 352, "DllCharacteristics: HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT (Windows on ARM64 requires ASLR)");
+    testing.expect(word(b, 152, 2) == 523, "PE32+ optional header");
+    testing.expect(word(b, 168, 4) == 4096 + 16, "entry RVA = .text + 4 words");
+    testing.expect(word(b, 176, 8) == 5368709120, "image base 0x140000000");
+    testing.expect(word(b, 220, 2) == 3, "console subsystem");
+}
+
+waza test_adrp_add_patches_target_constants_and_import_slots() -> unit {
+    kaku patches = [macho.AddressPatch { at_word: 0, add_at_word: 1, target: macho.AddressTarget { kind: 3 }, target_offset: 8, register: 16 },
+        macho.AddressPatch { at_word: 2, add_at_word: 3, target: macho.const_target(), target_offset: 1, register: 9 }];
+    kaku result = image(macho.ImageSpec { words: words(), constants: [uint8(1), uint8(2), uint8(3)], globals: 0, patches: patches }, 4, imports());
+    testing.expect(result.error == "", "image built");
+    kaku b = result.bytes;
+    // hand-computed from the A64 encodings: IAT slot 1 (GetStdHandle) at RVA 0x3070 from pc 0x140001000, constants at 0x140002001
+    testing.expect(word(b, 1024, 4) == 3489660944, "adrp x16, <IAT page> (+2 pages)");
+    testing.expect(word(b, 1028, 4) == 2432811536, "add x16, x16, #0x70 (slot 1)");
+    testing.expect(word(b, 1032, 4) == 2952790025, "adrp x9, <.rdata page> (+1 page from the instruction's page)");
+    testing.expect(word(b, 1036, 4) == 2432697641, "add x9, x9, #1 (constant offset 1)");
+    // data directories: import table at .idata (0x3000), IAT at 0x3068 with 5 entries (two terminators)
+    testing.expect(word(b, 272, 4) == 12288 && word(b, 360, 4) == 12392 && word(b, 364, 4) == 40, "import directory 0x3000, IAT directory 0x3068 / 40 bytes");
+}
+
+waza test_globals_come_first_at_rva_0x1000() -> unit {
+    kaku patches = [macho.AddressPatch { at_word: 0, add_at_word: 1, target: macho.data_target(), target_offset: 16, register: 10 }];
+    kaku result = image(macho.ImageSpec { words: words(), constants: [], globals: 4, patches: patches }, 4, imports());
+    testing.expect(result.error == "", "image built with a zero-fill .data");
+    kaku b = result.bytes;
+    testing.expect(word(b, 134, 2) == 5, ".data, .text, .rdata (relocation slot), .idata and .reloc");
+    testing.expect(word(b, 168, 4) == 8192 + 16, ".data (RVA 0x1000, 32 bytes) comes first; .text starts at 0x2000");
+}
+
+waza test_invalid_input_fails_closed() -> unit {
+    testing.expect(image(macho.ImageSpec { words: [], constants: [], globals: 0, patches: [] }, 0, imports()).error == "EMPTY_TEXT", "no code");
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: [] }, 6, imports()).error == "INVALID_ENTRY", "entry outside the code");
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 10245, patches: [] }, 0, imports()).error == "TOO_MANY_GLOBALS", "too many globals");
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: [] }, 0, []).error == "INVALID_IMPORTS", "no imports");
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: [] }, 0, ["kernel32.dll"]).error == "INVALID_IMPORTS", "odd import list");
+    kaku outside = [macho.AddressPatch { at_word: 9, add_at_word: -1, target: macho.text_target(), target_offset: 0, register: 9 }];
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: outside }, 0, imports()).error == "INVALID_PATCH", "patch past the code");
+    kaku bad_slot = [macho.AddressPatch { at_word: 0, add_at_word: 1, target: macho.AddressTarget { kind: 3 }, target_offset: 24, register: 16 }];
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: bad_slot }, 0, imports()).error == "INVALID_PATCH", "IAT slot beyond the imports");
+    kaku no_data = [macho.AddressPatch { at_word: 0, add_at_word: 1, target: macho.data_target(), target_offset: 0, register: 9 }];
+    testing.expect(image(macho.ImageSpec { words: words(), constants: [], globals: 0, patches: no_data }, 0, imports()).error == "INVALID_PATCH", "global patch with no globals");
+}
