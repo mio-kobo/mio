@@ -27,6 +27,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[4]
 TEXT_BASE, CODE_OFFSET, DATA_BASE = 0x400000, 0x1000, 0x10000000
 EXIT_42 = bytes([0xB8, 0x01, 0x00, 0x00, 0x02, 0xBF, 0x2A, 0x00, 0x00, 0x00, 0x0F, 0x05])
+# The second image starts execution after five NOPs (a non-zero LC_MAIN entry offset); the NOPs are real code, not skipped bytes.
+NOPS = bytes([0x90] * 5)
+IMAGES = {"plain": (EXIT_42, 0, 0), "data": (NOPS + EXIT_42, 5, 4104)}
 
 
 def source(path_plain, path_data):
@@ -34,7 +37,7 @@ def source(path_plain, path_data):
         return "[" + ", ".join(f"uint8({b})" for b in data) + "]"
     return ('yobu "kiso/aot/machox64";\nyobu "kiso/fs";\n'
             f'kaku a = machox64.executable(machox64.ImageSpec {{ code: {array(EXIT_42)}, entry_offset: 0, bss_size: 0 }});\n'
-            f'kaku b = machox64.executable(machox64.ImageSpec {{ code: {array(EXIT_42)}, entry_offset: 5, bss_size: 4104 }});\n'
+            f'kaku b = machox64.executable(machox64.ImageSpec {{ code: {array(NOPS + EXIT_42)}, entry_offset: 5, bss_size: 4104 }});\n'
             f'kaku wa = fs.write_all("{path_plain}", a.bytes);\nkaku wb = fs.write_all("{path_data}", b.bytes);\n'
             'chant(a.error == "" && b.error == "" && wa.error == mu && wb.error == mu);\n')
 
@@ -48,8 +51,8 @@ def cstr(raw):
     return raw.split(b"\0", 1)[0].decode()
 
 
-def check_image(data, entry_offset, bss_size):
-    text_end = CODE_OFFSET + len(EXIT_42)
+def check_image(data, code, entry_offset, bss_size):
+    text_end = CODE_OFFSET + len(code)
     file_size = (text_end + 0xFFF) // 0x1000 * 0x1000
     magic, cputype, cpusubtype, filetype, ncmds, sizeofcmds, flags, reserved = struct.unpack_from("<IiiIIIII", data)
     expect(magic == 0xFEEDFACF, "MH_MAGIC_64")
@@ -84,7 +87,7 @@ def check_image(data, entry_offset, bss_size):
     by_name = {seg[0]: seg for seg in segments}
     expect(by_name["__PAGEZERO"][1:3] == (0, TEXT_BASE) and by_name["__PAGEZERO"][5:7] == (0, 0), "__PAGEZERO covers 0..0x400000 with no access")
     expect(by_name["__TEXT"][1:7] == (TEXT_BASE, file_size, 0, file_size, 5, 5), "__TEXT r-x maps the file from offset 0")
-    expect(sections[("__text", "__TEXT")] == (TEXT_BASE + CODE_OFFSET, len(EXIT_42), CODE_OFFSET, 4, 0x80000400), "__text section")
+    expect(sections[("__text", "__TEXT")] == (TEXT_BASE + CODE_OFFSET, len(code), CODE_OFFSET, 4, 0x80000400), "__text section")
     if has_data:
         size = (bss_size + 0xFFF) // 0x1000 * 0x1000
         expect(by_name["__DATA"][1:7] == (DATA_BASE, size, 0, 0, 3, 3), "__DATA rw- zero-fill at 0x10000000")
@@ -92,7 +95,7 @@ def check_image(data, entry_offset, bss_size):
         expect(by_name["__LINKEDIT"][1] == DATA_BASE + size, "__LINKEDIT after __DATA")
     expect(by_name["__LINKEDIT"][3] == file_size and by_name["__LINKEDIT"][4] == 0, "__LINKEDIT at end of file, empty")
     expect(entry == CODE_OFFSET + entry_offset, "LC_MAIN entryoff")
-    expect(len(data) == file_size and data[CODE_OFFSET:text_end] == EXIT_42, "code bytes and file size")
+    expect(len(data) == file_size and data[CODE_OFFSET:text_end] == code, "code bytes and file size")
 
 
 def tool(name):
@@ -121,8 +124,8 @@ def main():
     run = subprocess.run(command, capture_output=True, text=True, timeout=600, cwd=cwd)
     if run.returncode != 0 or run.stdout.strip() != "hai":
         raise RuntimeError(f"the Mio image writer failed: exit={run.returncode} stdout={run.stdout!r} stderr={run.stderr!r}")
-    check_image(plain.read_bytes(), 0, 0)
-    check_image(data.read_bytes(), 5, 4104)
+    check_image(plain.read_bytes(), *IMAGES["plain"])
+    check_image(data.read_bytes(), *IMAGES["data"])
     print("struct parse: PASS (header, every load command, segments, sections and code compared for two images)")
 
     if platform.system() == "Darwin" and tool("otool") and tool("lipo"):
