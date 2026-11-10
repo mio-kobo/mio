@@ -1,0 +1,28 @@
+// Threads that start and join threads: a join inside a non-main thread, and a chain three deep, with allocation at every level.
+yobu "mio/thread/runtime";
+
+waza churn(n: int64) -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) { kaku cell = [i, i + 1, i + 2]; total = total + cell[1]; i = i + 1; }
+    kaesu total;
+}
+waza leaf() -> int64 { kaesu churn(500); }
+waza middle() -> int64 {
+    kaku h = runtime.start(leaf);
+    kaku own = churn(700);
+    kaesu own + runtime.join(h);
+}
+waza top() -> int64 {
+    kaku h = runtime.start(middle);
+    kaku own = churn(900);
+    kaesu own + runtime.join(h);
+}
+waza run() -> int64 {
+    kaku h = runtime.start(top);
+    kaku result = runtime.join(h);
+    chant(result);
+    chant(result == churn(900) + churn(700) + churn(500));
+    kaesu 0;
+}
+run();

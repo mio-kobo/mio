@@ -160,7 +160,10 @@ waza bins_base() -> int64 { kaesu elf.data_base + 4096; }
 // Small requests pop an exact-size bin, or split the first non-empty bin of size >= need + 24; everything else
 // (and every request above 512 bytes) takes the first fitting block of the large list, then falls back to bump allocation.
 waza emit_gc_alloc(code: x86_64.Assembler) -> unit {
-    x86_64.label(code, "rt.alloc");
+    // mutator mode wraps this allocator in a heap lock (mutators.mio) and emits it under another name
+    kaku entry = "rt.alloc";
+    moshi (mutators_enabled(code)) { entry = "rt.alloc.locked"; }
+    x86_64.label(code, entry);
     x86_64.push_r(code, x86_64.r9);
     x86_64.push_r(code, x86_64.r10);
     x86_64.mov_ri(code, x86_64.rcx, gc_state());
@@ -556,7 +559,12 @@ waza emit_gc_runtime(code: x86_64.Assembler) -> unit {
     emit_gc_alloc(code);
     emit_gc_mark(code);
     emit_gc_drain(code);
-    emit_gc_collect(code);
+    moshi (mutators_enabled(code)) {
+        emit_collect_mutators(code);
+        emit_mutator_support(code);
+    } sore {
+        emit_gc_collect(code);
+    }
 }
 
 // ---- compile-time side: poll points and frame descriptors ----------------------------------------------------------
@@ -619,6 +627,23 @@ waza emit_poll(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAna
     offset: int64, parameters: int64) -> string {
     kaku skip = block_label("gc_poll_skip", len(code.bytes));
     x86_64.mov_ri(code, x86_64.rcx, gc_state());
+    moshi (mutators_enabled(code)) {
+        // another mutator may have requested a stop-the-world: honour it at every poll
+        kaku collect = block_label("gc_poll_collect", len(code.bytes));
+        x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_stop);
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_ne, collect);
+        x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 8);
+        x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 16);
+        x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
+        x86_64.jcc(code, x86_64.cc_b, skip);
+        x86_64.label(code, collect);
+        x86_64.call(code, "rt.gc");
+        kaku threaded = emit_frame_descriptor(code, file, analysis, function_id, offset, parameters);
+        moshi (threaded != "") { kaesu threaded; }
+        x86_64.label(code, skip);
+        kaesu "";
+    }
     x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 8);
     x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 16);
     x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);

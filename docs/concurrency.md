@@ -360,7 +360,45 @@ Tree-sitter (`tools/tree-sitter-mio`) is updated here. Still needed elsewhere (n
 * `mio-jetbrains`: add `yuzuru` to the lexer keyword set, the highlighter and completion.
 * any other grammar consumer that vendors the keyword list (language version V06).
 
-## 10. PR plan
+## 10. Implementation status: Linux x86-64 mutators (RA-2 draft, first slice)
+
+Implemented in `bunko/kiso/aot/lowerlinux/mutators.mio` (and the gated hooks in `gc.mio` / `lowerlinux.mio`). A program that references the
+thread natives gets the multi-mutator runtime; **every other program compiles to byte-identical images** (23 of 23 examples and the
+compiler itself were compared against the previous compiler).
+
+* **Registration.** Every mutator has a 128-byte record (in its own stack mapping; the main thread's lives in the collector state
+  area). It is also the TLS block: word 0 points to itself and the FS base is the record. Records form a registry; thread start
+  registers the record under the heap lock *before* the thread runs managed code, and the new thread enters the running state
+  through the same park protocol, so a collection already in progress is honoured. A thread that cannot be registered is never started
+  (`start` returns a negative errno).
+* **Safepoints and stop-the-world.** Polls (function entry, loop back-edges) test a stop flag as well as the allocation threshold. The
+  first thread to cross the threshold wins the flag with `lock cmpxchg`, waits until no other registered mutator is running, marks
+  the globals, every mutator's published frame chain and every mutator's entry closure, sweeps, clears the flag and wakes the parked
+  threads (futex). A thread publishes its chain (rbp and the call-site id of the frame's descriptor) before it leaves the running
+  state and re-checks the flag after it re-enters it; the collector sets the flag before it reads any state. With `xchg` on both sides
+  either the collector sees the thread as not running or the thread sees the request: a running thread is never scanned and never missed.
+* **Heap lock.** A spinlock serialises `rt.alloc` and registry changes. Runtime routines never collect, so a thread is never parked
+  while holding it.
+* **join.** A thread waiting in `join` is in a *native* state with its chain published, so it never blocks a collection; the joiner
+  unmaps the stack after the kernel cleared the tid word.
+* **Entry points (provisional names, decision D-2 still open).** The pseudo-package `mio/thread/runtime` provides
+  `start(entry: () -> int64) -> int64` (a handle, or a negative errno) and `join(handle) -> int64` (the entry's result). They are native
+  operations of the Linux x86-64 lowering only; the arm64 lowerings reject them at compile time, macOS x86-64 reports
+  `UNSUPPORTED_THREADS_TARGET`, and the Windows runtime reports them unsupported when called. A user-facing `kiso/thread` package, channels
+  and `yuzuru` transfer through them are the next milestones.
+
+Evidence (all native, Linux x86-64): `tests/threads/run.py` builds six real Mio programs (start/join, five mutators under
+`--gc-stress` with a sequential cross-check, captured closures that outlive the creator's references, nested threads, 32 thread lifetimes,
+and about 19 GiB of garbage through an 8 GiB heap) normally and with `--gc-stress` and runs them repeatedly; 600 local runs had no
+wrong result, hang or crash. CI records it as the required check `linux-thread-gc`; every other target records
+`thread-natives-fail-closed`.
+
+Known limits: blocking OS calls other than `join` are not safepoint-aware (a collection waits until such a thread returns); the process
+ends when the main thread ends; results are `int64` only (graphs travel through channels in the next milestone); one 1 MiB stack per thread;
+no thread-local allocation buffers (the heap lock is the only allocation synchronisation); the `target.TargetInfo` capability flags
+describe the neutral-IR runtime (M19ef path), which is unchanged, so they still report no threads for Linux.
+
+## 11. PR plan
 
 1. **PR-0 (this document)**: audit + specification, no behaviour change.
 2. **PR-1**: language version table + `yuzuru` token/parse/AST (Go and self-hosted), unresolved-grammar choice behind

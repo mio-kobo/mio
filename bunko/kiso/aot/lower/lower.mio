@@ -1606,6 +1606,7 @@ waza emit_function_epilogue(code: arm64.Assembler, id: int64) -> unit {
 waza emit_native_body(code: arm64.Assembler, patches: []macho.AddressPatch, analysis: types.TypeAnalysis,
     function: mochi.Function, op: int64) -> bool {
     moshi (nativefs.parameter_count(op) != function.parameter_count || !function.returns_value) { kaesu iie; }
+    moshi (nativefs.entry_label(op) == "") { kaesu iie; }   // operations without an arm64 routine (the OS thread natives) fail closed
     kaku roots = 0; kaku index = 0;
     aida (index < function.parameter_count) { moshi (nativefs.parameter_is_root(op, index)) { roots = roots + 1; } index = index + 1; }
     kaku shadow_bytes = (roots + 2) * 8; moshi (shadow_bytes - (shadow_bytes / 16) * 16 != 0) { shadow_bytes = shadow_bytes + 8; }

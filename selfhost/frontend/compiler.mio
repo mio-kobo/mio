@@ -425,12 +425,13 @@ koukai waza analyze_source_with_progress(root: string, entry: string, bunko_root
 waza compile_state(state: PackageState, root: string, entry: string) -> FrontendResult {
     load_package(state, root, entry);
     moshi (state.failed[0]) { kaesu FrontendResult { bytes: [], error: state.diagnostic[0] }; }
-    kaku natives = native_layouts(); add_socket_layouts(natives, state.resolved); kaku testing_runtime = iie; kaku os_runtime = iie; kaku package_index = 0;
+    kaku natives = native_layouts(); add_socket_layouts(natives, state.resolved); kaku testing_runtime = iie; kaku os_runtime = iie; kaku thread_runtime = iie; kaku package_index = 0;
     aida (package_index < len(state.resolved)) {
         kaku symbols = state.resolved[package_index].symbols; kaku symbol_index = 0;
         aida (symbol_index < len(symbols)) {
             moshi (symbols[symbol_index].package_path == "mio/testing/runtime" && symbols[symbol_index].name == "report") { testing_runtime = hai; }
             moshi (symbols[symbol_index].package_path == "mio/os/runtime") { os_runtime = hai; }
+            moshi (symbols[symbol_index].package_path == "mio/thread/runtime") { thread_runtime = hai; }
             symbol_index = symbol_index + 1;
         }
         package_index = package_index + 1;
@@ -439,6 +440,12 @@ waza compile_state(state: PackageState, root: string, entry: string) -> Frontend
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/testing/runtime", name: "report",
             binding_key: "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967",
             parameter_count: 2, returns_value: iie });
+    }
+    moshi (thread_runtime) {
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "start",
+            binding_key: "$mma::mio/thread/runtime::start::a3d1240461811d5cb81abc2a8540289381e974014b9673e90fde86ab68e0b5a0", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "join",
+            binding_key: "$mma::mio/thread/runtime::join::b15568a4df58d4355f98d16e65c34ee8bcb7acdc6bee95cdfc64e1fa36946600", parameter_count: 1, returns_value: hai });
     }
     moshi (os_runtime) {
         array.push(natives, codegen.NativeFunctionLayout {package_path:"mio/os/runtime",name:"real_path",binding_key:"$mma::mio/os/runtime::real_path::a45d9b7aef28d85d1466309e6a9a98b654726a1bef371c90bca683b2ecf21318",parameter_count:2,returns_value:hai});
