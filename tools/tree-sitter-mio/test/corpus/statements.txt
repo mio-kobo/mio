@@ -1,0 +1,196 @@
+==================
+variables and constants
+==================
+kaku a = 1;
+kaku b: int64 = 2;
+koukai teisu N: int64 = 3;
+a = a + 1;
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (integer_literal))
+  (let_statement
+    (identifier)
+    (type_reference
+      (builtin_type))
+    (integer_literal))
+  (const_declaration
+    (identifier)
+    (type_reference
+      (builtin_type))
+    (integer_literal))
+  (assignment_statement
+    (identifier)
+    (binary_expression
+      (identifier)
+      (integer_literal))))
+
+==================
+imports
+==================
+yobu "kiso/path";
+---
+
+(source_file
+  (import_statement
+    (string_literal)))
+
+==================
+functions
+==================
+waza add(a: int64, b: int64) -> int64 { kaesu a + b; }
+koukai waza noop() { kaesu; }
+waza first<T: Ord, U>(xs: []T) -> T? { kaesu mu; }
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (type_reference
+          (builtin_type)))
+      (parameter
+        (identifier)
+        (type_reference
+          (builtin_type))))
+    (type_reference
+      (builtin_type))
+    (block
+      (return_statement
+        (binary_expression
+          (identifier)
+          (identifier)))))
+  (function_declaration
+    (identifier)
+    (parameters)
+    (block
+      (return_statement)))
+  (function_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)
+        (identifier))
+      (type_parameter
+        (identifier)))
+    (parameters
+      (parameter
+        (identifier)
+        (array_type
+          (type_reference
+            (type_identifier)))))
+    (type_reference
+      (type_identifier))
+    (block
+      (return_statement
+        (nil_literal)))))
+
+==================
+control flow
+==================
+moshi (a == 1) { nukeru; } sore { tsuzuku; }
+aida (hai) { a = a + 1; }
+---
+
+(source_file
+  (if_statement
+    (binary_expression
+      (identifier)
+      (integer_literal))
+    (block
+      (break_statement))
+    (block
+      (continue_statement)))
+  (while_statement
+    (boolean_literal)
+    (block
+      (assignment_statement
+        (identifier)
+        (binary_expression
+          (identifier)
+          (integer_literal))))))
+
+==================
+structs and enums
+==================
+kata Pair<T> { first: T; second: T; }
+sentaku Shape { Circle(int64); Rectangle(int64, int64); Empty; }
+---
+
+(source_file
+  (struct_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (field_declaration
+      (identifier)
+      (type_reference
+        (type_identifier)))
+    (field_declaration
+      (identifier)
+      (type_reference
+        (type_identifier))))
+  (enum_declaration
+    (identifier)
+    (enum_variant
+      (identifier)
+      (type_reference
+        (builtin_type)))
+    (enum_variant
+      (identifier)
+      (type_reference
+        (builtin_type))
+      (type_reference
+        (builtin_type)))
+    (enum_variant
+      (identifier))))
+
+==================
+match
+==================
+awase (s) {
+    baai Circle(r) { kaesu r; }
+    baai Empty { kaesu 0; }
+}
+---
+
+(source_file
+  (match_statement
+    (identifier)
+    (match_arm
+      (identifier)
+      (identifier)
+      (block
+        (return_statement
+          (identifier))))
+    (match_arm
+      (identifier)
+      (block
+        (return_statement
+          (integer_literal))))))
+
+==================
+index assignment
+==================
+a[0] = 1;
+a[i][j] = 2;
+---
+
+(source_file
+  (index_assignment_statement
+    (index_expression
+      (identifier)
+      (integer_literal))
+    (integer_literal))
+  (index_assignment_statement
+    (index_expression
+      (index_expression
+        (identifier)
+        (identifier))
+      (identifier))
+    (integer_literal)))
