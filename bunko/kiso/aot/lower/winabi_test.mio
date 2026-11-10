@@ -99,3 +99,12 @@ waza test_windows_process_emulation_exists_and_never_writes_x18() -> unit {
     }
     testing.expect(bad == 0, "no ADD/SUB/MOVZ/MOVK/LDR/STR-load form writes x18 in the Windows code");
 }
+
+// Every stack allocation made by the adapter keeps SP 16-byte aligned: the probing store after the first half would otherwise
+// fault with STATUS_DATATYPE_MISALIGNMENT (0x80000002) on Windows ARM64. The adapter assembles only if all sizes qualify.
+waza test_windows_adapter_allocates_16_byte_aligned_frames() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(win.error == mu, "all wx_alloc sizes are halved into multiples of 16 (an unaligned size is an encode error)");
+    kaku init = win_label(win.labels, "windows_init");
+    testing.expect(init > 0 && win.words[init] == arm64.stp_pre_x(29, 30, 31, -16).word, "windows_init pushes the frame pair first");
+}

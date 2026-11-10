@@ -94,6 +94,8 @@ waza wx_bl(c: arm64.Assembler, name: string) -> unit { arm64.assembler_bl(c, nam
 
 // Frame allocation in two probed halves (each below a page) so the guard-page mechanism can commit the stack in order.
 waza wx_alloc(c: arm64.Assembler, size: int64) -> unit {
+    // each half must be a multiple of 16: SP is checked for alignment on every access through it
+    moshi ((size / 2) - ((size / 2) / 16) * 16 != 0 || size - (size / 2) * 2 != 0) { array.push(c.errors, arm64.EncodeError.MisalignedOffset()); }
     wx(c, arm64.sub_imm_x(31, 31, size / 2, iie)); wx(c, arm64.str_x(31, 31, 0));
     wx(c, arm64.sub_imm_x(31, 31, size / 2, iie)); wx(c, arm64.str_x(31, 31, 0));
 }
@@ -635,7 +637,7 @@ koukai waza emit_windows_init(c: arm64.Assembler, patches: []macho.AddressPatch,
     wx_li(c, 0, 65001); wx_call(c, patches, "SetConsoleCP");
     // a parent that passed a records channel (spawn_test) describes it in STARTUPINFO.lpReserved2 with the C runtime layout:
     // count (4 bytes), count flag bytes, count handles; descriptor 3 becomes table entry 3
-    wx_alloc(c, 112);
+    wx_alloc(c, 128);
     wx(c, arm64.add_imm_x(0, 31, 0, iie)); wx_call(c, patches, "GetStartupInfoW");
     wx(c, arm64.ldrh_w(9, 31, 66)); wx_cmpi(c, 9, 40); wx_bcc(c, 3, "windows_init_done");
     wx(c, arm64.ldr_x(9, 31, 72)); wx_cbz(c, 9, "windows_init_done");
@@ -644,7 +646,7 @@ koukai waza emit_windows_init(c: arm64.Assembler, patches: []macho.AddressPatch,
     wx(c, arm64.add_x(12, 9, 10)); wx(c, arm64.add_imm_x(12, 12, 28, iie)); wx(c, arm64.ldr_x(13, 12, 0));
     wx_data(c, patches, base, 14, 0); wx(c, arm64.str_x(13, 14, 24));
     wx_label(c, "windows_init_done");
-    wx_free(c, 112);
+    wx_free(c, 128);
     wx(c, arm64.ldp_post_x(29, 30, 31, 16)); wx(c, arm64.ret());
 }
 
