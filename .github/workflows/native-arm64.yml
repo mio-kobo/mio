@@ -41,7 +41,10 @@ jobs:
         env:
           MIO_CI_MIO: ${{ github.workspace }}/build/mio
           MIO_CI_MODULE_DIR: ${{ github.workspace }}/build/linuxarm64
-        run: python bunko/kiso/aot/linuxarm64/check_linuxarm64.py --reference-vm --require-execution | tee build/linuxarm64-report.txt
+        shell: bash
+        run: |
+          set -o pipefail
+          python bunko/kiso/aot/linuxarm64/check_linuxarm64.py --reference-vm --require-execution | tee build/linuxarm64-report.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -97,6 +97,8 @@ func runCLI(
 
 	case "lint":
 		return runLint(args[1:], stdout, stderr)
+	case "fmt":
+		return runFmt(args[1:], os.Stdin, stdout, stderr)
 
 	case "test":
 		return runTestCommand(args[1:], stdout, stderr, language, colorMode)

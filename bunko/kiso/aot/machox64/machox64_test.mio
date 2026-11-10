@@ -1,0 +1,63 @@
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0; kaku scale = 1; kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+// ret
+waza code_ret() -> []uint8 { kaesu [uint8(195), uint8(144), uint8(144)]; }
+
+waza test_header_and_load_commands() -> unit {
+    kaku result = executable(ImageSpec { code: code_ret(), entry_offset: 1, bss_size: 4104 });
+    testing.expect(result.error == "", "image built");
+    kaku b = result.bytes;
+    testing.expect(word(b, 0, 4) == 4277009103, "MH_MAGIC_64 0xFEEDFACF");
+    testing.expect(word(b, 4, 4) == 16777223 && word(b, 8, 4) == 3, "CPU_TYPE_X86_64 | ABI64, CPU_SUBTYPE_X86_64_ALL");
+    testing.expect(word(b, 12, 4) == 2, "MH_EXECUTE");
+    testing.expect(word(b, 16, 4) == 9 && word(b, 20, 4) == 632, "nine load commands, 632 bytes");
+    testing.expect(word(b, 24, 4) == 133, "MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL, no MH_PIE");
+    // __PAGEZERO at 32
+    testing.expect(word(b, 32, 4) == 25 && word(b, 36, 4) == 72 && word(b, 40, 1) == 95, "LC_SEGMENT_64 __PAGEZERO");
+    testing.expect(word(b, 32 + 24, 8) == 0 && word(b, 32 + 32, 8) == 4194304 && word(b, 32 + 56, 4) == 0 && word(b, 32 + 60, 4) == 0, "PAGEZERO vm 0..0x400000 with no access");
+    // __TEXT at 104
+    testing.expect(word(b, 104, 4) == 25 && word(b, 108, 4) == 152, "LC_SEGMENT_64 __TEXT with one section");
+    testing.expect(word(b, 104 + 24, 8) == 4194304 && word(b, 104 + 32, 8) == 8192 && word(b, 104 + 40, 8) == 0 && word(b, 104 + 48, 8) == 8192, "TEXT vm 0x400000, 8 KiB mapped from file offset 0");
+    testing.expect(word(b, 104 + 56, 4) == 5 && word(b, 104 + 60, 4) == 5, "TEXT r-x");
+    testing.expect(word(b, 104 + 72 + 32, 8) == 4198400 && word(b, 104 + 72 + 40, 8) == 3 && word(b, 104 + 72 + 48, 4) == 4096, "__text at 0x401000, 3 bytes, file offset 0x1000");
+    testing.expect(word(b, 104 + 72 + 64, 4) == 2147484672, "__text is S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS");
+    // __DATA at 256: zero-fill, no file bytes
+    testing.expect(word(b, 256 + 24, 8) == 268435456 && word(b, 256 + 32, 8) == 8192 && word(b, 256 + 40, 8) == 0 && word(b, 256 + 48, 8) == 0, "DATA vm 0x10000000, 8 KiB, no file bytes");
+    testing.expect(word(b, 256 + 56, 4) == 3 && word(b, 256 + 60, 4) == 3, "DATA rw-");
+    testing.expect(word(b, 256 + 72 + 32, 8) == 268435456 && word(b, 256 + 72 + 40, 8) == 4104 && word(b, 256 + 72 + 64, 4) == 1, "__bss is S_ZEROFILL of 4104 bytes");
+    // __LINKEDIT at 408, after __DATA in address order and at the end of the file
+    testing.expect(word(b, 408 + 24, 8) == 268443648 && word(b, 408 + 40, 8) == 8192 && word(b, 408 + 48, 8) == 0, "LINKEDIT after DATA, at EOF, empty");
+}
+
+waza test_dyld_build_version_and_main() -> unit {
+    kaku result = executable(ImageSpec { code: code_ret(), entry_offset: 1, bss_size: 0 });
+    testing.expect(result.error == "", "image built without data");
+    kaku b = result.bytes;
+    testing.expect(word(b, 16, 4) == 8 && word(b, 20, 4) == 480, "eight load commands without __DATA");
+    kaku at = 32 + 72 + 152 + 72;
+    testing.expect(word(b, at, 4) == 14 && word(b, at + 4, 4) == 32 && word(b, at + 8, 4) == 12, "LC_LOAD_DYLINKER");
+    testing.expect(word(b, at + 12, 1) == 47 && word(b, at + 24, 1) == 100 && word(b, at + 25, 1) == 0, "path /usr/lib/dyld");
+    at = at + 32;
+    testing.expect(word(b, at, 4) == 50 && word(b, at + 4, 4) == 24 && word(b, at + 8, 4) == 1 && word(b, at + 12, 4) == 720896 && word(b, at + 16, 4) == 720896, "LC_BUILD_VERSION macOS 11.0 (minos = sdk = 0x000B0000)");
+    at = at + 24;
+    testing.expect(word(b, at, 4) == 2 && word(b, at + 4, 4) == 24, "empty LC_SYMTAB");
+    at = at + 24;
+    testing.expect(word(b, at, 4) == 11 && word(b, at + 4, 4) == 80, "empty LC_DYSYMTAB");
+    at = at + 80;
+    testing.expect(word(b, at, 4) == 2147483688 && word(b, at + 4, 4) == 24 && word(b, at + 8, 8) == 4097, "LC_MAIN entryoff = 0x1000 + entry_offset");
+    testing.expect(word(b, 4096, 1) == 195, "code at file offset 0x1000");
+}
+
+waza test_invalid_specs_fail_closed() -> unit {
+    testing.expect(executable(ImageSpec { code: [], entry_offset: 0, bss_size: 0 }).error == "EMPTY_TEXT", "no code");
+    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 3, bss_size: 0 }).error == "INVALID_ENTRY", "entry outside the code");
+    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: -1, bss_size: 0 }).error == "INVALID_ENTRY", "negative entry");
+    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 0, bss_size: -1 }).error == "INVALID_BSS", "negative bss");
+    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "oversized bss");
+}
