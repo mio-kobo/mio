@@ -1,0 +1,189 @@
+==================
+precedence and associativity
+==================
+kaku x = a || b && c == d + e * f - g;
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (binary_expression
+      (identifier)
+      (binary_expression
+        (identifier)
+        (binary_expression
+          (identifier)
+          (binary_expression
+            (binary_expression
+              (identifier)
+              (binary_expression
+                (identifier)
+                (identifier)))
+            (identifier)))))))
+
+==================
+unary operators
+==================
+kaku x = -a * !b;
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (binary_expression
+      (unary_expression
+        (identifier))
+      (unary_expression
+        (identifier)))))
+
+==================
+calls, indexing and fields
+==================
+kaku x = f(a, b)[0].name;
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (field_expression
+      (index_expression
+        (call_expression
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier)))
+        (integer_literal))
+      (identifier))))
+
+==================
+literals
+==================
+kaku x = [1, 2.5, 1e3, "s\n", 'a', 'あ', hai, iie, mu];
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (array_literal
+      (integer_literal)
+      (float_literal)
+      (float_literal)
+      (string_literal)
+      (rune_literal)
+      (rune_literal)
+      (boolean_literal)
+      (boolean_literal)
+      (nil_literal))))
+
+==================
+struct literals
+==================
+kaku p = Point { x: 1, y: 2, };
+kaku q = pkg.Point { x: 1 };
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (struct_literal
+      (type_identifier)
+      (field_initializer
+        (identifier)
+        (integer_literal))
+      (field_initializer
+        (identifier)
+        (integer_literal))))
+  (let_statement
+    (identifier)
+    (struct_literal
+      (field_expression
+        (identifier)
+        (identifier))
+      (field_initializer
+        (identifier)
+        (integer_literal)))))
+
+==================
+function literals
+==================
+kaku f = waza(a: int64) -> int64 { kaesu a; };
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (function_literal
+      (parameters
+        (parameter
+          (identifier)
+          (type_reference
+            (builtin_type))))
+      (type_reference
+        (builtin_type))
+      (block
+        (return_statement
+          (identifier))))))
+
+==================
+explicit type arguments
+==================
+kaku a = first[int64](xs);
+kaku b = Pair[string] { first: "a", second: "b" };
+kaku c = Shape[int64].Empty();
+kaku d = xs[i];
+---
+
+(source_file
+  (let_statement
+    (identifier)
+    (call_expression
+      (type_application
+        (identifier)
+        (type_reference
+          (builtin_type)))
+      (arguments
+        (identifier))))
+  (let_statement
+    (identifier)
+    (struct_literal
+      (type_application
+        (type_identifier)
+        (type_reference
+          (builtin_type)))
+      (field_initializer
+        (identifier)
+        (string_literal))
+      (field_initializer
+        (identifier)
+        (string_literal))))
+  (let_statement
+    (identifier)
+    (call_expression
+      (field_expression
+        (type_application
+          (type_identifier)
+          (type_reference
+            (builtin_type)))
+        (identifier))
+      (arguments)))
+  (let_statement
+    (identifier)
+    (index_expression
+      (identifier)
+      (identifier))))
+
+==================
+comments
+==================
+// line
+/* block */ kaku x /* inner */ = 1; // trailing
+---
+
+(source_file
+  (line_comment)
+  (block_comment)
+  (let_statement
+    (identifier)
+    (block_comment)
+    (integer_literal))
+  (line_comment))
