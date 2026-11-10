@@ -19,9 +19,19 @@ yobu "kiso/string";
 
 // The imports in IAT order: pairs of (library, symbol). The image builder groups them by library in this order.
 koukai waza windows_imports() -> []string {
-    kaesu ["kernel32.dll", "ExitProcess", "kernel32.dll", "GetStdHandle", "kernel32.dll", "WriteFile", "kernel32.dll", "VirtualAlloc",
-        "kernel32.dll", "VirtualFree"];
+    kaku names = ["ExitProcess", "GetStdHandle", "WriteFile", "ReadFile", "CloseHandle", "VirtualAlloc", "VirtualFree", "CreateFileW",
+        "GetLastError", "MultiByteToWideChar", "WideCharToMultiByte", "GetFileAttributesExW", "CreateDirectoryW", "RemoveDirectoryW",
+        "DeleteFileW", "GetFileInformationByHandleEx", "GetCurrentProcessId", "GetFinalPathNameByHandleW", "GetModuleFileNameW",
+        "SetConsoleOutputCP", "SetConsoleCP"];
+    kaku pairs: []string = []; kaku at = 0;
+    aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
+    kaesu pairs;
 }
+
+// Adapter data (64-bit words appended after the program's globals): word 0..2 standard handles are table entries 0..2;
+// the descriptor table has 64 entries (HANDLE or 0 = free) at word 0; per-descriptor "directory enumeration started" flags
+// at word 64.
+koukai waza windows_adapter_words() -> int64 { kaesu 128; }
 
 waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
 waza wx_label(c: arm64.Assembler, name: string) -> unit { arm64.assembler_label(c, name); }
@@ -53,21 +63,92 @@ waza wx_call(c: arm64.Assembler, patches: []macho.AddressPatch, symbol: string) 
     wx(c, arm64.ldr_x(16, 16, 0)); wx(c, arm64.blr_x(16));
 }
 
+// x(reg) = address of adapter data word `word` (ADRP/ADD with a globals patch; the image builder resolves it).
+waza wx_data(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64, reg: int64, word: int64) -> unit {
+    kaku at = len(c.words);
+    wx(c, arm64.Instruction { word: uint32(0), error: mu }); wx(c, arm64.Instruction { word: uint32(0), error: mu });
+    array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: (base + word) * 8, register: reg });
+}
+
 // BOOL results are 32-bit: clear the undefined upper half.
 waza wx_bool(c: arm64.Assembler) -> unit { wx(c, arm64.lsl_x(0, 0, 32)); wx(c, arm64.lsr_x(0, 0, 32)); }
 
 waza wx_save(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { wx(c, arm64.stp_x(a, b, 31, offset)); }
 waza wx_load(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { wx(c, arm64.ldp_x(a, b, 31, offset)); }
 
-// Defines `windows_syscall`. The Windows start-up routine `windows_start` is emitted by emit_windows_start.
-koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.AddressPatch) -> unit {
+
+// ---- small assembly helpers used by the blocks below
+waza wx_cmpi(c: arm64.Assembler, reg: int64, value: int64) -> unit { wx(c, arm64.cmp_imm_x(reg, value, iie)); }
+waza wx_ldr(c: arm64.Assembler, rt: int64, off: int64) -> unit { wx(c, arm64.ldr_x(rt, 31, off)); }
+waza wx_str(c: arm64.Assembler, rt: int64, off: int64) -> unit { wx(c, arm64.str_x(rt, 31, off)); }
+waza wx_cbnz(c: arm64.Assembler, reg: int64, name: string) -> unit { arm64.assembler_cbnz_x(c, reg, name); }
+waza wx_bl(c: arm64.Assembler, name: string) -> unit { arm64.assembler_bl(c, name); }
+
+// Frame allocation in two probed halves (each below a page) so the guard-page mechanism can commit the stack in order.
+waza wx_alloc(c: arm64.Assembler, size: int64) -> unit {
+    wx(c, arm64.sub_imm_x(31, 31, size / 2, iie)); wx(c, arm64.str_x(31, 31, 0));
+    wx(c, arm64.sub_imm_x(31, 31, size / 2, iie)); wx(c, arm64.str_x(31, 31, 0));
+}
+waza wx_free(c: arm64.Assembler, size: int64) -> unit {
+    wx(c, arm64.add_imm_x(31, 31, size / 2, iie)); wx(c, arm64.add_imm_x(31, 31, size / 2, iie));
+}
+
+// Win32 error code (x0) -> Darwin errno (x0). Leaf routine, clobbers x9-x10.
+waza wx_map_error(c: arm64.Assembler) -> unit {
+    wx_label(c, "wx_map_error");
+    kaku pairs = [2, 2, 3, 2, 5, 13, 6, 9, 32, 13, 80, 17, 183, 17, 267, 20, 145, 66, 87, 22, 123, 63, 161, 63, 206, 63];
+    kaku at = 0;
+    aida (at < len(pairs)) {
+        kaku next = wx_name("wx_map_error_next_", at);
+        wx_cmpi(c, 0, pairs[at]); wx_bcc(c, 1, next); wx_li(c, 0, pairs[at + 1]); wx(c, arm64.ret());
+        wx_label(c, next);
+        at = at + 2;
+    }
+    wx_li(c, 0, 5); wx(c, arm64.ret());
+}
+
+// Calls GetLastError, maps it and jumps to the common error exit; `cleanup` bytes of stack are released first.
+waza wx_fail_last(c: arm64.Assembler, patches: []macho.AddressPatch, cleanup: int64) -> unit {
+    wx_call(c, patches, "GetLastError"); wx_bool(c); wx_bl(c, "wx_map_error");
+    moshi (cleanup > 0) { wx_free(c, cleanup); }
+    wx_b(c, "wx_error");
+}
+
+// x0 = descriptor -> x0 = HANDLE, or 0 when the descriptor is not open. Clobbers x9, x10.
+waza wx_handle_routine(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64) -> unit {
+    wx_label(c, "wx_handle");
+    wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_handle_none");
+    wx_data(c, patches, base, 10, 0);
+    wx(c, arm64.ldr_x_register_scaled(0, 10, 0)); wx(c, arm64.ret());
+    wx_label(c, "wx_handle_none"); wx_li(c, 0, 0); wx(c, arm64.ret());
+}
+
+// UTF-8 C string at [sp, #source] -> UTF-16 at [sp] (1024 code units): x0 = number of units including the NUL, 0 on failure.
+waza wx_to_utf16(c: arm64.Assembler, patches: []macho.AddressPatch, source: int64) -> unit {
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx_ldr(c, 2, source); wx(c, arm64.movn_x(3, 0, 0)); wx(c, arm64.add_imm_x(4, 31, 0, iie)); wx_li(c, 5, 1024);
+    wx_call(c, patches, "MultiByteToWideChar"); wx_bool(c);
+}
+
+// bytes at [reg] equal `text` (and its NUL): fall through when equal, jump to `fail` otherwise. Uses x9.
+waza wx_streq(c: arm64.Assembler, reg: int64, text: string, fail: string) -> unit {
+    kaku bytes = string.to_bytes(text); kaku at = 0;
+    aida (at <= len(bytes)) {
+        kaku expected = 0; moshi (at < len(bytes)) { expected = int64(bytes[at]); }
+        wx(c, arm64.ldrb_w(9, reg, at)); wx_cmpi(c, 9, expected); wx_bcc(c, 1, fail);
+        at = at + 1;
+    }
+}
+
+// Defines `windows_syscall`; `base` is the first adapter data word (see windows_adapter_words).
+koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64) -> unit {
     wx_label(c, "windows_syscall");
     wx(c, arm64.sub_imm_x(31, 31, 288, iie));
     wx_save(c, 2, 3, 0); wx_save(c, 4, 5, 16); wx_save(c, 6, 7, 32); wx_save(c, 8, 9, 48);
     wx_save(c, 10, 11, 64); wx_save(c, 12, 13, 80); wx_save(c, 14, 15, 96); wx_save(c, 17, 30, 112);
     wx(c, arm64.str_x(1, 31, 128));
-    kaku calls = [1, 4, 73, 74, 197];
-    kaku names = ["wx_exit", "wx_write", "wx_munmap", "wx_mprotect", "wx_mmap"];
+    kaku calls = [1, 3, 4, 5, 6, 10, 15, 20, 73, 74, 92, 136, 137, 194, 197, 202, 274, 336, 338, 344];
+    kaku names = ["wx_exit", "wx_read", "wx_write", "wx_open", "wx_close", "wx_unlink", "wx_chmod", "wx_getpid", "wx_munmap", "wx_mprotect", "wx_fcntl",
+        "wx_mkdir", "wx_rmdir", "wx_getrlimit", "wx_mmap", "wx_sysctl", "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
     kaku at = 0;
     aida (at < len(calls)) {
         kaku next = wx_name("wx_dispatch_next_", at);
@@ -84,20 +165,220 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_load(c, 2, 3, 0); wx_load(c, 4, 5, 16); wx_load(c, 6, 7, 32); wx_load(c, 8, 9, 48);
     wx_load(c, 10, 11, 64); wx_load(c, 12, 13, 80); wx_load(c, 14, 15, 96); wx_load(c, 17, 30, 112);
     wx(c, arm64.add_imm_x(31, 31, 288, iie)); wx(c, arm64.ret());
+    wx_map_error(c);
+    wx_handle_routine(c, patches, base);
 
     // ---- exit(status) -> ExitProcess(status)
     wx_label(c, "wx_exit"); wx_call(c, patches, "ExitProcess"); wx_b(c, "wx_unsupported");
+    wx_label(c, "wx_badfd"); wx_li(c, 0, 9); wx_b(c, "wx_error");
+    wx_label(c, "wx_inval"); wx_li(c, 0, 22); wx_b(c, "wx_error");
 
-    // ---- write(fd, buffer, length): fd 0, 1, 2 are the standard handles (GetStdHandle(-10 - fd))
-    wx_label(c, "wx_write");
-    wx(c, arm64.cmp_imm_x(0, 2, iie)); wx_bcc(c, 8, "wx_badfd");
+    // ---- read(fd, buffer, length) -> ReadFile; a broken pipe or end of file reads as 0 bytes
+    wx_label(c, "wx_read");
     wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
-    wx_li(c, 9, 4294967286); wx(c, arm64.sub_x(0, 9, 0)); wx_call(c, patches, "GetStdHandle");
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
+    wx_call(c, patches, "ReadFile"); wx_bool(c); wx_cbz(c, 0, "wx_read_failed");
+    wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
+    wx_label(c, "wx_read_failed");
+    wx_call(c, patches, "GetLastError"); wx_bool(c);
+    wx_cmpi(c, 0, 109); wx_bcc(c, 0, "wx_eof"); wx_cmpi(c, 0, 38); wx_bcc(c, 0, "wx_eof");
+    wx_bl(c, "wx_map_error"); wx_b(c, "wx_error");
+    wx_label(c, "wx_eof"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+
+    // ---- write(fd, buffer, length) -> WriteFile
+    wx_label(c, "wx_write");
+    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
     wx_call(c, patches, "WriteFile"); wx_bool(c); wx_cbz(c, 0, "wx_io_error");
     wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
-    wx_label(c, "wx_io_error"); wx_li(c, 0, 5); wx_b(c, "wx_error");
-    wx_label(c, "wx_badfd"); wx_li(c, 0, 9); wx_b(c, "wx_error");
+    wx_label(c, "wx_io_error"); wx_fail_last(c, patches, 0);
+
+    // ---- close(fd): the standard descriptors stay open; others are removed from the table and closed
+    wx_label(c, "wx_close");
+    wx_cmpi(c, 0, 2); wx_bcc(c, 9, "wx_close_real"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_close_real");
+    wx(c, arm64.str_x(0, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.str_x(0, 31, 152));
+    wx_data(c, patches, base, 10, 0); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(31, 10, 0));
+    wx(c, arm64.ldr_x(0, 31, 152)); wx_call(c, patches, "CloseHandle"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+
+    // ---- open(path, flags, mode): "/dev/stdin|stdout|stderr" are descriptors 0..2, "/dev/null" is NUL; files via CreateFileW
+    wx_label(c, "wx_open");
+    wx_alloc(c, 2304);
+    wx_str(c, 0, 2048); wx_str(c, 1, 2056);
+    wx_streq(c, 0, "/dev/stdin", "wx_open_not_stdin"); wx_li(c, 0, 0); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx_label(c, "wx_open_not_stdin"); wx_ldr(c, 0, 2048);
+    wx_streq(c, 0, "/dev/stdout", "wx_open_not_stdout"); wx_li(c, 0, 1); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx_label(c, "wx_open_not_stdout"); wx_ldr(c, 0, 2048);
+    wx_streq(c, 0, "/dev/stderr", "wx_open_not_stderr"); wx_li(c, 0, 2); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx_label(c, "wx_open_not_stderr"); wx_ldr(c, 0, 2048);
+    wx_streq(c, 0, "/dev/null", "wx_open_path");
+    wx_li(c, 9, 5002574); wx(c, arm64.str_x(9, 31, 2104)); wx(c, arm64.add_imm_x(9, 31, 2104, iie)); wx_str(c, 9, 2048);
+    wx_label(c, "wx_open_path");
+    wx_to_utf16(c, patches, 2048); wx_cbz(c, 0, "wx_open_invalid");
+    wx_ldr(c, 9, 2056);
+    // desired access from the low two flag bits (0 read, 1 write, 2 both); O_APPEND replaces write by FILE_APPEND_DATA
+    wx_li(c, 10, 3); wx(c, arm64.and_x(10, 9, 10));
+    wx_li(c, 1, 2147483648); wx_cbz(c, 10, "wx_open_access_done");
+    wx_li(c, 1, 1073741824); wx_cmpi(c, 10, 1); wx_bcc(c, 0, "wx_open_access_done"); wx_li(c, 1, 3221225472);
+    wx_label(c, "wx_open_access_done");
+    wx_li(c, 11, 8); wx(c, arm64.and_x(11, 9, 11)); wx_cbz(c, 11, "wx_open_not_append");
+    wx_cbz(c, 10, "wx_open_not_append");
+    wx_li(c, 12, 1048580); wx_cmpi(c, 10, 2); wx_bcc(c, 1, "wx_open_append_only"); wx_li(c, 1, 2148532228); wx_b(c, "wx_open_not_append");
+    wx_label(c, "wx_open_append_only"); wx_mov(c, 1, 12);
+    wx_label(c, "wx_open_not_append");
+    // creation disposition
+    wx_li(c, 10, 512); wx(c, arm64.and_x(10, 9, 10)); wx_cbz(c, 10, "wx_open_no_create");
+    wx_li(c, 10, 2048); wx(c, arm64.and_x(10, 9, 10)); wx_cbz(c, 10, "wx_open_create_plain"); wx_li(c, 4, 1); wx_b(c, "wx_open_disposition_done");
+    wx_label(c, "wx_open_create_plain"); wx_li(c, 10, 1024); wx(c, arm64.and_x(10, 9, 10)); wx_li(c, 4, 4); wx_cbz(c, 10, "wx_open_disposition_done"); wx_li(c, 4, 2); wx_b(c, "wx_open_disposition_done");
+    wx_label(c, "wx_open_no_create");
+    wx_li(c, 10, 1024); wx(c, arm64.and_x(10, 9, 10)); wx_li(c, 4, 3); wx_cbz(c, 10, "wx_open_disposition_done"); wx_li(c, 4, 5);
+    wx_label(c, "wx_open_disposition_done");
+    wx(c, arm64.add_imm_x(0, 31, 0, iie)); wx_li(c, 2, 7); wx_li(c, 3, 0); wx_li(c, 5, 33554560); wx_li(c, 6, 0);
+    wx_call(c, patches, "CreateFileW");
+    wx(c, arm64.cmn_imm_x(0, 1, iie)); wx_bcc(c, 0, "wx_open_failed");
+    wx_str(c, 0, 2064);
+    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 3);
+    wx_label(c, "wx_open_scan");
+    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_open_full");
+    wx(c, arm64.ldr_x_register_scaled(12, 10, 11)); wx_cbz(c, 12, "wx_open_found");
+    wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_open_scan");
+    wx_label(c, "wx_open_found");
+    wx_ldr(c, 0, 2064); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(0, 12, 0));
+    wx(c, arm64.str_x(11, 31, 2072));
+    wx_data(c, patches, base, 10, 64); wx_ldr(c, 11, 2072); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(31, 12, 0));
+    wx_ldr(c, 0, 2072); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx_label(c, "wx_open_full"); wx_ldr(c, 0, 2064); wx_call(c, patches, "CloseHandle"); wx_free(c, 2304); wx_li(c, 0, 24); wx_b(c, "wx_error");
+    wx_label(c, "wx_open_failed"); wx_fail_last(c, patches, 2304);
+    wx_label(c, "wx_open_invalid"); wx_free(c, 2304); wx_b(c, "wx_inval");
+
+    // ---- path operations: mkdir, rmdir, unlink (chmod is accepted and ignored: Windows has no mode bits)
+    wx_label(c, "wx_chmod"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_mkdir"); wx_li(c, 9, 0); wx_b(c, "wx_pathop");
+    wx_label(c, "wx_rmdir"); wx_li(c, 9, 1); wx_b(c, "wx_pathop");
+    wx_label(c, "wx_unlink"); wx_li(c, 9, 2);
+    wx_label(c, "wx_pathop");
+    wx_alloc(c, 2304); wx_str(c, 0, 2048); wx_str(c, 9, 2056);
+    wx_to_utf16(c, patches, 2048); wx_cbz(c, 0, "wx_pathop_invalid");
+    wx(c, arm64.add_imm_x(0, 31, 0, iie)); wx_ldr(c, 9, 2056);
+    wx_cbz(c, 9, "wx_pathop_mkdir"); wx_cmpi(c, 9, 1); wx_bcc(c, 0, "wx_pathop_rmdir");
+    wx_call(c, patches, "DeleteFileW"); wx_b(c, "wx_pathop_result");
+    wx_label(c, "wx_pathop_mkdir"); wx_li(c, 1, 0); wx_call(c, patches, "CreateDirectoryW"); wx_b(c, "wx_pathop_result");
+    wx_label(c, "wx_pathop_rmdir"); wx_call(c, patches, "RemoveDirectoryW");
+    wx_label(c, "wx_pathop_result");
+    wx_bool(c); wx_cbz(c, 0, "wx_pathop_failed");
+    wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_pathop_failed"); wx_fail_last(c, patches, 2304);
+    wx_label(c, "wx_pathop_invalid"); wx_free(c, 2304); wx_b(c, "wx_inval");
+
+    // ---- getpid
+    wx_label(c, "wx_getpid"); wx_call(c, patches, "GetCurrentProcessId"); wx_bool(c); wx_b(c, "wx_ok");
+
+    // ---- stat64(path, buffer) -> GetFileAttributesExW, rebuilt as a Darwin stat64 (mode, nlink, size, atime/mtime/ctime)
+    wx_label(c, "wx_stat");
+    wx_alloc(c, 2304); wx_str(c, 0, 2048); wx_str(c, 1, 2056);
+    wx_to_utf16(c, patches, 2048); wx_cbz(c, 0, "wx_stat_invalid");
+    wx(c, arm64.add_imm_x(0, 31, 0, iie)); wx_li(c, 1, 0); wx(c, arm64.add_imm_x(2, 31, 2080, iie));
+    wx_call(c, patches, "GetFileAttributesExW"); wx_bool(c); wx_cbz(c, 0, "wx_stat_failed");
+    wx_ldr(c, 13, 2056);
+    kaku zero = 0;
+    aida (zero < 144) { wx(c, arm64.str_x(31, 13, zero)); zero = zero + 8; }
+    // WIN32_FILE_ATTRIBUTE_DATA at sp+2080: attributes 0, creation 4, last access 12, last write 20, size high 28, size low 32
+    wx(c, arm64.ldr_w(9, 31, 2080));
+    wx_li(c, 10, 16877); wx_li(c, 11, 16); wx(c, arm64.and_x(11, 9, 11)); wx_cbnz(c, 11, "wx_stat_mode_set");
+    wx_li(c, 10, 33188); wx_li(c, 11, 1); wx(c, arm64.and_x(11, 9, 11)); wx_cbz(c, 11, "wx_stat_mode_set"); wx_li(c, 10, 33060);
+    wx_label(c, "wx_stat_mode_set");
+    wx(c, arm64.strh_w(10, 13, 4)); wx_li(c, 10, 1); wx(c, arm64.strh_w(10, 13, 6));
+    wx(c, arm64.ldr_w(9, 31, 2108)); wx(c, arm64.lsl_x(9, 9, 32)); wx(c, arm64.ldr_w(10, 31, 2112)); wx(c, arm64.orr_x(9, 9, 10)); wx(c, arm64.str_x(9, 13, 96));
+    // FILETIME (100 ns since 1601) -> seconds since 1970
+    wx_li(c, 12, 10000000); wx_li(c, 14, 11644473600);
+    kaku times = [2084, 64, 2092, 32, 2100, 48];
+    at = 0;
+    aida (at < len(times)) {
+        wx(c, arm64.ldr_w(9, 31, times[at])); wx(c, arm64.ldr_w(10, 31, times[at] + 4)); wx(c, arm64.lsl_x(10, 10, 32)); wx(c, arm64.orr_x(9, 9, 10));
+        wx(c, arm64.udiv_x(9, 9, 12)); wx(c, arm64.sub_x(9, 9, 14)); wx(c, arm64.str_x(9, 13, times[at + 1]));
+        at = at + 2;
+    }
+    wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_stat_failed"); wx_fail_last(c, patches, 2304);
+    wx_label(c, "wx_stat_invalid"); wx_free(c, 2304); wx_b(c, "wx_inval");
+
+    // ---- getdirentries64(fd, buffer, nbytes >= 8192, basep) -> GetFileInformationByHandleEx(FileIdBothDirectoryInfo),
+    // converted entry by entry into Darwin dirent64 (ino 0, seekoff 8, reclen 16, namlen 18, type 20, name 21)
+    wx_label(c, "wx_dirents");
+    wx_li(c, 9, 8192); wx(c, arm64.cmp_x(2, 9)); wx_bcc(c, 2, "wx_dirents_ok"); wx_b(c, "wx_inval");
+    wx_label(c, "wx_dirents_ok");
+    wx_alloc(c, 4352);
+    wx(c, arm64.str_x(0, 31, 4096)); wx(c, arm64.str_x(1, 31, 4112)); wx(c, arm64.str_x(2, 31, 4120));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_dirents_badfd"); wx(c, arm64.str_x(0, 31, 4104));
+    wx_data(c, patches, base, 10, 64); wx(c, arm64.ldr_x(11, 31, 4096)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(10, 31, 4136));
+    wx(c, arm64.ldr_x(12, 10, 0)); wx_li(c, 1, 11); wx_cbz(c, 12, "wx_dirents_query"); wx_li(c, 1, 10);
+    wx_label(c, "wx_dirents_query");
+    wx(c, arm64.ldr_x(0, 31, 4104)); wx(c, arm64.add_imm_x(2, 31, 0, iie)); wx_li(c, 3, 4096);
+    wx_call(c, patches, "GetFileInformationByHandleEx"); wx_bool(c); wx_cbz(c, 0, "wx_dirents_failed");
+    wx(c, arm64.ldr_x(10, 31, 4136)); wx_li(c, 11, 1); wx(c, arm64.str_x(11, 10, 0));
+    wx(c, arm64.str_x(31, 31, 4128)); wx(c, arm64.ldr_x(9, 31, 4112)); wx(c, arm64.str_x(9, 31, 4144));
+    wx_label(c, "wx_dirents_entry");
+    wx(c, arm64.add_imm_x(9, 31, 0, iie)); wx(c, arm64.ldr_x(10, 31, 4128)); wx(c, arm64.add_x(9, 9, 10));
+    wx(c, arm64.ldr_x(11, 31, 4144));
+    wx(c, arm64.ldr_x(12, 9, 96)); wx(c, arm64.str_x(12, 11, 0)); wx(c, arm64.str_x(31, 11, 8));
+    wx(c, arm64.ldr_w(12, 9, 56)); wx_li(c, 13, 16); wx(c, arm64.and_x(13, 12, 13)); wx_li(c, 12, 8); wx_cbz(c, 13, "wx_dirents_type"); wx_li(c, 12, 4);
+    wx_label(c, "wx_dirents_type");
+    wx(c, arm64.strb_w(12, 11, 20));
+    wx(c, arm64.add_imm_x(2, 9, 104, iie)); wx(c, arm64.ldr_w(3, 9, 60)); wx(c, arm64.lsr_x(3, 3, 1));
+    wx(c, arm64.add_imm_x(4, 11, 21, iie)); wx_li(c, 5, 765); wx_li(c, 0, 65001); wx_li(c, 1, 0); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c);
+    wx(c, arm64.ldr_x(11, 31, 4144)); wx(c, arm64.strh_w(0, 11, 18)); wx(c, arm64.add_x(12, 11, 0)); wx(c, arm64.strb_w(31, 12, 21));
+    wx(c, arm64.add_imm_x(12, 0, 29, iie)); wx(c, arm64.movn_x(13, 7, 0)); wx(c, arm64.and_x(12, 12, 13)); wx(c, arm64.strh_w(12, 11, 16));
+    wx(c, arm64.add_x(11, 11, 12)); wx(c, arm64.str_x(11, 31, 4144));
+    wx(c, arm64.add_imm_x(9, 31, 0, iie)); wx(c, arm64.ldr_x(10, 31, 4128)); wx(c, arm64.add_x(9, 9, 10)); wx(c, arm64.ldr_w(12, 9, 0));
+    wx_cbz(c, 12, "wx_dirents_done"); wx(c, arm64.add_x(10, 10, 12)); wx(c, arm64.str_x(10, 31, 4128)); wx_b(c, "wx_dirents_entry");
+    wx_label(c, "wx_dirents_done");
+    wx(c, arm64.ldr_x(0, 31, 4144)); wx(c, arm64.ldr_x(1, 31, 4112)); wx(c, arm64.sub_x(0, 0, 1));
+    wx_free(c, 4352); wx_b(c, "wx_ok");
+    wx_label(c, "wx_dirents_failed");
+    wx_call(c, patches, "GetLastError"); wx_bool(c); wx_cmpi(c, 0, 18); wx_bcc(c, 1, "wx_dirents_error");
+    wx_free(c, 4352); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_dirents_error"); wx_bl(c, "wx_map_error"); wx_free(c, 4352); wx_b(c, "wx_error");
+    wx_label(c, "wx_dirents_badfd"); wx_free(c, 4352); wx_b(c, "wx_badfd");
+
+    // ---- fcntl(fd, F_GETPATH = 50, buffer) -> GetFinalPathNameByHandleW without the \\?\ prefix, as UTF-8; other commands succeed
+    wx_label(c, "wx_fcntl");
+    wx_cmpi(c, 1, 50); wx_bcc(c, 1, "wx_fcntl_other");
+    wx_alloc(c, 2304); wx_str(c, 2, 2048);
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_fcntl_badfd");
+    wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx_li(c, 2, 1024); wx_li(c, 3, 0);
+    wx_call(c, patches, "GetFinalPathNameByHandleW"); wx_bool(c); wx_cbz(c, 0, "wx_fcntl_failed");
+    wx(c, arm64.add_imm_x(2, 31, 0, iie)); wx(c, arm64.ldrh_w(9, 31, 0)); wx_cmpi(c, 9, 92); wx_bcc(c, 1, "wx_fcntl_convert");
+    wx(c, arm64.ldrh_w(9, 31, 2)); wx_cmpi(c, 9, 92); wx_bcc(c, 1, "wx_fcntl_convert");
+    wx(c, arm64.ldrh_w(9, 31, 4)); wx_cmpi(c, 9, 63); wx_bcc(c, 1, "wx_fcntl_convert");
+    wx(c, arm64.ldrh_w(9, 31, 6)); wx_cmpi(c, 9, 92); wx_bcc(c, 1, "wx_fcntl_convert");
+    wx(c, arm64.add_imm_x(2, 31, 8, iie));
+    wx_label(c, "wx_fcntl_convert");
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 4, 2048); wx_li(c, 5, 1023); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "wx_fcntl_failed");
+    wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_fcntl_failed"); wx_fail_last(c, patches, 2304);
+    wx_label(c, "wx_fcntl_badfd"); wx_free(c, 2304); wx_b(c, "wx_badfd");
+    wx_label(c, "wx_fcntl_other"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+
+    // ---- proc_info(PIDINFO = 2, pid, PIDPATHINFO = 11, 0, buffer, size) -> GetModuleFileNameW(NULL) as UTF-8
+    wx_label(c, "wx_procinfo");
+    wx_cmpi(c, 0, 2); wx_bcc(c, 1, "wx_unsupported"); wx_cmpi(c, 2, 11); wx_bcc(c, 1, "wx_unsupported");
+    wx_alloc(c, 2304); wx_str(c, 4, 2048); wx_str(c, 5, 2056);
+    wx_li(c, 0, 0); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx_li(c, 2, 1024); wx_call(c, patches, "GetModuleFileNameW"); wx_bool(c); wx_cbz(c, 0, "wx_procinfo_failed");
+    wx_li(c, 0, 65001); wx_li(c, 1, 0); wx(c, arm64.add_imm_x(2, 31, 0, iie)); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 4, 2048); wx_ldr(c, 5, 2056); wx_li(c, 6, 0); wx_li(c, 7, 0);
+    wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "wx_procinfo_failed");
+    wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_procinfo_failed"); wx_fail_last(c, patches, 2304);
+
+    // ---- system queries: physical memory is unavailable, the memory-pressure level is optional, no resource limits
+    wx_label(c, "wx_sysctl"); wx_li(c, 0, 2); wx_b(c, "wx_error");
+    wx_label(c, "wx_sysctlbyname"); wx_li(c, 0, 2); wx_b(c, "wx_error");
+    wx_label(c, "wx_getrlimit");
+    wx(c, arm64.movn_x(9, 0, 0)); wx(c, arm64.lsr_x(9, 9, 1)); wx(c, arm64.str_x(9, 1, 0)); wx(c, arm64.str_x(9, 1, 8)); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ---- memory. Darwin pages are 16 KiB: lengths are rounded up to 16 KiB (VirtualAlloc returns 64 KiB-aligned regions).
     // mmap -> VirtualAlloc(NULL, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
@@ -127,11 +408,27 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_li(c, 0, 0); wx_b(c, "wx_ok");
 }
 
-// PE entry point: the loader calls it with no arguments. Slice 1 provides argc = 1, argv = {"mio.exe"} and an empty
-// environment, then continues at the first lowered word (label windows_main) with the Darwin entry registers x0-x2.
+// Start-up: the three standard handles go into descriptor-table entries 0..2 and the console is switched to UTF-8.
+koukai waza emit_windows_init(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64) -> unit {
+    wx_label(c, "windows_init");
+    wx(c, arm64.stp_pre_x(29, 30, 31, -16));
+    kaku handle = 0;
+    aida (handle < 3) {
+        wx_li(c, 0, 4294967286 - handle); wx_call(c, patches, "GetStdHandle");
+        wx_data(c, patches, base, 10, 0); wx(c, arm64.str_x(0, 10, handle * 8));
+        handle = handle + 1;
+    }
+    wx_li(c, 0, 65001); wx_call(c, patches, "SetConsoleOutputCP");
+    wx_li(c, 0, 65001); wx_call(c, patches, "SetConsoleCP");
+    wx(c, arm64.ldp_post_x(29, 30, 31, 16)); wx(c, arm64.ret());
+}
+
+// PE entry point: the loader calls it with no arguments. Slice 2 still provides argc = 1, argv = {"mio.exe"} and an empty
+// environment, after initialising the adapter, then continues at the first lowered word (label windows_main).
 koukai waza emit_windows_start(c: arm64.Assembler) -> unit {
     wx_label(c, "windows_start");
     wx(c, arm64.sub_imm_x(31, 31, 48, iie));
+    wx_bl(c, "windows_init");
     wx(c, arm64.adr(3, 32));
     wx(c, arm64.str_x(3, 31, 0)); wx(c, arm64.str_x(31, 31, 8)); wx(c, arm64.str_x(31, 31, 16));
     wx_li(c, 0, 1); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx(c, arm64.add_imm_x(2, 31, 16, iie));

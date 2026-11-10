@@ -2409,7 +2409,10 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_fatal_cleanup");}
     emit(code, arm64.movz_x(0, 5, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
     moshi (abi == 1) { emit_linux_abi_runtime(code); }
-    moshi (abi == 2) { emit_windows_abi_runtime(code, patches); emit_windows_start(code); }
+    kaku adapter_base = file.global_count;
+    moshi (testing) { adapter_base = adapter_base + 1; }
+    moshi (os_state >= 0) { adapter_base = adapter_base + 3; }
+    moshi (abi == 2) { emit_windows_abi_runtime(code, patches, adapter_base); emit_windows_init(code, patches, adapter_base); emit_windows_start(code); }
 
     kaku function_reachable = types.reachable_functions(file);
     kaku id = 0;
@@ -2455,6 +2458,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     kaku data_words = file.global_count;
     moshi (testing) { data_words = data_words + 1; }
     moshi (os_state >= 0) { data_words = data_words + 3; }
+    moshi (abi == 2) { data_words = data_words + windows_adapter_words(); }
     moshi(attached){kaku error=emit_attached_root_runtime(code,patches,data_words,queue_slots);moshi(error!=""){kaesu failed(LowerError.EncodeFailure());}}
     kaku pi = 0;
     aida (pi < len(patches)) {
