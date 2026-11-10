@@ -18,6 +18,7 @@ EVIDENCE_TAG = 'v2.1.0-evidence.1'
 LOG_DIR = seed_identity(NATIVE_V21).log_dir
 ARCHIVE = f'{LOG_DIR}.tar.gz'
 MAX_ARCHIVE_SIZE = 1024 * 1024
+MAX_LOG_ARCHIVE_SIZE = 16 * 1024 * 1024
 RELEASE_PURL = f'pkg:github/{REPOSITORY}@{EVIDENCE_TAG}'
 PAX_KEYS = {b'LIBARCHIVE.xattr.com.apple.provenance', b'SCHILY.xattr.com.apple.provenance'}
 
@@ -26,7 +27,7 @@ def github(*args):
     try:
         return subprocess.check_output(['gh', *args], text=True)
     except (OSError, subprocess.CalledProcessError) as error:
-        raise ValueError(f'could not verify or retrieve supplemental evidence for {EVIDENCE_TAG}') from error
+        raise ValueError('could not verify or retrieve supplemental evidence') from error
 
 
 def download_archive(directory, source):
@@ -93,16 +94,16 @@ def check_pax(name, data, member_name):
         raise ValueError('empty supplemental archive PAX header')
 
 
-def read_logs(archive, hashes):
+def read_logs(archive, hashes, limit=MAX_ARCHIVE_SIZE):
     # Read the gzip trailer and bound expansion before interpreting tar headers.
     try:
         with gzip.open(archive, 'rb') as stream:
-            data = stream.read(MAX_ARCHIVE_SIZE + 1)
+            data = stream.read(limit + 1)
     except (OSError, EOFError, zlib.error) as error:
         raise ValueError('malformed supplemental gzip archive') from error
     block = tarfile.BLOCKSIZE
     zero_block = bytes(block)
-    if len(data) > MAX_ARCHIVE_SIZE or len(data) % block:
+    if len(data) > limit or len(data) % block:
         raise ValueError('invalid supplemental tar archive size')
 
     logs = {}
@@ -143,25 +144,77 @@ def read_logs(archive, hashes):
     return logs
 
 
+def download_release_logs(directory, tag, archive):
+    """Download the stable Release's log archive and bind it to its asset metadata."""
+    release = json.loads(github('api', '--hostname', 'github.com', f'repos/{REPOSITORY}/releases/tags/{tag}'))
+    if (release.get('tag_name') != tag or release.get('immutable') is not True
+            or release.get('draft') is not False or release.get('prerelease') is not False
+            or not release.get('published_at') or type(release.get('id')) is not int):
+        raise ValueError('expected the published immutable stable release')
+    assets = release.get('assets')
+    if not isinstance(assets, list) or not all(isinstance(asset, dict) for asset in assets):
+        raise ValueError('invalid stable release asset list')
+    url = f'https://github.com/{REPOSITORY}/releases/download/{tag}/{archive}'
+    matches = [asset for asset in assets if asset.get('name') == archive]
+    if len(matches) != 1:
+        raise ValueError('expected exactly one supplemental log archive asset')
+    asset = matches[0]
+    size = asset.get('size')
+    if (asset.get('state') != 'uploaded' or asset.get('browser_download_url') != url
+            or type(size) is not int or not 0 < size <= MAX_LOG_ARCHIVE_SIZE
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(asset.get('digest')))):
+        raise ValueError('invalid supplemental log archive asset metadata')
+
+    repo = f'github.com/{REPOSITORY}'
+    github('release', 'download', tag, '--repo', repo, '--pattern', archive, '--dir', str(directory))
+    path = directory / archive
+    if path.stat().st_size != size:
+        raise ValueError('supplemental log archive size mismatch')
+    sha = digest(path)
+    if asset.get('digest') != 'sha256:' + sha:
+        raise ValueError('supplemental log archive digest mismatch')
+    return path
+
+
 def restore_logs(assets, tag, source):
-    if tag != STABLE_TAG:
+    if tag == STABLE_TAG:
+        destination = assets / LOG_DIR
+        if destination.is_symlink():
+            raise ValueError('supplemental log destination is a symlink')
+        if destination.is_dir():
+            # The caller still authenticates every log. Never repair or replace an
+            # existing directory, including one that is incomplete or modified.
+            return
+        evidence, kind = authenticate_report(assets, tag, source)
+        if kind != NATIVE_V21:
+            raise ValueError('supplemental logs require the original native-v21 release evidence')
+        hashes = {f'{LOG_DIR}/{name}': evidence['files'][f'{LOG_DIR}/{name}'] for name in SEED_LOGS}
+        with tempfile.TemporaryDirectory(dir=assets) as temp:
+            directory = Path(temp)
+            logs = read_logs(download_archive(directory, source), hashes)
+            staged = directory / LOG_DIR
+            staged.mkdir()
+            for name in SEED_LOGS:
+                (staged / name).write_bytes(logs[f'{LOG_DIR}/{name}'])
+            staged.rename(destination)
         return
-    destination = assets / LOG_DIR
+
+    # v2.1.1 and later publish the original logs as a normal Release asset. The
+    # signed inventory is authenticated before the archive is even downloaded.
+    evidence, kind = authenticate_report(assets, tag, source)
+    identity = seed_identity(kind)
+    destination = assets / identity.log_dir
     if destination.is_symlink():
         raise ValueError('supplemental log destination is a symlink')
     if destination.is_dir():
-        # The caller still authenticates every log. Never repair or replace an
-        # existing directory, including one that is incomplete or modified.
         return
-    evidence, kind = authenticate_report(assets, tag, source)
-    if kind != NATIVE_V21:
-        raise ValueError('supplemental logs require the original native-v21 release evidence')
-    hashes = {f'{LOG_DIR}/{name}': evidence['files'][f'{LOG_DIR}/{name}'] for name in SEED_LOGS}
+    hashes = {f'{identity.log_dir}/{name}': evidence['files'][f'{identity.log_dir}/{name}'] for name in SEED_LOGS}
+    archive = f'{identity.log_dir}.tar.gz'
     with tempfile.TemporaryDirectory(dir=assets) as temp:
         directory = Path(temp)
-        logs = read_logs(download_archive(directory, source), hashes)
-        staged = directory / LOG_DIR
+        logs = read_logs(download_release_logs(directory, tag, archive), hashes, MAX_LOG_ARCHIVE_SIZE)
+        staged = directory / identity.log_dir
         staged.mkdir()
         for name in SEED_LOGS:
-            (staged / name).write_bytes(logs[f'{LOG_DIR}/{name}'])
+            (staged / name).write_bytes(logs[f'{identity.log_dir}/{name}'])
         staged.rename(destination)
