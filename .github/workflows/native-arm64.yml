@@ -1,4 +1,4 @@
-name: Native / linux-arm64 groundwork
+name: Native / linux-arm64
 # Native execution evidence for the Linux AArch64 backend while it is being built (v2.2.0 platform expansion).
 # linux-arm64 is NOT a supported compiler target yet (`mio build --target linux-arm64` is rejected with E_TARGET).
 # This job only proves what exists: the pure-Mio AArch64 encoder + ELF writer emit an image that the ARM64 kernel
@@ -8,16 +8,11 @@ on:
   workflow_dispatch:
   pull_request:
     branches: ['Mio-[0-9]*']
-    paths:
-      - 'bunko/kiso/aot/elf/**'
-      - 'bunko/kiso/aot/arm64/**'
-      - 'bunko/kiso/aot/linuxarm64/**'
-      - '.github/workflows/native-arm64.yml'
 permissions:
   contents: read
 jobs:
   linux-arm64:
-    name: Native / linux-arm64 groundwork
+    name: Native / linux-arm64
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -54,5 +49,48 @@ jobs:
           path: |
             build/linuxarm64-report.txt
             build/linuxarm64/linuxarm64-hello.bin
+          if-no-files-found: warn
+          retention-days: 7
+  chain:
+    name: Native / linux-arm64 chain
+    # The go-hosted Stage A (Go reference VM runs the pure-Mio AArch64 lowering) builds compiler-A for linux-arm64;
+    # every later stage and every test runs as a native AArch64 image on this runner (scripts/ci/native_platforms.py).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
+        run: go build -o build/native/refvm ./tests/windows-amd64/refvm
+      - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
+        run: python scripts/ci/native_platforms.py linux-arm64 --refvm build/native/refvm --output build/native/linux-arm64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-report-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/linux-arm64/report.json
+            build/native/linux-arm64/logs/
+            build/native/linux-arm64/runtime-abi/results.json
+            build/native/linux-arm64/runtime-abi/*.std*
+            build/native/linux-arm64/native-differential/results.json
+            build/native/linux-arm64/native-differential/*.std*
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-compilers-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/linux-arm64/work/compiler-*
+            build/native/linux-arm64/work/mio-*
           if-no-files-found: warn
           retention-days: 7

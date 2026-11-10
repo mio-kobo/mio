@@ -1,5 +1,6 @@
 yobu "kiso/aot/arm64";
 yobu "kiso/aot/elf";
+yobu "kiso/aot/macho";
 yobu "kiso/array";
 yobu "kiso/string";
 
@@ -47,4 +48,72 @@ koukai waza hello_image(message: string, status: int64) -> elf.ImageResult {
     kaku program = hello_program(message, status);
     moshi (program.error != "") { kaesu elf.ImageResult { bytes: [], error: program.error }; }
     kaesu elf.executable_aarch64(elf.ImageSpec { code: program.code, entry_offset: 0, bss_size: 0 });
+}
+
+// ---- Image for lowered Mochi programs (kiso/aot/lower, compile_linux_arm64)
+//
+// The lowered words use the Darwin entry convention main(argc, argv, envp) in x0-x2 and address constants and globals
+// through ADRP/ADD patches. This container lays the image out as: [words][pad to 8][constants][pad to 4][_start], and
+// reserves globals*8 bytes in the zero-filled data segment (elf.data_base). `_start` converts the Linux initial stack
+// (argc, argv[], NULL, envp[]) into x0-x2 and branches to word 0. Addresses are absolute, so ADRP page deltas are
+// computed from the real code and data addresses.
+teisu maximum_globals = 10244;
+teisu maximum_image_size = 67108864;
+
+waza align(value: int64, boundary: int64) -> int64 {
+    kaku remainder = value - (value / boundary) * boundary;
+    moshi (remainder == 0) { kaesu value; }
+    kaesu value + boundary - remainder;
+}
+
+waza image_failed(message: string) -> elf.ImageResult { kaesu elf.ImageResult { bytes: [], error: message }; }
+
+koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult {
+    moshi (len(spec.words) == 0) { kaesu image_failed("EMPTY_TEXT"); }
+    moshi (spec.globals < 0 || spec.globals > maximum_globals) { kaesu image_failed("TOO_MANY_GLOBALS"); }
+    moshi (len(spec.words) > maximum_image_size / 4 || len(spec.constants) > maximum_image_size) { kaesu image_failed("IMAGE_TOO_LARGE"); }
+    kaku code_base = elf.image_base + elf.code_offset;
+    kaku const_offset = align(len(spec.words) * 4, 8);
+    kaku words = array.clone(spec.words);
+    kaku index = 0;
+    aida (index < len(spec.patches)) {
+        kaku patch = spec.patches[index];
+        moshi (patch.at_word < 0 || patch.at_word >= len(words) || patch.target_offset < 0 || patch.target.kind < 0 || patch.target.kind > 2) { kaesu image_failed("INVALID_PATCH"); }
+        kaku target = code_base + patch.target_offset;
+        moshi (patch.target.kind == 0 && patch.target_offset >= len(spec.words) * 4) { kaesu image_failed("INVALID_PATCH"); }
+        moshi (patch.target.kind == 1) {
+            moshi (patch.target_offset >= len(spec.constants)) { kaesu image_failed("INVALID_PATCH"); }
+            target = code_base + const_offset + patch.target_offset;
+        }
+        moshi (patch.target.kind == 2) {
+            moshi (patch.target_offset >= spec.globals * 8) { kaesu image_failed("INVALID_PATCH"); }
+            target = elf.data_base + patch.target_offset;
+        }
+        kaku encoded = arm64.adrp_offset(patch.register, code_base + patch.at_word * 4, target);
+        moshi (encoded.error != mu) { kaesu image_failed("ENCODE"); }
+        words[patch.at_word] = encoded.word;
+        moshi (patch.add_at_word >= 0) {
+            moshi (patch.add_at_word >= len(words) || patch.add_at_word == patch.at_word) { kaesu image_failed("INVALID_PATCH"); }
+            kaku addition = arm64.add_imm_x(patch.register, patch.register, target - (target / 4096) * 4096, iie);
+            moshi (addition.error != mu) { kaesu image_failed("ENCODE"); }
+            words[patch.add_at_word] = addition.word;
+        }
+        index = index + 1;
+    }
+    kaku code: []uint8 = array.with_capacity[uint8](len(spec.words) * 4 + len(spec.constants) + 64);
+    index = 0;
+    aida (index < len(words)) { push_word(code, words[index]); index = index + 1; }
+    aida (len(code) < const_offset) { array.push(code, uint8(0)); }
+    array.append_all(code, spec.constants);
+    aida (len(code) - (len(code) / 4) * 4 != 0) { array.push(code, uint8(0)); }
+    kaku start = len(code);
+    // _start: x0 = argc, x1 = &argv[0], x2 = &envp[0] = argv + 8 * (argc + 1); then branch to word 0.
+    kaku sequence = [arm64.ldr_x(0, 31, 0), arm64.add_imm_x(1, 31, 8, iie), arm64.add_imm_x(3, 0, 1, iie), arm64.lsl_x(3, 3, 3),
+        arm64.add_x(2, 1, 3), arm64.b(-(start / 4) - 5)];
+    index = 0;
+    aida (index < len(sequence)) {
+        moshi (sequence[index].error != mu) { kaesu image_failed("ENCODE"); }
+        push_word(code, sequence[index].word); index = index + 1;
+    }
+    kaesu elf.executable_aarch64(elf.ImageSpec { code: code, entry_offset: start, bss_size: spec.globals * 8 });
 }

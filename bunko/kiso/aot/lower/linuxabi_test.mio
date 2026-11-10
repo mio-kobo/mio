@@ -1,0 +1,39 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/testing";
+
+waza label_word(labels: []arm64.Label, name: string) -> int64 {
+    kaku at = 0;
+    aida (at < len(labels)) { moshi (labels[at].name == name) { kaesu labels[at].word; } at = at + 1; }
+    kaesu -1;
+}
+waza count_word(words: []uint32, value: uint32) -> int64 {
+    kaku at = 0; kaku count = 0;
+    aida (at < len(words)) { moshi (words[at] == value) { count = count + 1; } at = at + 1; }
+    kaesu count;
+}
+
+waza test_linux_target_routes_every_darwin_syscall_through_the_adapter() -> unit {
+    kaku dar = compile(empty_v14([]));
+    kaku lin = compile_linux_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(dar.error == mu && lin.error == mu, "both targets lower");
+    testing.expect(count_word(dar.words, uint32(3556773889)) > 0, "Darwin keeps SVC #128");
+    testing.expect(count_word(lin.words, uint32(3556773889)) == 0, "no Darwin SVC #128 survives in a Linux image");
+    testing.expect(label_word(dar.labels, "linux_syscall") < 0 && label_word(dar.labels, "linux_abi") < 0, "the Darwin image has no adapter");
+    kaku shim = label_word(lin.labels, "linux_syscall");
+    testing.expect(shim >= 0 && label_word(lin.labels, "linux_abi") >= 0, "the Linux image defines linux_abi and linux_syscall");
+    testing.expect(lin.words[shim] == arm64.sub_imm_x(31, 31, 288, iie).word, "the adapter allocates its 288-byte frame first");
+    testing.expect(lin.words[shim] == uint32(3506438144 + 288 * 1024 + 31 * 32 + 31), "sub sp, sp, #288 encoding");
+}
+
+// The adapter must preserve every register except x0, x1, x16 and the flags: it saves x2-x15, x17, x30.
+waza test_linux_adapter_saves_and_restores_the_callee_state() -> unit {
+    kaku lin = compile_linux_arm64(empty_v14([]), 1073741824, iie);
+    kaku shim = label_word(lin.labels, "linux_syscall");
+    testing.expect(lin.words[shim + 1] == arm64.stp_x(2, 3, 31, 0).word && lin.words[shim + 8] == arm64.stp_x(17, 30, 31, 112).word, "x2-x15, x17 and x30 are saved");
+    testing.expect(label_word(lin.labels, "lx_return") > shim && label_word(lin.labels, "lx_norm") > shim, "common completion paths exist");
+    testing.expect(lin.words[label_word(lin.labels, "lx_norm")] == arm64.cmn_imm_x(0, 4095, iie).word, "errors are recognised by CMN x0, #4095 (the Linux -4095..-1 range)");
+}
+
+waza test_linux_target_rejects_bad_capacity_like_darwin() -> unit {
+    testing.expect(compile_linux_arm64(empty_v14([]), 63, iie).error != mu, "capacity below the minimum fails closed");
+}

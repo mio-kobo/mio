@@ -1,6 +1,9 @@
 yobu "selfhost/frontend";
 yobu "kiso/encoding/mochi";
 yobu "kiso/aot/lowerlinux";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/linuxarm64";
+yobu "kiso/aot/macho";
 yobu "kiso/runtime/abi";
 yobu "kiso/convert";
 yobu "kiso/string";
@@ -72,9 +75,25 @@ koukai waza link_test_packet(data: []uint8) -> LinkedTest {
 
 // The host decides which native format a test image must have: /proc exists on Linux and not on macOS; Windows is
 // recognised by its system directory (SystemRoot), which neither Unix host has.
+waza contains_text(data: []uint8, needle: string) -> bool {
+    kaku wanted = string.to_bytes(needle); kaku at = 0;
+    aida (at + len(wanted) <= len(data)) {
+        kaku i = 0;
+        aida (i < len(wanted) && data[at + i] == wanted[i]) { i = i + 1; }
+        moshi (i == len(wanted)) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
 koukai waza host_target() -> string {
     kaku probe = fs.stat("/proc/self");
-    moshi (probe.error == mu && probe.is_dir) { kaesu "linux-amd64"; }
+    moshi (probe.error == mu && probe.is_dir) {
+        // Linux: the CPU architecture decides the image format ("CPU architecture" appears in /proc/cpuinfo on AArch64 only).
+        kaku cpu = fs.read_all("/proc/cpuinfo");
+        moshi (cpu.error == mu) { moshi (contains_text(cpu.data, "CPU architecture")) { kaesu "linux-arm64"; } }
+        kaesu "linux-amd64";
+    }
     kaku system = os.environment("SystemRoot");
     moshi (system != mu) { moshi (system != "" && fs.is_dir(system)) { kaesu "windows-amd64"; } }
     kaesu "darwin-arm64";
@@ -97,6 +116,40 @@ koukai waza temporary_root() -> string {
 koukai waza build_host_test(data: []uint8) -> NativeBuildResult {
     kaku host = host_target();
     moshi (host == "linux-amd64") { kaesu build_linux_test(data); }
+    moshi (host == "linux-arm64") { kaesu build_linux_arm64_test(data); }
     moshi (host == "windows-amd64") { kaesu build_windows_test(data); }
     kaesu build_signed_test(data);
+}
+
+// ---- Linux AArch64: the Darwin/AArch64 lowering with the Linux system-call adapter, packaged as a static ELF64.
+koukai waza build_linux_arm64_source(root: string, entry: string, bunko_root: string, gc_stress: bool) -> NativeBuildResult {
+    kaku compiled = frontend.compile_source(root, entry, bunko_root);
+    moshi (compiled.error != "") { kaesu NativeBuildResult { bytes: [], error: compiled.error }; }
+    kaesu build_linux_arm64_mochi(compiled.bytes, gc_stress);
+}
+
+koukai waza build_linux_arm64_mochi(data: []uint8, gc_stress: bool) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
+    kaesu build_linux_arm64_file(file, gc_stress);
+}
+
+waza build_linux_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
+    kaku lowered = lower.compile_linux_arm64(file, 1073741824, gc_stress);
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
+        kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
+    }
+    kaku image = linuxarm64.image(macho.ImageSpec { words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches });
+    moshi (image.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_ELF ", image.error) }; }
+    kaesu NativeBuildResult { bytes: image.bytes, error: "" };
+}
+
+koukai waza build_linux_arm64_test(data: []uint8) -> NativeBuildResult {
+    kaku linked = link_test_packet(data);
+    moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
+    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaesu build_linux_arm64_file(file, iie);
 }
