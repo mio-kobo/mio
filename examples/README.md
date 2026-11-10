@@ -30,6 +30,7 @@ Full distributions include Bunko. A Core distribution can run the examples marke
 | [structs_and_enums.mio](structs_and_enums.mio) | `kata`, `sentaku`, `awase` | Core |
 | [generics.mio](generics.mio) | Generic functions and types | Core |
 | [closures.mio](closures.mio) | Captures and function values | Core |
+| [ownership_transfer.mio](ownership_transfer.mio) | `yuzuru` explicit ownership transfer | Core |
 | [maps.mio](maps.mio) | Maps and optional lookups | Core |
 | [arrays.mio](arrays.mio) | Dynamic arrays and copying | Full (`kiso/array`) |
 | [math.mio](math.mio) | Math and numeric conversion | Full (`kiso/math`, `kiso/convert`) |

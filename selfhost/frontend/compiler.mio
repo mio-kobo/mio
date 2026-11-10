@@ -327,6 +327,8 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
                         moshi (len(node.children) > 0) { span = files[problem.node.file_id].ast.nodes[node.children[0]].span; }
                     }
                     kaku detail = string.concat(problem.detail, string.concat("\nexpected/actual: ", string.concat(typecheck.type_name(checked, problem.expected), string.concat(" / ", typecheck.type_name(checked, problem.actual)))));
+                    // Ownership diagnostics carry no types: print only the explanation.
+                    moshi (typecheck.type_error_kind_code(problem.kind) == 14) { detail = problem.detail; }
                     array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: files[problem.node.file_id].path, span: span, detail: detail }); ei = ei + 1;
                 }
                 array.push(state.paths, package_path); array.push(state.resolved, resolved); array.push(state.checked, checked);

@@ -46,7 +46,7 @@ var tokenCodes = map[token.Type]int{
 	token.Return: 35, token.True: 36, token.False: 37, token.Nil: 38, token.While: 39,
 	token.Break: 40, token.Continue: 41, token.Struct: 42, token.Enum: 43,
 	token.Match: 44, token.Case: 45, token.Import: 46, token.Export: 47,
-	token.Const: 48, token.Colon: 49, token.Arrow: 50,
+	token.Const: 48, token.Colon: 49, token.Arrow: 50, token.Yuzuru: 51,
 }
 
 var errorCodes = map[lexer.ErrorKind]int{
@@ -65,7 +65,7 @@ func repositoryRoot(t testing.TB) string {
 }
 
 func referenceResult(source []byte) wireResult {
-	checked, err := lexer.NewChecked(string(source), token.V05)
+	checked, err := lexer.NewChecked(string(source), token.CurrentVersion)
 	if err != nil {
 		lexical := err.(*lexer.LexicalError)
 		return wireResult{tokens: []wireToken{}, errors: []wireError{{kind: errorCodes[lexical.Kind], position: lexical.Position}}}
@@ -262,7 +262,8 @@ func compareCorpus(t *testing.T, corpus [][]byte) (int, int) {
 func TestMioLexerDifferentialCorpus(t *testing.T) {
 	corpus := [][]byte{
 		{}, []byte(" \t\r\n"),
-		[]byte("kaku waza moshi sore kaesu hai iie mu aida nukeru tsuzuku kata sentaku awase baai yobu koukai teisu"),
+		[]byte("kaku waza moshi sore kaesu hai iie mu aida nukeru tsuzuku kata sentaku awase baai yobu koukai teisu yuzuru"),
+		[]byte("yuzuru yuzurux xyuzuru Yuzuru yuzuru_ _yuzuru yuzuru1"),
 		[]byte("+-*/ = == ! != ? < <= > >= && || & | , ; : . -> () {} []"),
 		[]byte("0 1 42 3.14 1e3 2.5e-4 01 1. 1e 1e+ 1.2.3 12abc"),
 		[]byte("\"ASCII\" \"中文 日本語 🍡\" \"a\\n\\r\\t\\\"\\\\b\" \"bad\\q\""),
@@ -418,7 +419,7 @@ func benchmarkGoLexer(b *testing.B, size int) {
 	b.ResetTimer()
 	b.ReportMetric(float64(tokens), "tokens/op")
 	for iteration := 0; iteration < b.N; iteration++ {
-		current, err := lexer.NewChecked(string(source), token.V05)
+		current, err := lexer.NewChecked(string(source), token.CurrentVersion)
 		if err != nil {
 			b.Fatal(err)
 		}

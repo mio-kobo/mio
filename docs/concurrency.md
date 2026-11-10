@@ -327,7 +327,40 @@ RA-2 is **additive to RA-1** and is gated per target by `target.TargetInfo`:
   reported with measured numbers; the transfer is called "zero-copy" only if the measured cost is independent of payload
   size apart from the isolation analysis.
 
-## 8. PR plan
+## 8. Implementation status of the D-1/D-3 slice
+
+Implemented (Go reference and self-hosted compiler, so every native target gets it): `yuzuru` is a fully reserved keyword
+(language version V06, `token.CurrentVersion`; V05 sources still lex it as an identifier); `yuzuru name` is a prefix expression
+whose operand is exactly one variable name (parse error E0103 otherwise); the checker reports **E0701** invalid operand
+(parameter, function, constant, closure-captured variable, top-level variable that any function references, variable not
+declared in the transferring function), **E0702** use after transfer (flow sensitive: branches, loops, the next iteration),
+**E0703** double transfer, **E0704** use of a variable that still aliases the transferred graph. Aliasing is the coarse,
+sound-by-over-approximation grouping described in `internal/typecheck/ownership.go`. At run time `yuzuru x` is a plain read
+of `x`: it never copies, so identity, sharing and cycles are untouched. Programs without `yuzuru` are not analysed at all.
+
+Not implemented yet: the points-to/effect-summary engine (PR-2; today's grouping rejects more than necessary), element and
+field operands, parameter transfer, any runtime/threads/channels, and every target's concurrency capability (all flags unchanged).
+
+Further decisions that surfaced and need the owner (the current behaviour is the conservative choice and can only be relaxed
+later, never the reverse):
+
+* **Parameters.** `yuzuru p` on a parameter is rejected, because the caller still holds the argument. Allowing it needs either
+  the callee's effect summary to move the caller's variable at `f(a)` (an implicit move, forbidden by D-1) or a call-site
+  `f(yuzuru a)` contract; both need your call.
+* **Top-level variables.** Transferable only while no function body mentions them (script-style code); a mention anywhere in a
+  function makes the variable "global" and untransferable.
+* **Failure of a fallible send.** Recommendation unchanged (D-4): the rejected graph comes back inside the error value, so the
+  moved variable is dead on both paths. This must be confirmed when the `kiso/thread` API is specified.
+* **Closures.** A variable captured by any closure, before or after, cannot be transferred.
+
+## 9. Editor and ecosystem changes required outside this repository
+
+Tree-sitter (`tools/tree-sitter-mio`) is updated here. Still needed elsewhere (not edited from this tree):
+* `mio-vscode`: add `yuzuru` to the TextMate keyword scopes (operator keyword) and to completion snippets.
+* `mio-jetbrains`: add `yuzuru` to the lexer keyword set, the highlighter and completion.
+* any other grammar consumer that vendors the keyword list (language version V06).
+
+## 10. PR plan
 
 1. **PR-0 (this document)**: audit + specification, no behaviour change.
 2. **PR-1**: language version table + `yuzuru` token/parse/AST (Go and self-hosted), unresolved-grammar choice behind
