@@ -188,6 +188,7 @@ type ServerCapabilities struct {
 	DefinitionProvider      bool                    `json:"definitionProvider,omitempty"`
 	ReferencesProvider      bool                    `json:"referencesProvider,omitempty"`
 	WorkspaceSymbolProvider bool                    `json:"workspaceSymbolProvider,omitempty"`
+	RenameProvider          *RenameOptions          `json:"renameProvider,omitempty"`
 	DocumentSymbolProvider  bool                    `json:"documentSymbolProvider,omitempty"`
 	CompletionProvider      *CompletionOptions      `json:"completionProvider,omitempty"`
 	SignatureHelpProvider   *SignatureHelpOptions   `json:"signatureHelpProvider,omitempty"`
