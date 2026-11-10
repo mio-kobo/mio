@@ -153,3 +153,32 @@ func TestSelectLanguageEnvironmentOrder(t *testing.T) {
 		t.Fatalf("default = %q", got)
 	}
 }
+
+func TestSelectUsesLanguagePreferenceList(t *testing.T) {
+	environment := map[string]string{"LANGUAGE": "xx:ja_JP", "LC_ALL": "de_DE.UTF-8"}
+	getenv := func(name string) string { return environment[name] }
+	if got := Select("", getenv); got != "ja-JP" {
+		t.Fatalf("LANGUAGE list = %q, want ja-JP", got)
+	}
+	environment["LANGUAGE"] = "xx:en_GB"
+	if got := Select("", getenv); got != "en-GB" {
+		t.Fatalf("LANGUAGE list = %q, want en-GB", got)
+	}
+	environment["LANGUAGE"] = "xx:yy"
+	if got := Select("", getenv); got != "de-DE" {
+		t.Fatalf("unsupported LANGUAGE list should fall through to LC_ALL, got %q", got)
+	}
+	environment["LANGUAGE"] = "en_US:fr_FR"
+	if got := Select("", getenv); got != "en-US" {
+		t.Fatalf("LANGUAGE list = %q, want en-US", got)
+	}
+	environment["LANGUAGE"] = "fr_CA"
+	if got := Select("", getenv); got != "fr-FR" {
+		t.Fatalf("LANGUAGE list = %q, want fr-FR", got)
+	}
+	delete(environment, "LC_ALL")
+	environment["LANGUAGE"] = "xx"
+	if got := Select("", getenv); got != "en-US" {
+		t.Fatalf("unsupported list default = %q", got)
+	}
+}

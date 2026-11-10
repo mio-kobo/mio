@@ -114,7 +114,12 @@ func Select(explicit string, getenv func(string) string) Language {
 		return resolve(configured)
 	}
 	if configured := getenv("LANGUAGE"); configured != "" {
-		return resolve(beforeColon(configured))
+		for _, candidate := range strings.Split(configured, ":") {
+			candidate = strings.TrimSpace(candidate)
+			if usableLocale(candidate) {
+				return resolve(candidate)
+			}
+		}
 	}
 	for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if locale := getenv(name); locale != "" {
@@ -254,6 +259,17 @@ func scriptPrefix(tag string) string {
 		return ""
 	}
 	return parts[0] + "-" + parts[1]
+}
+
+func usableLocale(value string) bool {
+	if value == "" {
+		return false
+	}
+	if resolve(value) != defaultLanguage {
+		return true
+	}
+	tag := normalizeTag(value)
+	return tag != "" && firstSubtag(tag) == "en"
 }
 
 func beforeColon(value string) string {

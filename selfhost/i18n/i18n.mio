@@ -92,10 +92,35 @@ waza script_prefix(tag: string) -> string {
     moshi (!(len(bytes) == 4 && segment_alpha(bytes, len(bytes)))) { kaesu ""; }
     kaesu string.concat(first_subtag(tag), string.concat("-", segment_string(bytes)));
 }
-waza before_colon(value: string) -> string {
-    kaku data = string.to_bytes(value); kaku bytes: []uint8 = []; kaku at = 0;
-    aida (at < len(data) && data[at] != uint8(58)) { array.push(bytes, data[at]); at = at + 1; }
+waza segment_range(data: []uint8, first: int64, end: int64) -> string {
+    kaku bytes: []uint8 = []; kaku at = first;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
     kaesu segment_string(bytes);
+}
+
+// A locale is usable when resolve() finds a real catalog (or an English
+// variant that legitimately resolves to en-US).
+koukai waza usable_locale(value: string) -> bool {
+    kaku resolved = resolve(value);
+    moshi (resolved != "en-US") { kaesu hai; }
+    kaku tag = normalize(value);
+    kaesu tag != "" && first_subtag(tag) == "en";
+}
+
+// LANGUAGE is a colon-separated preference list. Skip unknown candidates and
+// return the first supported one; an unsupported list falls through to LC_ALL.
+koukai waza language_from_list(value: string) -> string {
+    kaku data = string.to_bytes(value); kaku start = 0; kaku at = 0;
+    aida (at <= len(data)) {
+        kaku byte = uint8(58); moshi (at < len(data)) { byte = data[at]; }
+        moshi (byte == uint8(58)) {
+            kaku candidate = string.trim_space(segment_range(data, start, at));
+            moshi (candidate != "" && usable_locale(candidate)) { kaesu candidate; }
+            start = at + 1;
+        }
+        at = at + 1;
+    }
+    kaesu "";
 }
 
 // Exact match, region alias, script default, legacy alias, then language
@@ -117,7 +142,8 @@ koukai waza resolve(value: string) -> string {
 }
 
 waza environment_locale() -> string {
-    kaku language = os.getenv("LANGUAGE"); moshi (language != "") { kaesu before_colon(language); }
+    kaku language = os.getenv("LANGUAGE");
+    moshi (language != "") { kaku selected = language_from_list(language); moshi (selected != "") { kaesu selected; } }
     kaku names: []string = ["LC_ALL", "LC_MESSAGES", "LANG"]; kaku at = 0;
     aida (at < len(names)) {
         kaku value = os.getenv(names[at]); moshi (value != "") { kaesu value; }

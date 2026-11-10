@@ -61,3 +61,13 @@ waza test_explicit_language_select() -> unit {
     testing.expect(select("pt_br") == "pt-BR", "explicit POSIX value");
     testing.expect(select("unknown") == "en-US", "invalid explicit value is safe");
 }
+
+waza test_language_preference_list() -> unit {
+    testing.expect(language_from_list("xx:ja_JP") == "ja_JP", "skip unsupported first candidate");
+    testing.expect(language_from_list("xx:en_GB") == "en_GB", "supported later candidate");
+    testing.expect(language_from_list("xx:yy") == "", "unsupported list falls through");
+    testing.expect(language_from_list("en_US:fr_FR") == "en_US", "en-US is a valid first candidate");
+    testing.expect(language_from_list(" fr_CA : de_DE ") == "fr_CA", "whitespace and region fallback");
+    testing.expect(language_from_list("") == "", "empty list");
+    testing.expect(usable_locale("fr-CA") && usable_locale("en-AU") && !usable_locale("xx"), "usable locale definition");
+}
