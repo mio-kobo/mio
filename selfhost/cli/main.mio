@@ -98,8 +98,14 @@ waza slice_array(values: []string, first: int64, end: int64) -> []string {
 }
 
 waza write_help(text: string) -> unit {
-    kaku written = fs.write_all("/dev/stdout", string.to_bytes(text));
-    moshi (written.error != mu) { fail("E_IO cannot write help", 1); }
+    // chant() writes to the already-open stdout descriptor. Reopening
+    // /dev/stdout is neither portable to all native runtimes nor needed.
+    kaku data = string.to_bytes(text); kaku end = len(data);
+    moshi (end > 0 && data[end - 1] == uint8(10)) { end = end - 1; }
+    kaku bytes: []uint8 = []; kaku at = 0;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { fail("E_IO cannot write help", 1); kaesu; }
+    chant(value);
 }
 waza show_help(language: string, name: string) -> unit {
     moshi (name == "") { write_help(usage.global(language, version_name(), cli_theme)); kaesu; }
