@@ -73,6 +73,7 @@ def install(assets, stable_packages=None):
         server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(assets)))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         installed = {}
+        roots = {}
         with tempfile.TemporaryDirectory(prefix='Mio choco projects ') as temp:
             project = Path(temp) / 'keep.mio'
             project.write_text('chant("keep");')
@@ -83,6 +84,7 @@ def install(assets, stable_packages=None):
                         raise RuntimeError('refusing to replace existing package/shim: ' + name)
                     archive, = assets.glob(f'mio-*-windows-amd64-{flavor}.zip')
                     root = extract(archive, Path(temp) / flavor)
+                    roots[flavor] = root
                     record = dict(url=f'http://127.0.0.1:{server.server_port}/{archive.name}', root=root.name, sha=digest(archive))
                     result['archives'][archive.name] = record['sha']
                     payload = choco / 'lib' / name / 'tools/payload'
@@ -139,12 +141,20 @@ def install(assets, stable_packages=None):
                     with offline():
                         smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=(ignore,))
                     passed(flavor + ' repeated and forced install')
-                assert digest(installed['core'][0] / 'bin/mio-core.exe') == digest(installed['full'][0] / 'bin/mio.exe')
+                core_bytes = digest(installed['core'][0] / 'bin/mio-core.exe')
+                full_bytes = digest(installed['full'][0] / 'bin/mio.exe')
+                assert core_bytes == digest(roots['core'] / 'bin/mio.exe')
+                assert full_bytes == digest(roots['full'] / 'bin/mio.exe')
+                # v2.1.2 ships distinct Core/Full compilers with embedded Bunko;
+                # legacy candidates share one compiler with an external Bunko tree.
+                embedded = json.loads((roots['full'] / 'provenance.json').read_text())['embedded_bunko']
+                assert (core_bytes != full_bytes) == embedded
                 with offline():
                     for flavor, (payload, shim) in installed.items():
                         ignore = 'bin/' + ('mio-core' if flavor == 'core' else 'mio') + '.exe.ignore'
                         smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=(ignore,))
-                passed('Core/Full coexist, distinct commands, identical compiler bytes')
+                passed('Core/Full coexist, distinct commands, compiler bytes match the verified archives'
+                       + (' with distinct embedded Bunko' if embedded else ' with the shared legacy compiler'))
                 for flavor, (payload, shim) in installed.items():
                     name = 'mio' if flavor == 'full' else 'mio-core'
                     run('choco', 'uninstall', name, '--yes', '--no-progress')
