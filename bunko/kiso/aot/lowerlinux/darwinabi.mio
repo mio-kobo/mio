@@ -1,0 +1,282 @@
+yobu "kiso/aot/x86_64";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// macOS x86-64 operating-system adapter for the Linux x86-64 lowering.
+//
+// The Linux lowering reaches the kernel only through x86_64.syscall (number in eax, arguments in rdi rsi rdx r10 r8 r9,
+// result or -errno in rax, all other registers except rcx and r11 preserved). With the label `darwin_abi` defined (see
+// x86_64.syscall) each such instruction becomes `call darwin_syscall`, emitted here. The routine performs the equivalent
+// Darwin BSD call (number | 0x2000000; error = carry flag set and a positive Darwin errno in rax) and returns the Linux
+// convention: it translates numbers, open/mmap flags, the stat and directory-entry layouts, sockaddr_in, the fork result
+// and the errno values; /proc/self/exe and /proc/self/fd/N are answered with proc_info and fcntl(F_GETPATH);
+// CLOCK_MONOTONIC is served from gettimeofday (a documented approximation). Signals (rt_sigaction/rt_sigreturn: the crash
+// reporter reads Linux ucontext offsets) and every unknown call fail explicitly with ENOSYS (-38).
+// All registers except rax, rcx and r11 are preserved, as on Linux.
+//
+// Frame: 200 bytes of scratch at rsp+0, saved r10 r9 r8 rdx rsi rdi r15 r14 r13 r12 rbx at rsp+200 .. rsp+280.
+
+waza dx_jmp(c: x86_64.Assembler, name: string) -> unit { x86_64.jmp(c, name); }
+waza dx_jcc(c: x86_64.Assembler, cc: int64, name: string) -> unit { x86_64.jcc(c, cc, name); }
+waza dx_name(prefix: string, index: int64) -> string { kaesu string.concat(prefix, convert.format_int(index)); }
+waza dx_class(number: int64) -> int64 { kaesu 33554432 + number; }
+
+// Linux call `linux` -> Darwin call `darwin`, same arguments and result convention.
+waza dx_direct(c: x86_64.Assembler, linux: int64, darwin: int64, index: int64) -> unit {
+    kaku next = dx_name("dx_direct_next_", index);
+    x86_64.cmp_ri(c, x86_64.rax, linux); dx_jcc(c, x86_64.cc_ne, next);
+    x86_64.mov_eax_imm(c, dx_class(darwin)); dx_jmp(c, "dx_svc");
+    x86_64.label(c, next);
+}
+
+waza dx_dispatch(c: x86_64.Assembler, linux: int64, target: string, index: int64) -> unit {
+    kaku next = dx_name("dx_dispatch_next_", index);
+    x86_64.cmp_ri(c, x86_64.rax, linux); dx_jcc(c, x86_64.cc_ne, next); dx_jmp(c, target);
+    x86_64.label(c, next);
+}
+
+// dst = (src & mask_low) | translated bits; pairs (from mask, to mask). Uses rcx and r14.
+waza dx_flags(c: x86_64.Assembler, src: int64, dst: int64, low_mask: int64, pairs: []int64, prefix: string) -> unit {
+    x86_64.mov_rr(c, dst, src); x86_64.and_ri(c, dst, low_mask);
+    kaku at = 0;
+    aida (at < len(pairs)) {
+        kaku skip = dx_name(prefix, at);
+        x86_64.mov_rr(c, x86_64.rcx, src); x86_64.and_ri(c, x86_64.rcx, pairs[at]); dx_jcc(c, x86_64.cc_e, skip);
+        x86_64.mov_ri(c, x86_64.r14, pairs[at + 1]); x86_64.or_rr(c, dst, x86_64.r14);
+        x86_64.label(c, skip);
+        at = at + 2;
+    }
+}
+
+// Compare the bytes of `text` at [reg] and jump to `fail` on the first difference. Uses rax.
+waza dx_prefix(c: x86_64.Assembler, reg: int64, text: string, fail: string) -> unit {
+    kaku bytes = string.to_bytes(text); kaku at = 0;
+    aida (at < len(bytes)) {
+        x86_64.mov_load8(c, x86_64.rax, reg, at); x86_64.cmp_ri(c, x86_64.rax, int64(bytes[at])); dx_jcc(c, x86_64.cc_ne, fail);
+        at = at + 1;
+    }
+}
+
+// Store `text` and a NUL at [rsp + offset].
+waza dx_store_text(c: x86_64.Assembler, offset: int64, text: string) -> int64 {
+    kaku bytes = string.to_bytes(text); kaku at = 0;
+    aida (at < len(bytes)) { x86_64.mov_ri(c, x86_64.rax, int64(bytes[at])); x86_64.mov_store8(c, x86_64.rsp, offset + at, x86_64.rax); at = at + 1; }
+    x86_64.mov_ri(c, x86_64.rax, 0); x86_64.mov_store8(c, x86_64.rsp, offset + len(bytes), x86_64.rax);
+    kaesu offset + len(bytes);
+}
+
+// Length of the NUL-terminated string at [reg] (at most 1023) into rax; clobbers rcx.
+waza dx_strlen(c: x86_64.Assembler, reg: int64, label: string) -> unit {
+    x86_64.mov_ri(c, x86_64.rax, 0);
+    x86_64.label(c, label);
+    x86_64.mov_rr(c, x86_64.rcx, reg); x86_64.add_rr(c, x86_64.rcx, x86_64.rax);
+    x86_64.mov_load8(c, x86_64.rcx, x86_64.rcx, 0); x86_64.test_rr(c, x86_64.rcx, x86_64.rcx); dx_jcc(c, x86_64.cc_e, string.concat(label, "_done"));
+    x86_64.add_ri(c, x86_64.rax, 1); x86_64.cmp_ri(c, x86_64.rax, 1023); dx_jcc(c, x86_64.cc_b, label);
+    x86_64.label(c, string.concat(label, "_done"));
+}
+
+// The syscall instruction proper, then the carry-flag test: success returns rax, failure maps the Darwin errno.
+waza dx_tail(c: x86_64.Assembler) -> unit {
+    x86_64.label(c, "dx_svc"); x86_64.syscall_raw(c);
+    dx_jcc(c, x86_64.cc_ae, "dx_return");
+    x86_64.label(c, "dx_fail");
+    x86_64.call(c, "dx_errno"); x86_64.neg_r(c, x86_64.rax);
+    x86_64.label(c, "dx_return");
+    x86_64.add_ri(c, x86_64.rsp, 200);
+    x86_64.pop_r(c, x86_64.r10); x86_64.pop_r(c, x86_64.r9); x86_64.pop_r(c, x86_64.r8); x86_64.pop_r(c, x86_64.rdx);
+    x86_64.pop_r(c, x86_64.rsi); x86_64.pop_r(c, x86_64.rdi); x86_64.pop_r(c, x86_64.r15); x86_64.pop_r(c, x86_64.r14);
+    x86_64.pop_r(c, x86_64.r13); x86_64.pop_r(c, x86_64.r12); x86_64.pop_r(c, x86_64.rbx);
+    x86_64.ret(c);
+}
+
+// Darwin errno (rax) -> Linux errno for the values that differ.
+waza dx_errno(c: x86_64.Assembler) -> unit {
+    x86_64.label(c, "dx_errno");
+    kaku pairs = [35, 11, 36, 115, 37, 114, 38, 88, 39, 89, 40, 90, 41, 91, 42, 92, 43, 93, 45, 95, 47, 97, 48, 98, 49, 99, 50, 100,
+        51, 101, 53, 103, 54, 104, 55, 105, 56, 106, 57, 107, 60, 110, 61, 111, 65, 113, 66, 39, 62, 40, 63, 36, 78, 38];
+    kaku at = 0;
+    aida (at < len(pairs)) {
+        kaku next = dx_name("dx_errno_next_", at);
+        x86_64.cmp_ri(c, x86_64.rax, pairs[at]); dx_jcc(c, x86_64.cc_ne, next);
+        x86_64.mov_ri(c, x86_64.rax, pairs[at + 1]); x86_64.ret(c);
+        x86_64.label(c, next);
+        at = at + 2;
+    }
+    x86_64.ret(c);
+}
+
+koukai waza emit_darwin_abi_runtime(c: x86_64.Assembler) -> unit {
+    x86_64.label(c, "darwin_syscall");
+    x86_64.push_r(c, x86_64.rbx); x86_64.push_r(c, x86_64.r12); x86_64.push_r(c, x86_64.r13); x86_64.push_r(c, x86_64.r14);
+    x86_64.push_r(c, x86_64.r15); x86_64.push_r(c, x86_64.rdi); x86_64.push_r(c, x86_64.rsi); x86_64.push_r(c, x86_64.rdx);
+    x86_64.push_r(c, x86_64.r8); x86_64.push_r(c, x86_64.r9); x86_64.push_r(c, x86_64.r10);
+    x86_64.sub_ri(c, x86_64.rsp, 200);
+    // ---- direct translations: (Linux, Darwin)
+    kaku direct = [0, 3, 1, 4, 3, 6, 7, 230, 33, 90, 38, 83, 39, 20, 43, 30, 50, 106, 59, 59, 61, 7, 83, 136, 84, 137, 87, 10, 90, 15, 160, 195, 231, 1];
+    kaku at = 0;
+    aida (at < len(direct)) { dx_direct(c, direct[at], direct[at + 1], at); at = at + 2; }
+    // ---- translated calls
+    kaku calls = [2, 9, 4, 217, 89, 57, 228, 44, 54, 49, 42, 41, 13, 15];
+    kaku names = ["dx_open", "dx_mmap", "dx_stat", "dx_dirents", "dx_readlink", "dx_fork", "dx_clock", "dx_sendto", "dx_setsockopt", "dx_bind", "dx_connect", "dx_socket", "dx_unsupported", "dx_unsupported"];
+    at = 0;
+    aida (at < len(calls)) { dx_dispatch(c, calls[at], names[at], at); at = at + 1; }
+    x86_64.label(c, "dx_unsupported"); x86_64.mov_ri(c, x86_64.rax, -38); dx_jmp(c, "dx_return");
+
+    // ---- open(path, flags, mode): Linux flag bits -> Darwin
+    x86_64.label(c, "dx_open");
+    dx_flags(c, x86_64.rsi, x86_64.r13, 3, [64, 512, 128, 2048, 512, 1024, 1024, 8, 2048, 4, 65536, 1048576, 524288, 16777216, 131072, 256, 2097152, 32768], "dx_open_skip_");
+    x86_64.mov_rr(c, x86_64.rsi, x86_64.r13); x86_64.mov_eax_imm(c, dx_class(5)); dx_jmp(c, "dx_svc");
+
+    // ---- mmap: MAP_ANONYMOUS 0x20 -> 0x1000, MAP_NORESERVE 0x4000 -> 0x40; MAP_SHARED/PRIVATE/FIXED are equal
+    x86_64.label(c, "dx_mmap");
+    x86_64.mov_rr(c, x86_64.r13, x86_64.r10); x86_64.and_ri(c, x86_64.r13, 19);
+    x86_64.mov_rr(c, x86_64.rcx, x86_64.r10); x86_64.and_ri(c, x86_64.rcx, 32); dx_jcc(c, x86_64.cc_e, "dx_mmap_anon_done");
+    x86_64.mov_ri(c, x86_64.r14, 4096); x86_64.or_rr(c, x86_64.r13, x86_64.r14);
+    x86_64.label(c, "dx_mmap_anon_done");
+    x86_64.mov_rr(c, x86_64.rcx, x86_64.r10); x86_64.and_ri(c, x86_64.rcx, 16384); dx_jcc(c, x86_64.cc_e, "dx_mmap_go");
+    x86_64.mov_ri(c, x86_64.r14, 64); x86_64.or_rr(c, x86_64.r13, x86_64.r14);
+    x86_64.label(c, "dx_mmap_go");
+    x86_64.mov_rr(c, x86_64.r10, x86_64.r13); x86_64.mov_eax_imm(c, dx_class(197)); dx_jmp(c, "dx_svc");
+
+    // ---- stat(path, buf): Darwin stat64 into scratch, then the Linux x86-64 struct stat layout (144 bytes)
+    x86_64.label(c, "dx_stat");
+    x86_64.mov_rr(c, x86_64.r12, x86_64.rsi); x86_64.mov_rr(c, x86_64.rsi, x86_64.rsp); x86_64.mov_eax_imm(c, dx_class(338));
+    x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_stat_ok"); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_stat_ok");
+    x86_64.mov_ri(c, x86_64.rax, 0);
+    kaku zero = 0;
+    aida (zero < 144) { x86_64.mov_store(c, x86_64.r12, zero, x86_64.rax); zero = zero + 8; }
+    // Darwin: dev 0 (u32), mode 4 (u16), nlink 6 (u16), ino 8, uid 16, gid 20, rdev 24 (u32), atime 32/40, mtime 48/56,
+    // ctime 64/72, size 96, blocks 104, blksize 112 (u32).  Linux: dev 0, ino 8, nlink 16, mode 24 (u32), uid 28, gid 32,
+    // rdev 40, size 48, blksize 56, blocks 64, atime 72/80, mtime 88/96, ctime 104/112.
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 0); x86_64.mov_store(c, x86_64.r12, 0, x86_64.rax);
+    x86_64.mov_load(c, x86_64.rax, x86_64.rsp, 8); x86_64.mov_store(c, x86_64.r12, 8, x86_64.rax);
+    x86_64.mov_load16(c, x86_64.rax, x86_64.rsp, 6); x86_64.mov_store(c, x86_64.r12, 16, x86_64.rax);
+    x86_64.mov_load16(c, x86_64.rax, x86_64.rsp, 4); x86_64.mov_store32(c, x86_64.r12, 24, x86_64.rax);
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 16); x86_64.mov_store32(c, x86_64.r12, 28, x86_64.rax);
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 20); x86_64.mov_store32(c, x86_64.r12, 32, x86_64.rax);
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 24); x86_64.mov_store(c, x86_64.r12, 40, x86_64.rax);
+    x86_64.mov_load(c, x86_64.rax, x86_64.rsp, 96); x86_64.mov_store(c, x86_64.r12, 48, x86_64.rax);
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 112); x86_64.mov_store(c, x86_64.r12, 56, x86_64.rax);
+    x86_64.mov_load(c, x86_64.rax, x86_64.rsp, 104); x86_64.mov_store(c, x86_64.r12, 64, x86_64.rax);
+    kaku times = [32, 72, 40, 80, 48, 88, 56, 96, 64, 104, 72, 112];
+    at = 0;
+    aida (at < len(times)) { x86_64.mov_load(c, x86_64.rax, x86_64.rsp, times[at]); x86_64.mov_store(c, x86_64.r12, times[at + 1], x86_64.rax); at = at + 2; }
+    x86_64.mov_ri(c, x86_64.rax, 0); dx_jmp(c, "dx_return");
+
+    // ---- getdents64(fd, buf, count >= 8192) -> getdirentries64 into a 4 KiB stack buffer, converted to linux_dirent64
+    // (Darwin: ino 0, seekoff 8, reclen 16, namlen 18, type 20, name 21; Linux: ino 0, off 8, reclen 16, type 18, name 19)
+    x86_64.label(c, "dx_dirents");
+    x86_64.cmp_ri(c, x86_64.rdx, 8192); dx_jcc(c, x86_64.cc_ae, "dx_dirents_ok"); x86_64.mov_ri(c, x86_64.rax, -22); dx_jmp(c, "dx_return");
+    x86_64.label(c, "dx_dirents_ok");
+    x86_64.mov_rr(c, x86_64.r12, x86_64.rsi);
+    x86_64.sub_ri(c, x86_64.rsp, 4112);
+    x86_64.mov_rr(c, x86_64.rsi, x86_64.rsp); x86_64.mov_ri(c, x86_64.rdx, 4096); x86_64.lea(c, x86_64.r10, x86_64.rsp, 4096);
+    x86_64.mov_eax_imm(c, dx_class(344)); x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_dirents_got");
+    x86_64.add_ri(c, x86_64.rsp, 4112); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_dirents_got");
+    x86_64.test_rr(c, x86_64.rax, x86_64.rax); dx_jcc(c, x86_64.cc_ne, "dx_dirents_convert");
+    x86_64.add_ri(c, x86_64.rsp, 4112); dx_jmp(c, "dx_return");
+    x86_64.label(c, "dx_dirents_convert");
+    x86_64.mov_rr(c, x86_64.r14, x86_64.rsp); x86_64.mov_rr(c, x86_64.r15, x86_64.rsp); x86_64.add_rr(c, x86_64.r15, x86_64.rax); x86_64.mov_rr(c, x86_64.rbx, x86_64.r12);
+    x86_64.label(c, "dx_dirents_next");
+    x86_64.cmp_rr(c, x86_64.r14, x86_64.r15); dx_jcc(c, x86_64.cc_ae, "dx_dirents_done");
+    x86_64.mov_load(c, x86_64.rax, x86_64.r14, 0); x86_64.mov_store(c, x86_64.rbx, 0, x86_64.rax);
+    x86_64.mov_load(c, x86_64.rax, x86_64.r14, 8); x86_64.mov_store(c, x86_64.rbx, 8, x86_64.rax);
+    x86_64.mov_load8(c, x86_64.rax, x86_64.r14, 20); x86_64.mov_store8(c, x86_64.rbx, 18, x86_64.rax);
+    x86_64.mov_load16(c, x86_64.rcx, x86_64.r14, 18);
+    x86_64.lea(c, x86_64.rax, x86_64.rcx, 27); x86_64.and_ri(c, x86_64.rax, -8); x86_64.mov_store16(c, x86_64.rbx, 16, x86_64.rax);
+    x86_64.add_ri(c, x86_64.rcx, 1);
+    x86_64.lea(c, x86_64.rsi, x86_64.r14, 21); x86_64.lea(c, x86_64.rdi, x86_64.rbx, 19); x86_64.rep_movsb(c);
+    x86_64.mov_load16(c, x86_64.rax, x86_64.rbx, 16); x86_64.add_rr(c, x86_64.rbx, x86_64.rax);
+    x86_64.mov_load16(c, x86_64.rax, x86_64.r14, 16); x86_64.add_rr(c, x86_64.r14, x86_64.rax);
+    dx_jmp(c, "dx_dirents_next");
+    x86_64.label(c, "dx_dirents_done");
+    x86_64.mov_rr(c, x86_64.rax, x86_64.rbx); x86_64.sub_rr(c, x86_64.rax, x86_64.r12);
+    x86_64.add_ri(c, x86_64.rsp, 4112); dx_jmp(c, "dx_return");
+
+    // ---- readlink(path, buf, size): /proc/self/exe -> proc_info(PIDPATHINFO); /proc/self/fd/N -> fcntl(F_GETPATH)
+    x86_64.label(c, "dx_readlink");
+    x86_64.mov_rr(c, x86_64.r12, x86_64.rsi); x86_64.mov_rr(c, x86_64.r13, x86_64.rdx);
+    dx_prefix(c, x86_64.rdi, "/proc/self/", "dx_readlink_plain");
+    x86_64.mov_load8(c, x86_64.rax, x86_64.rdi, 11); x86_64.cmp_ri(c, x86_64.rax, 101); dx_jcc(c, x86_64.cc_e, "dx_readlink_exe");
+    dx_prefix(c, x86_64.rdi, "/proc/self/fd/", "dx_readlink_plain");
+    // fd number: decimal digits from offset 14
+    x86_64.mov_ri(c, x86_64.r14, 0); x86_64.mov_ri(c, x86_64.r15, 14);
+    x86_64.label(c, "dx_readlink_digit");
+    x86_64.mov_rr(c, x86_64.rcx, x86_64.rdi); x86_64.add_rr(c, x86_64.rcx, x86_64.r15); x86_64.mov_load8(c, x86_64.rax, x86_64.rcx, 0);
+    x86_64.sub_ri(c, x86_64.rax, 48); x86_64.cmp_ri(c, x86_64.rax, 10); dx_jcc(c, x86_64.cc_ae, "dx_readlink_digits_done");
+    x86_64.mov_ri(c, x86_64.rcx, 10); x86_64.imul_rr(c, x86_64.r14, x86_64.rcx); x86_64.add_rr(c, x86_64.r14, x86_64.rax);
+    x86_64.add_ri(c, x86_64.r15, 1); dx_jmp(c, "dx_readlink_digit");
+    x86_64.label(c, "dx_readlink_digits_done");
+    x86_64.sub_ri(c, x86_64.rsp, 1040);
+    x86_64.mov_rr(c, x86_64.rdi, x86_64.r14); x86_64.mov_ri(c, x86_64.rsi, 50); x86_64.mov_rr(c, x86_64.rdx, x86_64.rsp);
+    x86_64.mov_eax_imm(c, dx_class(92)); dx_jmp(c, "dx_readlink_measure");
+    x86_64.label(c, "dx_readlink_exe");
+    x86_64.sub_ri(c, x86_64.rsp, 1040);
+    x86_64.mov_eax_imm(c, dx_class(20)); x86_64.syscall_raw(c);
+    x86_64.mov_rr(c, x86_64.rsi, x86_64.rax); x86_64.mov_ri(c, x86_64.rdi, 2); x86_64.mov_ri(c, x86_64.rdx, 11); x86_64.mov_ri(c, x86_64.r10, 0);
+    x86_64.mov_rr(c, x86_64.r8, x86_64.rsp); x86_64.mov_ri(c, x86_64.r9, 1024); x86_64.mov_eax_imm(c, dx_class(336));
+    x86_64.label(c, "dx_readlink_measure");
+    x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_readlink_measured");
+    x86_64.add_ri(c, x86_64.rsp, 1040); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_readlink_measured");
+    dx_strlen(c, x86_64.rsp, "dx_readlink_len");
+    x86_64.mov_rr(c, x86_64.rcx, x86_64.rax); x86_64.cmp_rr(c, x86_64.rcx, x86_64.r13); dx_jcc(c, x86_64.cc_be, "dx_readlink_copy");
+    x86_64.mov_rr(c, x86_64.rcx, x86_64.r13);
+    x86_64.label(c, "dx_readlink_copy");
+    x86_64.mov_rr(c, x86_64.rax, x86_64.rcx); x86_64.mov_rr(c, x86_64.rsi, x86_64.rsp); x86_64.mov_rr(c, x86_64.rdi, x86_64.r12); x86_64.rep_movsb(c);
+    x86_64.add_ri(c, x86_64.rsp, 1040); dx_jmp(c, "dx_return");
+    x86_64.label(c, "dx_readlink_plain"); x86_64.mov_eax_imm(c, dx_class(58)); dx_jmp(c, "dx_svc");
+
+    // ---- fork(): Darwin returns rdx = 1 in the child; Linux returns 0 there
+    x86_64.label(c, "dx_fork");
+    x86_64.mov_eax_imm(c, dx_class(2)); x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_fork_ok"); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_fork_ok");
+    x86_64.test_rr(c, x86_64.rdx, x86_64.rdx); dx_jcc(c, x86_64.cc_e, "dx_return"); x86_64.mov_ri(c, x86_64.rax, 0); dx_jmp(c, "dx_return");
+
+    // ---- clock_gettime(clock, timespec*) -> gettimeofday (CLOCK_MONOTONIC is approximated by the wall clock)
+    x86_64.label(c, "dx_clock");
+    x86_64.mov_rr(c, x86_64.r12, x86_64.rsi); x86_64.mov_rr(c, x86_64.rdi, x86_64.rsp); x86_64.mov_ri(c, x86_64.rsi, 0); x86_64.mov_ri(c, x86_64.rdx, 0);
+    x86_64.mov_eax_imm(c, dx_class(116)); x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_clock_ok"); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_clock_ok");
+    x86_64.mov_load(c, x86_64.rax, x86_64.rsp, 0); x86_64.mov_store(c, x86_64.r12, 0, x86_64.rax);
+    x86_64.mov_load32(c, x86_64.rax, x86_64.rsp, 8); x86_64.mov_ri(c, x86_64.rcx, 1000); x86_64.imul_rr(c, x86_64.rax, x86_64.rcx); x86_64.mov_store(c, x86_64.r12, 8, x86_64.rax);
+    x86_64.mov_ri(c, x86_64.rax, 0); dx_jmp(c, "dx_return");
+
+    // ---- socket(): Darwin has no MSG_NOSIGNAL, so every socket gets SO_NOSIGPIPE (setsockopt SOL_SOCKET 0xffff, 0x1022)
+    x86_64.label(c, "dx_socket");
+    x86_64.mov_eax_imm(c, dx_class(97)); x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_socket_ok"); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_socket_ok");
+    x86_64.mov_rr(c, x86_64.r12, x86_64.rax); x86_64.mov_ri(c, x86_64.rcx, 1); x86_64.mov_store(c, x86_64.rsp, 0, x86_64.rcx);
+    x86_64.mov_rr(c, x86_64.rdi, x86_64.r12); x86_64.mov_ri(c, x86_64.rsi, 65535); x86_64.mov_ri(c, x86_64.rdx, 4130);
+    x86_64.mov_rr(c, x86_64.r10, x86_64.rsp); x86_64.mov_ri(c, x86_64.r8, 4); x86_64.mov_eax_imm(c, dx_class(105)); x86_64.syscall_raw(c);
+    x86_64.mov_rr(c, x86_64.rax, x86_64.r12); dx_jmp(c, "dx_return");
+
+    // ---- sockets: sendto without MSG_NOSIGNAL (SO_NOSIGPIPE is set on every socket instead), setsockopt names, sockaddr_in
+    x86_64.label(c, "dx_sendto");
+    x86_64.mov_ri(c, x86_64.rcx, 16384); x86_64.cmp_rr(c, x86_64.r10, x86_64.rcx); dx_jcc(c, x86_64.cc_ne, "dx_sendto_go"); x86_64.mov_ri(c, x86_64.r10, 0);
+    x86_64.label(c, "dx_sendto_go"); x86_64.mov_eax_imm(c, dx_class(133)); dx_jmp(c, "dx_svc");
+    x86_64.label(c, "dx_setsockopt");
+    x86_64.cmp_ri(c, x86_64.rsi, 1); dx_jcc(c, x86_64.cc_ne, "dx_setsockopt_go"); x86_64.mov_ri(c, x86_64.rsi, 65535);
+    kaku options = [2, 4, 9, 8, 15, 512, 7, 4097, 8, 4098];
+    at = 0;
+    aida (at < len(options)) {
+        kaku next = dx_name("dx_setsockopt_next_", at);
+        x86_64.cmp_ri(c, x86_64.rdx, options[at]); dx_jcc(c, x86_64.cc_ne, next); x86_64.mov_ri(c, x86_64.rdx, options[at + 1]); dx_jmp(c, "dx_setsockopt_go");
+        x86_64.label(c, next);
+        at = at + 2;
+    }
+    x86_64.label(c, "dx_setsockopt_go"); x86_64.mov_eax_imm(c, dx_class(105)); dx_jmp(c, "dx_svc");
+    x86_64.label(c, "dx_bind"); x86_64.mov_eax_imm(c, dx_class(104)); dx_jmp(c, "dx_sockaddr");
+    x86_64.label(c, "dx_connect"); x86_64.mov_eax_imm(c, dx_class(98));
+    x86_64.label(c, "dx_sockaddr");
+    x86_64.mov_load(c, x86_64.rcx, x86_64.rsi, 0); x86_64.mov_store(c, x86_64.rsp, 0, x86_64.rcx);
+    x86_64.mov_load(c, x86_64.rcx, x86_64.rsi, 8); x86_64.mov_store(c, x86_64.rsp, 8, x86_64.rcx);
+    x86_64.mov_ri(c, x86_64.rcx, 16); x86_64.mov_store8(c, x86_64.rsp, 0, x86_64.rcx); x86_64.mov_ri(c, x86_64.rcx, 2); x86_64.mov_store8(c, x86_64.rsp, 1, x86_64.rcx);
+    x86_64.mov_rr(c, x86_64.rsi, x86_64.rsp); dx_jmp(c, "dx_svc");
+
+    dx_tail(c);
+    dx_errno(c);
+}

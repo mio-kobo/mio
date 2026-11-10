@@ -237,7 +237,13 @@ koukai waza executable_sized(spec:ImageSpec, frames:[]FrameFunction, stack_reser
 // data_rva > 0 places .data at that RVA (a multiple of 4096, not below the end of .text/.rdata), so generated code may
 // embed absolute data addresses (image_base + data_rva) as constants. 4096 is special: .data comes first, directly after the
 // headers, so there is no RVA gap and .text follows it. 0 keeps the sequential layout.
-koukai waza executable_placed(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64, data_rva:int64) -> ImageResult {
+koukai teisu machine_amd64 = 34404;
+koukai teisu machine_arm64 = 43620;
+koukai waza executable_placed(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64, data_rva:int64) -> ImageResult { kaesu executable_machine(spec,frames,stack_reserve,data_rva,machine_amd64); }
+
+// COFF machine type: IMAGE_FILE_MACHINE_AMD64 (0x8664) or IMAGE_FILE_MACHINE_ARM64 (0xAA64). Any other value fails closed.
+koukai waza executable_machine(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64, data_rva:int64, machine:int64) -> ImageResult {
+    moshi(machine!=machine_amd64 && machine!=machine_arm64){kaesu failure(PEError.InvalidEntry());}
     moshi(data_rva<0 || data_rva-(data_rva/4096)*4096!=0 || data_rva>maximum_image_size){kaesu failure(PEError.InvalidEntry());}
     moshi(stack_reserve<65536 || stack_reserve>1073741824 || stack_reserve-(stack_reserve/65536)*65536!=0){kaesu failure(PEError.ImageTooLarge());}
     moshi(len(frames)>0 && len(spec.unwind)>0){kaesu failure(PEError.InvalidUnwind());}
@@ -289,7 +295,7 @@ koukai waza executable_placed(spec:ImageSpec, frames:[]FrameFunction, stack_rese
     put(bytes,0,2,23117);put(bytes,2,2,128);put(bytes,4,2,1);put(bytes,8,2,4);
     put(bytes,10,2,16);put(bytes,12,2,65535);put(bytes,16,2,256);put(bytes,24,2,64);put(bytes,60,4,128);
     copy_bytes(bytes,64,[184,1,76,205,33]);
-    put(bytes,128,4,17744);put(bytes,132,2,34404);put(bytes,134,2,count);put(bytes,148,2,240);
+    put(bytes,128,4,17744);put(bytes,132,2,machine);put(bytes,134,2,count);put(bytes,148,2,240);
     kaku characteristics=35;moshi(has_relocations){characteristics=34;}put(bytes,150,2,characteristics);
     kaku text=section(layout,text_section);kaku initialized=0;kaku uninitialized=0;i=0;
     aida(i<len(layout.sections)){kaku s=layout.sections[i];moshi(s.kind!=text_section){initialized=initialized+s.raw_size;}

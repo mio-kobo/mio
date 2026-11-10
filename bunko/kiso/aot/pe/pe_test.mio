@@ -225,3 +225,14 @@ waza test_data_first_layout_has_no_gap() -> unit {
     testing.expect(image.layout.sections[1].kind==text_section && image.layout.sections[1].rva==12288 && image.layout.sections[1].offset==512,"text follows the page-aligned data");
     testing.expect(u32(image.bytes,168)==12288 && u32(image.bytes,172)==12288 && image.layout.image_size==16384,"entry and BaseOfCode point at text; image size has no gap");
 }
+
+waza test_arm64_machine_type_is_explicit() -> unit {
+    kaku spec = ImageSpec { text: [uint8(31), uint8(32), uint8(3), uint8(213)], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] };
+    kaku arm = executable_machine(spec, [], 1048576, 0, machine_arm64);
+    testing.expect(arm.error == mu, "an ARM64 image builds");
+    testing.expect(arm.bytes[132] == uint8(100) && arm.bytes[133] == uint8(170), "IMAGE_FILE_MACHINE_ARM64 = 0xAA64");
+    kaku amd = executable(spec);
+    testing.expect(amd.error == mu && amd.bytes[132] == uint8(100) && amd.bytes[133] == uint8(134), "the default stays IMAGE_FILE_MACHINE_AMD64 = 0x8664");
+    testing.expect(executable_machine(spec, [], 1048576, 0, 332).error != mu, "i386 is not an accepted machine");
+    testing.expect(executable_machine(spec, [], 1048576, 0, 0).error != mu, "an unknown machine fails closed");
+}
