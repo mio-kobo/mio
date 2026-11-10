@@ -2285,6 +2285,14 @@ waza compile_old_profile(file:mochi.File,capacity:int64,queue_slots:int64,gc_str
     kaesu compile_worker_impl(file,gc_stress,capacity,iie,iie,hai,bindings,hai,queue_slots,full_sweep,release_fault);
 }
 waza compile_worker_impl(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool) -> LowerResult {
+    kaesu compile_worker_target(input_file,gc_stress,capacity,observation,adaptive,attached,worker_bindings,old_proto,queue_slots,full_sweep,release_fault,iie);
+}
+// Linux AArch64 target: the same lowering and runtime as Darwin, with every Darwin system call routed through the
+// linux_syscall adapter (linuxabi.mio). The caller links the words with an ELF container (kiso/aot/linuxarm64).
+koukai waza compile_linux_arm64(file: mochi.File, capacity: int64, gc_stress: bool) -> LowerResult {
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,hai);
+}
+waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool, linux: bool) -> LowerResult {
     kaku file = input_file;
     kaku metadata_bytes = runtime_metadata_bytes;
     moshi (observation) { metadata_bytes = observation_metadata_bytes; }
@@ -2310,6 +2318,7 @@ waza compile_worker_impl(input_file: mochi.File, gc_stress: bool, capacity: int6
     }
     kaku ids = string_ids(file.constants);
     kaku code = arm64.assembler();
+    moshi (linux) { arm64.assembler_label(code, "linux_abi"); }
     kaku patches: []macho.AddressPatch = [];
     array.reserve(patches, file.global_count * 2);
     kaku native_fs = file_uses_nativefs(file);
@@ -2393,6 +2402,7 @@ waza compile_worker_impl(input_file: mochi.File, gc_stress: bool, capacity: int6
     arm64.assembler_label(code, "runtime_gc_bad_count");
     moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_fatal_cleanup");}
     emit(code, arm64.movz_x(0, 5, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
+    moshi (linux) { emit_linux_abi_runtime(code); }
 
     kaku function_reachable = types.reachable_functions(file);
     kaku id = 0;

@@ -124,3 +124,38 @@ waza test_far_conditions_and_imm26_guard() -> unit {
         condition = condition + 1;
     }
 }
+
+// Hand-computed from the A64 encoding tables (not from the encoder): CMN Xn, #imm is ADDS XZR, Xn, #imm.
+waza test_linux_abi_encodings() -> unit {
+    testing.expect(cmn_imm_x(0, 4095, iie).word == uint32(2973760543), "cmn x0, #4095 = 0xB13FFC1F");
+    testing.expect(adds_imm_x(5, 7, 1, iie).word == uint32(2969567232 + 1024 + 7 * 32 + 5), "adds x5, x7, #1");
+    testing.expect(str_w(9, 13, 16).word == uint32(3103789481), "str w9, [x13, #16] = 0xB90011A9");
+    testing.expect(strh_w(9, 13, 4).word == uint32(2030045609), "strh w9, [x13, #4] = 0x790009A9");
+    testing.expect(str_w(9, 13, 2).error != mu && strh_w(9, 13, 1).error != mu, "misaligned offsets fail closed");
+    testing.expect(stp_pre_x(30, 31, 31, -16).word == uint32(2847899646), "stp x30, xzr, [sp, #-16]! = 0xA9BF7FFE");
+    testing.expect(ldp_post_x(30, 31, 31, 16).word == uint32(2831253502), "ldp x30, xzr, [sp], #16 = 0xA8C17FFE");
+}
+
+// SVC #128 (Darwin) is rewritten only when the label linux_abi exists; SVC #0 (Linux) is never rewritten.
+waza test_linux_abi_mode_rewrites_darwin_svc_only_when_enabled() -> unit {
+    kaku plain = assembler();
+    assembler_label(plain, "linux_syscall"); assembler_emit(plain, svc(128)); assembler_emit(plain, svc(0));
+    kaku plain_words = assembler_assemble(plain);
+    testing.expect(plain_words.error == mu && len(plain_words.words) == 2, "without the label the SVC stays one instruction");
+    testing.expect(plain_words.words[0] == uint32(3556773889) && plain_words.words[1] == uint32(3556769793), "SVC #128 = 0xD4001001, SVC #0 = 0xD4000001");
+    kaku linux = assembler();
+    assembler_label(linux, "linux_abi"); assembler_label(linux, "linux_syscall");
+    assembler_emit(linux, svc(128)); assembler_emit(linux, svc(0));
+    kaku result = assembler_assemble(linux);
+    testing.expect(result.error == mu && len(result.words) == 4, "SVC #128 becomes three instructions, SVC #0 is kept");
+    testing.expect(result.words[0] == uint32(2847899646), "stp x30, xzr, [sp, #-16]!");
+    testing.expect(result.words[1] == bl(-1).word, "bl linux_syscall (the routine is at word 0)");
+    testing.expect(result.words[2] == uint32(2831253502), "ldp x30, xzr, [sp], #16");
+    testing.expect(result.words[3] == uint32(3556769793), "Linux SVC #0 is not expanded");
+}
+
+waza test_linux_abi_without_the_routine_fails_closed() -> unit {
+    kaku linux = assembler();
+    assembler_label(linux, "linux_abi"); assembler_emit(linux, svc(128));
+    testing.expect(assembler_assemble(linux).error != mu, "a rewritten SVC with no linux_syscall label is an undefined label");
+}

@@ -1,0 +1,327 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Linux AArch64 operating-system adapter for the Darwin/AArch64 lowering.
+//
+// The Darwin backend reaches the kernel only through `SVC #128` (BSD system-call number in x16, carry flag set and a
+// positive errno in x0 on failure). With the label `linux_abi` defined (see arm64.assembler_emit) every such SVC becomes
+// a call of `linux_syscall`, emitted here. The routine translates the call into the Linux AArch64 system call: number,
+// argument conventions, flag values, the `stat` and directory-entry layouts, sockaddr_in and the errno values, and it
+// returns the Darwin result convention. Calls that have no translation fail explicitly with ENOSYS (Darwin value 78).
+// All registers except x0, x1, x16 and the flags are preserved, as the Darwin kernel does; x1 is preserved unless the
+// call defines a second result (fork).
+//
+// Frame (288 bytes): 0..127 saved x2..x15, x17, x30; 128 original x1; 144..271 scratch (stat buffer, sockaddr, path).
+
+waza lx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
+waza lx_label(c: arm64.Assembler, name: string) -> unit { arm64.assembler_label(c, name); }
+waza lx_b(c: arm64.Assembler, name: string) -> unit { arm64.assembler_b(c, name); }
+waza lx_bcc(c: arm64.Assembler, condition: int64, name: string) -> unit { arm64.assembler_b_cond(c, condition, name); }
+waza lx_cbz(c: arm64.Assembler, reg: int64, name: string) -> unit { arm64.assembler_cbz_x(c, reg, name); }
+waza lx_cbnz(c: arm64.Assembler, reg: int64, name: string) -> unit { arm64.assembler_cbnz_x(c, reg, name); }
+waza lx_bl(c: arm64.Assembler, name: string) -> unit { arm64.assembler_bl(c, name); }
+waza lx_mov(c: arm64.Assembler, rd: int64, rn: int64) -> unit { lx(c, arm64.add_imm_x(rd, rn, 0, iie)); }
+// Load an immediate in [-65536, 4294967295].
+waza lx_li(c: arm64.Assembler, reg: int64, value: int64) -> unit {
+    moshi (value < 0) { lx(c, arm64.movn_x(reg, -value - 1, 0)); kaesu; }
+    moshi (value < 65536) { lx(c, arm64.movz_x(reg, value, 0)); kaesu; }
+    kaku low = value - (value / 65536) * 65536;
+    lx(c, arm64.movz_x(reg, low, 0)); lx(c, arm64.movk_x(reg, value / 65536, 1));
+}
+waza lx_name(prefix: string, index: int64) -> string { kaesu string.concat(prefix, convert.format_int(index)); }
+
+// A direct translation: only the number changes (arguments and result convention are identical).
+waza lx_direct(c: arm64.Assembler, darwin: int64, linux: int64, index: int64) -> unit {
+    kaku next = lx_name("lx_direct_next_", index);
+    lx(c, arm64.cmp_imm_x(16, darwin, iie)); lx_bcc(c, 1, next);
+    lx_li(c, 8, linux); lx_b(c, "lx_svc");
+    lx_label(c, next);
+}
+
+// Dispatch entry for a translated call: `lx_dispatch(c, darwin, label)` jumps to label when x16 == darwin.
+waza lx_dispatch(c: arm64.Assembler, darwin: int64, target: string, index: int64) -> unit {
+    kaku next = lx_name("lx_dispatch_next_", index);
+    lx(c, arm64.cmp_imm_x(16, darwin, iie)); lx_bcc(c, 1, next); lx_b(c, target);
+    lx_label(c, next);
+}
+
+// dst = (src & 3) | translated flag bits; pairs are (darwin mask, linux mask). Uses x10-x12.
+waza lx_flags(c: arm64.Assembler, src: int64, dst: int64, masks: []int64, prefix: string) -> unit {
+    lx_li(c, 10, 3); lx(c, arm64.and_x(dst, src, 10));
+    kaku at = 0;
+    aida (at < len(masks)) {
+        kaku skip = lx_name(prefix, at);
+        lx_li(c, 10, masks[at]); lx(c, arm64.and_x(11, src, 10)); lx_cbz(c, 11, skip);
+        lx_li(c, 12, masks[at + 1]); lx(c, arm64.orr_x(dst, dst, 12));
+        lx_label(c, skip);
+        at = at + 2;
+    }
+}
+
+// Store the bytes of `text` plus a NUL at [base, #offset...] using x9.
+waza lx_store_text(c: arm64.Assembler, base: int64, offset: int64, text: string) -> int64 {
+    kaku bytes = string.to_bytes(text); kaku at = 0;
+    aida (at < len(bytes)) { lx_li(c, 9, int64(bytes[at])); lx(c, arm64.strb_w(9, base, offset + at)); at = at + 1; }
+    lx(c, arm64.strb_w(31, base, offset + len(bytes)));
+    kaesu offset + len(bytes);
+}
+
+// readlinkat(AT_FDCWD, path at x1, buffer at x2, size x3) then NUL-terminate: result 0 or a negative errno in x0.
+waza lx_readlink_finish(c: arm64.Assembler, label: string) -> unit {
+    lx_li(c, 0, -100); lx_li(c, 8, 78); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx(c, arm64.add_x(9, 2, 0)); lx(c, arm64.strb_w(31, 9, 0)); lx_li(c, 0, 0); lx_b(c, "lx_norm");
+}
+
+// Linux errno -> Darwin errno for the values that differ (x0 in and out; uses x9, x10).
+waza lx_errno(c: arm64.Assembler) -> unit {
+    lx_label(c, "lx_errno");
+    kaku pairs = [11, 35, 115, 36, 114, 37, 88, 38, 89, 39, 90, 40, 91, 41, 92, 42, 93, 43, 95, 45, 97, 47, 98, 48, 99, 49, 100, 50,
+        101, 51, 103, 53, 104, 54, 105, 55, 106, 56, 107, 57, 110, 60, 111, 61, 113, 65, 39, 66, 40, 62, 36, 63, 38, 78];
+    kaku at = 0;
+    aida (at < len(pairs)) {
+        kaku next = lx_name("lx_errno_next_", at);
+        lx(c, arm64.cmp_imm_x(0, pairs[at], iie)); lx_bcc(c, 1, next);
+        lx_li(c, 0, pairs[at + 1]); lx(c, arm64.ret());
+        lx_label(c, next);
+        at = at + 2;
+    }
+    lx(c, arm64.ret());
+}
+
+waza lx_save_pair(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { lx(c, arm64.stp_x(a, b, 31, offset)); }
+waza lx_load_pair(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { lx(c, arm64.ldp_x(a, b, 31, offset)); }
+
+koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
+    lx_label(c, "linux_syscall");
+    lx(c, arm64.sub_imm_x(31, 31, 288, iie));
+    lx_save_pair(c, 2, 3, 0); lx_save_pair(c, 4, 5, 16); lx_save_pair(c, 6, 7, 32); lx_save_pair(c, 8, 9, 48);
+    lx_save_pair(c, 10, 11, 64); lx_save_pair(c, 12, 13, 80); lx_save_pair(c, 14, 15, 96); lx_save_pair(c, 17, 30, 112);
+    lx(c, arm64.str_x(1, 31, 128));
+    // ---- direct translations (number only)
+    kaku direct = [1, 94, 3, 63, 4, 64, 6, 57, 7, 260, 20, 172, 30, 202, 59, 221, 83, 103, 97, 198, 106, 201, 195, 164, 74, 226];
+    kaku at = 0;
+    aida (at < len(direct)) { lx_direct(c, direct[at], direct[at + 1], at); at = at + 2; }
+    // ---- translated calls
+    kaku calls = [73, 5, 197, 338, 344, 136, 137, 10, 15, 2, 90, 92, 105, 104, 98, 230, 336, 202, 274, 194];
+    kaku names = ["lx_munmap", "lx_open", "lx_mmap", "lx_stat", "lx_dirents", "lx_mkdir", "lx_rmdir", "lx_unlink", "lx_chmod", "lx_fork", "lx_dup2",
+        "lx_fcntl", "lx_setsockopt", "lx_bind", "lx_connect", "lx_poll", "lx_procinfo", "lx_sysctl", "lx_sysctlbyname", "lx_getrlimit"];
+    at = 0;
+    aida (at < len(calls)) { lx_dispatch(c, calls[at], names[at], at); at = at + 1; }
+    lx_li(c, 0, -38); lx_b(c, "lx_norm");
+
+    // ---- common completion
+    lx_label(c, "lx_svc"); lx(c, arm64.svc(0));
+    lx_label(c, "lx_norm");
+    lx(c, arm64.cmn_imm_x(0, 4095, iie)); lx_bcc(c, 3, "lx_done");
+    lx(c, arm64.sub_x(0, 31, 0)); lx_bl(c, "lx_errno"); lx(c, arm64.cmp_x(31, 31));
+    lx_label(c, "lx_done");
+    lx(c, arm64.ldr_x(1, 31, 128));
+    lx_label(c, "lx_return");
+    lx_load_pair(c, 2, 3, 0); lx_load_pair(c, 4, 5, 16); lx_load_pair(c, 6, 7, 32); lx_load_pair(c, 8, 9, 48);
+    lx_load_pair(c, 10, 11, 64); lx_load_pair(c, 12, 13, 80); lx_load_pair(c, 14, 15, 96); lx_load_pair(c, 17, 30, 112);
+    lx(c, arm64.add_imm_x(31, 31, 288, iie)); lx(c, arm64.ret());
+
+    // ---- open(path, flags, mode) -> openat(AT_FDCWD, path, flags', mode)
+    lx_label(c, "lx_open");
+    lx_mov(c, 3, 2);
+    lx_flags(c, 1, 9, [512, 64, 1024, 512, 8, 1024, 2048, 128, 4, 2048, 1048576, 16384, 16777216, 524288, 32768, 2097152], "lx_open_skip_");
+    lx_mov(c, 1, 0); lx_mov(c, 2, 9); lx_li(c, 0, -100); lx_li(c, 8, 56); lx_b(c, "lx_svc");
+
+    // ---- mmap: the Darwin kernel works in 16 KiB pages (mappings are 16 KiB aligned and their length is rounded up to
+    // 16 KiB; the runtime protects and releases ranges up to that rounded end), Linux in 4 KiB pages. Length is rounded
+    // to 16 KiB here; mappings of 64 KiB or more are also aligned to 16 KiB by over-allocating and trimming the slack.
+    // MAP_ANON 0x1000 -> 0x20; very large reservations are MAP_NORESERVE (0x4000).
+    lx_label(c, "lx_mmap");
+    lx_li(c, 10, 4096); lx(c, arm64.and_x(11, 3, 10)); lx_cbz(c, 11, "lx_mmap_flags_done");
+    lx(c, arm64.sub_imm_x(3, 3, 1, hai)); lx(c, arm64.add_imm_x(3, 3, 32, iie));
+    lx_label(c, "lx_mmap_flags_done");
+    lx_li(c, 10, 16383); lx(c, arm64.add_x(1, 1, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(1, 1, 11));
+    lx_li(c, 10, 268435456); lx(c, arm64.cmp_x(1, 10)); lx_bcc(c, 3, "lx_mmap_reserve_done");
+    lx_li(c, 11, 16384); lx(c, arm64.orr_x(3, 3, 11));
+    lx_label(c, "lx_mmap_reserve_done");
+    lx_cbnz(c, 0, "lx_mmap_plain");
+    lx_li(c, 10, 65536); lx(c, arm64.cmp_x(1, 10)); lx_bcc(c, 3, "lx_mmap_plain");
+    // aligned path: map len + 16 KiB at a kernel-chosen address, keep the 16 KiB-aligned window, unmap the slack
+    lx_mov(c, 13, 1); lx(c, arm64.add_imm_x(1, 13, 4, hai)); lx_li(c, 8, 222); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx_mov(c, 12, 0); lx_li(c, 10, 16383); lx(c, arm64.add_x(9, 12, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(9, 9, 11));
+    lx(c, arm64.sub_x(1, 9, 12)); lx_cbz(c, 1, "lx_mmap_head_done");
+    lx_mov(c, 0, 12); lx_li(c, 8, 215); lx(c, arm64.svc(0));
+    lx_label(c, "lx_mmap_head_done");
+    lx(c, arm64.add_x(0, 9, 13)); lx(c, arm64.sub_x(1, 9, 12)); lx_li(c, 10, 16384); lx(c, arm64.sub_x(1, 10, 1));
+    lx_li(c, 8, 215); lx(c, arm64.svc(0));
+    lx_mov(c, 0, 9); lx_b(c, "lx_norm");
+    lx_label(c, "lx_mmap_plain");
+    lx_li(c, 8, 222); lx_b(c, "lx_svc");
+
+    // ---- munmap: ranges are released in whole 16 KiB pages, matching the mapping lengths created above
+    lx_label(c, "lx_munmap");
+    lx_li(c, 10, 16383); lx(c, arm64.add_x(1, 1, 10)); lx(c, arm64.movn_x(11, 16383, 0)); lx(c, arm64.and_x(1, 1, 11));
+    lx_li(c, 8, 215); lx_b(c, "lx_svc");
+
+    // ---- stat64(path, buf) -> newfstatat(AT_FDCWD, path, tmp, 0), then rebuild the Darwin stat64 layout in buf
+    lx_label(c, "lx_stat");
+    lx_mov(c, 13, 1); lx_mov(c, 1, 0); lx_li(c, 0, -100); lx(c, arm64.add_imm_x(2, 31, 144, iie)); lx_li(c, 3, 0); lx_li(c, 8, 79);
+    lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    kaku zero = 0;
+    aida (zero < 144) { lx(c, arm64.str_x(31, 13, zero)); zero = zero + 8; }
+    // Linux stat at sp+144: ino 8, mode 16 (u32), nlink 20 (u32), uid 24, gid 28, rdev 32, size 48, blksize 56 (u32),
+    // blocks 64, atime 72/80, mtime 88/96, ctime 104/112.
+    lx(c, arm64.ldr_w(9, 31, 160)); lx(c, arm64.strh_w(9, 13, 4));
+    lx(c, arm64.ldr_w(9, 31, 164)); lx(c, arm64.strh_w(9, 13, 6));
+    lx(c, arm64.ldr_x(9, 31, 152)); lx(c, arm64.str_x(9, 13, 8));
+    lx(c, arm64.ldr_w(9, 31, 168)); lx(c, arm64.str_w(9, 13, 16));
+    lx(c, arm64.ldr_w(9, 31, 172)); lx(c, arm64.str_w(9, 13, 20));
+    lx(c, arm64.ldr_w(9, 31, 176)); lx(c, arm64.str_w(9, 13, 24));
+    kaku times = [216, 32, 224, 40, 232, 48, 240, 56, 248, 64, 256, 72, 232, 80, 240, 88];
+    at = 0;
+    aida (at < len(times)) { lx(c, arm64.ldr_x(9, 31, times[at])); lx(c, arm64.str_x(9, 13, times[at + 1])); at = at + 2; }
+    lx(c, arm64.ldr_x(9, 31, 192)); lx(c, arm64.str_x(9, 13, 96));
+    lx(c, arm64.ldr_x(9, 31, 208)); lx(c, arm64.str_x(9, 13, 104));
+    lx(c, arm64.ldr_w(9, 31, 200)); lx(c, arm64.str_w(9, 13, 112));
+    lx_li(c, 0, 0); lx_b(c, "lx_norm");
+
+    // ---- getdirentries64(fd, buf, nbytes >= 4096, basep) -> getdents64 into a 2 KiB stack buffer, converted record by
+    // record into Darwin dirent64 (ino 0, seekoff 8, reclen 16, namlen 18, type 20, name 21).
+    lx_label(c, "lx_dirents");
+    lx_li(c, 9, 4096); lx(c, arm64.cmp_x(2, 9)); lx_bcc(c, 2, "lx_dirents_ok"); lx_li(c, 0, -22); lx_b(c, "lx_norm");
+    lx_label(c, "lx_dirents_ok");
+    lx_mov(c, 13, 1);
+    lx(c, arm64.sub_imm_x(31, 31, 2048, iie)); lx_mov(c, 1, 31); lx_li(c, 2, 2048); lx_li(c, 8, 61); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_dirents_fail"); lx_cbz(c, 0, "lx_dirents_end");
+    lx_mov(c, 10, 31); lx(c, arm64.add_x(11, 10, 0)); lx_mov(c, 12, 13);
+    lx_label(c, "lx_dirents_next");
+    lx(c, arm64.cmp_x(10, 11)); lx_bcc(c, 2, "lx_dirents_done");
+    lx(c, arm64.ldr_x(9, 10, 0)); lx(c, arm64.str_x(9, 12, 0));
+    lx(c, arm64.ldr_x(9, 10, 8)); lx(c, arm64.str_x(9, 12, 8));
+    lx(c, arm64.ldrb_w(9, 10, 18)); lx(c, arm64.strb_w(9, 12, 20));
+    lx(c, arm64.add_imm_x(4, 10, 19, iie)); lx_li(c, 2, 0);
+    lx_label(c, "lx_dirents_len");
+    lx(c, arm64.ldrb_w_register(9, 4, 2)); lx_cbz(c, 9, "lx_dirents_len_done"); lx(c, arm64.add_imm_x(2, 2, 1, iie)); lx_b(c, "lx_dirents_len");
+    lx_label(c, "lx_dirents_len_done");
+    lx(c, arm64.strh_w(2, 12, 18));
+    lx(c, arm64.add_imm_x(5, 12, 21, iie)); lx_li(c, 3, 0);
+    lx_label(c, "lx_dirents_copy");
+    lx(c, arm64.cmp_x(3, 2)); lx_bcc(c, 8, "lx_dirents_copied");
+    lx(c, arm64.ldrb_w_register(9, 4, 3)); lx(c, arm64.add_x(6, 5, 3)); lx(c, arm64.strb_w(9, 6, 0)); lx(c, arm64.add_imm_x(3, 3, 1, iie)); lx_b(c, "lx_dirents_copy");
+    lx_label(c, "lx_dirents_copied");
+    lx(c, arm64.add_x(6, 5, 2)); lx(c, arm64.strb_w(31, 6, 0));
+    lx(c, arm64.add_imm_x(9, 2, 29, iie)); lx(c, arm64.movn_x(6, 7, 0)); lx(c, arm64.and_x(9, 9, 6));
+    lx(c, arm64.strh_w(9, 12, 16)); lx(c, arm64.add_x(12, 12, 9));
+    lx(c, arm64.ldrh_w(9, 10, 16)); lx(c, arm64.add_x(10, 10, 9)); lx_b(c, "lx_dirents_next");
+    lx_label(c, "lx_dirents_done");
+    lx(c, arm64.sub_x(0, 12, 13)); lx(c, arm64.add_imm_x(31, 31, 2048, iie)); lx_b(c, "lx_norm");
+    lx_label(c, "lx_dirents_end"); lx(c, arm64.add_imm_x(31, 31, 2048, iie)); lx_li(c, 0, 0); lx_b(c, "lx_norm");
+    lx_label(c, "lx_dirents_fail"); lx(c, arm64.add_imm_x(31, 31, 2048, iie)); lx_b(c, "lx_norm");
+
+    // ---- path calls with the directory descriptor AT_FDCWD
+    lx_label(c, "lx_mkdir"); lx_mov(c, 2, 1); lx_mov(c, 1, 0); lx_li(c, 0, -100); lx_li(c, 8, 34); lx_b(c, "lx_svc");
+    lx_label(c, "lx_chmod"); lx_mov(c, 2, 1); lx_mov(c, 1, 0); lx_li(c, 0, -100); lx_li(c, 8, 53); lx_b(c, "lx_svc");
+    lx_label(c, "lx_unlink"); lx_mov(c, 1, 0); lx_li(c, 0, -100); lx_li(c, 2, 0); lx_li(c, 8, 35); lx_b(c, "lx_svc");
+    lx_label(c, "lx_rmdir"); lx_mov(c, 1, 0); lx_li(c, 0, -100); lx_li(c, 2, 512); lx_li(c, 8, 35); lx_b(c, "lx_svc");
+
+    // ---- fork() -> clone(SIGCHLD): Darwin returns x1 = 0 in the parent and 1 in the child
+    lx_label(c, "lx_fork");
+    lx_li(c, 0, 17); lx_li(c, 1, 0); lx_li(c, 2, 0); lx_li(c, 3, 0); lx_li(c, 4, 0); lx_li(c, 8, 220); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx_li(c, 9, 0); lx_cbnz(c, 0, "lx_fork_store"); lx_li(c, 9, 1);
+    lx_label(c, "lx_fork_store");
+    lx(c, arm64.str_x(9, 31, 128)); lx_b(c, "lx_norm");
+
+    // ---- dup2(old, new): dup3 rejects old == new, dup2 returns new
+    lx_label(c, "lx_dup2");
+    lx(c, arm64.cmp_x(0, 1)); lx_bcc(c, 1, "lx_dup2_go"); lx_mov(c, 0, 1); lx_b(c, "lx_norm");
+    lx_label(c, "lx_dup2_go"); lx_li(c, 2, 0); lx_li(c, 8, 24); lx_b(c, "lx_svc");
+
+    // ---- fcntl: F_GETPATH (50) reads /proc/self/fd/<fd>; F_DUPFD_CLOEXEC 67 -> 1030; the rest keep their values
+    lx_label(c, "lx_fcntl");
+    lx(c, arm64.cmp_imm_x(1, 50, iie)); lx_bcc(c, 0, "lx_getpath");
+    lx(c, arm64.cmp_imm_x(1, 67, iie)); lx_bcc(c, 1, "lx_fcntl_go"); lx_li(c, 1, 1030);
+    lx_label(c, "lx_fcntl_go"); lx_li(c, 8, 25); lx_b(c, "lx_svc");
+    lx_label(c, "lx_getpath");
+    lx_mov(c, 13, 2); lx_mov(c, 14, 0);
+    kaku end = lx_store_text(c, 31, 144, "/proc/self/fd/");
+    // digits of the descriptor (x14), at least one
+    lx_li(c, 10, 10); lx_mov(c, 9, 14); lx_li(c, 11, 1);
+    lx_label(c, "lx_getpath_count");
+    lx(c, arm64.cmp_x(9, 10)); lx_bcc(c, 3, "lx_getpath_counted"); lx(c, arm64.udiv_x(9, 9, 10)); lx(c, arm64.add_imm_x(11, 11, 1, iie)); lx_b(c, "lx_getpath_count");
+    lx_label(c, "lx_getpath_counted");
+    lx(c, arm64.add_imm_x(12, 31, end, iie)); lx(c, arm64.add_x(12, 12, 11)); lx(c, arm64.strb_w(31, 12, 0)); lx_mov(c, 9, 14);
+    lx_label(c, "lx_getpath_digit");
+    lx(c, arm64.sub_imm_x(12, 12, 1, iie)); lx(c, arm64.udiv_x(15, 9, 10)); lx(c, arm64.msub_x(4, 15, 10, 9)); lx(c, arm64.add_imm_x(4, 4, 48, iie));
+    lx(c, arm64.strb_w(4, 12, 0)); lx_mov(c, 9, 15); lx_cbnz(c, 9, "lx_getpath_digit");
+    lx(c, arm64.add_imm_x(1, 31, 144, iie)); lx_mov(c, 2, 13); lx_li(c, 3, 1023); lx_readlink_finish(c, "lx_getpath");
+
+    // ---- proc_info(PIDINFO=2, pid, PIDPATHINFO=11, 0, buffer x4, size x5) -> readlink("/proc/self/exe")
+    lx_label(c, "lx_procinfo");
+    lx(c, arm64.cmp_imm_x(0, 2, iie)); lx_bcc(c, 1, "lx_unsupported"); lx(c, arm64.cmp_imm_x(2, 11, iie)); lx_bcc(c, 1, "lx_unsupported");
+    lx_mov(c, 13, 4); lx_mov(c, 14, 5);
+    lx_store_text(c, 31, 144, "/proc/self/exe");
+    lx(c, arm64.add_imm_x(1, 31, 144, iie)); lx_mov(c, 2, 13); lx(c, arm64.sub_imm_x(3, 14, 1, iie)); lx_readlink_finish(c, "lx_procinfo");
+    lx_label(c, "lx_unsupported"); lx_li(c, 0, -38); lx_b(c, "lx_norm");
+
+    // ---- setsockopt: SOL_SOCKET 0xffff -> 1; SO_REUSEADDR 4 -> 2; SO_NOSIGPIPE 0x1022 has no Linux counterpart (no-op)
+    lx_label(c, "lx_setsockopt");
+    lx_li(c, 9, 65535); lx(c, arm64.cmp_x(1, 9)); lx_bcc(c, 1, "lx_setsockopt_go"); lx_li(c, 1, 1);
+    kaku options = [4, 2, 4130, -1, 512, 15, 4097, 7, 4098, 8];
+    at = 0;
+    aida (at < len(options)) {
+        kaku next = lx_name("lx_setsockopt_next_", at);
+        lx_li(c, 9, options[at]); lx(c, arm64.cmp_x(2, 9)); lx_bcc(c, 1, next);
+        moshi (options[at + 1] < 0) { lx_li(c, 0, 0); lx_b(c, "lx_norm"); }
+        sore { lx_li(c, 2, options[at + 1]); lx_b(c, "lx_setsockopt_go"); }
+        lx_label(c, next);
+        at = at + 2;
+    }
+    lx_label(c, "lx_setsockopt_go"); lx_li(c, 8, 208); lx_b(c, "lx_svc");
+
+    // ---- bind/connect: Darwin sockaddr_in (sin_len, sin_family) -> Linux (u16 family)
+    lx_label(c, "lx_bind"); lx_li(c, 8, 200); lx_b(c, "lx_sockaddr");
+    lx_label(c, "lx_connect"); lx_li(c, 8, 203);
+    lx_label(c, "lx_sockaddr");
+    lx(c, arm64.ldp_x(9, 10, 1, 0)); lx(c, arm64.stp_x(9, 10, 31, 144));
+    lx_li(c, 9, 2); lx(c, arm64.strb_w(9, 31, 144)); lx(c, arm64.strb_w(31, 31, 145));
+    lx(c, arm64.add_imm_x(1, 31, 144, iie)); lx_b(c, "lx_svc");
+
+    // ---- poll(fds, nfds, timeout ms) -> ppoll(fds, nfds, &timespec or NULL, NULL, 0)
+    lx_label(c, "lx_poll");
+    lx(c, arm64.cmp_imm_x(2, 0, iie)); lx_bcc(c, 11, "lx_poll_infinite");
+    lx_li(c, 9, 1000); lx(c, arm64.udiv_x(10, 2, 9)); lx(c, arm64.msub_x(11, 10, 9, 2)); lx_li(c, 12, 1000000); lx(c, arm64.mul_x(11, 11, 12));
+    lx(c, arm64.str_x(10, 31, 144)); lx(c, arm64.str_x(11, 31, 152)); lx(c, arm64.add_imm_x(2, 31, 144, iie)); lx_b(c, "lx_poll_go");
+    lx_label(c, "lx_poll_infinite"); lx_li(c, 2, 0);
+    lx_label(c, "lx_poll_go"); lx_li(c, 3, 0); lx_li(c, 4, 0); lx_li(c, 8, 73); lx_b(c, "lx_svc");
+
+    // ---- sysctl({CTL_HW, HW_MEMSIZE}, 2, oldp, oldlenp): physical memory in bytes from sysinfo(2); other names fail
+    lx_label(c, "lx_sysctl");
+    lx(c, arm64.ldr_w(9, 0, 0)); lx(c, arm64.cmp_imm_x(9, 6, iie)); lx_bcc(c, 1, "lx_unsupported");
+    lx(c, arm64.ldr_w(9, 0, 4)); lx(c, arm64.cmp_imm_x(9, 24, iie)); lx_bcc(c, 1, "lx_unsupported");
+    lx_mov(c, 13, 2); lx_mov(c, 14, 3);
+    lx(c, arm64.add_imm_x(0, 31, 144, iie)); lx_li(c, 8, 179); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx(c, arm64.ldr_x(9, 31, 176)); lx(c, arm64.ldr_w(10, 31, 248)); lx(c, arm64.mul_x(9, 9, 10));
+    lx(c, arm64.str_x(9, 13, 0)); lx_li(c, 11, 8); lx(c, arm64.str_x(11, 14, 0));
+    lx_li(c, 0, 0); lx_b(c, "lx_norm");
+    // sysctlbyname: the memory-pressure level is optional input; report it as unavailable (ENOENT)
+    lx_label(c, "lx_sysctlbyname"); lx_li(c, 0, -2); lx_b(c, "lx_norm");
+    // getrlimit: RLIMIT_AS is 5 on Darwin and 9 on Linux; Linux RLIM_INFINITY (~0) becomes the Darwin value 2^63 - 1
+    lx_label(c, "lx_getrlimit");
+    lx(c, arm64.cmp_imm_x(0, 5, iie)); lx_bcc(c, 1, "lx_getrlimit_go"); lx_li(c, 0, 9);
+    lx_label(c, "lx_getrlimit_go");
+    lx_mov(c, 13, 1); lx_li(c, 8, 163); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx(c, arm64.movn_x(11, 0, 0)); lx(c, arm64.lsr_x(12, 11, 1));
+    kaku slot = 0;
+    aida (slot < 2) {
+        kaku keep = lx_name("lx_getrlimit_keep_", slot);
+        lx(c, arm64.ldr_x(9, 13, slot * 8)); lx(c, arm64.cmp_x(9, 11)); lx_bcc(c, 1, keep); lx(c, arm64.str_x(12, 13, slot * 8));
+        lx_label(c, keep);
+        slot = slot + 1;
+    }
+    lx_li(c, 0, 0); lx_b(c, "lx_norm");
+
+    lx_errno(c);
+}

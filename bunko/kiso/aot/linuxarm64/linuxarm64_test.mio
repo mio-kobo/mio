@@ -1,3 +1,4 @@
+yobu "kiso/aot/macho";
 yobu "kiso/testing";
 
 waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
@@ -30,4 +31,55 @@ waza test_code_is_the_documented_aarch64_sequence() -> unit {
 waza test_invalid_input_fails_closed() -> unit {
     testing.expect(hello_image("", 0).error == "INVALID_MESSAGE", "empty message");
     testing.expect(hello_image("x", 256).error == "INVALID_STATUS", "status out of range");
+}
+
+// ---- image(): lowered words + constants + globals + patches -> ELF
+waza image_words() -> []uint32 { kaesu [uint32(0), uint32(0), uint32(3573751839), uint32(3573751839)]; }
+
+waza test_image_applies_patches_with_absolute_addresses() -> unit {
+    // word 0/1: ADRP/ADD of the constant at offset 0 (const section follows the 16 bytes of code, 8-aligned: 0x401010);
+    // word 2/3: ADRP/ADD of global slot 1 (data segment at 0x10000000 + 8).
+    kaku patches = [macho.AddressPatch { at_word: 0, add_at_word: 1, target: macho.const_target(), target_offset: 0, register: 9 },
+        macho.AddressPatch { at_word: 2, add_at_word: 3, target: macho.data_target(), target_offset: 8, register: 10 }];
+    kaku result = image(macho.ImageSpec { words: image_words(), constants: [uint8(7), uint8(8)], globals: 2, patches: patches });
+    testing.expect(result.error == "", "image built");
+    kaku b = result.bytes;
+    testing.expect(word(b, 18, 2) == 183, "EM_AARCH64");
+    testing.expect(word(b, 4096, 4) == 2415919113, "adrp x9, #0 (same 4 KiB page as the code at 0x401000)");
+    testing.expect(word(b, 4100, 4) == 2432704809 + 16 * 1024 - 8 * 1024, "add x9, x9, #0x10 (constant at 0x401010)");
+    // ADRP x10 to page 0x10000 from the page of the instruction at 0x401008 (0x401): delta 0xFFFFF pages... encoded by hand below
+    kaku pages = 268435456 / 4096 - 4198408 / 4096;
+    kaku low = pages - (pages / 4) * 4; kaku high = pages / 4;
+    testing.expect(word(b, 4104, 4) == 2415919104 + low * 536870912 + high * 32 + 10, "adrp x10 to the data segment page");
+    testing.expect(word(b, 4108, 4) == 2432696320 + 8 * 1024 + 10 * 32 + 10, "add x10, x10, #8 (global slot 1)");
+    testing.expect(word(b, 4096 + 16, 1) == 7 && word(b, 4096 + 17, 1) == 8, "constants follow the code");
+    testing.expect(word(b, 64 + 56 + 16, 8) == 268435456 && word(b, 64 + 56 + 32, 8) == 0 && word(b, 64 + 56 + 40, 8) == 16, "two global slots (16 bytes) are reserved in the zero-filled data segment at 0x10000000");
+}
+
+waza test_image_start_stub_converts_the_linux_stack_to_the_darwin_entry_registers() -> unit {
+    kaku result = image(macho.ImageSpec { words: image_words(), constants: [], globals: 0, patches: [] });
+    testing.expect(result.error == "", "image built");
+    kaku b = result.bytes;
+    kaku entry = word(b, 24, 8);
+    kaku start = entry - 4198400;
+    testing.expect(start == 16, "no constants: the stub follows the four code words");
+    testing.expect(word(b, 4096 + start, 4) == 4181722080, "ldr x0, [sp] (argc)");
+    testing.expect(word(b, 4096 + start + 4, 4) == 2432705505, "add x1, sp, #8 (argv)");
+    testing.expect(word(b, 4096 + start + 8, 4) == 2432697347, "add x3, x0, #1");
+    testing.expect(word(b, 4096 + start + 12, 4) == 3548246115, "lsl x3, x3, #3");
+    testing.expect(word(b, 4096 + start + 16, 4) == 2332229666, "add x2, x1, x3 (envp = argv + 8 * (argc + 1))");
+    // b to word 0: from the stub's sixth word at word index start/4 + 5 = 9
+    testing.expect(word(b, 4096 + start + 20, 4) == 335544320 + (67108864 - 9), "b word 0 (imm26 = -9)");
+}
+
+waza test_image_fails_closed() -> unit {
+    testing.expect(image(macho.ImageSpec { words: [], constants: [], globals: 0, patches: [] }).error == "EMPTY_TEXT", "no code");
+    testing.expect(image(macho.ImageSpec { words: image_words(), constants: [], globals: 10245, patches: [] }).error == "TOO_MANY_GLOBALS", "too many globals");
+    testing.expect(image(macho.ImageSpec { words: image_words(), constants: [], globals: -1, patches: [] }).error == "TOO_MANY_GLOBALS", "negative globals");
+    kaku outside = [macho.AddressPatch { at_word: 9, add_at_word: -1, target: macho.text_target(), target_offset: 0, register: 9 }];
+    testing.expect(image(macho.ImageSpec { words: image_words(), constants: [], globals: 0, patches: outside }).error == "INVALID_PATCH", "patch past the code");
+    kaku bad_target = [macho.AddressPatch { at_word: 0, add_at_word: -1, target: macho.data_target(), target_offset: 0, register: 9 }];
+    testing.expect(image(macho.ImageSpec { words: image_words(), constants: [], globals: 0, patches: bad_target }).error == "INVALID_PATCH", "global patch with no globals");
+    kaku same = [macho.AddressPatch { at_word: 0, add_at_word: 0, target: macho.text_target(), target_offset: 0, register: 9 }];
+    testing.expect(image(macho.ImageSpec { words: image_words(), constants: [], globals: 0, patches: same }).error == "INVALID_PATCH", "ADRP and ADD cannot share a word");
 }

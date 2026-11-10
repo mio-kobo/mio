@@ -43,8 +43,13 @@ from prepare import EMPTY
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
 BUDGET_SECONDS = int(os.environ.get("MIO_NATIVE_BUDGET_SECONDS", "6600"))
-TARGETS = {"linux": "linux-amd64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
-EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
+TARGETS = {"linux": "linux-amd64", "linux-arm64": "linux-arm64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
+# Go-hosted Stage A programs per Linux target: the self-contained compiler program, its lowering driver and its messages.
+LINUX_PROFILES = {
+    "linux-amd64": dict(compiler="selfhost/linux-compiler", stage_a="selfhost/native-aot-linux", tag="linux-compiler", aot="native-aot-linux"),
+    "linux-arm64": dict(compiler="selfhost/linux-arm64-compiler", stage_a="selfhost/native-aot-linux-arm64", tag="linux-arm64-compiler", aot="native-aot-linux-arm64"),
+}
+EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "linux-arm64": ("Linux", ("aarch64", "arm64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
                  "windows-amd64": ("Windows", ("amd64", "x86_64"))}
 EXE = {"windows-amd64": ".exe"}
 TCP_PACKAGE = "bunko/kiso/net/tcp"
@@ -571,8 +576,9 @@ def contract(report, cli, target, reference="", suite="contract"):
 
 # ---------------------------------------------------------------------------------------------------- linux
 
-def linux(args):
-    report = Report("linux-amd64", args.output)
+def linux(args, target="linux-amd64"):
+    profile = LINUX_PROFILES[target]
+    report = Report(target, args.output)
     report.run_examples = args.run_examples
     if not verify_host(report):
         return finish(report)
@@ -580,21 +586,21 @@ def linux(args):
     work.mkdir(exist_ok=True)
     refvm = Path(args.refvm).resolve()
     # Stage A: Go reference frontend -> Mochi; pure-Mio lowerlinux running in the Go VM -> ELF. Explicitly go-hosted.
-    mochi = work / "linux-compiler.mochi"
-    code, out, err, seconds = run(report, "stage-a-mochi", [refvm, ROOT / "bunko", "mochi", ROOT / "selfhost/linux-compiler/main.mio", mochi])
+    mochi = work / (profile["tag"] + ".mochi")
+    code, out, err, seconds = run(report, "stage-a-mochi", [refvm, ROOT / "bunko", "mochi", ROOT / (profile["compiler"] + "/main.mio"), mochi])
     if not report.check("stage-a-frontend", "PASS" if code == 0 else "FAIL", "go-hosted",
                         "" if code == 0 else brief(err), seconds=round(seconds, 1),
-                        note="Go reference frontend compiles selfhost/linux-compiler to Mochi"):
+                        note="Go reference frontend compiles %s to Mochi" % profile["compiler"]):
         return finish(report)
     lowering = work / "stage-a-lowering"
     lowering.mkdir(exist_ok=True)
     compiler_a = work / "compiler-A"
     (lowering / "input.config").write_text(str(mochi))
     (lowering / "output.config").write_text(str(compiler_a))
-    code, out, err, seconds = run(report, "stage-a-lowering", [refvm, ROOT / "bunko", "run", ROOT / "selfhost/native-aot-linux/main.mio"], cwd=lowering, timeout=3600)
-    ok = code == 0 and "native-aot-linux: ok" in out and compiler_a.is_file()
+    code, out, err, seconds = run(report, "stage-a-lowering", [refvm, ROOT / "bunko", "run", ROOT / (profile["stage_a"] + "/main.mio")], cwd=lowering, timeout=3600)
+    ok = code == 0 and (profile["aot"] + ": ok") in out and compiler_a.is_file()
     if not report.check("stage-a-lowering", "PASS" if ok else "FAIL", "go-hosted", "" if ok else "exit %s: %s" % (code, brief(err or out)),
-                        seconds=round(seconds, 1), note="pure-Mio lowerlinux executed by the Go reference VM; not a trusted seed"):
+                        seconds=round(seconds, 1), note="pure-Mio %s lowering executed by the Go reference VM; not a trusted seed" % target):
         return finish(report)
     os.chmod(compiler_a, 0o755)
     report.hashes["compiler-A"] = sha256(compiler_a)
@@ -602,8 +608,8 @@ def linux(args):
     paths = {"A": compiler_a}
     for previous, name in (("A", "B"), ("B", "C"), ("C", "D")):
         output = work / ("compiler-" + name)
-        code, out, err, seconds = run(report, "compiler-" + name, [paths[previous]], stdin=("selfhost/linux-compiler\n%s\n" % output).encode())
-        ok = code == 0 and out == "linux-compiler: ok\n" and output.is_file()
+        code, out, err, seconds = run(report, "compiler-" + name, [paths[previous]], stdin=("%s\n%s\n" % (profile["compiler"], output)).encode())
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and output.is_file()
         if not report.check("compiler-stage-" + name, "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)),
                             seconds=round(seconds, 1), built_by=previous):
             return finish(report)
@@ -617,25 +623,28 @@ def linux(args):
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / "mio-A"
     code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
-    ok = code == 0 and out == "linux-compiler: ok\n" and cli_a.is_file()
+    ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
     if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
-    cli = cli_chain(report, cli_a, "linux-amd64", work, checks=True)
+    cli = cli_chain(report, cli_a, target, work, checks=True)
     if cli is None:
         return finish(report)
-    core = core_chain(report, cli, "linux-amd64", work, checks=True)
+    core = core_chain(report, cli, target, work, checks=True)
     if core is None:
         return finish(report)
-    embedded_checks(report, cli, core, "linux-amd64", work)
-    smoke(report, cli, "linux-amd64", work)
+    embedded_checks(report, cli, core, target, work)
+    smoke(report, cli, target, work)
     mio_run_protocol(report, cli, work)
     os_process_protocol(report, cli, work)
     mio_test_protocol(report, cli, work)
     native_mio_test(report, cli, skips_allowed=True)
-    contract(report, cli, "linux-amd64", reference=str(refvm))
-    contract(report, cli, "linux-amd64", reference=str(refvm), suite="differential")
+    contract(report, cli, target, reference=str(refvm))
+    contract(report, cli, target, reference=str(refvm), suite="differential")
+    if target != "linux-amd64":
+        # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
+        return finish(report, cli)
     chain = work / "runtime-chain"
     chain.mkdir(exist_ok=True)
     code, out, err, seconds = run(report, "linux-runtime-chain", [sys.executable, ROOT / "bunko/kiso/runtime/os/linux/check_chain.py"],
@@ -912,9 +921,10 @@ def summary(args):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("linux")
-    p.add_argument("--refvm", required=True)
-    p.add_argument("--output", required=True)
+    for name in ("linux", "linux-arm64"):
+        p = sub.add_parser(name)
+        p.add_argument("--refvm", required=True)
+        p.add_argument("--output", required=True)
     for name in ("darwin", "windows"):
         p = sub.add_parser(name)
         p.add_argument("--stage-a", required=True)
@@ -928,6 +938,8 @@ def main():
     args = parser.parse_args()
     if args.command == "linux":
         return linux(args)
+    if args.command == "linux-arm64":
+        return linux(args, "linux-arm64")
     if args.command == "summary":
         return summary(args)
     return follower(args, TARGETS[args.command])

@@ -97,6 +97,9 @@ waza immediate_arithmetic(base: int64, rd: int64, rn: int64, immediate: int64, s
 koukai waza add_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2432696320, rd, rn, immediate, shift12); }
 koukai waza sub_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(3506438144, rd, rn, immediate, shift12); }
 koukai waza cmp_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(4043309056, 31, rn, immediate, shift12); }
+// ADDS (immediate); CMN Xn, #imm is ADDS XZR, Xn, #imm and sets the carry flag when Xn + imm wraps (Xn >= -imm unsigned).
+koukai waza adds_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2969567232, rd, rn, immediate, shift12); }
+koukai waza cmn_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2969567232, 31, rn, immediate, shift12); }
 
 koukai waza add_imm_w(rd: int64, rn: int64, immediate: int64) -> Instruction {
     kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
@@ -157,6 +160,8 @@ koukai waza ldr_x(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kae
 koukai waza str_x(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(4177526784, rt, rn, byte_offset, 8); }
 koukai waza ldrb_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(960495616, rt, rn, byte_offset, 1); }
 koukai waza strb_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(956301312, rt, rn, byte_offset, 1); }
+koukai waza strh_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(2030043136, rt, rn, byte_offset, 2); }
+koukai waza str_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(3103784960, rt, rn, byte_offset, 4); }
 koukai waza ldrh_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(2034237440, rt, rn, byte_offset, 2); }
 
 waza pair_offset(base: int64, rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
@@ -250,9 +255,20 @@ koukai waza assembler() -> Assembler {
     kaesu Assembler { words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), label_index: [array.make[int64](32, 0)], fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
 }
 
+// Linux ABI mode (opt-in, chosen by defining the label "linux_abi" before any code is emitted): the Darwin system-call
+// instruction SVC #128 (number in x16) becomes `stp x30, xzr, [sp, #-16]!; bl linux_syscall; ldp x30, xzr, [sp], #16`.
+// linux_syscall is a runtime routine that translates the Darwin call into the Linux AArch64 call and restores the Darwin
+// result convention (carry flag set and a positive Darwin errno in x0 on failure). Without the label nothing changes, so
+// Darwin images stay byte-identical.
 koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeError? {
     kaku failure = encoded.error;
     moshi (failure != mu) { array.push(value.errors, failure); kaesu failure; }
+    moshi (encoded.word == uint32(3556773889) && find_label(value, "linux_abi") >= 0) {
+        array.push(value.words, stp_pre_x(30, 31, 31, -16).word);
+        kaku called = assembler_fixup(value, "linux_syscall", 1, 0);
+        array.push(value.words, ldp_post_x(30, 31, 31, 16).word);
+        kaesu called;
+    }
     array.push(value.words, encoded.word);
     kaesu mu;
 }
