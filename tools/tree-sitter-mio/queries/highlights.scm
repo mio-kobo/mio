@@ -1,4 +1,4 @@
-; Highlight queries for Mio. Keywords are exactly those of internal/token (version 0.5).
+; Highlight queries for Mio. Keywords are exactly those of internal/token (version 0.6).
 
 [
   "kaku"
@@ -21,6 +21,9 @@
 ] @keyword.control
 
 "yobu" @keyword.import
+
+; Ownership transfer (language version 0.6): a fully reserved keyword, never an identifier.
+"yuzuru" @keyword.operator
 
 (boolean_literal) @constant.builtin
 (nil_literal) @constant.builtin

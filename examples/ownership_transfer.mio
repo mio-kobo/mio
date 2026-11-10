@@ -1,0 +1,22 @@
+// yuzuru explicitly hands an object graph to a new owner. Ordinary assignment never moves anything.
+kata Batch { label: int64; values: []int64; }
+
+waza total(batch: Batch) -> int64 {
+    kaku i = 0;
+    kaku sum = 0;
+    aida (i < len(batch.values)) {
+        sum = sum + batch.values[i];
+        i = i + 1;
+    }
+    kaesu sum;
+}
+
+waza run() -> int64 {
+    kaku batch = Batch { label: 7, values: [1, 2, 3] };
+    kaku copy_of_name = batch;           // ordinary assignment: an alias, both names usable for now
+    chant(total(copy_of_name));          // 6
+    kaku owner = yuzuru batch;           // moves the graph: batch and its alias are unusable from here
+    kaesu total(owner) + owner.label;    // 13
+}
+
+chant(run());

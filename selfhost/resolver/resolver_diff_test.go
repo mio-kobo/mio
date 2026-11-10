@@ -223,7 +223,7 @@ func walkIdentifiers(value reflect.Value, visit func(*ast.Identifier)) {
 
 func runGoResolver(source string) normalizedResolve {
 	result := normalizedResolve{errorKind: -1, errorOffset: -1, bindings: make(map[string]int)}
-	checked, err := lexer.NewChecked(source, token.V05)
+	checked, err := lexer.NewChecked(source, token.CurrentVersion)
 	if err != nil {
 		return result
 	}

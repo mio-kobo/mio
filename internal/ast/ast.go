@@ -107,6 +107,12 @@ type PrefixExpression struct {
 	Range    Span
 }
 
+// yuzuru 显式所有权转移表达式：operand 必须是被静态跟踪的变量标识符
+type TransferExpression struct {
+	Operand *Identifier
+	Range   Span
+}
+
 // hai / iie 布尔字面量
 type BooleanLiteral struct {
 	Value bool
@@ -425,6 +431,13 @@ func (n *GroupedExpression) Span() Span {
 func (n *PrefixExpression) expressionNode() {}
 
 func (n *PrefixExpression) Span() Span {
+	return n.Range
+}
+
+// yuzuru 显式所有权转移表达式
+func (n *TransferExpression) expressionNode() {}
+
+func (n *TransferExpression) Span() Span {
 	return n.Range
 }
 

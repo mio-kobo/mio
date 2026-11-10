@@ -392,6 +392,10 @@ func (c *Compiler) Compile(node ast.Node) error {
 		// 生成对应算术指令
 		return c.emit(opcode)
 
+		// yuzuru 只在编译期改变所有权状态；运行时它等于读取变量
+	case *ast.TransferExpression:
+		return c.Compile(n.Operand)
+
 		// 编译一元表达式
 	case *ast.PrefixExpression:
 		var opcode code.Opcode

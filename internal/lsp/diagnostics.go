@@ -55,7 +55,7 @@ func (a *analyzer) diagnostics(ctx context.Context, doc *document) []Diagnostic 
 
 // parseSource 直接解析单个源码缓冲区，不经过 Bunko 包合并。
 func parseSource(text string) (*ast.Program, error) {
-	lex, err := lexer.NewChecked(text, token.V05)
+	lex, err := lexer.NewChecked(text, token.CurrentVersion)
 	if err != nil {
 		return nil, err
 	}

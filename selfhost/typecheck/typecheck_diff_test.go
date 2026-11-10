@@ -268,7 +268,7 @@ func runGoTypecheck(source string) error {
 }
 
 func runGoTypecheckDetailed(source string) (*ast.Program, *gotypes.Checker, error) {
-	checked, err := lexer.NewChecked(source, token.V05)
+	checked, err := lexer.NewChecked(source, token.CurrentVersion)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -285,7 +285,7 @@ func runGoTypecheckDetailed(source string) (*ast.Program, *gotypes.Checker, erro
 }
 
 func runGoConstants(source string) (map[string]constant.Value, error) {
-	checked, err := lexer.NewChecked(source, token.V05)
+	checked, err := lexer.NewChecked(source, token.CurrentVersion)
 	if err != nil {
 		return nil, err
 	}

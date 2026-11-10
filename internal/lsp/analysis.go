@@ -358,6 +358,8 @@ func captureBeforeFold(program *ast.Program, result *analysis) *capturedSource {
 			walk(n.Right, fileKey)
 		case *ast.GroupedExpression:
 			walk(n.Expr, fileKey)
+		case *ast.TransferExpression:
+			walk(n.Operand, fileKey)
 		case *ast.PrefixExpression:
 			walk(n.Right, fileKey)
 		case *ast.CallExpression:
@@ -543,11 +545,11 @@ func (a *analysis) bufferFor(key string) *textBuffer {
 // 只有当整个文件无法严格解析时才使用：单条语句失败会被跳过，
 // 其余声明仍然进入 AST，从而保留未受影响的语义信息。
 func parseRecovering(text string) *ast.Program {
-	if _, err := lexer.NewChecked(text, token.V05); err != nil {
+	if _, err := lexer.NewChecked(text, token.CurrentVersion); err != nil {
 		// 非法 UTF-8 不在本阶段的容错范围内。
 		return &ast.Program{}
 	}
-	program, _ := parser.New(lexer.New(text, token.V05)).ParseProgramRecovering()
+	program, _ := parser.New(lexer.New(text, token.CurrentVersion)).ParseProgramRecovering()
 	return program
 }
 

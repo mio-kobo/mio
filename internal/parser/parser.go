@@ -56,6 +56,7 @@ func New(l *lexer.Lexer) *Parser {
 	// 一元运算与括号分组
 	p.registerPrefix(token.Minus, p.parsePrefixExpression)
 	p.registerPrefix(token.Bang, p.parsePrefixExpression)
+	p.registerPrefix(token.Yuzuru, p.parseTransferExpression)
 	p.registerPrefix(token.LParen, p.parseGroupedExpression)
 	p.registerPrefix(token.LBracket, p.parseArrayLiteral)
 
@@ -774,6 +775,36 @@ func (p *Parser) parsePrefixExpression() (ast.Expression, error) {
 			End:   right.Span().End,
 		},
 	}, nil
+}
+
+// parseTransferExpression 解析 yuzuru 显式所有权转移：`yuzuru name`。
+// 操作数必须是单个变量标识符（不是分组、字段、下标或调用结果）。
+func (p *Parser) parseTransferExpression() (ast.Expression, error) {
+	keyword := p.curToken
+	if p.peekToken.Type != token.Ident {
+		return nil, p.transferOperandError(keyword)
+	}
+	p.nextToken()
+	operand := &ast.Identifier{
+		Name:  p.curToken.Literal,
+		Range: ast.Span{Start: p.curToken.Start, End: p.curToken.End},
+	}
+	// yuzuru a.b / yuzuru a[0] / yuzuru f(x) would transfer something that is not a tracked variable.
+	switch p.peekToken.Type {
+	case token.Dot, token.LBracket, token.LParen:
+		return nil, p.transferOperandError(keyword)
+	}
+	return &ast.TransferExpression{
+		Operand: operand,
+		Range:   ast.Span{Start: keyword.Start, End: operand.Range.End},
+	}, nil
+}
+
+func (p *Parser) transferOperandError(keyword token.Token) error {
+	at := p.peekToken
+	cause := fmt.Errorf("yuzuru operand must be a plain variable name, got %s", at.Type)
+	return diagnostic.NewError("E0103", "yuzuru 的操作数必须是单个变量名", diagnostic.FromPositions(keyword.Start, at.End)).
+		WithHelp("先把要转移的值放入局部变量，再写 yuzuru 变量名").WithCause(cause)
 }
 
 // parseInfixExpression 解析算术、比较和逻辑中缀表达式。

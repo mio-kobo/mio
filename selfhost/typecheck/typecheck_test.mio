@@ -233,3 +233,34 @@ waza test_qualified_name_matches_concatenation() -> unit {
     testing.expect(wrong == 0, "qualified name comparison equals package + dot + name");
     testing.expect(qualified_name_matches("a", "bc", "a.bc") && !qualified_name_matches("ab", "c", "a.bc") && !qualified_name_matches("a", "bc", "a.bd"), "split point and last byte matter");
 }
+
+// ---- yuzuru: explicit ownership transfer (docs/concurrency.md). The Go reference reports the same codes.
+waza first_code(result: TypeCheckResult) -> string {
+    moshi (len(result.errors) == 0) { kaesu ""; }
+    kaesu result.errors[0].code;
+}
+
+waza test_transfer_accepts_a_move_and_keeps_ordinary_assignment() -> unit {
+    kaku moved = check_source("waza f() -> int64 { kaku a = [1, 2]; kaku b = yuzuru a; kaesu len(b); }");
+    testing.expect(len(moved.errors) == 0, "a transferred graph is usable through its new owner");
+    kaku revived = check_source("waza f() -> int64 { kaku a = [1]; kaku b = yuzuru a; a = [2, 3]; kaesu len(a) + len(b); }");
+    testing.expect(len(revived.errors) == 0, "reassignment makes a moved variable usable again");
+    kaku plain = check_source("waza f() -> int64 { kaku a = [1]; kaku b = a; a = [2]; kaesu len(a) + len(b); }");
+    testing.expect(len(plain.errors) == 0, "ordinary assignment keeps both names usable");
+    kaku unused_alias = check_source("waza f() -> int64 { kaku a = [1]; kaku b = a; kaku c = yuzuru a; kaesu len(c); }");
+    testing.expect(len(unused_alias.errors) == 0, "an alias that is never used again is harmless");
+}
+
+waza test_transfer_rejects_use_after_transfer_and_double_transfer() -> unit {
+    testing.expect(first_code(check_source("waza f() -> int64 { kaku a = [1]; kaku b = yuzuru a; kaesu len(a); }")) == "E0702", "use after transfer");
+    testing.expect(first_code(check_source("waza f() -> int64 { kaku a = [1]; kaku b = yuzuru a; kaku c = yuzuru a; kaesu 0; }")) == "E0703", "double transfer");
+    testing.expect(first_code(check_source("waza f(c: bool) -> int64 { kaku a = [1]; moshi (c) { kaku b = yuzuru a; } kaesu len(a); }")) == "E0702", "maybe moved on one branch");
+    testing.expect(first_code(check_source("waza f() -> int64 { kaku a = [1]; kaku i = 0; aida (i < 2) { kaku b = yuzuru a; i = i + 1; } kaesu 0; }")) == "E0703", "a loop transfers twice");
+}
+
+waza test_transfer_rejects_live_aliases_and_invalid_operands() -> unit {
+    testing.expect(first_code(check_source("waza f() -> int64 { kaku a = [1]; kaku b = a; kaku c = yuzuru a; kaesu len(b); }")) == "E0704", "alias used after transfer");
+    testing.expect(first_code(check_source("waza f(p: []int64) -> int64 { kaku b = yuzuru p; kaesu 0; }")) == "E0701", "parameters cannot be transferred");
+    testing.expect(first_code(check_source("waza f() -> int64 { kaku a = [1]; kaku g = waza() -> int64 { kaesu len(a); }; kaku b = yuzuru a; kaesu g(); }")) == "E0701", "closure-captured variables cannot be transferred");
+    testing.expect(first_code(check_source("kaku a = [1];\nwaza peek() -> int64 { kaesu len(a); }\nkaku b = yuzuru a;")) == "E0701", "top-level variables reachable from functions cannot be transferred");
+}

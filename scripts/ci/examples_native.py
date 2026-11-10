@@ -44,6 +44,7 @@ PROGRAMS = {
     "structs_and_enums.mio": Expected(b"7\n75\n24\n0\n"),
     "generics.mio": Expected(b"Mio\nMochi\n42\nhai\n"),
     "closures.mio": Expected(b"1\n2\n1\n"),
+    "ownership_transfer.mio": Expected(b"6\n13\n"),
     "maps.mio": Expected(b"43\nhai\n"),
     "arrays.mio": Expected(b"4\n99\n99\n1\n2\n"),
     "math.mio": Expected(b"6\n0\n3\n129\n"),

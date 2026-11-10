@@ -274,6 +274,10 @@ func (b *indexBuilder) walkExpression(expression ast.Expression, fileKey string,
 	case *ast.GroupedExpression:
 		b.walkExpression(n.Expr, fileKey, container)
 
+	case *ast.TransferExpression:
+		b.walkExpression(n.Operand, fileKey, container)
+		b.addExpr(n, fileKey, false)
+
 	case *ast.PrefixExpression:
 		b.walkExpression(n.Right, fileKey, container)
 		b.addExpr(n, fileKey, false)

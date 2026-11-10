@@ -254,6 +254,9 @@ func (f *fingerprinter) expression(expression ast.Expression) {
 	case *ast.GroupedExpression:
 		f.text("group")
 		f.expression(node.Expr)
+	case *ast.TransferExpression:
+		f.text("transfer")
+		f.expression(node.Operand)
 	case *ast.PrefixExpression:
 		f.text("prefix")
 		f.text(string(node.Operator))

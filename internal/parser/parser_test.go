@@ -1441,3 +1441,34 @@ func TestInvalidFunctionTypeAnnotations(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTransferExpression(t *testing.T) {
+	l := lexer.New("kaku b = yuzuru a;\nthread(c, yuzuru a);\n", token.CurrentVersion)
+	program, err := New(l).ParseProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	let := program.Statements[0].(*ast.LetStatement)
+	transfer, ok := let.Value.(*ast.TransferExpression)
+	if !ok || transfer.Operand.Name != "a" {
+		t.Fatalf("let value is %T, want a transfer of a", let.Value)
+	}
+	if transfer.Span().Start.Column != 10 || transfer.Span().End.Column != 18 {
+		t.Fatalf("transfer span = %+v", transfer.Span())
+	}
+	call := program.Statements[1].(*ast.ExpressionStatement).Expr.(*ast.CallExpression)
+	if _, ok := call.Arguments[1].(*ast.TransferExpression); !ok {
+		t.Fatalf("call argument is %T, want a transfer", call.Arguments[1])
+	}
+	// An ordinary assignment is still an ordinary assignment: no transfer node appears.
+	plain, err := New(lexer.New("kaku b = a;\nb = a;", token.CurrentVersion)).ParseProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, bad := plain.Statements[0].(*ast.LetStatement).Value.(*ast.TransferExpression); bad {
+		t.Fatal("ordinary initialisation must not parse as a transfer")
+	}
+	if _, bad := plain.Statements[1].(*ast.AssignStatement).Value.(*ast.TransferExpression); bad {
+		t.Fatal("ordinary assignment must not parse as a transfer")
+	}
+}

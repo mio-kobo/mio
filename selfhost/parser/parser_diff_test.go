@@ -61,7 +61,7 @@ var tokenCodes = map[token.Type]int{
 	token.Return: 35, token.True: 36, token.False: 37, token.Nil: 38, token.While: 39,
 	token.Break: 40, token.Continue: 41, token.Struct: 42, token.Enum: 43,
 	token.Match: 44, token.Case: 45, token.Import: 46, token.Export: 47,
-	token.Const: 48, token.Colon: 49, token.Arrow: 50,
+	token.Const: 48, token.Colon: 49, token.Arrow: 50, token.Yuzuru: 51,
 }
 
 func repositoryRoot(t testing.TB) string {
@@ -327,6 +327,11 @@ func normalizeExpression(expression ast.Expression, source string) *canonicalNod
 		result := node(11, value.Range, normalizeExpression(value.Left, source), normalizeExpression(value.Right, source))
 		result.operator = tokenCodes[value.Operator]
 		return result
+	case *ast.TransferExpression:
+		// The self-hosted AST represents yuzuru as a prefix node whose operator is the Yuzuru token.
+		result := node(12, value.Range, normalizeExpression(value.Operand, source))
+		result.operator = tokenCodes[token.Yuzuru]
+		return result
 	case *ast.PrefixExpression:
 		result := node(12, value.Range, normalizeExpression(value.Right, source))
 		result.operator = tokenCodes[value.Operator]
@@ -545,7 +550,7 @@ func normalizeProgram(program *ast.Program, source string) *canonicalNode {
 }
 
 func goParse(source []byte) (*canonicalNode, []wireError) {
-	checked, err := lexer.NewChecked(string(source), token.V05)
+	checked, err := lexer.NewChecked(string(source), token.CurrentVersion)
 	if err != nil {
 		lexical := err.(*lexer.LexicalError)
 		return nil, []wireError{{kind: 0, position: lexical.Position}}
@@ -561,6 +566,9 @@ func goParse(source []byte) (*canonicalNode, []wireError) {
 		kind := 1
 		if detailed.Code == "E0102" {
 			kind = 2
+		}
+		if detailed.Code == "E0103" {
+			kind = 7 // yuzuru operand is not a single variable name
 		}
 		label, _ := detailed.PrimaryLabel()
 		return nil, []wireError{{kind: kind, position: token.Position{Offset: label.Span.Start.Offset, Line: label.Span.Start.Line, Column: label.Span.Start.Column}}}
@@ -671,6 +679,12 @@ func TestMioParserDifferentialCorpus(t *testing.T) {
 		[]byte(`yobu "kiso/array"; koukai waza exported() -> unit { kaesu; }`),
 		[]byte(`kaku value = (1 + 2;`), []byte(`waza missing(value: int64 -> unit {}`),
 		[]byte(`moshi hai) {}`), []byte(`kaku = 1;`), []byte(`1 + ;`), []byte("\xff"),
+		// yuzuru: explicit ownership transfer (prefix, one variable name) and its rejected operand forms
+		[]byte(`kaku mine = yuzuru graph; send(channel, yuzuru graph); value = yuzuru other;`),
+		[]byte(`waza f() -> int64 { kaesu len(yuzuru items); }`),
+		[]byte(`kaku a = yuzuru b.c;`), []byte(`kaku a = yuzuru b[0];`), []byte(`kaku a = yuzuru f();`), []byte(`kaku a = yuzuru (b);`),
+		[]byte(`kaku a = yuzuru 1;`), []byte(`kaku a = yuzuru;`), []byte(`kaku yuzuru = 1;`), []byte(`waza yuzuru() -> unit {}`),
+		[]byte(`kata P { yuzuru: int64; }`),
 	}
 	valid, invalid := compareCorpus(t, corpus)
 	t.Logf("定向语料：有效 %d，非法 %d", valid, invalid)
@@ -837,7 +851,7 @@ func countCanonicalNodes(root *canonicalNode) int {
 }
 
 func countTokens(source []byte) int {
-	checked, err := lexer.NewChecked(string(source), token.V05)
+	checked, err := lexer.NewChecked(string(source), token.CurrentVersion)
 	if err != nil {
 		return 0
 	}
@@ -885,7 +899,7 @@ func benchmarkGoParser(b *testing.B, source []byte) {
 	b.ReportMetric(float64(countCanonicalNodes(expected)), "nodes/op")
 	b.ReportMetric(float64(len(errors)), "errors/op")
 	for iteration := 0; iteration < b.N; iteration++ {
-		checked, err := lexer.NewChecked(string(source), token.V05)
+		checked, err := lexer.NewChecked(string(source), token.CurrentVersion)
 		if err == nil {
 			_, _ = goparser.New(checked).ParseProgram()
 		}

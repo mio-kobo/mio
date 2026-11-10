@@ -59,3 +59,29 @@ func TestLookupCoreTypeKeywords(t *testing.T) {
 		}
 	}
 }
+
+func TestYuzuruKeywordVersioning(t *testing.T) {
+	if got := LookupIdent("yuzuru", V05); got != Ident {
+		t.Fatalf("V05 must keep yuzuru an identifier, got %s", got)
+	}
+	if got := LookupIdent("yuzuru", V06); got != Yuzuru {
+		t.Fatalf("V06 must reserve yuzuru, got %s", got)
+	}
+	if CurrentVersion != V06 {
+		t.Fatalf("current language version must reserve yuzuru")
+	}
+	found := false
+	for _, k := range Keywords(CurrentVersion) {
+		if k == "yuzuru" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("completion keyword list is missing yuzuru")
+	}
+	for _, k := range Keywords(V05) {
+		if k == "yuzuru" {
+			t.Fatal("V05 keyword list must not include yuzuru")
+		}
+	}
+}

@@ -178,6 +178,8 @@ func requiresCoreTypeFallback(program *ast.Program, r *resolver.Resolver) bool {
 			}
 		case *ast.GroupedExpression:
 			return expressionNeedsFallback(node.Expr)
+		case *ast.TransferExpression:
+			return expressionNeedsFallback(node.Operand)
 		case *ast.PrefixExpression:
 			return expressionNeedsFallback(node.Right)
 		case *ast.InfixExpression:
@@ -302,7 +304,7 @@ func (c *Compiler) StoreFunction(key string, artifact bytecodecompiler.FunctionA
 }
 
 func parseAndResolve(source string) (*ast.Program, *resolver.Resolver, error) {
-	l, err := lexer.NewChecked(source, token.V05)
+	l, err := lexer.NewChecked(source, token.CurrentVersion)
 	if err != nil {
 		return nil, nil, err
 	}

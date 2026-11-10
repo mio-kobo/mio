@@ -666,6 +666,8 @@ func (e *evaluator) replace(expression *ast.Expression, locals map[string]bool) 
 	switch n := (*expression).(type) {
 	case *ast.GroupedExpression:
 		return e.replace(&n.Expr, locals)
+	case *ast.TransferExpression:
+		return nil
 	case *ast.PrefixExpression:
 		return e.replace(&n.Right, locals)
 	case *ast.InfixExpression:

@@ -253,6 +253,10 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 	case *ast.GroupedExpression:
 		return c.checkExpression(n.Expr)
 
+	// yuzuru：类型与操作数相同；所有权规则由 checkOwnership 在函数体级别验证
+	case *ast.TransferExpression:
+		return c.checkExpression(n.Operand)
+
 	// 一元表达式
 	case *ast.PrefixExpression:
 		if literal := groupedIntegerLiteral(n.Right); literal != nil && n.Operator == token.Minus {
