@@ -75,7 +75,7 @@ def package_files(version, flavor, record, fixture=False):
     description = ('Native Mio compiler, supported Bunko standard library and integrated check/build/run/exec/test/lsp/disasm tools. Supports offline development.' if flavor == 'full' else 'The identical native Mio compiler without importable Bunko or standalone tools. Compiles library-free programs. Command: mio-core.')
     fields = dict(id=name, version=version, title='Mio' + (' Core' if flavor == 'core' else ''), authors='Mio Kobo',
                   projectUrl='https://github.com/mio-kobo/mio', licenseUrl='https://github.com/mio-kobo/mio/blob/Mio-2.1/LICENSE',
-                  iconUrl='https://raw.githubusercontent.com/mio-kobo/mio-docs/07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
+                  iconUrl='https://cdn.jsdelivr.net/gh/mio-kobo/mio-docs@07dcf2520b848ee84285039f058c74983728b6e3/app/icon.png',
                   packageSourceUrl='https://github.com/mio-kobo/mio/tree/Mio-2.1/scripts/package_managers',
                   releaseNotes=f'https://github.com/mio-kobo/mio/releases/tag/v{version}' if not fixture else 'Chocolatey lifecycle fixture.',
                   docsUrl='https://mio.kaelexvp.cc/docs/',
