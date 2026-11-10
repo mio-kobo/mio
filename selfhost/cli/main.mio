@@ -6,15 +6,112 @@ yobu "kiso/fs";
 yobu "kiso/string";
 yobu "selfhost/frontend";
 yobu "selfhost/diagnostic";
+yobu "selfhost/i18n";
 yobu "selfhost/pipeline";
 yobu "selfhost/disasm";
 yobu "selfhost/testrunner";
+yobu "selfhost/theme";
+yobu "selfhost/usage";
 yobu "selfhost/lsp/rpc";
 
 // Mio v2.1 CLI. Full embeds Bunko; Core keeps the external-only distribution.
 // Command, compatibility, embedded-resource and isolation gates remain in CI.
+kaku cli_language = "en-US";
+kaku cli_theme = theme.Theme {enabled: iie, depth: theme.depth_ansi, palette: theme.palette_neutral};
+
+koukai kata Globals { rest: []string; language: string; theme: string; color: string; error: string; detail: string; }
+
 waza fail(message: string, status: int64) -> unit {
     fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n"))); os.exit(status);
+}
+waza error_message(code: string, key: string, detail: string) -> string {
+    kaku text = i18n.format(cli_language, key, [detail]);
+    kaesu string.concat(code, string.concat(" ", text));
+}
+waza version_banner() -> string { kaesu "mio v2.1.2-dev (pure Mio Native AOT; maintenance candidate)"; }
+waza version_name() -> string {
+    kaku data = string.to_bytes(version_banner()); kaku at = 0;
+    aida (at < len(data) && data[at] != uint8(32)) { at = at + 1; }
+    kaku start = at + 1; moshi (start < len(data) && data[start] == uint8(118)) { start = start + 1; }
+    kaku end = start; aida (end < len(data) && data[end] != uint8(32)) { end = end + 1; }
+    kaku bytes: []uint8 = []; at = start;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { kaesu "dev"; } kaesu value;
+}
+waza slice(data: []uint8, first: int64, end: int64) -> string {
+    kaku bytes: []uint8 = []; kaku at = first;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { kaesu ""; } kaesu value;
+}
+waza value_of(option: string, prefix: string) -> string { kaesu slice(string.to_bytes(option), string.byte_len(prefix), string.byte_len(option)); }
+waza takes_value(option: string) -> bool {
+    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols";
+}
+
+// Global options may appear before or after the command, so they are removed
+// before command parsing. Values of ordinary options are never interpreted as
+// globals; everything after -- belongs to the program under test.
+waza global_options(args: []string) -> Globals {
+    kaku rest: []string = []; kaku language = ""; kaku selected_theme = ""; kaku selected_color = ""; kaku error = ""; kaku detail = "";
+    moshi (len(args) > 0) { array.push(rest, args[0]); }
+    kaku at = 1;
+    aida (at < len(args) && error == "") {
+        kaku option = args[at];
+        moshi (option == "--") { array.append_all(rest, slice_array(args, at, len(args))); at = len(args); nukeru; }
+        moshi (option == "--lang" || string.has_prefix(option, "--lang=")) {
+            kaku value = ""; moshi (option == "--lang") {
+                moshi (at + 1 >= len(args) || string.has_prefix(args[at + 1], "-")) { error = i18n.key_err_missing_value; detail = "--lang"; }
+                sore { at = at + 1; value = args[at]; }
+            } sore { value = value_of(option, "--lang="); }
+            moshi (error == "" && value == "") { error = i18n.key_err_missing_value; detail = "--lang"; }
+            moshi (error == "") { language = value; }
+            at = at + 1; tsuzuku;
+        }
+        moshi (option == "--theme" || string.has_prefix(option, "--theme=")) {
+            kaku value = ""; moshi (option == "--theme") {
+                moshi (at + 1 >= len(args) || string.has_prefix(args[at + 1], "-")) { error = i18n.key_err_missing_value; detail = "--theme"; }
+                sore { at = at + 1; value = args[at]; }
+            } sore { value = value_of(option, "--theme="); }
+            moshi (error == "" && value != "auto" && value != "dark" && value != "light") { error = i18n.key_err_invalid_theme; detail = value; }
+            moshi (error == "") { selected_theme = value; }
+            at = at + 1; tsuzuku;
+        }
+        moshi (option == "--color" || string.has_prefix(option, "--color=")) {
+            kaku value = ""; moshi (option == "--color") {
+                moshi (at + 1 >= len(args) || string.has_prefix(args[at + 1], "-")) { error = i18n.key_err_missing_value; detail = "--color"; }
+                sore { at = at + 1; value = args[at]; }
+            } sore { value = value_of(option, "--color="); }
+            moshi (error == "" && value != "auto" && value != "always" && value != "never") { error = i18n.key_err_invalid_color; detail = value; }
+            moshi (error == "") { selected_color = value; }
+            at = at + 1; tsuzuku;
+        }
+        moshi (takes_value(option) && at + 1 < len(args)) { array.push(rest, option); at = at + 1; array.push(rest, args[at]); at = at + 1; tsuzuku; }
+        array.push(rest, option); at = at + 1;
+    }
+    moshi (at < len(args)) { array.append_all(rest, slice_array(args, at, len(args))); }
+    kaesu Globals { rest: rest, language: language, theme: selected_theme, color: selected_color, error: error, detail: detail };
+}
+waza slice_array(values: []string, first: int64, end: int64) -> []string {
+    kaku result: []string = []; kaku at = first;
+    aida (at < end) { array.push(result, values[at]); at = at + 1; }
+    kaesu result;
+}
+
+waza write_help(text: string) -> unit {
+    // chant() writes to the already-open stdout descriptor. Reopening
+    // /dev/stdout is neither portable to all native runtimes nor needed.
+    kaku data = string.to_bytes(text); kaku end = len(data);
+    moshi (end > 0 && data[end - 1] == uint8(10)) { end = end - 1; }
+    kaku bytes: []uint8 = []; kaku at = 0;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { fail("E_IO cannot write help", 1); kaesu; }
+    chant(value);
+}
+waza show_help(language: string, name: string) -> unit {
+    moshi (name == "") { write_help(usage.global(language, version_name(), cli_theme)); kaesu; }
+    kaku text = usage.command(language, name, cli_theme);
+    moshi (text == "") { fail(error_message("E_COMMAND", i18n.key_err_help_unknown, name), 2); kaesu; }
+    write_help(text);
 }
 
 waza analysis_failed(analyzed: frontend.AnalysisResult, entry: string, opts: diagnostic.Options, cause: string) -> bool {
@@ -26,141 +123,141 @@ waza analysis_failed(analyzed: frontend.AnalysisResult, entry: string, opts: dia
     moshi(analyzed.error!=""){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(analyzed.error,entry,opts)));kaesu hai;}
     kaesu iie;
 }
-waza source_failure(entry: string, bunko: string, opts: diagnostic.Options, cause: string) -> unit {
+waza source_failure(entry: string, bunko: string, opts: diagnostic.Options, detail: string, cause: string) -> unit {
     kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
-    moshi(!analysis_failed(analyzed,entry,opts,cause)){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(cause,entry,opts)));}
+    moshi(!analysis_failed(analyzed,entry,opts,cause)){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(detail,cause,entry,opts)));}
     os.exit(1);
 }
 
-waza help() -> unit {
-    chant("mio v2 native development candidate");
-    chant("mio version | help [command]");
-    chant("mio run <source> [-- program arguments...]");
-    chant("mio exec <file.mochi> [-- program arguments...]");
-    chant("mio disasm <file.mochi>");
-    chant("mio test <directory[/...]> [--run=regexp] [--format=human|short|json] [--lang=locale] [--verbose]");
-    chant("mio lsp [--stdio] [--bunko-root <directory>]");
-    chant("mio check <source> [--bunko-root <directory>]");
-    chant("source diagnostics: --color=auto|always|never --format=human|short|json --verbose");
-    chant("mio build <source> [-o <output>] [--emit=mochi] [--target=darwin-arm64|linux-amd64|windows-amd64] [--gc-stress] [--observe] [--emit-symbols <file>] [--bunko-root <directory>]");
-}
 waza run() -> unit {
-    kaku args = os.arguments();
-    moshi (len(args) < 2) { help(); kaesu; }
+    kaku globals = global_options(os.arguments());
+    kaku language = i18n.select(globals.language);
+    cli_language = language;
+    kaku color = "auto"; moshi (globals.color != "") { color = globals.color; }
+    kaku selected_theme = "auto"; moshi (globals.theme != "") { selected_theme = globals.theme; }
+    cli_theme = theme.resolve_for(color, selected_theme, "/dev/stdout");
+    moshi (globals.error != "") { fail(error_message("E_OPTIONS", globals.error, globals.detail), 2); kaesu; }
+    kaku args = globals.rest;
+    moshi (len(args) < 2) { show_help(language, ""); kaesu; }
     kaku command = args[1];
-    moshi (command == "test") { os.exit(testrunner.command(args)); kaesu; }
-    moshi (command == "lsp") { os.exit(rpc.command(args)); kaesu; }
+    moshi (command == "test") { os.exit(testrunner.command(args, language, color, selected_theme)); kaesu; }
+    moshi (command == "lsp") { os.exit(rpc.run_command(args, language)); kaesu; }
     moshi (command == "version" || command == "--version") {
-        moshi (len(args) != 2) { fail("E_OPTIONS version takes no arguments", 2); kaesu; }
-        chant("mio v2.1.1-dev (pure Mio Native AOT; maintenance candidate)"); kaesu;
+        moshi (len(args) != 2) { fail(error_message("E_OPTIONS", i18n.key_err_version_args, ""), 2); kaesu; }
+        chant(version_banner()); kaesu;
     }
     moshi (command == "help" || command == "--help" || command == "-h") {
-        moshi (len(args) > 3) { fail("E_OPTIONS help takes at most one command", 2); kaesu; }
-        moshi (len(args) == 3 && args[2] != "build" && args[2] != "check" && args[2] != "run" && args[2] != "exec" && args[2] != "disasm" && args[2] != "version" && args[2] != "test" && args[2] != "lsp") { fail("E_COMMAND command migration is incomplete", 2); kaesu; }
-        help(); kaesu;
+        moshi (len(args) > 3) { fail(error_message("E_OPTIONS", i18n.key_err_help_args, ""), 2); kaesu; }
+        moshi (len(args) == 3) { show_help(language, args[2]); kaesu; }
+        show_help(language, ""); kaesu;
     }
-    moshi (command != "build" && command != "check" && command != "run" && command != "exec" && command != "disasm") { fail("E_COMMAND native command migration is incomplete", 2); kaesu; }
-    kaku opts=diagnostic.options();
+    moshi (command != "build" && command != "check" && command != "run" && command != "exec" && command != "disasm") {
+        fail(error_message("E_COMMAND", i18n.key_err_unknown_command, command), 2); kaesu;
+    }
+    kaku opts=diagnostic.Options {format:"human",color:color,verbose:iie,lang:language,theme:selected_theme};
     kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku at = 2;
     aida (at < len(args)) {
         kaku option = args[at];
         moshi (option == "--") {
-            moshi (command != "run" && command != "exec") { fail("E_OPTIONS program arguments require run or exec", 2); kaesu; }
+            moshi (command != "run" && command != "exec") { fail(error_message("E_OPTIONS", i18n.key_err_program_args, ""), 2); kaesu; }
             at = at + 1;
             aida (at < len(args)) { array.push(program_args, args[at]); at = at + 1; }
             tsuzuku;
         }
-        moshi(option=="--verbose"){opts=diagnostic.Options {format:opts.format,color:opts.color,verbose:hai};at=at+1;tsuzuku;}
+        moshi(option=="--verbose"){opts=diagnostic.Options {format:opts.format,color:opts.color,verbose:hai,lang:opts.lang,theme:opts.theme};at=at+1;tsuzuku;}
         moshi(option=="--format=human" || option=="--format=short" || option=="--format=json"){
             kaku format="human";moshi(option=="--format=short"){format="short";}moshi(option=="--format=json"){format="json";}
-            opts=diagnostic.Options {format:format,color:opts.color,verbose:opts.verbose};at=at+1;tsuzuku;
+            opts=diagnostic.Options {format:format,color:opts.color,verbose:opts.verbose,lang:opts.lang,theme:opts.theme};at=at+1;tsuzuku;
+        }
+        moshi(string.has_prefix(option, "--format=")){
+            fail(error_message("E_OPTIONS", i18n.key_err_invalid_format, value_of(option, "--format=")), 2); kaesu;
         }
         moshi(option=="--color=auto" || option=="--color=always" || option=="--color=never"){
-            kaku color="auto";moshi(option=="--color=always"){color="always";}moshi(option=="--color=never"){color="never";}
-            opts=diagnostic.Options {format:opts.format,color:color,verbose:opts.verbose};at=at+1;tsuzuku;
+            kaku selected="auto";moshi(option=="--color=always"){selected="always";}moshi(option=="--color=never"){selected="never";}
+            opts=diagnostic.Options {format:opts.format,color:selected,verbose:opts.verbose,lang:opts.lang,theme:opts.theme};at=at+1;tsuzuku;
         }
         moshi (option == "--target" || string.has_prefix(option, "--target=")) {
             kaku value = "";
             moshi (option == "--target") {
-                moshi (at + 1 >= len(args)) { fail("E_OPTIONS missing option value", 2); kaesu; }
+                moshi (at + 1 >= len(args)) { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--target"), 2); kaesu; }
                 at = at + 1; value = args[at];
             }
             moshi (option != "--target") { value = string.trim_space(string.concat("", option)); kaku bytes = string.to_bytes(option); kaku tail: []uint8 = []; kaku cut = 9; aida (cut < len(bytes)) { array.push(tail, bytes[cut]); cut = cut + 1; } kaku parsed = string.from_utf8(tail); moshi (parsed != mu) { value = parsed; } }
-            moshi (value != "darwin-arm64" && value != "linux-amd64" && value != "windows-amd64") { fail("E_TARGET unsupported target (expected darwin-arm64, linux-amd64 or windows-amd64)", 2); kaesu; }
+            moshi (value != "darwin-arm64" && value != "linux-amd64" && value != "windows-amd64") { fail(error_message("E_TARGET", i18n.key_err_target, value), 2); kaesu; }
             target = value; at = at + 1; tsuzuku;
         }
         moshi (option == "--emit-symbols") {
-            moshi (at + 1 >= len(args) || args[at + 1] == "") { fail("E_OPTIONS missing option value", 2); kaesu; }
+            moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--emit-symbols"), 2); kaesu; }
             symbols = args[at + 1]; at = at + 2; tsuzuku;
         }
         moshi (option == "-o" || option == "--bunko-root") {
-            moshi (at + 1 >= len(args)) { fail("E_OPTIONS missing option value", 2); kaesu; }
+            moshi (at + 1 >= len(args)) { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, option), 2); kaesu; }
             at = at + 1;
-            moshi (option == "-o") { moshi ((command == "run" || command == "exec")) { fail("E_OPTIONS run/exec manages its native output", 2); kaesu; } output = args[at]; }
-            sore { bunko = args[at]; moshi (bunko == "") { fail("E_OPTIONS Bunko override must be explicit and nonempty", 2); kaesu; } }
+            moshi (option == "-o") { moshi ((command == "run" || command == "exec")) { fail(error_message("E_OPTIONS", i18n.key_err_run_output, ""), 2); kaesu; } output = args[at]; }
+            sore { bunko = args[at]; moshi (bunko == "") { fail(error_message("E_OPTIONS", i18n.key_err_bunko_empty, ""), 2); kaesu; } }
         }
         sore { moshi (option == "--emit=mochi") { emit_mochi = hai; } sore { moshi (option == "--gc-stress") { gc_stress = hai; } sore { moshi (option == "--observe") { observe = hai; }
-        sore { moshi (string.has_prefix(option, "-")) { fail(string.concat("E_OPTIONS unknown option: ", option), 2); kaesu; }
-        sore { moshi (entry != "") { fail("E_OPTIONS multiple source entries", 2); kaesu; } entry = option; } } } } }
+        sore { moshi (string.has_prefix(option, "-")) { fail(error_message("E_OPTIONS", i18n.key_err_unknown_option, option), 2); kaesu; }
+        sore { moshi (entry != "") { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; } entry = option; } } } } }
         at = at + 1;
     }
     kaku library=bunkopath.resolve(bunko); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
-    moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail("E_OPTIONS run requires native output", 2); kaesu; }
-    moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail("E_OPTIONS --emit-symbols applies to darwin-arm64 native builds from source", 2); kaesu; }
-    moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail("E_OPTIONS --observe applies to darwin-arm64 native builds from source", 2); kaesu; }
-    moshi (gc_stress && (emit_mochi || command == "exec" || command == "disasm" || command == "check")) { fail("E_OPTIONS --gc-stress applies to native builds from source", 2); kaesu; }
+    moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
+    moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_symbols, ""), 2); kaesu; }
+    moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_observe, ""), 2); kaesu; }
+    moshi (gc_stress && (emit_mochi || command == "exec" || command == "disasm" || command == "check")) { fail(error_message("E_OPTIONS", i18n.key_err_gc_stress, ""), 2); kaesu; }
     // run/exec start the image on this machine, so it must be built for the host; --target defaults to the host.
-    moshi (target != host && (command == "run" || command == "exec")) { fail(string.concat("E_TARGET run and exec need the host target ", host), 2); kaesu; }
-    moshi (entry == "" || output == "") { fail("E_OPTIONS source and output must be nonempty", 2); kaesu; }
+    moshi (target != host && (command == "run" || command == "exec")) { fail(error_message("E_TARGET", i18n.key_err_host_target, host), 2); kaesu; }
+    moshi (entry == "" || output == "") { fail(error_message("E_OPTIONS", i18n.key_err_empty_paths, ""), 2); kaesu; }
     moshi(command=="check"){
         kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
-        moshi(analysis_failed(analyzed,entry,opts,"source analysis failed")){os.exit(1);}kaesu;
+        moshi(analysis_failed(analyzed,entry,opts,i18n.text(language, i18n.key_err_analysis))){os.exit(1);}kaesu;
     }
     moshi (emit_mochi) {
         kaku checked = frontend.compile_source(".", entry, bunko);
-        moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error); kaesu; }
+        moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error,i18n.text(language, i18n.key_err_analysis)); kaesu; }
         kaku written = fs.write_all(output, checked.bytes);
-        moshi (written.error != mu) { fail("E_IO cannot write Mochi output", 1); }
+        moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_mochi, ""), 1); }
         kaesu;
     }
     kaku compiled = pipeline.NativeBuildResult { bytes: [], error: "" };
     moshi (command == "exec" || command == "disasm") {
         kaku input = fs.read_all(entry);
-        moshi (input.error != mu) { fail("E_IO cannot read Mochi input", 1); kaesu; }
+        moshi (input.error != mu) { fail(error_message("E_IO", i18n.key_err_read_mochi, ""), 1); kaesu; }
         moshi (command == "disasm") {
             kaku listing = disasm.render(input.data);
             moshi (listing.error != "") { fail(listing.error, 1); kaesu; }
             kaku written = fs.write_all("/dev/stdout", string.to_bytes(listing.text));
-            moshi (written.error != mu) { fail("E_IO cannot write disassembly", 1); }
+            moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_disasm, ""), 1); }
             kaesu;
         }
         moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi(input.data); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } }
     }
     sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_with_options(".", entry, bunko, gc_stress); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_diagnostic(".", entry, bunko, gc_stress, observe, symbols); } } }
-    moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error);}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(compiled.error,entry,opts)));os.exit(1);}kaesu;}
+    moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {
         temporary = string.concat(pipeline.temporary_root(), string.concat("/mio-run-", convert.format_int(os.pid())));
         kaku created = fs.create_dir(temporary);
-        moshi (created.error != mu) { fail("E_IO cannot create private run directory", 1); kaesu; }
-        moshi (os.chmod(temporary, 448) != 0) { os.remove_dir(temporary); fail("E_IO cannot protect run directory", 1); kaesu; }
+        moshi (created.error != mu) { fail(error_message("E_IO", i18n.key_err_create_run_dir, ""), 1); kaesu; }
+        moshi (os.chmod(temporary, 448) != 0) { os.remove_dir(temporary); fail(error_message("E_IO", i18n.key_err_protect_run_dir, ""), 1); kaesu; }
         output = string.concat(temporary, "/program");
     }
     kaku written = fs.write_all(output, compiled.bytes);
     moshi (written.error != mu) {
         moshi (temporary != "") { os.remove(output); os.remove_dir(temporary); }
-        fail("E_IO cannot write native output", 1); kaesu;
+        fail(error_message("E_IO", i18n.key_err_write_native, ""), 1); kaesu;
     }
     moshi (os.chmod(output, 493) != 0) {
         moshi (temporary != "") { os.remove(output); os.remove_dir(temporary); }
-        fail("E_IO cannot make native output executable", 1); kaesu;
+        fail(error_message("E_IO", i18n.key_err_chmod_native, ""), 1); kaesu;
     }
     moshi (command == "run" || command == "exec") {
         kaku launch: []string = [output]; array.append_all(launch, program_args);
         kaku status = os.spawn(output, launch);
         kaku removed = os.remove(output); kaku directory_removed = os.remove_dir(temporary);
-        moshi (removed != 0 || directory_removed != 0) { fs.write_all("/dev/stderr", string.to_bytes("E_IO run cleanup failed\n")); }
-        moshi (status < 0) { fail("E_RUN native process failed", 1); kaesu; }
+        moshi (removed != 0 || directory_removed != 0) { fs.write_all("/dev/stderr", string.to_bytes(string.concat(error_message("E_IO", i18n.key_err_cleanup, ""), "\n"))); }
+        moshi (status < 0) { fail(error_message("E_RUN", i18n.key_err_spawn, ""), 1); kaesu; }
         os.exit(status);
     }
 }

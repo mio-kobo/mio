@@ -174,7 +174,7 @@ def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT):
     return ok, reason, seconds
 
 
-def cli_chain(report, first, target, work, engine="native"):
+def cli_chain(report, first, target, work, engine="native", checks=False):
     """first builds selfhost/cli -> B, B -> C, C -> D for `target`; requires B == C == D. Returns the path of B."""
     suffix = EXE.get(target, "")
     paths = {"A": Path(first)}
@@ -190,10 +190,54 @@ def cli_chain(report, first, target, work, engine="native"):
     same = sha256(paths["B"]) == sha256(paths["C"]) == sha256(paths["D"])
     report.check("cli-fixed-point", "PASS" if same else "FAIL", engine, "" if same else "B, C and D differ",
                  B=report.hashes["cli-B"], C=report.hashes["cli-C"], D=report.hashes["cli-D"])
+    if same and checks:
+        cli_checks(report, paths["B"], target, work)
     return paths["B"] if same else None
 
 
-def core_chain(report, full_cli, target, work):
+def cli_checks(report, cli, target, work):
+    """Locale, help, theme and machine-output checks on the native CLI itself."""
+    ansi = "\x1b["
+    def check(name, argv, code=0, contains=(), absent=(), env=None):
+        actual, out, err, _ = run(report, "cli-" + name, [cli, *argv], cwd=work, timeout=180, env=env)
+        text = out + err
+        problems = []
+        if actual != code:
+            problems.append("exit %s" % actual)
+        for value in contains:
+            if value not in text:
+                problems.append("missing %r" % value)
+        for value in absent:
+            if value in text:
+                problems.append("unexpected %r" % value)
+        return report.check("cli-i18n-" + name, "PASS" if not problems else "FAIL", "native",
+                            "" if not problems else brief(", ".join(problems)), detail=brief(text))
+    check("japanese", ["--lang", "ja-JP", "help"], contains=("使用方法", "コマンド"), absent=(ansi,), env={"NO_COLOR": None, "CI": None})
+    check("region-fallback", ["--lang", "fr-CA", "help", "build"], contains=("Construire", "mio build <source>"), absent=(ansi,))
+    check("explicit-color", ["--color=always", "--theme=dark", "help"], contains=(ansi,), env={"NO_COLOR": "1", "TERM": "xterm-256color"})
+    check("no-color", ["--color=never", "help"], absent=(ansi,), env={"NO_COLOR": None, "CI": None})
+    check("auto-no-color", ["help"], absent=(ansi,), env={"NO_COLOR": "1", "CI": None})
+    check("unknown-command", ["--lang", "zh-CN", "help", "missing-command"], code=2, contains=("E_COMMAND", "未知命令"))
+    check("version", ["--lang", "en-US", "--version"], contains=("mio v2.1.2",))
+    bad = work / "i18n-machine-bad.mio"
+    bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
+    check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
+          contains=('"code":', '"severity":"error"'), absent=(ansi, "不明な"))
+    # Frontend accepts this source; the native backend rejects the 600-value
+    # expression frame. The original E_LOWER detail must survive localization.
+    backend = work / "i18n-backend-failure.mio"
+    backend.write_text("kaku values = [%s];\nchant(values[0]);\n" % ",".join(str(index) for index in range(600)),
+                       encoding="utf-8")
+    output = work / "i18n-backend-failure.bin"
+    check("backend-error", ["--lang", "en-US", "build", str(backend), "--target=darwin-arm64", "-o", str(output)], code=1,
+          contains=("E_LOWER 6 / 0",))
+    check("backend-verbose", ["--lang", "en-US", "build", str(backend), "--target=darwin-arm64", "--verbose", "-o", str(output)], code=1,
+          contains=("E_LOWER 6 / 0", "cause: source analysis failed"))
+    check("backend-json", ["--lang", "en-US", "--color=always", "build", str(backend), "--target=darwin-arm64", "--format=json", "-o", str(output)],
+          code=1, contains=('"code":"E0401"', '"message":"E_LOWER 6 / 0"'), absent=(ansi,))
+
+
+def core_chain(report, full_cli, target, work, checks=False):
     """Build the Core variant from an empty embedded table with the verified Full compiler.
     The source copy is disposable; Core must remain byte-identical across its own stages."""
     source = work / "core-source"
@@ -215,6 +259,8 @@ def core_chain(report, full_cli, target, work):
     same = sha256(paths["B"]) == sha256(paths["C"]) == sha256(paths["D"])
     report.check("core-cli-fixed-point", "PASS" if same else "FAIL", "native", "" if same else "Core B, C and D differ",
                  B=report.hashes["core-cli-B"], C=report.hashes["core-cli-C"], D=report.hashes["core-cli-D"])
+    if same and checks:
+        cli_checks(report, paths["B"], target, work)
     return paths["B"] if same else None
 
 
@@ -576,10 +622,10 @@ def linux(args):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
-    cli = cli_chain(report, cli_a, "linux-amd64", work)
+    cli = cli_chain(report, cli_a, "linux-amd64", work, checks=True)
     if cli is None:
         return finish(report)
-    core = core_chain(report, cli, "linux-amd64", work)
+    core = core_chain(report, cli, "linux-amd64", work, checks=True)
     if core is None:
         return finish(report)
     embedded_checks(report, cli, core, "linux-amd64", work)
@@ -659,9 +705,9 @@ def follower(args, target):
         os.chmod(first, 0o755)
     # A quick signal that Stage A works on this host before the long self-builds.
     smoke(report, first, target, work / "smoke-A", label_prefix="stage-a-")
-    cli = cli_chain(report, first, target, work)
+    cli = cli_chain(report, first, target, work, checks=True)
     if cli is not None:
-        core = core_chain(report, cli, target, work)
+        core = core_chain(report, cli, target, work, checks=True)
         if core is not None:
             embedded_checks(report, cli, core, target, work)
         same = report.hashes["cli-A"] == report.hashes["cli-B"]

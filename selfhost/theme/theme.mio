@@ -1,0 +1,134 @@
+// Semantic CLI styling shared by help and diagnostics.
+//
+// Colors are attached to semantic roles, never to translated strings. The
+// module never queries the terminal: background and capability hints come from
+// environment variables, so startup cannot block on a terminal reply.
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+
+koukai teisu palette_neutral = 0;
+koukai teisu palette_dark = 1;
+koukai teisu palette_light = 2;
+koukai teisu depth_ansi = 1;
+koukai teisu depth_256 = 2;
+koukai teisu depth_truecolor = 3;
+
+koukai kata Options { color: string; theme: string; }
+koukai kata Theme { enabled: bool; depth: int64; palette: int64; }
+
+koukai waza options() -> Options { kaesu Options {color: "auto", theme: "auto"}; }
+
+waza ansi() -> string { kaku value = string.from_utf8([uint8(27)]); moshi (value == mu) { kaesu ""; } kaesu value; }
+
+// Explicit --color always/never wins. Otherwise NO_COLOR and TERM=dumb disable;
+// CLICOLOR_FORCE enables; CI output stays plain; the final check is the target
+// stream itself.
+koukai waza color_enabled(mode: string, no_color: string, term: string, clicolor: string, force: string, ci: string, tty: bool) -> bool {
+    moshi (mode == "always") { kaesu hai; }
+    moshi (mode == "never") { kaesu iie; }
+    moshi (no_color != "" || term == "dumb" || clicolor == "0") { kaesu iie; }
+    moshi (force != "" && force != "0") { kaesu hai; }
+    moshi (ci != "") { kaesu iie; }
+    kaesu tty;
+}
+
+koukai waza color_depth(colorterm: string, term: string) -> int64 {
+    moshi (colorterm == "truecolor" || colorterm == "24bit") { kaesu depth_truecolor; }
+    moshi (string.contains(term, "256color")) { kaesu depth_256; }
+    kaesu depth_ansi;
+}
+
+waza background_index(value: string) -> int64 {
+    kaku data = string.to_bytes(value); kaku at = 0; kaku found = -1; kaku current = 0; kaku digits = 0;
+    aida (at <= len(data)) {
+        kaku byte = uint8(59);
+        moshi (at < len(data)) { byte = data[at]; }
+        moshi (byte >= uint8(48) && byte <= uint8(57)) { current = current * 10 + int64(byte - uint8(48)); digits = digits + 1; }
+        sore {
+            moshi (digits > 0) { found = current; }
+            current = 0; digits = 0;
+        }
+        at = at + 1;
+    }
+    kaesu found;
+}
+
+// auto, MIO_THEME, COLORFGBG, then the neutral palette. A terminal with no
+// reliable background hint keeps ANSI 16-color semantics instead of guessing.
+koukai waza choose_palette(selected: string, configured: string, colorfgbg: string) -> int64 {
+    moshi (selected == "dark") { kaesu palette_dark; }
+    moshi (selected == "light") { kaesu palette_light; }
+    moshi (configured == "dark") { kaesu palette_dark; }
+    moshi (configured == "light") { kaesu palette_light; }
+    kaku background = background_index(colorfgbg);
+    moshi (background >= 0) {
+        moshi (background <= 6 || background == 8) { kaesu palette_dark; }
+        moshi (background <= 15) { kaesu palette_light; }
+    }
+    kaesu palette_neutral;
+}
+
+koukai waza resolve_for(selected_color: string, selected_theme: string, path: string) -> Theme {
+    kaesu resolve_stream(selected_color, selected_theme, fs.is_character_device(path));
+}
+koukai waza resolve(selected_color: string, selected_theme: string, tty: bool) -> Theme {
+    kaesu resolve_stream(selected_color, selected_theme, tty);
+}
+waza resolve_stream(selected_color: string, selected_theme: string, tty: bool) -> Theme {
+    kaku enabled = color_enabled(selected_color, os.getenv("NO_COLOR"), os.getenv("TERM"), os.getenv("CLICOLOR"), os.getenv("CLICOLOR_FORCE"), os.getenv("CI"), tty);
+    kaku palette = choose_palette(selected_theme, os.getenv("MIO_THEME"), os.getenv("COLORFGBG"));
+    moshi (!enabled) { kaesu Theme {enabled: iie, depth: depth_ansi, palette: palette}; }
+    kaku depth = color_depth(os.getenv("COLORTERM"), os.getenv("TERM"));
+    // The neutral palette deliberately stays 16-color so the terminal's own
+    // foreground/background contrast rules apply.
+    moshi (palette == palette_neutral) { depth = depth_ansi; }
+    kaesu Theme {enabled: hai, depth: depth, palette: palette};
+}
+
+waza color_code(style: Theme, role: string) -> string {
+    kaku dark = style.palette == palette_dark;
+    moshi (role == "title") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[1;38;2;124;196;255m"); } kaesu string.concat(ansi(), "[1;38;2;11;79;138m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[1;38;5;81m"); } kaesu string.concat(ansi(), "[1;38;5;25m"); }
+        kaesu string.concat(ansi(), "[1m");
+    }
+    moshi (role == "command") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;86;212;221m"); } kaesu string.concat(ansi(), "[38;2;0;109;119m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;45m"); } kaesu string.concat(ansi(), "[38;5;30m"); }
+        kaesu string.concat(ansi(), "[36m");
+    }
+    moshi (role == "option") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;255;216;102m"); } kaesu string.concat(ansi(), "[38;2;122;91;0m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;220m"); } kaesu string.concat(ansi(), "[38;5;136m"); }
+        kaesu string.concat(ansi(), "[33m");
+    }
+    moshi (role == "success") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;126;231;135m"); } kaesu string.concat(ansi(), "[38;2;23;107;44m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;114m"); } kaesu string.concat(ansi(), "[38;5;28m"); }
+        kaesu string.concat(ansi(), "[32m");
+    }
+    moshi (role == "warning") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;255;166;87m"); } kaesu string.concat(ansi(), "[38;2;154;74;0m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;214m"); } kaesu string.concat(ansi(), "[38;5;166m"); }
+        kaesu string.concat(ansi(), "[33m");
+    }
+    moshi (role == "error") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;255;123;114m"); } kaesu string.concat(ansi(), "[38;2;164;0;36m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;203m"); } kaesu string.concat(ansi(), "[38;5;160m"); }
+        kaesu string.concat(ansi(), "[31m");
+    }
+    moshi (role == "muted") {
+        moshi (style.depth == depth_truecolor) { moshi (dark) { kaesu string.concat(ansi(), "[38;2;139;148;158m"); } kaesu string.concat(ansi(), "[38;2;92;102;112m"); }
+        moshi (style.depth == depth_256) { moshi (dark) { kaesu string.concat(ansi(), "[38;5;244m"); } kaesu string.concat(ansi(), "[38;5;240m"); }
+        kaesu string.concat(ansi(), "[90m");
+    }
+    kaesu "";
+}
+
+koukai waza paint(style: Theme, role: string, value: string) -> string {
+    moshi (!style.enabled || value == "") { kaesu value; }
+    kaku code = color_code(style, role);
+    moshi (code == "") { kaesu value; }
+    kaesu string.concat(code, string.concat(value, string.concat(ansi(), "[0m")));
+}

@@ -135,7 +135,7 @@ age;
 
 // 测试版本命令
 func TestCLIVersion(t *testing.T) {
-	const want = "Mio 2.0.0\n"
+	const want = "Mio 2.1.2-dev\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -169,11 +169,11 @@ func TestCLIHelpShowsCurrentVersion(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Mio " + version + "\n",
-		"mio check <file.mio>",
-		"mio run <file.mio>",
-		"mio build [-o <file.mochi>] <file.mio>",
-		"mio exec <file.mochi>",
-		"mio disasm <file.mochi>",
+		"check <source> [options]",
+		"run <source> [-- <program arguments...>]",
+		"build <source> [options]",
+		"exec <file.mochi> [-- <program arguments...>]",
+		"disasm <file.mochi>",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("help output missing %q:\n%s", want, stdout.String())
@@ -196,14 +196,14 @@ func TestCLIMissingArguments(t *testing.T) {
 		t.Fatalf("got exit code %d, want 2", code)
 	}
 
-	if !strings.Contains(stderr.String(), "Usage:") {
+	if !strings.Contains(stderr.String(), "Usage") {
 		t.Fatal("expected usage information")
 	}
 }
 
 func TestCLIReleaseVersionAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := runCLI([]string{"--version"}, &stdout, &stderr); code != 0 || stdout.String() != "Mio 2.0.0\n" || stderr.Len() != 0 {
+	if code := runCLI([]string{"--version"}, &stdout, &stderr); code != 0 || stdout.String() != "Mio 2.1.2-dev\n" || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

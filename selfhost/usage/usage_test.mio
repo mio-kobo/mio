@@ -1,0 +1,45 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "selfhost/i18n";
+yobu "selfhost/theme";
+
+waza disabled() -> theme.Theme { kaesu theme.Theme {enabled: iie, depth: theme.depth_ansi, palette: theme.palette_neutral}; }
+
+waza test_command_inventory() -> unit {
+    kaku entries = commands();
+    testing.expect(len(entries) == 9, "all real CLI commands are listed");
+    kaku at = 0;
+    aida (at < len(entries)) { testing.expect(find(entries[at].name) == at, "every command is resolvable"); at = at + 1; }
+    testing.expect(find("nope") == -1, "unknown command is not resolvable");
+    testing.expect(find("help") == 0 && find("lsp") == 8, "stable command order");
+}
+
+waza test_global_help_sections() -> unit {
+    kaku text = global("en-US", "2.1.2-dev", disabled());
+    testing.expect(string.contains(text, "Mio 2.1.2-dev"), "version heading");
+    testing.expect(string.contains(text, "Usage") && string.contains(text, "Commands") && string.contains(text, "Options") && string.contains(text, "Examples"), "all sections");
+    testing.expect(string.contains(text, "Compilation") && string.contains(text, "Development tools"), "command groups");
+    testing.expect(string.contains(text, "--lang <locale>") && string.contains(text, "mio help build"), "options and examples");
+}
+
+waza test_subcommand_help_is_distinct_and_localized() -> unit {
+    kaku build_en = command("en-US", "build", disabled());
+    kaku test_en = command("en-US", "test", disabled());
+    testing.expect(build_en != "" && test_en != "" && build_en != test_en, "subcommand pages differ");
+    testing.expect(string.contains(build_en, "mio build <source>") && string.contains(build_en, "--target <target>"), "build usage and options");
+    testing.expect(string.contains(test_en, "mio test <directory") && string.contains(test_en, "--run=<regexp>"), "test usage and options");
+    kaku build_ja = command("ja-JP", "build", disabled());
+    testing.expect(string.contains(build_ja, "ビルド"), "subcommand help follows the language");
+    testing.expect(command("en-US", "nope", disabled()) == "", "unknown command yields no page");
+}
+
+waza test_width_and_wrapping() -> unit {
+    testing.expect(visible_width("abc") == 3, "ASCII width");
+    testing.expect(visible_width("日本語") == 6, "wide characters are two cells");
+    kaku lines = wrap("one two three four five six seven eight", 12);
+    testing.expect(len(lines) > 1, "long text wraps");
+    kaku at = 0;
+    aida (at < len(lines)) { testing.expect(visible_width(lines[at]) <= 12, "wrapped line respects the limit"); at = at + 1; }
+    kaku wide = wrap("日本語のテキストが折り返されます", 8);
+    testing.expect(len(wide) > 1, "spaceless CJK text is hard-wrapped");
+}

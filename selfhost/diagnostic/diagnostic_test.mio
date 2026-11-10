@@ -10,12 +10,12 @@ waza problem_at(first: int64, end: int64) -> frontend.AnalysisDiagnostic {
 }
 waza test_short_diagnostic_unicode_tabs_combining_and_crlf() -> unit {
     kaku source="\t日本語é = 1;\r\n";kaku first=string.index(source,"1;");
-    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"short",color:"always",verbose:iie},"");
+    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"short",color:"always",verbose:iie,lang:"",theme:"auto"},"");
     testing.expect(output=="例.mio:1:15: error[E0301]: bad\n","short format uses terminal cells rather than UTF8 bytes and never ANSI");
 }
 waza test_json_diagnostic_is_structured_and_has_exact_byte_span() -> unit {
     kaku source="\t日本語é = 1;\r\n";kaku first=string.index(source,"1;");
-    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"json",color:"always",verbose:hai},"internal cause");
+    kaku output=render(problem_at(first,first+1),string.to_bytes(source),Options {format:"json",color:"always",verbose:hai,lang:"",theme:"auto"},"internal cause");
     kaku document=json.parse(string.to_bytes(output));testing.expect(document.error=="","JSON diagnostics are one valid document");
     testing.expect(json.text(document,json.member(document,document.root,"code"))=="E0301" && json.text(document,json.member(document,document.root,"path"))=="例.mio","published code and path fields");
     kaku location=json.member(document,document.root,"location");kaku column=json.integer(document,json.member(document,location,"column"));kaku offset=json.integer(document,json.member(document,location,"offset"));
@@ -24,12 +24,30 @@ waza test_json_diagnostic_is_structured_and_has_exact_byte_span() -> unit {
 }
 waza test_human_diagnostic_source_marker_and_verbose_cause() -> unit {
     kaku source="kaku n: int64=\"wrong\";";kaku first=string.index(source,"\"wrong\"");
-    kaku output=render(problem_at(first,first+7),string.to_bytes(source),Options {format:"human",color:"never",verbose:hai},"detail for debugging");
+    kaku output=render(problem_at(first,first+7),string.to_bytes(source),Options {format:"human",color:"never",verbose:hai,lang:"",theme:"auto"},"detail for debugging");
     testing.expect(string.contains(output,"error[E0301]: bad") && string.contains(output,"  --> 例.mio:1:15") && string.contains(output,"^^^^^^^") && string.contains(output,"cause: detail for debugging"),"human error keeps source, range and requested cause");
     testing.expect(!string.contains(output,ansi()),"never color emits no ANSI");
 }
 waza test_non_source_error_has_no_fabricated_label() -> unit {
-    kaku output=failure("E_IO missing input","missing.mio",Options {format:"json",color:"auto",verbose:iie});
+    kaku output=failure("E_IO missing input","missing.mio",Options {format:"json",color:"auto",verbose:iie,lang:"",theme:"auto"});
     kaku document=json.parse(string.to_bytes(output));testing.expect(document.error=="" && json.member(document,document.root,"labels")<0,"missing source does not fabricate a span");
     kaku location=json.member(document,document.root,"location");kaku line=json.integer(document,json.member(document,location,"line"));moshi(line!=mu){testing.expect(line==0,"unknown location remains unknown");}sore{testing.fail("generic diagnostic location");}
+}
+
+waza test_backend_failure_keeps_original_detail() -> unit {
+    kaku opts=Options {format:"human",color:"never",verbose:hai,lang:"en-US",theme:"auto"};
+    kaku output=failure_with_cause("E_LOWER 6 / 0","source analysis failed","main.mio",opts);
+    testing.expect(string.contains(output,"E_LOWER 6 / 0"),"backend detail is preserved");
+    testing.expect(string.contains(output,"cause: source analysis failed"),"verbose cause label stays localized");
+    testing.expect(!string.contains(output,ansi()),"no ANSI in never mode");
+}
+
+waza test_backend_failure_json_keeps_original_detail() -> unit {
+    kaku opts=Options {format:"json",color:"always",verbose:hai,lang:"ja-JP",theme:"auto"};
+    kaku output=failure_with_cause("E_LOWER 6 / 0","原因の説明","main.mio",opts);
+    kaku document=json.parse(string.to_bytes(output));
+    testing.expect(document.error=="","one JSON document");
+    testing.expect(json.text(document,json.member(document,document.root,"code"))=="E0401","stable error code");
+    testing.expect(json.text(document,json.member(document,document.root,"message"))=="E_LOWER 6 / 0","original compiler detail");
+    testing.expect(!string.contains(output,"原因の説明") && !string.contains(output,ansi()),"localized cause and ANSI stay out of JSON");
 }

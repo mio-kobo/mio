@@ -1,0 +1,73 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+
+waza test_normalize_bcp47_tags() -> unit {
+    testing.expect(normalize("en-us") == "en-US", "lowercase language and region");
+    testing.expect(normalize("zh_cn") == "zh-CN", "underscore separator");
+    testing.expect(normalize("pt_br") == "pt-BR", "POSIX locale normalization");
+    testing.expect(normalize("zh_Hant") == "zh-Hant", "script capitalization");
+    testing.expect(normalize("en_US.UTF-8") == "en-US", "encoding suffix is dropped");
+    testing.expect(normalize("ja_JP@euro") == "ja-JP", "modifier is dropped");
+    testing.expect(normalize("C") == "", "POSIX C has no language");
+    testing.expect(normalize("not a tag") == "", "malformed tags are rejected");
+}
+
+waza test_language_and_region_fallback() -> unit {
+    testing.expect(resolve("fr-CA") == "fr-FR", "region falls back to language primary");
+    testing.expect(resolve("de-AT") == "de-DE", "German region fallback");
+    testing.expect(resolve("es-AR") == "es-ES", "Spanish region fallback");
+    testing.expect(resolve("pt-PT") == "pt-PT", "exact regional locale wins");
+    testing.expect(resolve("pt") == "pt-BR", "language-only primary");
+    testing.expect(resolve("zh-HK") == "zh-HK", "Hong Kong Chinese is exact");
+    testing.expect(resolve("zh-MO") == "zh-HK", "Macau maps to Hong Kong Chinese");
+    testing.expect(resolve("zh-Hant") == "zh-TW", "traditional script default");
+    testing.expect(resolve("zh-Hans") == "zh-CN", "simplified script default");
+    testing.expect(resolve("no") == "nb-NO", "legacy Norwegian alias");
+    testing.expect(resolve("iw-IL") == "he-IL", "legacy Hebrew alias");
+    testing.expect(resolve("in-ID") == "id-ID", "legacy Indonesian alias");
+    testing.expect(resolve("tl-PH") == "fil-PH", "legacy Filipino alias");
+    testing.expect(resolve("en-AU") == "en-US", "unknown English region falls back");
+    testing.expect(resolve("unknown") == "en-US", "unknown language falls back to en-US");
+}
+
+waza test_supported_locales_and_direction() -> unit {
+    kaku tags = supported_tags();
+    testing.expect(len(tags) == 39, "39 catalog locales are compiled in");
+    kaku at = 0;
+    aida (at < len(tags)) { testing.expect(supported_tag(tags[at]), "every supported tag resolves"); at = at + 1; }
+    testing.expect(direction("ar-SA") == "rtl" && is_rtl("he-IL") && is_rtl("fa-IR"), "RTL locales");
+    testing.expect(direction("en-US") == "ltr" && !is_rtl("ja-JP"), "LTR locales");
+}
+
+waza test_message_lookup_and_fallback() -> unit {
+    testing.expect(text("en-US", key_test_pass) == "PASS", "English message");
+    testing.expect(text("ja-JP", key_test_pass) == "成功", "Japanese message");
+    testing.expect(text("zh-CN", key_test_pass) == "通过", "Chinese message");
+    testing.expect(text("xx-YY", key_test_pass) == "PASS", "unknown locale falls back to en-US");
+    testing.expect(text("ja-JP", "missing.key") == "missing.key", "unknown key is preserved");
+    kaku ansi = string.from_utf8([uint8(27)]);
+    moshi (ansi != mu) { testing.expect(!string.contains(text("ar-SA", key_help_tagline), ansi), "catalog text has no ANSI"); }
+}
+
+waza test_placeholder_formatting() -> unit {
+    testing.expect(format("en-US", key_test_summary, ["2", "1"]) == "Tests complete: 2 passed, 1 failed", "English placeholders");
+    testing.expect(format("ja-JP", key_test_summary, ["2", "1"]) == "テスト完了：2 件成功、1 件失敗", "Japanese placeholders");
+    testing.expect(format("zh-CN", key_err_unknown_command, ["build"]) == "未知命令：build", "argument appears in translated order");
+    testing.expect(format("en-US", key_check_passed, [""]) == "check passed", "no-argument messages are unchanged");
+}
+
+waza test_explicit_language_select() -> unit {
+    testing.expect(select("ja-JP") == "ja-JP", "explicit language");
+    testing.expect(select("pt_br") == "pt-BR", "explicit POSIX value");
+    testing.expect(select("unknown") == "en-US", "invalid explicit value is safe");
+}
+
+waza test_language_preference_list() -> unit {
+    testing.expect(language_from_list("xx:ja_JP") == "ja_JP", "skip unsupported first candidate");
+    testing.expect(language_from_list("xx:en_GB") == "en_GB", "supported later candidate");
+    testing.expect(language_from_list("xx:yy") == "", "unsupported list falls through");
+    testing.expect(language_from_list("en_US:fr_FR") == "en_US", "en-US is a valid first candidate");
+    testing.expect(language_from_list(" fr_CA : de_DE ") == "fr_CA", "whitespace and region fallback");
+    testing.expect(language_from_list("") == "", "empty list");
+    testing.expect(usable_locale("fr-CA") && usable_locale("en-AU") && !usable_locale("xx"), "usable locale definition");
+}

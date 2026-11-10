@@ -1,0 +1,292 @@
+// Mio CLI localization runtime.
+//
+// Message text lives in locales/*.json and is generated into
+// messages_generated.mio. This module owns BCP 47 normalization, fallback
+// selection, environment/system detection and placeholder formatting. It never
+// performs a network request and never consults a mutable translation service.
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+
+koukai teisu default_language = "en-US";
+
+waza is_alpha(value: uint8) -> bool { kaesu (value >= uint8(65) && value <= uint8(90)) || (value >= uint8(97) && value <= uint8(122)); }
+waza is_digit(value: uint8) -> bool { kaesu value >= uint8(48) && value <= uint8(57); }
+waza lower_byte(value: uint8) -> uint8 { moshi (value >= uint8(65) && value <= uint8(90)) { kaesu value + uint8(32); } kaesu value; }
+waza upper_byte(value: uint8) -> uint8 { moshi (value >= uint8(97) && value <= uint8(122)) { kaesu value - uint8(32); } kaesu value; }
+waza segment_alpha(data: []uint8, limit: int64) -> bool {
+    kaku at = 0; aida (at < limit) { moshi (!is_alpha(data[at])) { kaesu iie; } at = at + 1; } kaesu hai;
+}
+waza segment_digits(data: []uint8, limit: int64) -> bool {
+    kaku at = 0; aida (at < limit) { moshi (!is_digit(data[at])) { kaesu iie; } at = at + 1; } kaesu hai;
+}
+waza segment_string(data: []uint8) -> string {
+    kaku value = string.from_utf8(data); moshi (value == mu) { kaesu ""; } kaesu value;
+}
+
+// en_us.UTF-8 -> en-US, zh_hant -> zh-Hant, pt_br@euro -> pt-BR.
+koukai waza normalize(value: string) -> string {
+    kaku raw = string.to_bytes(string.trim_space(value)); kaku cleaned: []uint8 = []; kaku at = 0;
+    aida (at < len(raw)) {
+        kaku byte = raw[at];
+        moshi (byte == uint8(46) || byte == uint8(64)) { nukeru; }
+        moshi (byte == uint8(95)) { byte = uint8(45); }
+        moshi (!is_alpha(byte) && !is_digit(byte) && byte != uint8(45)) { kaesu ""; }
+        array.push(cleaned, byte); at = at + 1;
+    }
+    kaku segments: []string = []; kaku segment: []uint8 = [];
+    at = 0;
+    aida (at < len(cleaned)) {
+        moshi (cleaned[at] == uint8(45)) { moshi (len(segment) > 0) { array.push(segments, segment_string(segment)); segment = []; } }
+        sore { array.push(segment, cleaned[at]); }
+        at = at + 1;
+    }
+    moshi (len(segment) > 0) { array.push(segments, segment_string(segment)); }
+    moshi (len(segments) == 0) { kaesu ""; }
+    kaku language = string.to_bytes(segments[0]);
+    kaku valid_language = (len(language) >= 2 && len(language) <= 3 && segment_alpha(language, len(language))) ||
+        (len(language) >= 5 && len(language) <= 8 && segment_alpha(language, len(language)));
+    moshi (!valid_language) { kaesu ""; }
+    kaku output = string.new_builder(); kaku index = 0;
+    aida (index < len(segments)) {
+        moshi (index > 0) { string.write_rune(output, rune(45)); }
+        kaku bytes = string.to_bytes(segments[index]); kaku position = 0;
+        moshi (index == 0) { aida (position < len(bytes)) { string.write_rune(output, rune(lower_byte(bytes[position]))); position = position + 1; } }
+        sore {
+            kaku script = len(bytes) == 4 && segment_alpha(bytes, len(bytes));
+            kaku region = (len(bytes) == 2 && segment_alpha(bytes, len(bytes))) || (len(bytes) == 3 && segment_digits(bytes, len(bytes)));
+            aida (position < len(bytes)) {
+                kaku normalized = lower_byte(bytes[position]);
+                moshi (script && position == 0) { normalized = upper_byte(normalized); }
+                moshi (region) { normalized = upper_byte(normalized); }
+                string.write_rune(output, rune(normalized)); position = position + 1;
+            }
+        }
+        index = index + 1;
+    }
+    kaesu string.builder_string(output);
+}
+
+waza first_subtag(tag: string) -> string {
+    kaku data = string.to_bytes(tag); kaku bytes: []uint8 = []; kaku at = 0;
+    aida (at < len(data) && data[at] != uint8(45)) { array.push(bytes, data[at]); at = at + 1; }
+    kaesu segment_string(bytes);
+}
+waza last_subtag(tag: string) -> string {
+    kaku data = string.to_bytes(tag); kaku start = 0; kaku at = 0;
+    aida (at < len(data)) { moshi (data[at] == uint8(45)) { start = at + 1; } at = at + 1; }
+    kaku bytes: []uint8 = []; at = start;
+    aida (at < len(data)) { array.push(bytes, data[at]); at = at + 1; }
+    kaesu segment_string(bytes);
+}
+waza script_prefix(tag: string) -> string {
+    kaku data = string.to_bytes(tag); kaku first = 0; kaku at = 0;
+    aida (at < len(data) && data[at] != uint8(45)) { at = at + 1; }
+    moshi (at >= len(data)) { kaesu ""; }
+    first = at + 1; kaku start = first; at = start;
+    aida (at < len(data) && data[at] != uint8(45)) { at = at + 1; }
+    kaku bytes: []uint8 = []; kaku position = start;
+    aida (position < at) { array.push(bytes, data[position]); position = position + 1; }
+    moshi (!(len(bytes) == 4 && segment_alpha(bytes, len(bytes)))) { kaesu ""; }
+    kaesu string.concat(first_subtag(tag), string.concat("-", segment_string(bytes)));
+}
+waza segment_range(data: []uint8, first: int64, end: int64) -> string {
+    kaku bytes: []uint8 = []; kaku at = first;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaesu segment_string(bytes);
+}
+
+// A locale is usable when resolve() finds a real catalog (or an English
+// variant that legitimately resolves to en-US).
+koukai waza usable_locale(value: string) -> bool {
+    kaku resolved = resolve(value);
+    moshi (resolved != "en-US") { kaesu hai; }
+    kaku tag = normalize(value);
+    kaesu tag != "" && first_subtag(tag) == "en";
+}
+
+// LANGUAGE is a colon-separated preference list. Skip unknown candidates and
+// return the first supported one; an unsupported list falls through to LC_ALL.
+koukai waza language_from_list(value: string) -> string {
+    kaku data = string.to_bytes(value); kaku start = 0; kaku at = 0;
+    aida (at <= len(data)) {
+        kaku byte = uint8(58); moshi (at < len(data)) { byte = data[at]; }
+        moshi (byte == uint8(58)) {
+            kaku candidate = string.trim_space(segment_range(data, start, at));
+            moshi (candidate != "" && usable_locale(candidate)) { kaesu candidate; }
+            start = at + 1;
+        }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+// Exact match, region alias, script default, legacy alias, then language
+// primary. Every failure falls back to en-US at the final step.
+koukai waza resolve(value: string) -> string {
+    kaku tag = normalize(value); moshi (tag == "") { kaesu default_language; }
+    moshi (supported_tag(tag)) { kaesu tag; }
+    kaku language = first_subtag(tag); kaku region = last_subtag(tag);
+    moshi (region != language) {
+        kaku candidate = string.concat(language, string.concat("-", region));
+        moshi (supported_tag(candidate)) { kaesu candidate; }
+        kaku mapped = regional(candidate); moshi (mapped != candidate && supported_tag(mapped)) { kaesu mapped; }
+    }
+    kaku script = script_prefix(tag);
+    moshi (script != "") { kaku mapped = script_default(script); moshi (mapped != "") { kaesu mapped; } }
+    kaku aliased = alias(language);
+    moshi (aliased != language) { kaesu primary(aliased); }
+    kaesu primary(language);
+}
+
+waza environment_locale() -> string {
+    kaku language = os.getenv("LANGUAGE");
+    moshi (language != "") { kaku selected = language_from_list(language); moshi (selected != "") { kaesu selected; } }
+    kaku names: []string = ["LC_ALL", "LC_MESSAGES", "LANG"]; kaku at = 0;
+    aida (at < len(names)) {
+        kaku value = os.getenv(names[at]); moshi (value != "") { kaesu value; }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+waza temporary_root() -> string {
+    kaku names: []string = ["TMPDIR", "TEMP", "TMP"]; kaku at = 0;
+    aida (at < len(names)) {
+        kaku value = os.environment(names[at]);
+        moshi (value != mu) { moshi (value != "" && fs.is_dir(value)) { kaesu value; } }
+        at = at + 1;
+    }
+    moshi (fs.is_dir("/tmp")) { kaesu "/tmp"; }
+    kaesu ".";
+}
+
+// Captured child output without touching the CLI's own stdout/stderr. The
+// runtime deadline guarantees that an unavailable helper cannot block startup.
+waza probe(path: string, arguments: []string) -> string {
+    kaku root = temporary_root();
+    kaku base = string.concat(root, string.concat("/mio-locale-", string.concat(convert.format_int(os.pid()), string.concat("-", convert.format_int(os.monotonic_ms())))));
+    kaku created = fs.create_dir(base); moshi (created.error != mu) { kaesu ""; }
+    moshi (os.chmod(base, 448) != 0) { os.remove_dir(base); kaesu ""; }
+    kaku captured = string.concat(base, "/out"); kaku errors = string.concat(base, "/err"); kaku records = string.concat(base, "/records"); kaku empty: []uint8 = [];
+    moshi (fs.write_all(captured, empty).error != mu || fs.write_all(errors, empty).error != mu || fs.write_all(records, empty).error != mu) {
+        os.remove(captured); os.remove(errors); os.remove(records); os.remove_dir(base); kaesu "";
+    }
+    kaku status = os.spawn_test(path, arguments, captured, errors, records, 1);
+    kaku output = fs.read_all(captured);
+    os.remove(captured); os.remove(errors); os.remove(records); os.remove_dir(base);
+    moshi (status < 0 || output.error != mu) { kaesu ""; }
+    kaesu segment_string(output.data);
+}
+
+waza first_quoted(value: string) -> string {
+    kaku data = string.to_bytes(value); kaku start = -1; kaku at = 0;
+    aida (at < len(data) && start < 0) { moshi (data[at] == uint8(34)) { start = at + 1; } at = at + 1; }
+    moshi (start < 0) { kaesu ""; }
+    kaku end = start; aida (end < len(data) && data[end] != uint8(34)) { end = end + 1; }
+    kaku bytes: []uint8 = []; at = start;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaesu segment_string(bytes);
+}
+waza visible(value: []uint8) -> []uint8 {
+    kaku has_zero = iie; kaku at = 0; aida (at < len(value)) { moshi (value[at] == uint8(0)) { has_zero = hai; } at = at + 1; }
+    moshi (!has_zero) { kaesu value; }
+    kaku decoded: []uint8 = []; at = 0;
+    aida (at + 1 < len(value)) {
+        moshi (value[at + 1] == uint8(0)) { array.push(decoded, value[at]); }
+        at = at + 2;
+    }
+    kaesu decoded;
+}
+waza last_word(value: string) -> string {
+    kaku data = string.to_bytes(value); kaku end = len(data); kaku at = end;
+    aida (end > 0 && (data[end - 1] == uint8(32) || data[end - 1] == uint8(9) || data[end - 1] == uint8(13) || data[end - 1] == uint8(10))) { end = end - 1; }
+    at = end; aida (at > 0 && !(data[at - 1] == uint8(32) || data[at - 1] == uint8(9) || data[at - 1] == uint8(13) || data[at - 1] == uint8(10))) { at = at - 1; }
+    kaku bytes: []uint8 = []; kaku position = at;
+    aida (position < end) { array.push(bytes, data[position]); position = position + 1; }
+    kaesu segment_string(bytes);
+}
+waza locale_line(value: string) -> string {
+    kaku data = string.to_bytes(value); kaku line: []uint8 = []; kaku at = 0;
+    aida (at <= len(data)) {
+        kaku byte = uint8(10); moshi (at < len(data)) { byte = data[at]; }
+        moshi (byte != uint8(10) && byte != uint8(13)) { array.push(line, byte); }
+        sore {
+            kaku text = string.trim_space(segment_string(line));
+            aida (hai) {
+                moshi (!string.has_prefix(text, "LANG=") && !string.has_prefix(text, "LC_ALL=")) { nukeru; }
+                kaku found = string.to_bytes(text); kaku start = string.index(text, "=") + 1; kaku bytes: []uint8 = []; kaku position = start;
+                aida (position < len(found)) { moshi (found[position] != uint8(34) && found[position] != uint8(39)) { array.push(bytes, found[position]); } position = position + 1; }
+                kaku result = segment_string(bytes); moshi (result != "") { kaesu result; }
+                nukeru;
+            }
+            line = [];
+        }
+        at = at + 1;
+    }
+    kaesu "";
+}
+waza config_locale() -> string {
+    kaku paths: []string = ["/etc/locale.conf", "/etc/default/locale"]; kaku at = 0;
+    aida (at < len(paths)) {
+        kaku read = fs.read_all(paths[at]);
+        moshi (read.error == mu) { kaku value = locale_line(segment_string(read.data)); moshi (value != "") { kaesu value; } }
+        at = at + 1;
+    }
+    kaesu "";
+}
+waza mac_locale() -> string {
+    kaesu first_quoted(probe("/usr/bin/defaults", ["defaults", "read", "-g", "AppleLanguages"]));
+}
+waza windows_locale() -> string {
+    kaku system = os.getenv("SystemRoot"); kaku reg = string.concat(system, "\\System32\\reg.exe");
+    moshi (!fs.is_file(reg)) { reg = "reg"; }
+    kaku output = probe(reg, ["reg", "query", "HKCU\\Control Panel\\International", "/v", "LocaleName"]);
+    moshi (output != "") { kaku value = last_word(segment_string(visible(string.to_bytes(output)))); moshi (value != "") { kaesu value; } }
+    kaku shell = string.concat(system, "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    moshi (!fs.is_file(shell)) { shell = "powershell.exe"; }
+    kaesu string.trim_space(probe(shell, ["powershell", "-NoProfile", "-NonInteractive", "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; (Get-Culture).Name"]));
+}
+waza system_locale() -> string {
+    moshi (os.getenv("OS") == "Windows_NT") { kaesu windows_locale(); }
+    moshi (fs.is_file("/usr/bin/defaults")) { kaesu mac_locale(); }
+    kaesu config_locale();
+}
+
+// Explicit --lang, MIO_LANG, process locale, OS preference, en-US.
+koukai waza select(explicit: string) -> string {
+    moshi (explicit != "") { kaesu resolve(explicit); }
+    kaku configured = os.environment("MIO_LANG");
+    moshi (configured != mu) { moshi (configured != "") { kaesu resolve(configured); } }
+    kaku environment = environment_locale();
+    moshi (environment != "") { kaesu resolve(environment); }
+    kaku system = system_locale();
+    moshi (system != "") { kaesu resolve(system); }
+    kaesu default_language;
+}
+
+// {0}..{n} placeholders, independent of translated word order. An out-of-range
+// or malformed placeholder is preserved literally instead of corrupting output.
+koukai waza format(language: string, key: string, arguments: []string) -> string {
+    kaku template = string.to_bytes(text(language, key)); kaku output: []uint8 = []; kaku at = 0;
+    aida (at < len(template)) {
+        kaku byte = template[at];
+        moshi (byte == uint8(123)) {
+            kaku end = at + 1; kaku index = 0; kaku digits = 0; kaku valid = hai;
+            aida (end < len(template) && template[end] != uint8(125)) {
+                kaku digit = template[end];
+                moshi (!is_digit(digit)) { valid = iie; nukeru; }
+                index = index * 10 + int64(digit - uint8(48)); digits = digits + 1; end = end + 1;
+            }
+            moshi (valid && digits > 0 && end < len(template) && index < len(arguments)) {
+                array.append_all(output, string.to_bytes(arguments[index])); at = end + 1; tsuzuku;
+            }
+        }
+        array.push(output, byte); at = at + 1;
+    }
+    kaku result = string.from_utf8(output); moshi (result == mu) { kaesu ""; } kaesu result;
+}
+
+koukai waza is_rtl(language: string) -> bool { kaesu direction(language) == "rtl"; }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Mio/internal/i18n"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -31,8 +32,8 @@ func TestRunCLILSPCommand(t *testing.T) {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	stdout.Reset()
-	printUsage(&stdout)
-	if !strings.Contains(stdout.String(), "mio lsp [--stdio]") {
+	printUsage(&stdout, i18n.English, resolveHelpTheme("never", "auto", &stdout))
+	if !strings.Contains(stdout.String(), "lsp [--stdio] [options]") {
 		t.Fatalf("CLI usage does not advertise LSP: %q", stdout.String())
 	}
 }

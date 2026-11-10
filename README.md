@@ -25,9 +25,11 @@
 
 Mio 2.1 targets macOS ARM64, Linux AMD64 and Windows AMD64 for native ahead-of-time (AOT) compilation.
 
-> [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) is the latest stable release and was verified on macOS ARM64. [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) is the latest published release candidate. The [`Mio-2.1.1` development branch](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) is preparing v2.1.1, which is still unreleased.
+> [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) is the latest stable release and was verified on macOS ARM64. [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) is the latest published release candidate. The [`Mio-2.1.2` development branch](https://github.com/mio-kobo/mio/tree/Mio-2.1.2) is preparing v2.1.2, which is still unreleased.
 
 See the [v2.1.0 release notes draft](docs/releases/v2.1.0.md) for changes and release verification status.
+
+Mio 2.1.2 adds a localized CLI and adaptive help themes. See [docs/i18n.md](docs/i18n.md) for the BCP 47 fallback rules, the 39 supported locales, `--lang`, `--theme`, `NO_COLOR`, and the machine-readable output guarantees.
 
 ## Language and toolchain
 

@@ -4,6 +4,15 @@
 
 # Changelog
 
+## 2.1.2 — Unreleased
+
+- **Localized CLI:** every help page, option description, friendly error, warning and human-readable test result is available in 39 locales. Catalogs use BCP 47 tags, normalize POSIX forms such as `zh_CN.UTF-8`, fall back from region to language and finally to `en-US`, and never contact a network service at runtime.
+- **Global language selection:** `--lang <locale>` and `--lang=<locale>` work before or after the command (`mio --lang ja-JP help`, `mio help build --lang fr-FR`). The priority is explicit `--lang`, `MIO_LANG`, `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`, the operating-system preference, then `en-US`. The native CLI reads the macOS `AppleLanguages` preference and the Windows user locale on a best-effort basis; failure always falls back instead of blocking startup.
+- **Adaptive help:** Help is grouped by command family (General, Compilation, Execution, Diagnostics, Testing, Development tools), documents every real subcommand, follows terminal width via `COLUMNS`, and uses semantic roles instead of ad-hoc colors. `--theme=auto|dark|light` selects a palette; `auto` uses `MIO_THEME`/`COLORFGBG` when available and otherwise keeps high-contrast ANSI 16-color semantics instead of guessing the background.
+- **Color compatibility:** `--color=auto|always|never` keeps its meaning. Explicit CLI values win over `NO_COLOR`, `TERM=dumb`, `CLICOLOR` and `CLICOLOR_FORCE`; non-TTY output is plain. JSON, LSP frames and error codes remain machine-stable and never receive ANSI escapes or localized protocol fields.
+- **Single catalog for both CLIs:** `selfhost/i18n/locales/*.json` are the source of truth for the native CLI and the Go reference CLI. `scripts/i18n/catalog.py` validates completeness, placeholders, UTF-8, technical tokens and RTL metadata, and regenerates both lookup tables; `scripts/i18n/test_catalog.py` runs in the quality gate so a new CLI string without translations cannot merge unnoticed.
+- No language syntax, Mochi format, Native AOT output, exit-code meaning or compiler architecture was changed.
+
 ## 2.1.1 — Unreleased
 
 - The **Full** distribution is now a single self-contained native compiler with the complete Bunko standard library embedded. It works without an external `bunko/` directory, supports all `kiso/...` imports immediately, and can be copied alone to another directory or compatible computer.

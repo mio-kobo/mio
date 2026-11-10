@@ -25,7 +25,7 @@
 
 Mio 2.1 のネイティブ AOT コンパイル対象は macOS ARM64、Linux AMD64、Windows AMD64 です。
 
-> 最新の安定版は [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) で、macOS ARM64 で検証済みです。公開済みの最新リリース候補は [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) です。[開発ブランチ `Mio-2.1.1`](https://github.com/mio-kobo/mio/tree/Mio-2.1.1) では、未公開の v2.1.1 に向けて開発を進めています。
+> 最新の安定版は [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0) で、macOS ARM64 で検証済みです。公開済みの最新リリース候補は [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1) です。[開発ブランチ `Mio-2.1.2`](https://github.com/mio-kobo/mio/tree/Mio-2.1.2) では、未公開の v2.1.2 に向けて開発を進めています。
 
 変更点とリリースに向けた検証状況は、[v2.1.0 リリースノートの草案](releases/v2.1.0.md)を参照してください。
 
