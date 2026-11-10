@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
-from seed_evidence import seed_binding, seed_identity
+from seed_evidence import NATIVE_V21, seed_binding, seed_identity
 from stable_release import authenticate, docker_archive, reports
 from supplemental_evidence import restore_logs
 from bootstrap import profile_for
@@ -42,6 +42,7 @@ def immutable(path, data):
 
 
 PINNED_EVIDENCE = Path(__file__).with_name('evidence')
+V210_RELEASE_SOURCE = '74e461b2985886160a285c7104d2a41090d0f548'
 
 
 def restore_pinned(assets, tag, evidence, pinned=None):
@@ -75,7 +76,10 @@ def validate(assets, tag, release, source):
     if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
         raise ValueError('published stable GitHub Release required')
     run, kind = authenticate(assets, tag, source, restore=lambda a, e: restore_pinned(a, tag, e))
-    if profile_for(version).kind != kind:
+    # The immutable v2.1.0 release used the native v2.1 seed. Its original
+    # attestation and seed evidence have already been checked above.
+    expected_kind = NATIVE_V21 if tag == 'v2.1.0' and source == V210_RELEASE_SOURCE else profile_for(version).kind
+    if expected_kind != kind:
         raise ValueError('published evidence does not use the reviewed bootstrap seed profile for this version')
     seed_path = assets / seed_identity(kind).report_name
     seed = json.loads(seed_path.read_text())

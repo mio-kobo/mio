@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from release import (stable, immutable, formula, winget, validate, restore_pinned,
+from release import (V210_RELEASE_SOURCE, stable, immutable, formula, winget, validate, restore_pinned,
                      windows_product_code)
 from package import digest, inventory, write_json
 from seed_evidence import (GF4, GF4_LOGS, GF4_SEED_SHA256, GF4_SOURCE, NATIVE_V21, SEED_KINDS,
@@ -169,6 +169,12 @@ class ReleaseTests(unittest.TestCase):
         linux_full = next(a['digest'][7:] for a in release['assets'] if a['name'].endswith('linux-amd64-full.tar.gz'))
         write_json(base / 'docker-verification.json', dict(status='PASS', source_sha='a'*40, full_archive_sha256=linux_full, archive_sha256=digest(base / image), checks=[dict(status='PASS')]))
         return release
+
+    @patch('release.authenticate', return_value=(RUN, GF4))
+    def test_published_v210_requires_its_native_seed_evidence(self, _authenticate):
+        release = dict(tag_name='v2.1.0', draft=False, prerelease=False, published_at='date')
+        with self.assertRaisesRegex(ValueError, 'does not use the reviewed bootstrap seed profile'):
+            validate(Path('/unused'), 'v2.1.0', release, V210_RELEASE_SOURCE)
 
     @patch('release.authenticate', return_value=(RUN, GF4))
     def test_six_asset_gate_rejects_tampering_and_missing_evidence(self, _authenticate):
