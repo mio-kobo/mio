@@ -28,18 +28,18 @@ waza options(args: []string, explicit_language: string, explicit_color: string, 
     aida (at < len(args) && error == "") {
         kaku option = args[at];
         moshi (string.has_prefix(option, "--run=")) {
-            filter = tail(option, 6); moshi (filter == "") { error = "E_OPTIONS " + i18n.text(lang, i18n.key_test_empty_filter); }
+            filter = tail(option, 6); moshi (filter == "") { error = string.concat("E_OPTIONS ", i18n.text(lang, i18n.key_test_empty_filter)); }
             at = at + 1; tsuzuku;
         }
         moshi (string.has_prefix(option, "--lang=")) {
-            kaku text = tail(option, 7); lang = i18n.select(text); moshi (text == "") { error = "E_OPTIONS " + i18n.text(lang, i18n.key_test_empty_lang); }
+            kaku text = tail(option, 7); lang = i18n.select(text); moshi (text == "") { error = string.concat("E_OPTIONS ", i18n.text(lang, i18n.key_test_empty_lang)); }
             at = at + 1; tsuzuku;
         }
         moshi (option == "--format=human") { format = "human"; at = at + 1; tsuzuku; }
         moshi (option == "--format=short") { format = "short"; at = at + 1; tsuzuku; }
         moshi (option == "--format=json") { format = "json"; at = at + 1; tsuzuku; }
         moshi (string.has_prefix(option, "--format=")) {
-            error = "E_OPTIONS " + i18n.format(lang, i18n.key_err_invalid_format, [tail(option, 9)]);
+            error = string.concat("E_OPTIONS ", i18n.format(lang, i18n.key_err_invalid_format, [tail(option, 9)]));
             at = at + 1; tsuzuku;
         }
         moshi (option == "--verbose") { verbose = hai; at = at + 1; tsuzuku; }
@@ -53,18 +53,18 @@ waza options(args: []string, explicit_language: string, explicit_color: string, 
         }
         moshi (option == "--bunko-root") {
             at = at + 1;
-            moshi (at >= len(args)) { error = "E_OPTIONS " + i18n.text(lang, i18n.key_test_bunko_missing); }
-            sore { bunko = args[at]; moshi (bunko == "") { error = "E_OPTIONS " + i18n.text(lang, i18n.key_test_bunko_empty); } }
+            moshi (at >= len(args)) { error = string.concat("E_OPTIONS ", i18n.text(lang, i18n.key_test_bunko_missing)); }
+            sore { bunko = args[at]; moshi (bunko == "") { error = string.concat("E_OPTIONS ", i18n.text(lang, i18n.key_test_bunko_empty)); } }
             at = at + 1; tsuzuku;
         }
         moshi (option == "" || string.has_prefix(option, "-") || target != "") {
-            error = "E_OPTIONS " + i18n.format(lang, i18n.key_test_invalid_arg, [option]);
+            error = string.concat("E_OPTIONS ", i18n.format(lang, i18n.key_test_invalid_arg, [option]));
             at = at + 1; tsuzuku;
         }
         target = option;
         at = at + 1;
     }
-    moshi (target == "") { error = "E_OPTIONS " + i18n.text(lang, i18n.key_test_missing_target); }
+    moshi (target == "") { error = string.concat("E_OPTIONS ", i18n.text(lang, i18n.key_test_missing_target)); }
     moshi(error==""){kaku library=bunkopath.resolve(bunko);bunko=library.root;error=library.error;}
     kaesu Options { target: target, filter: filter, format: format, color: color, lang: lang, theme: theme_name, bunko: bunko, verbose: verbose, error: error };
 }
