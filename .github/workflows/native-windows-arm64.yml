@@ -33,10 +33,11 @@ jobs:
       - name: Host facts
         run: |
           set -o pipefail
-          python -c "import platform; print(platform.system(), platform.machine(), platform.version())"
-          echo "PROCESSOR_ARCHITECTURE=$PROCESSOR_ARCHITECTURE"
-          test "$PROCESSOR_ARCHITECTURE" = ARM64
+          # Git Bash is an emulated x64 process here, so its PROCESSOR_ARCHITECTURE says AMD64: ask the native Python and Go.
+          python -c "import platform,sys; print(platform.system(), platform.machine(), platform.version()); sys.exit(0 if platform.system() == 'Windows' and platform.machine().lower() == 'arm64' else 1)"
+          echo "bash sees PROCESSOR_ARCHITECTURE=$PROCESSOR_ARCHITECTURE PROCESSOR_ARCHITEW6432=$PROCESSOR_ARCHITEW6432"
           go env GOOS GOARCH
+          test "$(go env GOARCH)" = arm64
       - name: Build the reference VM (Stage A host only)
         run: go build -o build/refvm.exe ./tests/windows-amd64/refvm && go build -o build/mio.exe ./cmd/mio
       - name: Mio unit tests for the PE writer, the ARM64 encoder, the lowering and the Windows image builder

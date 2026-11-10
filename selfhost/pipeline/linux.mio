@@ -100,9 +100,9 @@ koukai waza host_target() -> string {
     kaku system = os.environment("SystemRoot");
     moshi (system != mu) {
         moshi (system != "" && fs.is_dir(system)) {
-            // PROCESSOR_ARCHITECTURE is ARM64 for a native Windows ARM64 process (an emulated x64 process reports AMD64)
-            kaku arch = os.environment("PROCESSOR_ARCHITECTURE");
-            moshi (arch != mu) { moshi (arch == "ARM64") { kaesu "windows-arm64"; } }
+            // The architecture of this very process, from its own PE header (an environment variable such as
+            // PROCESSOR_ARCHITECTURE is inherited from the parent and says AMD64 under an emulated x64 parent).
+            moshi (own_pe_machine() == 43620) { kaesu "windows-arm64"; }
             kaesu "windows-amd64";
         }
     }
@@ -194,6 +194,24 @@ koukai waza build_darwin_amd64_test(data: []uint8) -> NativeBuildResult {
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
     kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
     kaesu build_darwin_amd64_file(file, iie);
+}
+
+// COFF machine field of this process's own PE header (0xAA64 ARM64, 0x8664 AMD64); 0 when it cannot be read.
+waza own_pe_machine() -> int64 {
+    kaku exe = os.executable_path();
+    moshi (exe == mu) { kaesu 0; }
+    kaku opened = fs.open_read(exe);
+    moshi (opened.error != mu) { kaesu 0; }
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu 0; }
+    kaku header: []uint8 = array.make[uint8](1024, uint8(0));
+    kaku read = fs.read(file, header, 0, 1024);
+    fs.close(file);
+    moshi (read.error != mu || read.count < 128) { kaesu 0; }
+    kaku pe = int64(header[60]) + int64(header[61]) * 256 + int64(header[62]) * 65536;
+    moshi (pe < 64 || pe + 6 > read.count) { kaesu 0; }
+    moshi (header[pe] != uint8(80) || header[pe + 1] != uint8(69) || header[pe + 2] != uint8(0) || header[pe + 3] != uint8(0)) { kaesu 0; }
+    kaesu int64(header[pe + 4]) + int64(header[pe + 5]) * 256;
 }
 
 // CPU type field of this process's own Mach-O header (little-endian bytes 4..7): 0x01000007 x86-64, 0x0100000C ARM64.
