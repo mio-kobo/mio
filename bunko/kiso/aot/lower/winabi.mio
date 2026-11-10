@@ -140,6 +140,18 @@ waza wx_streq(c: arm64.Assembler, reg: int64, text: string, fail: string) -> uni
     }
 }
 
+// The Mio front end expects drive-absolute paths with '/' separators from os.canonical_path (as the Windows amd64 backend
+// provides): rewrite every backslash of the NUL-terminated UTF-8 string whose pointer is saved at [sp, #slot].
+waza wx_slashes(c: arm64.Assembler, slot: int64, prefix: string) -> unit {
+    wx_ldr(c, 9, slot);
+    wx_label(c, string.concat(prefix, "_loop"));
+    wx(c, arm64.ldrb_w(10, 9, 0)); wx_cbz(c, 10, string.concat(prefix, "_done"));
+    wx_cmpi(c, 10, 92); wx_bcc(c, 1, string.concat(prefix, "_next"));
+    wx_li(c, 11, 47); wx(c, arm64.strb_w(11, 9, 0));
+    wx_label(c, string.concat(prefix, "_next")); wx(c, arm64.add_imm_x(9, 9, 1, iie)); wx_b(c, string.concat(prefix, "_loop"));
+    wx_label(c, string.concat(prefix, "_done"));
+}
+
 // Defines `windows_syscall`; `base` is the first adapter data word (see windows_adapter_words).
 koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64) -> unit {
     wx_label(c, "windows_syscall");
@@ -360,6 +372,7 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_fcntl_convert");
     wx_li(c, 0, 65001); wx_li(c, 1, 0); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 4, 2048); wx_li(c, 5, 1023); wx_li(c, 6, 0); wx_li(c, 7, 0);
     wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "wx_fcntl_failed");
+    wx_slashes(c, 2048, "wx_fcntl_slashes");
     wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_fcntl_failed"); wx_fail_last(c, patches, 2304);
     wx_label(c, "wx_fcntl_badfd"); wx_free(c, 2304); wx_b(c, "wx_badfd");
@@ -372,6 +385,7 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_li(c, 0, 0); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx_li(c, 2, 1024); wx_call(c, patches, "GetModuleFileNameW"); wx_bool(c); wx_cbz(c, 0, "wx_procinfo_failed");
     wx_li(c, 0, 65001); wx_li(c, 1, 0); wx(c, arm64.add_imm_x(2, 31, 0, iie)); wx(c, arm64.movn_x(3, 0, 0)); wx_ldr(c, 4, 2048); wx_ldr(c, 5, 2056); wx_li(c, 6, 0); wx_li(c, 7, 0);
     wx_call(c, patches, "WideCharToMultiByte"); wx_bool(c); wx_cbz(c, 0, "wx_procinfo_failed");
+    wx_slashes(c, 2048, "wx_procinfo_slashes");
     wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_procinfo_failed"); wx_fail_last(c, patches, 2304);
 

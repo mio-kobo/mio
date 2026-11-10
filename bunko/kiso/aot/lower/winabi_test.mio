@@ -68,3 +68,15 @@ waza test_windows_close_tests_descriptors_above_two() -> unit {
     testing.expect(win.words[close] == arm64.cmp_imm_x(0, 2, iie).word, "cmp x0, #2");
     testing.expect(win.words[close + 1] == arm64.b_cond(8, win_label(win.labels, "wx_close_real") - (close + 1)).word, "b.hi wx_close_real (condition 8, not 9)");
 }
+
+// os.canonical_path / os.executable_path return '/'-separated paths on Windows: the adapter rewrites backslashes in the
+// F_GETPATH and proc_info results (the front end compares them by prefix with the Bunko root).
+waza test_windows_adapter_normalises_path_separators() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku loop = win_label(win.labels, "wx_fcntl_slashes_loop");
+    testing.expect(loop >= 0 && win_label(win.labels, "wx_procinfo_slashes_loop") >= 0, "both path results are normalised");
+    testing.expect(win.words[loop] == arm64.ldrb_w(10, 9, 0).word, "ldrb w10, [x9]");
+    testing.expect(win.words[loop + 3] == arm64.cmp_imm_x(10, 92, iie).word, "cmp x10, #92 ('\\')");
+    kaku store = loop + 6;
+    testing.expect(win.words[store] == arm64.movz_x(11, 47, 0).word && win.words[store + 1] == arm64.strb_w(11, 9, 0).word, "mov x11, #47 ('/'); strb w11, [x9]");
+}
