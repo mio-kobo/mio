@@ -86,7 +86,10 @@ def exclusions(target):
     excluded = {}
     if reason := tcp_exclusion(target):
         excluded.update(dict.fromkeys(TCP, reason))
-    if target not in ("windows-amd64", "windows-arm64"):
+    if target == "windows-arm64":
+        excluded[PE_EXECUTION] = ("The generated image is an AMD64 PE; Windows on ARM64 could only run it through x64 emulation, which is not "
+                                  "native evidence. The ARM64 compiler's own PE output is executed natively by the windows-arm64 image check.")
+    elif target != "windows-amd64":
         excluded[PE_EXECUTION] = "The generated AMD64 PE requires Windows to execute. The host-native generator is checked separately."
     return excluded
 

@@ -74,6 +74,9 @@ class DriverTest(unittest.TestCase):
                 self.assertEqual(set(examples.exclusions(target)), {examples.PE_EXECUTION})
         with patch.object(examples, "tcp_exclusion", return_value=None):
             self.assertEqual(examples.exclusions("windows-amd64"), {})
+            # The AMD64 PE would only run under x64 emulation on Windows ARM64: excluded with a reason, never counted as PASS.
+            self.assertEqual(set(examples.exclusions("windows-arm64")), {examples.PE_EXECUTION})
+            self.assertIn("emulation", examples.exclusions("windows-arm64")[examples.PE_EXECUTION])
 
     def test_inventory_missing_or_unlisted_example(self):
         examples.check_inventory(examples.ROOT / "examples")

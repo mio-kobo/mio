@@ -6,7 +6,17 @@ name: Native / linux-arm64
 # no emulation or translation is involved in executing the image. A required layer that did not run fails the job.
 on:
   workflow_dispatch:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -76,7 +86,7 @@ jobs:
         run: |
           uname -srm; getconf PAGESIZE; cat /proc/sys/vm/overcommit_memory; free -m; ulimit -a
       - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
-        run: python scripts/ci/native_platforms.py linux-arm64 --refvm build/native/refvm --output build/native/linux-arm64
+        run: python scripts/ci/native_platforms.py linux-arm64 --refvm build/native/refvm --output build/native/linux-arm64 ${{ inputs.run_examples && '--run-examples' || '' }}
       - name: Diagnose a failing native compiler stage (variants of compiler-A building compiler-B, then strace)
         if: failure()
         run: |
