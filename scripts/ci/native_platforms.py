@@ -43,13 +43,14 @@ from prepare import EMPTY
 STARTED = time.monotonic()
 # Wall-clock budget for one platform (below the job timeout) so a slow host still uploads a complete report.
 BUDGET_SECONDS = int(os.environ.get("MIO_NATIVE_BUDGET_SECONDS", "6600"))
-TARGETS = {"linux": "linux-amd64", "linux-arm64": "linux-arm64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
+TARGETS = {"linux": "linux-amd64", "linux-arm64": "linux-arm64", "darwin-amd64": "darwin-amd64", "darwin": "darwin-arm64", "windows": "windows-amd64"}
 # Go-hosted Stage A programs per Linux target: the self-contained compiler program, its lowering driver and its messages.
 LINUX_PROFILES = {
     "linux-amd64": dict(compiler="selfhost/linux-compiler", stage_a="selfhost/native-aot-linux", tag="linux-compiler", aot="native-aot-linux"),
     "linux-arm64": dict(compiler="selfhost/linux-arm64-compiler", stage_a="selfhost/native-aot-linux-arm64", tag="linux-arm64-compiler", aot="native-aot-linux-arm64"),
+    "darwin-amd64": dict(compiler="selfhost/darwin-amd64-compiler", stage_a="selfhost/native-aot-darwin-amd64", tag="darwin-amd64-compiler", aot="native-aot-darwin-amd64"),
 }
-EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "linux-arm64": ("Linux", ("aarch64", "arm64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
+EXPECTED_HOST = {"linux-amd64": ("Linux", ("x86_64", "amd64")), "linux-arm64": ("Linux", ("aarch64", "arm64")), "darwin-amd64": ("Darwin", ("x86_64", "amd64")), "darwin-arm64": ("Darwin", ("arm64", "aarch64")),
                  "windows-amd64": ("Windows", ("amd64", "x86_64"))}
 EXE = {"windows-amd64": ".exe"}
 TCP_PACKAGE = "bunko/kiso/net/tcp"
@@ -921,7 +922,7 @@ def summary(args):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("linux", "linux-arm64"):
+    for name in ("linux", "linux-arm64", "darwin-amd64"):
         p = sub.add_parser(name)
         p.add_argument("--refvm", required=True)
         p.add_argument("--output", required=True)
@@ -940,6 +941,8 @@ def main():
         return linux(args)
     if args.command == "linux-arm64":
         return linux(args, "linux-arm64")
+    if args.command == "darwin-amd64":
+        return linux(args, "darwin-amd64")
     if args.command == "summary":
         return summary(args)
     return follower(args, TARGETS[args.command])

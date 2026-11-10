@@ -1,0 +1,41 @@
+yobu "kiso/aot/lowerlinux";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/math";
+yobu "kiso/string";
+
+// macOS x86-64 counterpart of selfhost/native-aot: reads the paths from input.config and
+// output.config, decodes a Mochi module, lowers it with the Darwin system-call adapter to a Mach-O executable and writes it.
+waza diagnostic(message: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n")));
+}
+
+waza compile_file(file: mochi.File, output: string) -> bool {
+    kaku lowered = lowerlinux.compile_darwin_amd64(file, 33554432);
+    moshi (lowered.error != "") { diagnostic(string.concat("E_LOWER native-aot-darwin-amd64: ", lowered.error)); kaesu iie; }
+    kaku written = fs.write_all(output, lowered.bytes);
+    moshi (written.error != mu) { diagnostic("E_IO native-aot-darwin-amd64: write failed"); kaesu iie; }
+    chant("native-aot-darwin-amd64: ok");
+    kaesu hai;
+}
+
+waza compile(input: string, output: string) -> bool {
+    kaku decoded = mochi.decode_file(input);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { diagnostic("E_DECODE native-aot-darwin-amd64: decode failed"); kaesu iie; }
+    moshi (file == mu) { diagnostic("E_DECODE native-aot-darwin-amd64: decode failed"); kaesu iie; }
+    kaesu compile_file(file, output);
+}
+
+waza run() -> bool {
+    kaku input_config = fs.read_all("input.config");
+    kaku output_config = fs.read_all("output.config");
+    moshi (input_config.error != mu || output_config.error != mu) { diagnostic("E_CONFIG native-aot-darwin-amd64: config unavailable"); kaesu iie; }
+    kaku input = string.from_utf8(input_config.data);
+    kaku output = string.from_utf8(output_config.data);
+    moshi (input == mu) { diagnostic("E_CONFIG native-aot-darwin-amd64: invalid config"); kaesu iie; }
+    moshi (output == mu) { diagnostic("E_CONFIG native-aot-darwin-amd64: invalid config"); kaesu iie; }
+    kaesu compile(input, output);
+}
+
+moshi (!run()) { math.fail("native-aot-darwin-amd64 failed"); }

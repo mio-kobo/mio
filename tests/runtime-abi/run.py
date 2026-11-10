@@ -32,7 +32,7 @@ SUITES = {"contract": HERE / "cases", "differential": ROOT / "tests" / "native-d
 # Programs whose run time is quadratic under per-allocation collection (Darwin --gc-stress): default mode only, as in
 # the former Go harness (TestLinuxAMD64PureMioLoweringUnderGCStress). Reported NOT_APPLICABLE, never PASS.
 STRESS_EXCLUDED = {"differential": {"gc_garbage", "gc_keeps_live_data"}}
-TARGETS = ("darwin-arm64", "linux-amd64", "linux-arm64", "windows-amd64")
+TARGETS = ("darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64", "windows-amd64")
 
 
 def sha256(path):
@@ -43,6 +43,8 @@ def host_target():
     system, machine = platform.system(), platform.machine().lower()
     if system == "Darwin" and machine in ("arm64", "aarch64"):
         return "darwin-arm64"
+    if system == "Darwin" and machine in ("x86_64", "amd64"):
+        return "darwin-amd64"
     if system == "Linux" and machine in ("x86_64", "amd64"):
         return "linux-amd64"
     if system == "Linux" and machine in ("aarch64", "arm64"):

@@ -1,4 +1,5 @@
 yobu "kiso/aot/elf";
+yobu "kiso/aot/machox64";
 yobu "kiso/aot/lower/types";
 yobu "kiso/aot/x86_64";
 yobu "kiso/array";
@@ -1199,9 +1200,22 @@ waza emit_function(code: x86_64.Assembler, file: mochi.File, analysis: types.Typ
 koukai waza compile(file: mochi.File) -> LowerResult { kaesu compile_with_gc_threshold(file, 33554432); }
 
 koukai waza compile_with_gc_threshold(file: mochi.File, gc_threshold: int64) -> LowerResult {
+    kaesu compile_target(file, gc_threshold, iie);
+}
+
+// macOS x86-64 target: the same lowering and runtime, every Linux system call routed through the darwin_syscall adapter
+// (darwinabi.mio) and the result packaged as a Mach-O executable (kiso/aot/machox64).
+koukai waza compile_darwin_amd64(file: mochi.File, gc_threshold: int64) -> LowerResult {
+    kaesu compile_target(file, gc_threshold, hai);
+}
+
+waza compile_target(file: mochi.File, gc_threshold: int64, darwin: bool) -> LowerResult {
     moshi (gc_threshold < 4096) { kaesu failed("INVALID_GC_THRESHOLD"); }
     kaku analysis = types.analyze_types(file);
     kaku code = x86_64.assembler();
+    // dyld enters at LC_MAIN with main(argc, argv, envp): rsi = argv, and argc sits just below it, exactly where the Linux
+    // entry expects its stack pointer. The label darwin_abi makes every x86_64.syscall a call of darwin_syscall.
+    moshi (darwin) { x86_64.label(code, "darwin_abi"); x86_64.lea(code, x86_64.rsp, x86_64.rsi, -8); }
     x86_64.mov_ri(code, x86_64.rcx, initial_sp_cell());
     x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rsp);
     x86_64.call(code, "rt.init");
@@ -1229,11 +1243,18 @@ koukai waza compile_with_gc_threshold(file: mochi.File, gc_threshold: int64) -> 
         index = index + 1;
     }
     emit_runtime(code);
+    moshi (darwin) { emit_darwin_abi_runtime(code); }
     emit_globals_map(code, file, analysis);
     emit_string_constants(code, file);
     kaku assembled = x86_64.assemble(code);
     moshi (assembled.error != "") { kaesu failed(assembled.error); }
-    kaku image = elf.executable(elf.ImageSpec { code: assembled.bytes, entry_offset: 0, bss_size: 8192 + 2097152 + 8 * file.global_count + 32 });
+    kaku bss = 8192 + 2097152 + 8 * file.global_count + 32;
+    moshi (darwin) {
+        kaku macho_image = machox64.executable(machox64.ImageSpec { code: assembled.bytes, entry_offset: 0, bss_size: bss });
+        moshi (macho_image.error != "") { kaesu failed(macho_image.error); }
+        kaesu LowerResult { bytes: macho_image.bytes, error: "" };
+    }
+    kaku image = elf.executable(elf.ImageSpec { code: assembled.bytes, entry_offset: 0, bss_size: bss });
     moshi (image.error != "") { kaesu failed(image.error); }
     kaesu LowerResult { bytes: image.bytes, error: "" };
 }

@@ -4,6 +4,7 @@ yobu "kiso/aot/lowerlinux";
 yobu "kiso/aot/lower";
 yobu "kiso/aot/linuxarm64";
 yobu "kiso/aot/macho";
+yobu "kiso/aot/machox64";
 yobu "kiso/runtime/abi";
 yobu "kiso/convert";
 yobu "kiso/string";
@@ -96,6 +97,8 @@ koukai waza host_target() -> string {
     }
     kaku system = os.environment("SystemRoot");
     moshi (system != mu) { moshi (system != "" && fs.is_dir(system)) { kaesu "windows-amd64"; } }
+    // macOS: Intel (CPU_TYPE_X86_64) or Apple silicon, from this binary's own Mach-O header
+    moshi (own_cpu_type() == 16777223) { kaesu "darwin-amd64"; }
     kaesu "darwin-arm64";
 }
 
@@ -117,6 +120,7 @@ koukai waza build_host_test(data: []uint8) -> NativeBuildResult {
     kaku host = host_target();
     moshi (host == "linux-amd64") { kaesu build_linux_test(data); }
     moshi (host == "linux-arm64") { kaesu build_linux_arm64_test(data); }
+    moshi (host == "darwin-amd64") { kaesu build_darwin_amd64_test(data); }
     moshi (host == "windows-amd64") { kaesu build_windows_test(data); }
     kaesu build_signed_test(data);
 }
@@ -152,4 +156,48 @@ koukai waza build_linux_arm64_test(data: []uint8) -> NativeBuildResult {
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
     kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
     kaesu build_linux_arm64_file(file, iie);
+}
+
+// ---- macOS x86-64: the Linux x86-64 lowering with the Darwin system-call adapter, packaged as a Mach-O executable.
+koukai waza build_darwin_amd64_source(root: string, entry: string, bunko_root: string, gc_stress: bool) -> NativeBuildResult {
+    kaku compiled = frontend.compile_source(root, entry, bunko_root);
+    moshi (compiled.error != "") { kaesu NativeBuildResult { bytes: [], error: compiled.error }; }
+    kaesu build_darwin_amd64_mochi(compiled.bytes, gc_stress);
+}
+
+koukai waza build_darwin_amd64_mochi(data: []uint8, gc_stress: bool) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
+    kaesu build_darwin_amd64_file(file, gc_stress);
+}
+
+waza build_darwin_amd64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
+    kaku threshold = 33554432; moshi (gc_stress) { threshold = abi.gc_stress_threshold_bytes; }
+    kaku lowered = lowerlinux.compile_darwin_amd64(file, threshold);
+    moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
+    kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
+}
+
+koukai waza build_darwin_amd64_test(data: []uint8) -> NativeBuildResult {
+    kaku linked = link_test_packet(data);
+    moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
+    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaesu build_darwin_amd64_file(file, iie);
+}
+
+// CPU type field of this process's own Mach-O header (little-endian bytes 4..7): 0x01000007 x86-64, 0x0100000C ARM64.
+// Returns 0 when it cannot be read.
+waza own_cpu_type() -> int64 {
+    kaku exe = os.executable_path();
+    moshi (exe == mu) { kaesu 0; }
+    kaku opened = fs.open_read(exe);
+    moshi (opened.error != mu) { kaesu 0; }
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu 0; }
+    kaku header: []uint8 = [uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0)];
+    kaku read = fs.read(file, header, 0, 8);
+    fs.close(file);
+    moshi (read.error != mu || read.count < 8) { kaesu 0; }
+    kaesu int64(header[4]) + int64(header[5]) * 256 + int64(header[6]) * 65536 + int64(header[7]) * 16777216;
 }

@@ -1,0 +1,107 @@
+name: Native / darwin-amd64
+# Native evidence for the macOS Intel (darwin-amd64) backend while it is being built (v2.2.0 platform expansion).
+# `mio build --target darwin-amd64` produces a Mach-O x86-64 executable from the Linux x86-64 lowering with a Darwin
+# system-call adapter. Everything here runs on a real Intel macOS runner (macos-15-intel); no Rosetta and no emulation.
+# The go-hosted Stage A (Go reference VM runs the pure-Mio lowering) builds compiler-A; every later stage and every test
+# runs as a native Mach-O x86-64 image. A required layer that did not run fails the job.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ['Mio-[0-9]*']
+permissions:
+  contents: read
+jobs:
+  image:
+    name: Native / darwin-amd64 image
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Host facts
+        run: |
+          uname -srm; sw_vers; sysctl -n machdep.cpu.brand_string; sysctl -n hw.pagesize
+          python -c "import platform; print(platform.machine())"
+          test "$(uname -m)" = x86_64
+      - name: Build the reference VM (image writer host only)
+        run: go build -o build/mio ./cmd/mio
+      - name: Mio unit tests for the encoder, the Mach-O writer and the Darwin lowering
+        run: |
+          build/mio test bunko/kiso/aot/x86_64
+          build/mio test bunko/kiso/aot/machox64
+          build/mio test bunko/kiso/aot/lowerlinux
+      - name: Independent check and native execution of a generated Mach-O image
+        env:
+          MIO_CI_MIO: ${{ github.workspace }}/build/mio
+          MIO_CI_MODULE_DIR: ${{ github.workspace }}/build/machox64
+        run: python bunko/kiso/aot/machox64/check_machox64.py --reference-vm --require-execution | tee build/machox64-report.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-darwin-amd64-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/machox64-report.txt
+            build/machox64/
+          if-no-files-found: warn
+          retention-days: 7
+  chain:
+    name: Native / darwin-amd64 chain
+    runs-on: macos-15-intel
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
+        run: go build -o build/native/refvm ./tests/windows-amd64/refvm
+      - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
+        run: python scripts/ci/native_platforms.py darwin-amd64 --refvm build/native/refvm --output build/native/darwin-amd64
+      - name: Diagnose a failing native stage (compiler-A building compiler-B, with and without the extra environment)
+        if: failure()
+        run: |
+          mkdir -p build/native/darwin-amd64/diag
+          exe="$PWD/build/native/darwin-amd64/work/compiler-A"
+          [ -x "$exe" ] || exit 0
+          for variant in plain env; do
+            if [ "$variant" = env ]; then export MIO_BUNKO="$PWD/bunko"; fi
+            printf 'selfhost/darwin-amd64-compiler\nbuild/native/darwin-amd64/diag/out-%s\n' "$variant" | "$exe" >"build/native/darwin-amd64/diag/$variant.out" 2>"build/native/darwin-amd64/diag/$variant.err"
+            echo "variant $variant: exit $? stdout=$(head -c 80 build/native/darwin-amd64/diag/$variant.out) stderr=$(head -c 300 build/native/darwin-amd64/diag/$variant.err)"
+          done || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-report-darwin-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/darwin-amd64/report.json
+            build/native/darwin-amd64/logs/
+            build/native/darwin-amd64/runtime-abi/results.json
+            build/native/darwin-amd64/runtime-abi/*.std*
+            build/native/darwin-amd64/native-differential/results.json
+            build/native/darwin-amd64/native-differential/*.std*
+            build/native/darwin-amd64/diag/
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-compilers-darwin-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/darwin-amd64/work/compiler-*
+            build/native/darwin-amd64/work/mio-*
+          if-no-files-found: warn
+          retention-days: 7
