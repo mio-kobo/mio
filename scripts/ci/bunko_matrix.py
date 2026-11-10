@@ -135,7 +135,7 @@ def load_reports(directory):
             name = check.get("name", "")
             if name.startswith("mio-test bunko/") or name.startswith("mio-test selfhost/"):
                 statuses[name] = check.get("status")
-            elif name in ("mio-run-protocol", "os-process-protocol", "mio-test-protocol"):
+            elif name in ("mio-run-protocol", "os-process-protocol", "mio-test-protocol", "linux-thread-gc"):
                 statuses["protocol " + name] = check.get("status")
         for suite, folder in (("native-differential", "native-differential"), ("runtime-abi-contract", "runtime-abi")):
             results_path = report_path.parent / folder / "results.json"

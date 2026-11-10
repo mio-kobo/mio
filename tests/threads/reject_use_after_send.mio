@@ -1,0 +1,12 @@
+// Must NOT compile (E0702): the sender used the graph after handing it to the channel.
+yobu "kiso/thread";
+
+kata Packet { id: int64; payload: []int64; }
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[Packet](1, Packet { id: -1, payload: [] });
+    kaku packet = Packet { id: 1, payload: [1, 2] };
+    thread.send[Packet](channel, yuzuru packet);
+    kaesu len(packet.payload);
+}
+chant(run());

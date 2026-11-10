@@ -1,0 +1,44 @@
+// A producer thread sends 50 object graphs through a 2-slot channel with yuzuru; the consumer receives them. Nothing is copied: the
+// consumer holds the very objects the producer built.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Graph { id: int64; shared: []int64; items: []Graph; }
+
+waza build(id: int64, shared: []int64) -> Graph {
+    kaku children: []Graph = [];
+    kaku i = 0;
+    aida (i < 3) { array.push(children, Graph { id: id * 10 + i, shared: shared, items: [] }); i = i + 1; }
+    kaesu Graph { id: id, shared: shared, items: children };
+}
+
+waza run() -> int64 {
+    kaku filler = Graph { id: -1, shared: [], items: [] };
+    kaku channel = thread.channel_new[Graph](2, filler);
+    kaku producer = waza () -> int64 {
+        kaku n = 0;
+        aida (n < 50) {
+            kaku graph = build(n, [n]);
+            kaku outcome = thread.send[Graph](channel, yuzuru graph);
+            moshi (!outcome.sent) { kaesu -1; }
+            n = n + 1;
+        }
+        thread.close[Graph](channel);
+        kaesu 50;
+    };
+    kaku handle = thread.start(producer);
+    kaku total = 0;
+    kaku count = 0;
+    aida (hai) {
+        kaku got = thread.receive[Graph](channel);
+        moshi (got.closed) { nukeru; }
+        total = total + got.item.id + len(got.item.items) + got.item.shared[0];
+        count = count + 1;
+    }
+    chant(count);
+    chant(total);
+    chant(thread.join(handle));
+    thread.destroy[Graph](channel);
+    kaesu 0;
+}
+run();
