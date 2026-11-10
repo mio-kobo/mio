@@ -260,8 +260,9 @@ class GenericLogArchiveTests(unittest.TestCase):
             for name, content in self.logs.items():
                 if name != omitted:
                     self.add_file(archive, name, b'changed' if name == changed else content)
-            for name, kind, link in extra:
-                self.add_file(archive, name, b'', kind, link)
+            for entry in extra:
+                name, kind, link, *payload = entry
+                self.add_file(archive, name, payload[0] if payload else b'', kind, link)
 
     def add_file(self, archive, name, content, kind=tarfile.REGTYPE, link=''):
         entry = tarfile.TarInfo(name)
@@ -309,6 +310,69 @@ class GenericLogArchiveTests(unittest.TestCase):
         self.assertEqual(args[args.index('--source-digest') + 1], SOURCE)
         restored = {f'{GENERIC_LOG_DIR}/{path.name}': path.read_bytes() for path in (self.assets / GENERIC_LOG_DIR).iterdir()}
         self.assertEqual(restored, self.logs)
+
+    def use_v212(self):
+        self.release['tag_name'] = 'v2.1.2'
+        self.release['assets'][0]['browser_download_url'] = (
+            f'https://github.com/{REPOSITORY}/releases/download/v2.1.2/{GENERIC_ARCHIVE}')
+        self.report['version'] = '2.1.2'
+        self.report['files'] = {name: 'b' * 64 for name in evidence_files('2.1.2', NATIVE_V21)}
+        self.report['files'].update({name: hashlib.sha256(data).hexdigest()
+                                     for name, data in self.logs.items()})
+        write_json(self.assets / REPORT, self.report)
+
+    def test_v212_allows_signed_logs_with_appledouble_sidecars(self):
+        self.use_v212()
+        apple_double = bytes.fromhex('0005160700020000') + bytes(24)
+        sidecars = [
+            (f'._{GENERIC_LOG_DIR}', tarfile.REGTYPE, '', apple_double),
+            (f'{GENERIC_LOG_DIR}/._{SEED_LOGS[0]}', tarfile.REGTYPE, '', apple_double),
+        ]
+        self.write_archive(extra=sidecars)
+        self.bind_archive()
+        with patch(__name__ + '.GENERIC_TAG', 'v2.1.2'):
+            self.restore()
+        restored = {f'{GENERIC_LOG_DIR}/{path.name}': path.read_bytes()
+                    for path in (self.assets / GENERIC_LOG_DIR).iterdir()}
+        self.assertEqual(restored, self.logs)
+        self.assertEqual(self.sigstore.call_count, 1)
+
+    def test_v211_still_rejects_appledouble_sidecars(self):
+        apple_double = bytes.fromhex('0005160700020000') + bytes(24)
+        self.write_archive(extra=[(f'._{GENERIC_LOG_DIR}', tarfile.REGTYPE, '', apple_double)])
+        self.bind_archive()
+        self.assert_rejected('unexpected supplemental archive member')
+
+    def test_v212_rejects_unexpected_or_invalid_appledouble_members(self):
+        self.use_v212()
+        apple_double = bytes.fromhex('0005160700020000') + bytes(24)
+        for name, kind, payload, reason in [
+            ('._unrelated', tarfile.REGTYPE, apple_double, 'unexpected'),
+            (f'{GENERIC_LOG_DIR}/._unknown.log', tarfile.REGTYPE, apple_double, 'unexpected'),
+            (f'._{GENERIC_LOG_DIR}', tarfile.SYMTYPE, b'', 'unexpected'),
+            (f'._{GENERIC_LOG_DIR}', tarfile.REGTYPE, b'not AppleDouble', 'unexpected'),
+            (f'._{GENERIC_LOG_DIR}', tarfile.REGTYPE, apple_double + bytes(65536), 'unexpected'),
+        ]:
+            with self.subTest(name=name, kind=kind, size=len(payload)):
+                self.write_archive(extra=[(name, kind, '', payload)])
+                self.bind_archive()
+                with patch(__name__ + '.GENERIC_TAG', 'v2.1.2'):
+                    self.assert_rejected(reason)
+
+    def test_v212_appledouble_does_not_relax_signed_log_checks(self):
+        self.use_v212()
+        apple_double = bytes.fromhex('0005160700020000') + bytes(24)
+        sidecar = (f'._{GENERIC_LOG_DIR}', tarfile.REGTYPE, '', apple_double)
+        name = next(iter(self.logs))
+        for options, reason in [
+            (dict(omitted=name), 'missing expected logs'),
+            (dict(changed=name), 'does not match signed release evidence'),
+        ]:
+            with self.subTest(reason=reason):
+                self.write_archive(extra=[sidecar], **options)
+                self.bind_archive()
+                with patch(__name__ + '.GENERIC_TAG', 'v2.1.2'):
+                    self.assert_rejected(reason)
 
     def test_missing_or_modified_log_is_rejected(self):
         name = next(iter(self.logs))

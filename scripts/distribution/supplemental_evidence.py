@@ -19,6 +19,8 @@ LOG_DIR = seed_identity(NATIVE_V21).log_dir
 ARCHIVE = f'{LOG_DIR}.tar.gz'
 MAX_ARCHIVE_SIZE = 1024 * 1024
 MAX_LOG_ARCHIVE_SIZE = 16 * 1024 * 1024
+MAX_APPLEDOUBLE_SIZE = 64 * 1024
+APPLEDOUBLE_HEADER = b'\x00\x05\x16\x07\x00\x02\x00\x00'
 RELEASE_PURL = f'pkg:github/{REPOSITORY}@{EVIDENCE_TAG}'
 PAX_KEYS = {b'LIBARCHIVE.xattr.com.apple.provenance', b'SCHILY.xattr.com.apple.provenance'}
 
@@ -94,7 +96,7 @@ def check_pax(name, data, member_name):
         raise ValueError('empty supplemental archive PAX header')
 
 
-def read_logs(archive, hashes, limit=MAX_ARCHIVE_SIZE):
+def read_logs(archive, hashes, limit=MAX_ARCHIVE_SIZE, *, allow_appledouble=False):
     # Read the gzip trailer and bound expansion before interpreting tar headers.
     try:
         with gzip.open(archive, 'rb') as stream:
@@ -105,6 +107,15 @@ def read_logs(archive, hashes, limit=MAX_ARCHIVE_SIZE):
     zero_block = bytes(block)
     if len(data) > limit or len(data) % block:
         raise ValueError('invalid supplemental tar archive size')
+
+    # The immutable v2.1.2 archive was packaged on macOS. Its AppleDouble
+    # metadata is not seed evidence and must never be extracted as a log.
+    allowed_appledouble = set()
+    if allow_appledouble:
+        allowed_appledouble.add(f'._{LOG_DIR}')
+        for name in hashes:
+            path = PurePosixPath(name)
+            allowed_appledouble.add(str(path.parent / f'._{path.name}'))
 
     logs = {}
     seen = set()
@@ -131,6 +142,12 @@ def read_logs(archive, hashes, limit=MAX_ARCHIVE_SIZE):
             if hashlib.sha256(content).hexdigest() != hashes[member.name]:
                 raise ValueError('log does not match signed release evidence: ' + member.name)
             logs[member.name] = content
+        elif (allow_appledouble and member.type == tarfile.REGTYPE
+              and member.name in allowed_appledouble
+              and member.size <= MAX_APPLEDOUBLE_SIZE
+              and content.startswith(APPLEDOUBLE_HEADER)):
+            # Ignore only genuine, bounded metadata for known signed members.
+            pass
         elif member.type != tarfile.DIRTYPE or member.name != LOG_DIR or member.size != 0:
             raise ValueError('unexpected supplemental archive member: ' + member.name)
         if pax is not None:
@@ -212,7 +229,8 @@ def restore_logs(assets, tag, source):
     archive = f'{identity.log_dir}.tar.gz'
     with tempfile.TemporaryDirectory(dir=assets) as temp:
         directory = Path(temp)
-        logs = read_logs(download_release_logs(directory, tag, archive), hashes, MAX_LOG_ARCHIVE_SIZE)
+        logs = read_logs(download_release_logs(directory, tag, archive), hashes,
+                         MAX_LOG_ARCHIVE_SIZE, allow_appledouble=(tag == 'v2.1.2'))
         staged = directory / identity.log_dir
         staged.mkdir()
         for name in SEED_LOGS:
