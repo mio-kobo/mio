@@ -1,0 +1,50 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/elf";
+yobu "kiso/array";
+yobu "kiso/string";
+
+// Linux AArch64 (generic syscall table, AAPCS64 registers) static image builder. First backend slice: it emits the
+// smallest genuine native program (write + exit_group). There is no libc, no loader and no fallback to another CPU.
+// Syscall numbers are from the Linux generic table used by arm64 (not the x86-64 table): write=64, exit_group=94.
+koukai teisu syscall_write = 64;
+koukai teisu syscall_exit_group = 94;
+
+koukai kata Program { code: []uint8; error: string; }
+
+waza push_word(out: []uint8, word: uint32) -> unit {
+    kaku value = int64(word); kaku i = 0;
+    aida (i < 4) { array.push(out, uint8(value - (value / 256) * 256)); value = value / 256; i = i + 1; }
+}
+
+// write(1, message, len(message)); exit_group(status). The message bytes follow the code in the same RX segment and are
+// addressed PC-relative with ADR, so the image needs no relocation.
+koukai waza hello_program(message: string, status: int64) -> Program {
+    kaku text = string.to_bytes(message);
+    moshi (len(text) == 0 || len(text) > 65535) { kaesu Program { code: [], error: "INVALID_MESSAGE" }; }
+    moshi (status < 0 || status > 255) { kaesu Program { code: [], error: "INVALID_STATUS" }; }
+    kaku c = arm64.assembler();
+    // eight instructions; ADR is instruction 1 (byte 4) and the message starts at byte 32
+    kaku failure = arm64.assembler_emit(c, arm64.movz_x(0, 1, 0));
+    arm64.assembler_emit(c, arm64.adr(1, 28));
+    arm64.assembler_emit(c, arm64.movz_x(2, len(text), 0));
+    arm64.assembler_emit(c, arm64.movz_x(8, syscall_write, 0));
+    arm64.assembler_emit(c, arm64.svc(0));
+    arm64.assembler_emit(c, arm64.movz_x(0, status, 0));
+    arm64.assembler_emit(c, arm64.movz_x(8, syscall_exit_group, 0));
+    arm64.assembler_emit(c, arm64.svc(0));
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) { kaesu Program { code: [], error: "ENCODE" }; }
+    kaku code: []uint8 = [];
+    kaku i = 0;
+    aida (i < len(assembled.words)) { push_word(code, assembled.words[i]); i = i + 1; }
+    array.append_all(code, text);
+    aida (len(code) - (len(code) / 4) * 4 != 0) { array.push(code, uint8(0)); }
+    kaesu Program { code: code, error: "" };
+}
+
+// A complete Linux AArch64 ELF64 executable for hello_program.
+koukai waza hello_image(message: string, status: int64) -> elf.ImageResult {
+    kaku program = hello_program(message, status);
+    moshi (program.error != "") { kaesu elf.ImageResult { bytes: [], error: program.error }; }
+    kaesu elf.executable_aarch64(elf.ImageSpec { code: program.code, entry_offset: 0, bss_size: 0 });
+}
