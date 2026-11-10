@@ -183,7 +183,7 @@ waza run() -> unit {
                 at = at + 1; value = args[at];
             }
             moshi (option != "--target") { value = string.trim_space(string.concat("", option)); kaku bytes = string.to_bytes(option); kaku tail: []uint8 = []; kaku cut = 9; aida (cut < len(bytes)) { array.push(tail, bytes[cut]); cut = cut + 1; } kaku parsed = string.from_utf8(tail); moshi (parsed != mu) { value = parsed; } }
-            moshi (value != "darwin-arm64" && value != "linux-amd64" && value != "windows-amd64" && value != "linux-arm64" && value != "darwin-amd64") { fail(error_message("E_TARGET", i18n.key_err_target, value), 2); kaesu; }
+            moshi (value != "darwin-arm64" && value != "linux-amd64" && value != "windows-amd64" && value != "linux-arm64" && value != "darwin-amd64" && value != "windows-arm64") { fail(error_message("E_TARGET", i18n.key_err_target, value), 2); kaesu; }
             target = value; at = at + 1; tsuzuku;
         }
         moshi (option == "--emit-symbols") {
@@ -231,9 +231,9 @@ waza run() -> unit {
             moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_disasm, ""), 1); }
             kaesu;
         }
-        moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi(input.data); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } }
+        moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi(input.data); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } } }
     }
-    sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_with_options(".", entry, bunko, gc_stress); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_diagnostic(".", entry, bunko, gc_stress, observe, symbols); } } } } }
+    sore { moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_with_options(".", entry, bunko, gc_stress); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_diagnostic(".", entry, bunko, gc_stress, observe, symbols); } } } } } }
     moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {

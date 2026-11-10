@@ -159,3 +159,18 @@ waza test_linux_abi_without_the_routine_fails_closed() -> unit {
     assembler_label(linux, "linux_abi"); assembler_emit(linux, svc(128));
     testing.expect(assembler_assemble(linux).error != mu, "a rewritten SVC with no linux_syscall label is an undefined label");
 }
+
+// The label windows_abi selects the Windows adapter routine: SVC #128 -> stp x30,xzr,[sp,#-16]!; bl windows_syscall; ldp.
+waza test_windows_abi_mode_calls_the_windows_adapter() -> unit {
+    kaku win = assembler();
+    assembler_label(win, "windows_abi"); assembler_label(win, "windows_syscall"); assembler_emit(win, svc(128));
+    kaku result = assembler_assemble(win);
+    testing.expect(result.error == mu && len(result.words) == 3, "SVC #128 becomes three instructions");
+    testing.expect(result.words[0] == uint32(2847899646) && result.words[1] == bl(-1).word && result.words[2] == uint32(2831253502), "stp, bl windows_syscall, ldp");
+    kaku missing = assembler();
+    assembler_label(missing, "windows_abi"); assembler_emit(missing, svc(128));
+    testing.expect(assembler_assemble(missing).error != mu, "a rewritten SVC with no windows_syscall label is an undefined label");
+    kaku both = assembler();
+    assembler_label(both, "linux_abi"); assembler_label(both, "windows_abi"); assembler_label(both, "linux_syscall"); assembler_label(both, "windows_syscall"); assembler_emit(both, svc(128));
+    testing.expect(assembler_assemble(both).words[1] == bl(-1).word, "the Linux label wins when both are defined (still a single adapter)");
+}

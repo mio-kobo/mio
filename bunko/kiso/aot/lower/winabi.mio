@@ -1,0 +1,141 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Windows ARM64 operating-system adapter for the Darwin/AArch64 lowering.
+//
+// The Darwin backend reaches the kernel only through `SVC #128` (BSD number in x16; carry set and a positive errno in x0 on
+// failure). With the label `windows_abi` defined (see arm64.assembler_emit) every such SVC becomes a call of
+// `windows_syscall`, emitted here: it performs the equivalent Win32 call through the import address table (IAT) and
+// returns the Darwin convention. Win32 has no stable system-call interface, so every operation goes through kernel32 /
+// ws2_32 imports; the loader fills the IAT. Calls without a translation fail explicitly with ENOSYS (Darwin value 78).
+// All registers except x0, x1, x16 and the flags are preserved (Win32 clobbers x0-x17; the adapter saves and restores).
+//
+// IAT slots are addressed with ADRP/ADD AddressPatch records of target kind 3 (target_offset = flattened import index * 8);
+// the image builder (kiso/aot/winarm64) resolves them. Frame (288 bytes): 0..127 saved x2-x15, x17, x30; 128 original x1;
+// 144..271 scratch.
+
+// The imports in IAT order: pairs of (library, symbol). The image builder groups them by library in this order.
+koukai waza windows_imports() -> []string {
+    kaesu ["kernel32.dll", "ExitProcess", "kernel32.dll", "GetStdHandle", "kernel32.dll", "WriteFile", "kernel32.dll", "VirtualAlloc",
+        "kernel32.dll", "VirtualFree"];
+}
+
+waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
+waza wx_label(c: arm64.Assembler, name: string) -> unit { arm64.assembler_label(c, name); }
+waza wx_b(c: arm64.Assembler, name: string) -> unit { arm64.assembler_b(c, name); }
+waza wx_bcc(c: arm64.Assembler, condition: int64, name: string) -> unit { arm64.assembler_b_cond(c, condition, name); }
+waza wx_cbz(c: arm64.Assembler, reg: int64, name: string) -> unit { arm64.assembler_cbz_x(c, reg, name); }
+waza wx_mov(c: arm64.Assembler, rd: int64, rn: int64) -> unit { wx(c, arm64.add_imm_x(rd, rn, 0, iie)); }
+waza wx_li(c: arm64.Assembler, reg: int64, value: int64) -> unit {
+    moshi (value < 0) { wx(c, arm64.movn_x(reg, -value - 1, 0)); kaesu; }
+    moshi (value < 65536) { wx(c, arm64.movz_x(reg, value, 0)); kaesu; }
+    kaku low = value - (value / 65536) * 65536;
+    wx(c, arm64.movz_x(reg, low, 0)); wx(c, arm64.movk_x(reg, (value / 65536) - ((value / 65536) / 65536) * 65536, 1));
+    moshi (value >= 4294967296) { wx(c, arm64.movk_x(reg, value / 4294967296, 2)); }
+}
+waza wx_name(prefix: string, index: int64) -> string { kaesu string.concat(prefix, convert.format_int(index)); }
+
+waza import_index(symbol: string) -> int64 {
+    kaku names = windows_imports(); kaku at = 1;
+    aida (at < len(names)) { moshi (names[at] == symbol) { kaesu at / 2; } at = at + 2; }
+    kaesu -1;
+}
+
+// Call the imported function `symbol`: x16 = address of its IAT slot (patched ADRP/ADD), x16 = [x16], blr x16.
+waza wx_call(c: arm64.Assembler, patches: []macho.AddressPatch, symbol: string) -> unit {
+    kaku index = import_index(symbol);
+    kaku at = len(c.words);
+    wx(c, arm64.Instruction { word: uint32(0), error: mu }); wx(c, arm64.Instruction { word: uint32(0), error: mu });
+    array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.AddressTarget { kind: 3 }, target_offset: index * 8, register: 16 });
+    wx(c, arm64.ldr_x(16, 16, 0)); wx(c, arm64.blr_x(16));
+}
+
+// BOOL results are 32-bit: clear the undefined upper half.
+waza wx_bool(c: arm64.Assembler) -> unit { wx(c, arm64.lsl_x(0, 0, 32)); wx(c, arm64.lsr_x(0, 0, 32)); }
+
+waza wx_save(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { wx(c, arm64.stp_x(a, b, 31, offset)); }
+waza wx_load(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { wx(c, arm64.ldp_x(a, b, 31, offset)); }
+
+// Defines `windows_syscall`. The Windows start-up routine `windows_start` is emitted by emit_windows_start.
+koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.AddressPatch) -> unit {
+    wx_label(c, "windows_syscall");
+    wx(c, arm64.sub_imm_x(31, 31, 288, iie));
+    wx_save(c, 2, 3, 0); wx_save(c, 4, 5, 16); wx_save(c, 6, 7, 32); wx_save(c, 8, 9, 48);
+    wx_save(c, 10, 11, 64); wx_save(c, 12, 13, 80); wx_save(c, 14, 15, 96); wx_save(c, 17, 30, 112);
+    wx(c, arm64.str_x(1, 31, 128));
+    kaku calls = [1, 4, 73, 74, 197];
+    kaku names = ["wx_exit", "wx_write", "wx_munmap", "wx_mprotect", "wx_mmap"];
+    kaku at = 0;
+    aida (at < len(calls)) {
+        kaku next = wx_name("wx_dispatch_next_", at);
+        wx(c, arm64.cmp_imm_x(16, calls[at], iie)); wx_bcc(c, 1, next); wx_b(c, names[at]);
+        wx_label(c, next);
+        at = at + 1;
+    }
+    // unsupported: ENOSYS (Darwin 78), carry set
+    wx_label(c, "wx_unsupported"); wx_li(c, 0, 78);
+    wx_label(c, "wx_error"); wx(c, arm64.cmp_x(31, 31)); wx_b(c, "wx_done");
+    wx_label(c, "wx_ok"); wx(c, arm64.cmn_imm_x(0, 0, iie));
+    wx_label(c, "wx_done");
+    wx(c, arm64.ldr_x(1, 31, 128));
+    wx_load(c, 2, 3, 0); wx_load(c, 4, 5, 16); wx_load(c, 6, 7, 32); wx_load(c, 8, 9, 48);
+    wx_load(c, 10, 11, 64); wx_load(c, 12, 13, 80); wx_load(c, 14, 15, 96); wx_load(c, 17, 30, 112);
+    wx(c, arm64.add_imm_x(31, 31, 288, iie)); wx(c, arm64.ret());
+
+    // ---- exit(status) -> ExitProcess(status)
+    wx_label(c, "wx_exit"); wx_call(c, patches, "ExitProcess"); wx_b(c, "wx_unsupported");
+
+    // ---- write(fd, buffer, length): fd 0, 1, 2 are the standard handles (GetStdHandle(-10 - fd))
+    wx_label(c, "wx_write");
+    wx(c, arm64.cmp_imm_x(0, 2, iie)); wx_bcc(c, 8, "wx_badfd");
+    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx_li(c, 9, 4294967286); wx(c, arm64.sub_x(0, 9, 0)); wx_call(c, patches, "GetStdHandle");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
+    wx_call(c, patches, "WriteFile"); wx_bool(c); wx_cbz(c, 0, "wx_io_error");
+    wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
+    wx_label(c, "wx_io_error"); wx_li(c, 0, 5); wx_b(c, "wx_error");
+    wx_label(c, "wx_badfd"); wx_li(c, 0, 9); wx_b(c, "wx_error");
+
+    // ---- memory. Darwin pages are 16 KiB: lengths are rounded up to 16 KiB (VirtualAlloc returns 64 KiB-aligned regions).
+    // mmap -> VirtualAlloc(NULL, length, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
+    wx_label(c, "wx_mmap");
+    wx_li(c, 9, 16383); wx(c, arm64.add_x(1, 1, 9)); wx(c, arm64.movn_x(10, 16383, 0)); wx(c, arm64.and_x(1, 1, 10));
+    wx_li(c, 0, 0); wx_li(c, 2, 12288); wx_li(c, 3, 4); wx_call(c, patches, "VirtualAlloc");
+    wx_cbz(c, 0, "wx_nomem"); wx_b(c, "wx_ok");
+    wx_label(c, "wx_nomem"); wx_li(c, 0, 12); wx_b(c, "wx_error");
+    // mprotect(addr, length, prot): PROT_NONE decommits the range, anything else commits it read/write
+    wx_label(c, "wx_mprotect");
+    wx(c, arm64.str_x(0, 31, 144)); wx(c, arm64.str_x(1, 31, 152));
+    wx_cbz(c, 2, "wx_decommit");
+    wx_li(c, 2, 4096); wx_li(c, 3, 4); wx_call(c, patches, "VirtualAlloc"); wx_cbz(c, 0, "wx_nomem");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_decommit");
+    wx_li(c, 2, 16384); wx_call(c, patches, "VirtualFree"); wx_bool(c); wx_cbz(c, 0, "wx_nomem");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    // munmap(addr, length): release the whole region when addr is its base, otherwise decommit the range
+    wx_label(c, "wx_munmap");
+    wx(c, arm64.str_x(0, 31, 144)); wx(c, arm64.str_x(1, 31, 152));
+    wx_li(c, 1, 0); wx_li(c, 2, 32768); wx_call(c, patches, "VirtualFree"); wx_bool(c); wx_cbz(c, 0, "wx_munmap_range");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    wx_label(c, "wx_munmap_range");
+    wx(c, arm64.ldr_x(0, 31, 144)); wx(c, arm64.ldr_x(1, 31, 152));
+    wx_li(c, 9, 16383); wx(c, arm64.add_x(1, 1, 9)); wx(c, arm64.movn_x(10, 16383, 0)); wx(c, arm64.and_x(1, 1, 10));
+    wx_li(c, 2, 16384); wx_call(c, patches, "VirtualFree"); wx_bool(c); wx_cbz(c, 0, "wx_nomem");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+}
+
+// PE entry point: the loader calls it with no arguments. Slice 1 provides argc = 1, argv = {"mio.exe"} and an empty
+// environment, then continues at the first lowered word (label windows_main) with the Darwin entry registers x0-x2.
+koukai waza emit_windows_start(c: arm64.Assembler) -> unit {
+    wx_label(c, "windows_start");
+    wx(c, arm64.sub_imm_x(31, 31, 48, iie));
+    wx(c, arm64.adr(3, 32));
+    wx(c, arm64.str_x(3, 31, 0)); wx(c, arm64.str_x(31, 31, 8)); wx(c, arm64.str_x(31, 31, 16));
+    wx_li(c, 0, 1); wx(c, arm64.add_imm_x(1, 31, 0, iie)); wx(c, arm64.add_imm_x(2, 31, 16, iie));
+    wx_b(c, "windows_main");
+    // "mio.exe\0"
+    wx(c, arm64.Instruction { word: uint32(779053421), error: mu }); wx(c, arm64.Instruction { word: uint32(6649957), error: mu });
+}

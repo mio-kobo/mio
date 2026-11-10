@@ -1,0 +1,51 @@
+yobu "kiso/array";
+yobu "kiso/aot/arm64";
+yobu "kiso/testing";
+
+waza win_label(labels: []arm64.Label, name: string) -> int64 {
+    kaku at = 0;
+    aida (at < len(labels)) { moshi (labels[at].name == name) { kaesu labels[at].word; } at = at + 1; }
+    kaesu -1;
+}
+
+waza test_windows_target_routes_every_darwin_syscall_through_the_win32_adapter() -> unit {
+    kaku dar = compile(empty_v14([]));
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    testing.expect(dar.error == mu && win.error == mu, "both targets lower");
+    kaku at = 0; kaku count = 0;
+    aida (at < len(win.words)) { moshi (win.words[at] == uint32(3556773889)) { count = count + 1; } at = at + 1; }
+    testing.expect(count == 0, "no Darwin SVC #128 survives in a Windows image");
+    testing.expect(win_label(win.labels, "windows_syscall") >= 0 && win_label(win.labels, "windows_abi") == 0 && win_label(win.labels, "windows_main") == 0, "windows_abi and windows_main sit at the first word");
+    testing.expect(win_label(dar.labels, "windows_syscall") < 0 && win_label(dar.labels, "windows_abi") < 0, "the Darwin image has no adapter");
+    testing.expect(win_label(win.labels, "windows_start") > win_label(win.labels, "windows_syscall"), "the PE entry routine follows the adapter");
+}
+
+// Every Win32 call is an IAT call: ADRP/ADD of the slot (patch target kind 3) then ldr x16, [x16]; blr x16.
+waza test_windows_adapter_calls_win32_through_iat_patches() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku at = 0; kaku slots: []int64 = [];
+    aida (at < len(win.patches)) {
+        moshi (win.patches[at].target.kind == 3) {
+            moshi (win.patches[at].register != 16 || win.patches[at].add_at_word != win.patches[at].at_word + 1) { testing.fail("an IAT patch must be an ADRP/ADD pair into x16"); }
+            kaku next = win.words[win.patches[at].add_at_word + 1];
+            testing.expect(next == arm64.ldr_x(16, 16, 0).word && win.words[win.patches[at].add_at_word + 2] == arm64.blr_x(16).word, "the slot is loaded and called");
+            kaku seen = iie; kaku s = 0;
+            aida (s < len(slots)) { moshi (slots[s] == win.patches[at].target_offset) { seen = hai; } s = s + 1; }
+            moshi (!seen) { array_push_slot(slots, win.patches[at].target_offset); }
+        }
+        at = at + 1;
+    }
+    testing.expect(len(slots) == 5, "the five imports of the first slice are used: ExitProcess, GetStdHandle, WriteFile, VirtualAlloc, VirtualFree");
+    kaku imports = windows_imports();
+    testing.expect(len(imports) == 10 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[9] == "VirtualFree", "import list: (library, symbol) pairs in IAT order");
+}
+
+waza array_push_slot(slots: []int64, value: int64) -> unit { array.push(slots, value); }
+
+waza test_windows_start_provides_argc_argv_envp_and_enters_the_lowered_code() -> unit {
+    kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
+    kaku start = win_label(win.labels, "windows_start");
+    testing.expect(win.words[start] == arm64.sub_imm_x(31, 31, 48, iie).word, "the entry reserves the argv/envp arrays");
+    testing.expect(win.words[start + 1] == arm64.adr(3, 32).word, "adr x3, <program name>");
+    testing.expect(win.words[start + 9] == uint32(779053421) && win.words[start + 10] == uint32(6649957), "the program name \"mio.exe\" follows the branch");
+}
