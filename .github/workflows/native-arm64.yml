@@ -70,8 +70,23 @@ jobs:
           cache: false
       - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
         run: go build -o build/native/refvm ./tests/windows-amd64/refvm
+      - name: Host facts (kernel, page size, memory policy, limits)
+        run: |
+          uname -srm; getconf PAGESIZE; cat /proc/sys/vm/overcommit_memory; free -m; ulimit -a
       - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
         run: python scripts/ci/native_platforms.py linux-arm64 --refvm build/native/refvm --output build/native/linux-arm64
+      - name: Diagnose a failing native compiler stage (strace of compiler-A building compiler-B)
+        if: failure()
+        run: |
+          sudo apt-get install -y strace >/dev/null 2>&1 || echo "strace unavailable"
+          mkdir -p build/native/linux-arm64/diag
+          for stage in A B; do
+            exe=build/native/linux-arm64/work/compiler-$stage
+            [ -x "$exe" ] || continue
+            printf 'selfhost/linux-arm64-compiler\nbuild/native/linux-arm64/diag/out-%s\n' "$stage" | strace -f -s 96 -o build/native/linux-arm64/diag/strace-$stage.txt "$exe" || echo "compiler-$stage exit $?"
+            echo "--- tail of strace compiler-$stage"; tail -40 build/native/linux-arm64/diag/strace-$stage.txt || true
+            break
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,6 +98,7 @@ jobs:
             build/native/linux-arm64/runtime-abi/*.std*
             build/native/linux-arm64/native-differential/results.json
             build/native/linux-arm64/native-differential/*.std*
+            build/native/linux-arm64/diag/
           if-no-files-found: warn
           retention-days: 7
       - uses: actions/upload-artifact@v4
