@@ -123,9 +123,9 @@ waza analysis_failed(analyzed: frontend.AnalysisResult, entry: string, opts: dia
     moshi(analyzed.error!=""){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(analyzed.error,entry,opts)));kaesu hai;}
     kaesu iie;
 }
-waza source_failure(entry: string, bunko: string, opts: diagnostic.Options, cause: string) -> unit {
+waza source_failure(entry: string, bunko: string, opts: diagnostic.Options, detail: string, cause: string) -> unit {
     kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
-    moshi(!analysis_failed(analyzed,entry,opts,cause)){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(cause,entry,opts)));}
+    moshi(!analysis_failed(analyzed,entry,opts,cause)){fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(detail,cause,entry,opts)));}
     os.exit(1);
 }
 
@@ -215,7 +215,7 @@ waza run() -> unit {
     }
     moshi (emit_mochi) {
         kaku checked = frontend.compile_source(".", entry, bunko);
-        moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error); kaesu; }
+        moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error,i18n.text(language, i18n.key_err_analysis)); kaesu; }
         kaku written = fs.write_all(output, checked.bytes);
         moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_mochi, ""), 1); }
         kaesu;
@@ -234,7 +234,7 @@ waza run() -> unit {
         moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi(input.data); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } }
     }
     sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_with_options(".", entry, bunko, gc_stress); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_diagnostic(".", entry, bunko, gc_stress, observe, symbols); } } }
-    moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure(compiled.error,entry,opts)));os.exit(1);}kaesu;}
+    moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {
         temporary = string.concat(pipeline.temporary_root(), string.concat("/mio-run-", convert.format_int(os.pid())));

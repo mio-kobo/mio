@@ -223,6 +223,18 @@ def cli_checks(report, cli, target, work):
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
           contains=('"code":', '"severity":"error"'), absent=(ansi, "不明な"))
+    # Frontend accepts this source; the native backend rejects the 600-value
+    # expression frame. The original E_LOWER detail must survive localization.
+    backend = work / "i18n-backend-failure.mio"
+    backend.write_text("kaku values = [%s];\nchant(values[0]);\n" % ",".join(str(index) for index in range(600)),
+                       encoding="utf-8")
+    output = work / "i18n-backend-failure.bin"
+    check("backend-error", ["--lang", "en-US", "build", str(backend), "-o", str(output)], code=1,
+          contains=("E_LOWER 6 / 0",))
+    check("backend-verbose", ["--lang", "en-US", "build", str(backend), "--verbose", "-o", str(output)], code=1,
+          contains=("E_LOWER 6 / 0", "cause: source analysis failed"))
+    check("backend-json", ["--lang", "en-US", "--color=always", "build", str(backend), "--format=json", "-o", str(output)],
+          code=1, contains=('"code":"E0401"', '"message":"E_LOWER 6 / 0"'), absent=(ansi,))
 
 
 def core_chain(report, full_cli, target, work, checks=False):

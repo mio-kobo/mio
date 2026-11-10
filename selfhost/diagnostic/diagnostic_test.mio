@@ -33,3 +33,21 @@ waza test_non_source_error_has_no_fabricated_label() -> unit {
     kaku document=json.parse(string.to_bytes(output));testing.expect(document.error=="" && json.member(document,document.root,"labels")<0,"missing source does not fabricate a span");
     kaku location=json.member(document,document.root,"location");kaku line=json.integer(document,json.member(document,location,"line"));moshi(line!=mu){testing.expect(line==0,"unknown location remains unknown");}sore{testing.fail("generic diagnostic location");}
 }
+
+waza test_backend_failure_keeps_original_detail() -> unit {
+    kaku opts=Options {format:"human",color:"never",verbose:hai,lang:"en-US",theme:"auto"};
+    kaku output=failure_with_cause("E_LOWER 6 / 0","source analysis failed","main.mio",opts);
+    testing.expect(string.contains(output,"E_LOWER 6 / 0"),"backend detail is preserved");
+    testing.expect(string.contains(output,"cause: source analysis failed"),"verbose cause label stays localized");
+    testing.expect(!string.contains(output,ansi()),"no ANSI in never mode");
+}
+
+waza test_backend_failure_json_keeps_original_detail() -> unit {
+    kaku opts=Options {format:"json",color:"always",verbose:hai,lang:"ja-JP",theme:"auto"};
+    kaku output=failure_with_cause("E_LOWER 6 / 0","原因の説明","main.mio",opts);
+    kaku document=json.parse(string.to_bytes(output));
+    testing.expect(document.error=="","one JSON document");
+    testing.expect(json.text(document,json.member(document,document.root,"code"))=="E0401","stable error code");
+    testing.expect(json.text(document,json.member(document,document.root,"message"))=="E_LOWER 6 / 0","original compiler detail");
+    testing.expect(!string.contains(output,"原因の説明") && !string.contains(output,ansi()),"localized cause and ANSI stay out of JSON");
+}

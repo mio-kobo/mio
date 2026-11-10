@@ -83,8 +83,14 @@ koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: 
 }
 
 koukai waza failure(message: string, path: string, opts: Options) -> string {
+    kaesu failure_with_cause(message, message, path, opts);
+}
+
+// The detail is the untranslated compiler error. Only the verbose "cause:"
+// label and the surrounding CLI text are localized.
+koukai waza failure_with_cause(message: string, cause: string, path: string, opts: Options) -> string {
     kaku position=lexer.Position {offset:0,line:0,column:0};
-    kaesu render(frontend.AnalysisDiagnostic {code:"E0401",path:path,span:parser.SourceSpan {start:position,end:position},detail:message},[],opts,message);
+    kaesu render(frontend.AnalysisDiagnostic {code:"E0401",path:path,span:parser.SourceSpan {start:position,end:position},detail:message},[],opts,cause);
 }
 
 // Test-command diagnostics keep their existing text/JSON schema while sharing
