@@ -1,0 +1,69 @@
+name: Chocolatey v2.1.0 moderation
+on:
+  schedule:
+    - cron: '23 0,12 * * *'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: chocolatey-v2-1-0-moderation
+  cancel-in-progress: false
+jobs:
+  status:
+    if: >-
+      github.repository == 'mio-kobo/mio' && github.ref_type == 'branch' &&
+      github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      verify: ${{ steps.status.outputs.verify }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: status
+        name: Read CCR and record changed states in the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRACKING_ISSUE: '61'
+        run: python3 scripts/package_managers/chocolatey_monitor.py
+  verify-publication:
+    needs: status
+    if: needs.status.outputs.verify == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - name: Verify both packages from the standard Community Repository
+        shell: pwsh
+        run: |
+          function Invoke-Choco {
+            choco @args
+            if ($LASTEXITCODE -ne 0) { throw "Chocolatey exited with $LASTEXITCODE" }
+          }
+
+          function Assert-MioVersion([string]$Name) {
+            $shim = Join-Path $env:ChocolateyInstall "bin\$Name.exe"
+            if ((Get-Command "$Name.exe").Source -ne $shim) { throw "Unexpected executable for $Name" }
+            $version = & "$Name.exe" version
+            if ($LASTEXITCODE -ne 0 -or $version -notmatch '^mio v2\.1\.0(?:\s|$)') {
+              throw "Unexpected version for ${Name}: $version"
+            }
+            Write-Host "$Name reported $version"
+          }
+
+          foreach ($name in 'mio', 'mio-core') {
+            if (Get-Command "$name.exe" -ErrorAction SilentlyContinue) { throw "$name is already installed" }
+            $available = Invoke-Choco search $name --exact --all-versions --limit-output --source=https://community.chocolatey.org/api/v2/
+            if ($available -notcontains "$name|2.1.0") { throw "$name 2.1.0 is missing from the Community Repository" }
+            Invoke-Choco install $name --version=2.1.0 -y
+          }
+          Assert-MioVersion mio
+          Assert-MioVersion mio-core
+          Invoke-Choco uninstall mio-core -y
+          if (Get-Command mio-core.exe -ErrorAction SilentlyContinue) { throw 'Core shim remained after uninstall' }
+          Assert-MioVersion mio
+          Invoke-Choco uninstall mio -y
+          if (Get-Command mio.exe -ErrorAction SilentlyContinue) { throw 'Full shim remained after uninstall' }
+          'Both Mio 2.1.0 packages passed clean Windows feed discovery, coexistence, version, and uninstall checks.' >> $env:GITHUB_STEP_SUMMARY

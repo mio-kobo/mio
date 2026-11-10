@@ -232,3 +232,17 @@ References: [Chocolatey setup](https://docs.chocolatey.org/en-us/choco/setup/),
 [Install-BinFile](https://docs.chocolatey.org/en-us/create/functions/install-binfile/),
 [Uninstall-BinFile](https://docs.chocolatey.org/en-us/create/functions/uninstall-binfile/),
 [shim behavior](https://docs.chocolatey.org/en-us/features/shim/).
+
+### Mio 2.1.0 moderation tracking
+
+The [tracking issue](https://github.com/mio-kobo/mio/issues/61) records changes
+for both exact versions. The `chocolatey-moderation.yml` workflow reads the
+public Community Repository twice daily and can also run manually from the
+default branch. It comments only when moderation or test status changes.
+
+When both records are approved, the same run verifies discovery, installation,
+version, coexistence, and uninstall on clean Windows. A manual dispatch can
+repeat that check after both approvals. Review the linked Actions run and both
+package pages before closing the tracking issue. After successful verification,
+disable the schedule from the Actions workflow menu or with
+`gh workflow disable chocolatey-moderation.yml --repo mio-kobo/mio`.
