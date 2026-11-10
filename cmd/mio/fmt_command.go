@@ -11,27 +11,16 @@ import (
 	"strings"
 
 	"Mio/internal/format"
+	"Mio/internal/i18n"
 )
 
-const fmtUsage = `Usage: mio fmt [--check] <path>...
-       mio fmt --stdin [--check]
-
-Format Mio source files. Paths may be files or directories (searched
-recursively for *.mio; hidden, node_modules, vendor, build, dist, out and
-target directories and symbolic links are skipped).
-
-Options:
-  --check    Do not write files; list files that need formatting and exit 1.
-  --stdin    Read source from standard input and write the result to standard
-             output (with --check: print nothing, exit 1 when formatting changes it).
-  -h, --help Show this help.
-
-Files that do not parse are never modified; they are reported on standard
-error and the exit status is 2.
-
-Exit status: 0 success, 1 --check found files to format, 2 usage or I/O error
-or an unformattable file.
-`
+func printFmtHelp(out io.Writer, language i18n.Language) {
+	fmt.Fprintf(out, "%s: mio fmt [--check] <path>...\n", i18n.Text(language, i18n.KeyHelpUsage))
+	fmt.Fprintln(out, "       mio fmt --stdin [--check]")
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyCmdFmt))
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyFmtBehavior))
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyFmtStatus))
+}
 
 type fmtOptions struct {
 	check bool
@@ -68,16 +57,16 @@ func parseFmtArgs(args []string) (fmtOptions, bool) {
 }
 
 // runFmt implements `mio fmt`.
-func runFmt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func runFmt(args []string, stdin io.Reader, stdout, stderr io.Writer, language i18n.Language) int {
 	for _, argument := range args {
 		if argument == "-h" || argument == "--help" {
-			fmt.Fprint(stdout, fmtUsage)
+			printFmtHelp(stdout, language)
 			return 0
 		}
 	}
 	options, ok := parseFmtArgs(args)
 	if !ok {
-		fmt.Fprint(stderr, fmtUsage)
+		printFmtHelp(stderr, language)
 		return 2
 	}
 	if options.stdin {

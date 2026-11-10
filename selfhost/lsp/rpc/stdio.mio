@@ -18,19 +18,20 @@ koukai waza serve(state: Session, input: fs.File, output: fs.File) -> ServeResul
 koukai waza command(args: []string) -> int64 { kaesu run_command(args, i18n.select("")); }
 koukai waza run_command(args: []string, language: string) -> int64 {
     kaku at=2; kaku explicit="";
+    kaku usage = string.concat(i18n.text(language, i18n.key_help_usage), ": mio lsp [--stdio] [--bunko-root <directory>]");
     aida(at<len(args)){
         kaku option=args[at];
-        moshi(option=="help" || option=="-h" || option=="--help"){chant("Usage: mio lsp [--stdio] [--bunko-root <directory>]");kaesu 0;}
+        moshi(option=="help" || option=="-h" || option=="--help"){chant(usage);kaesu 0;}
         moshi(option=="--bunko-root"){at=at+1;moshi(at>=len(args) || args[at]==""){fs.write_all("/dev/stderr",string.to_bytes(string.concat("E_OPTIONS ",string.concat(i18n.format(language,i18n.key_err_missing_value,["--bunko-root"]),"\n"))));kaesu 2;}explicit=args[at];at=at+1;tsuzuku;}
         moshi(option!="--stdio"){
-            fs.write_all("/dev/stderr",string.to_bytes(string.concat("E_OPTIONS ",string.concat(i18n.format(language,i18n.key_cli_lsp_unknown,[option]),"\nUsage: mio lsp [--stdio] [--bunko-root <directory>]\n"))));kaesu 2;
+            fs.write_all("/dev/stderr",string.to_bytes(string.concat("E_OPTIONS ",string.concat(i18n.format(language,i18n.key_cli_lsp_unknown,[option]),string.concat("\n", string.concat(usage, "\n"))))));kaesu 2;
         }at=at+1;
     }
-    kaku library=bunkopath.resolve(explicit);moshi(library.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat(library.error,"\n")));kaesu 2;}
+    kaku library=bunkopath.resolve(explicit, language);moshi(library.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat(library.error,"\n")));kaesu 2;}
     kaku opened_input=fs.open_read("/dev/stdin");kaku input=opened_input.file;
-    moshi(input==mu){fs.write_all("/dev/stderr",string.to_bytes("mio lsp: cannot open stdin\n"));kaesu 1;}
+    moshi(input==mu){fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdin"]), "\n"))));kaesu 1;}
     kaku opened_output=fs.open_write("/dev/stdout");kaku output=opened_output.file;
-    moshi(output==mu){fs.close(input);fs.write_all("/dev/stderr",string.to_bytes("mio lsp: cannot open stdout\n"));kaesu 1;}
+    moshi(output==mu){fs.close(input);fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdout"]), "\n"))));kaesu 1;}
     kaku result=serve(session(".",library.root),input,output);
     fs.close(input);fs.close(output);
     moshi(result.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ",string.concat(result.error,"\n"))));}

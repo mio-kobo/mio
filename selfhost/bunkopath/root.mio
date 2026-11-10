@@ -3,26 +3,27 @@ yobu "kiso/os";
 yobu "kiso/path";
 yobu "kiso/string";
 yobu "selfhost/resources";
+yobu "selfhost/i18n";
 
 koukai kata Result { root: string; error: string; }
-koukai waza validate(root: string) -> Result {
-    moshi(root=="" || !fs.is_dir(root) || !fs.is_dir(path.join(root,"kiso"))){kaesu Result {root:"",error:string.concat("E_BUNKO_ROOT expected a Bunko directory containing kiso/: ",root)};}
+koukai waza validate(root: string, language: string) -> Result {
+    moshi(root=="" || !fs.is_dir(root) || !fs.is_dir(path.join(root,"kiso"))){kaesu Result {root:"",error:string.concat("E_BUNKO_ROOT ", i18n.format(language, i18n.key_bunko_root_layout, [root]))};}
     kaku physical=os.canonical_path(root);
-    moshi(physical==mu){kaesu Result {root:"",error:string.concat("E_BUNKO_ROOT cannot resolve directory: ",root)};}
+    moshi(physical==mu){kaesu Result {root:"",error:string.concat("E_BUNKO_ROOT ", i18n.format(language, i18n.key_bunko_root_resolve, [root]))};}
     kaesu Result {root:physical,error:""};
 }
 // Empty explicit means no CLI override. An existing empty environment value is an error.
-koukai waza resolve(explicit: string) -> Result {
-    moshi(explicit!=""){kaesu validate(explicit);}
+koukai waza resolve(explicit: string, language: string) -> Result {
+    moshi(explicit!=""){kaesu validate(explicit, language);}
     kaku environment=os.environment("MIO_BUNKO");
-    moshi(environment!=mu){kaesu validate(environment);}
+    moshi(environment!=mu){kaesu validate(environment, language);}
     // Full embeds Bunko and prefers it over a legacy executable-relative tree.
     // Core has no embedded table and keeps the existing adjacent lookup.
     moshi(resources.available()){kaesu Result {root:"",error:""};}
     kaku executable=os.executable_path();
     moshi(executable!=mu){
         kaku bundled=path.join(path.dir(executable),"../bunko");
-        moshi(fs.is_dir(bundled)){kaesu validate(bundled);}
+        moshi(fs.is_dir(bundled)){kaesu validate(bundled, language);}
     }
     kaesu Result {root:"",error:""};
 }

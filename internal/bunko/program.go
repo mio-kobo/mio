@@ -236,6 +236,18 @@ func packageImportPath(inputPath, bunkoRoot string) string {
 	return filepath.ToSlash(relative)
 }
 
+// DependencyError carries the import path independently of its English detail.
+type DependencyError struct {
+	ImportPath string
+	Cause      error
+}
+
+func (e *DependencyError) Error() string {
+	return fmt.Sprintf("module %q not found: %v", e.ImportPath, e.Cause)
+}
+
+func (e *DependencyError) Unwrap() error { return e.Cause }
+
 func (s *programLoader) loadDependency(importPath string, chain []string) error {
 	if functions, ok := s.registry.Module(importPath); ok {
 		if !s.nativeLoaded[importPath] {
@@ -250,7 +262,7 @@ func (s *programLoader) loadDependency(importPath string, chain []string) error 
 	}
 	_, err := s.load(importPath, chain)
 	if err != nil {
-		return fmt.Errorf("module %q not found: %w", importPath, err)
+		return &DependencyError{ImportPath: importPath, Cause: err}
 	}
 	return nil
 }

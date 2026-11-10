@@ -50,7 +50,8 @@ func TestDiagnosticsAndRuntimeErrors(t *testing.T) {
 	}
 	crash := execute(t, Request{Operation: OpRun, Source: "kaku z = 0;\nchant(\"a\");\nchant(1 / z);\n"})
 	if crash.Status != StatusRuntime || crash.Stdout != "a\n" || !strings.Contains(crash.Error, "division by zero") ||
-		!strings.HasPrefix(crash.Diagnostics[0].Rendered, "error[E0501]: 运行时错误: mio: runtime: ") {
+		!strings.HasPrefix(crash.Diagnostics[0].Message, "运行时错误: mio: runtime: ") ||
+		!strings.HasPrefix(crash.Diagnostics[0].Rendered, "error[E0501]: runtime error: mio: runtime: ") {
 		t.Fatalf("runtime=%+v", crash)
 	}
 }

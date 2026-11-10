@@ -1,6 +1,7 @@
 package main
 
 import (
+	"Mio/internal/i18n"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -20,7 +21,7 @@ func lintFile(t *testing.T, source string, args ...string) (int, string, string)
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	status := runLint(append(args, path), &stdout, &stderr)
+	status := runLint(append(args, path), &stdout, &stderr, i18n.English)
 	return status, stdout.String(), stderr.String()
 }
 
@@ -59,12 +60,12 @@ func TestLintCompilerErrorIsNotAWarning(t *testing.T) {
 
 func TestLintUsageAndRuleList(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if status := runLint([]string{"--list-rules"}, &stdout, &stderr); status != 0 || !strings.Contains(stdout.String(), "unreachable-code") {
+	if status := runLint([]string{"--list-rules"}, &stdout, &stderr, i18n.English); status != 0 || !strings.Contains(stdout.String(), "unreachable-code") {
 		t.Fatalf("list-rules status=%d out=%q", status, stdout.String())
 	}
 	for _, args := range [][]string{{}, {"--bogus", "x.mio"}, {"a.mio", "b.mio"}} {
 		stderr.Reset()
-		if status := runLint(args, &stdout, &stderr); status != 2 || !strings.Contains(stderr.String(), "Usage") {
+		if status := runLint(args, &stdout, &stderr, i18n.English); status != 2 || !strings.Contains(stderr.String(), "Usage") {
 			t.Fatalf("args %v status=%d", args, status)
 		}
 	}

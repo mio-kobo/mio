@@ -48,6 +48,8 @@ func helpCommands() []helpEntry {
 		{name: "exec", group: helpGroupExecution, description: i18n.KeyCmdExec, usage: "mio exec <file.mochi> [-- <program arguments...>]", options: []string{"target", "format", "color", "theme", "lang", "verbose", "program_args"}},
 		{name: "disasm", group: helpGroupDiagnostics, description: i18n.KeyCmdDisasm, usage: "mio disasm <file.mochi>", options: []string{"lang", "color", "theme"}},
 		{name: "test", group: helpGroupTesting, description: i18n.KeyCmdTest, usage: "mio test <directory[/...]> [--run=<regexp>] [options]", options: []string{"run_filter", "format", "color", "theme", "lang", "verbose", "bunko"}},
+		{name: "fmt", group: helpGroupTools, description: i18n.KeyCmdFmt, usage: "mio fmt [--check] <path>..."},
+		{name: "lint", group: helpGroupTools, description: i18n.KeyCmdLint, usage: "mio lint [options] <source.mio>"},
 		{name: "lsp", group: helpGroupTools, description: i18n.KeyCmdLsp, usage: "mio lsp [--stdio] [options]", options: []string{"stdio", "bunko"}},
 	}
 }
@@ -474,6 +476,14 @@ func printUsage(out io.Writer, language i18n.Language, theme helpTheme) {
 }
 
 func printCommandHelp(out io.Writer, language i18n.Language, theme helpTheme, name string) bool {
+	switch name {
+	case "fmt":
+		printFmtHelp(out, language)
+		return true
+	case "lint":
+		printLintHelp(out, language)
+		return true
+	}
 	entry, ok := findHelpCommand(name)
 	if !ok {
 		return false
