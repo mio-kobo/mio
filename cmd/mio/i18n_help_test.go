@@ -167,3 +167,49 @@ func TestJSONOutputNeverContainsLocalizedTextOrANSI(t *testing.T) {
 		t.Fatalf("stderr is not a JSON diagnostic: %q", stderr.String())
 	}
 }
+
+func TestLocalizedDevelopmentCommands(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"help", "fmt"}, "Formater les fichiers source Mio"},
+		{[]string{"fmt", "--help"}, "Formater les fichiers source Mio"},
+		{[]string{"help", "lint"}, "Rechercher les problèmes courants"},
+		{[]string{"lint", "--list-rules"}, "unused-import"},
+		{[]string{"lsp", "--help"}, "Utilisation: mio lsp"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if status := runCLI(append([]string{"--lang=fr-FR"}, test.args...), &stdout, &stderr); status != 0 ||
+			!strings.Contains(stdout.String(), test.want) || stderr.Len() != 0 {
+			t.Errorf("%v: status %d, stdout %q, stderr %q", test.args, status, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestLocalizedLintPreservesJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.mio")
+	if err := os.WriteFile(path, []byte("waza example() -> unit { kaku unused = 1; }"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var baseline string
+	for _, language := range []string{"en-US", "fr-FR"} {
+		var stdout, stderr bytes.Buffer
+		args := []string{"--lang=" + language, "lint", "--deny-warnings", path}
+		if status := runCLI(append(args, "--format=json"), &stdout, &stderr); status != 1 || stderr.Len() != 0 {
+			t.Fatalf("%s JSON: status %d, stdout %q, stderr %q", language, status, stdout.String(), stderr.String())
+		}
+		if baseline == "" {
+			baseline = stdout.String()
+		} else if baseline != stdout.String() {
+			t.Fatalf("lint JSON changed with locale: %q / %q", baseline, stdout.String())
+		}
+		stdout.Reset()
+		if status := runCLI(args, &stdout, &stderr); status != 1 || stderr.Len() != 0 {
+			t.Fatalf("%s text: status %d, stdout %q, stderr %q", language, status, stdout.String(), stderr.String())
+		}
+		if language == "fr-FR" && !strings.Contains(stdout.String(), "avertissement[unused-variable]: la variable \"unused\"") {
+			t.Fatalf("unexpected French finding: %s", stdout.String())
+		}
+	}
+}

@@ -26,16 +26,17 @@
 package lint
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"Mio/internal/ast"
 	"Mio/internal/bunko"
 	"Mio/internal/constant"
+	"Mio/internal/i18n"
 	"Mio/internal/lexer"
 	"Mio/internal/parser"
 	"Mio/internal/resolver"
@@ -46,13 +47,23 @@ import (
 
 // Finding is one lint warning.
 type Finding struct {
-	Rule      string `json:"rule"`
-	Message   string `json:"message"`
-	File      string `json:"file"`
-	Line      int    `json:"line"`
-	Column    int    `json:"column"`
-	EndLine   int    `json:"endLine"`
-	EndColumn int    `json:"endColumn"`
+	Rule        string `json:"rule"`
+	Message     string `json:"message"`
+	File        string `json:"file"`
+	Line        int    `json:"line"`
+	Column      int    `json:"column"`
+	EndLine     int    `json:"endLine"`
+	EndColumn   int    `json:"endColumn"`
+	messageKey  i18n.Key
+	messageArgs []any
+}
+
+// LocalizedMessage renders a finding for a human reader.
+func (f Finding) LocalizedMessage(language i18n.Language) string {
+	if f.messageKey == "" {
+		return f.Message
+	}
+	return i18n.Format(language, f.messageKey, f.messageArgs...)
 }
 
 // RuleNames lists every rule identifier in documentation order.
@@ -111,15 +122,17 @@ func Run(path, bunkoRoot string, registry *mma.ModuleRegistry) ([]Finding, error
 	return findings, nil
 }
 
-func finding(rule, file string, span ast.Span, format string, args ...any) Finding {
+func finding(rule, file string, span ast.Span, key i18n.Key, args ...any) Finding {
 	return Finding{
-		Rule:      rule,
-		Message:   fmt.Sprintf(format, args...),
-		File:      file,
-		Line:      span.Start.Line,
-		Column:    span.Start.Column,
-		EndLine:   span.End.Line,
-		EndColumn: span.End.Column,
+		Rule:        rule,
+		Message:     i18n.Format(i18n.English, key, args...),
+		messageKey:  key,
+		messageArgs: args,
+		File:        file,
+		Line:        span.Start.Line,
+		Column:      span.Start.Column,
+		EndLine:     span.End.Line,
+		EndColumn:   span.End.Column,
 	}
 }
 
@@ -186,7 +199,7 @@ func unreachableCode(file string, program *ast.Program) []Finding {
 			}
 			if keyword != "" && i+1 < len(statements) {
 				out = append(out, finding("unreachable-code", file, statements[i+1].Span(),
-					"unreachable code after %s", keyword))
+					i18n.KeyLintFindingUnreachable, keyword))
 				break
 			}
 		}
@@ -223,12 +236,12 @@ func constantConditions(file string, program *ast.Program) []Finding {
 		case *ast.IfStatement:
 			if v, ok := literalBool(n.Condition); ok {
 				out = append(out, finding("constant-condition", file, n.Condition.Span(),
-					"moshi condition is always %s", spell(v)))
+					i18n.KeyLintFindingIf, spell(v)))
 			}
 		case *ast.WhileStatement:
 			if v, ok := literalBool(n.Condition); ok && !v {
 				out = append(out, finding("constant-condition", file, n.Condition.Span(),
-					"aida condition is always iie; the loop body never runs"))
+					i18n.KeyLintFindingLoop))
 			}
 		}
 		return true
@@ -313,7 +326,7 @@ func unusedImports(file string, program *ast.Program, imports []bunko.Import) []
 		}
 		if _, ok := used[alias]; !ok {
 			out = append(out, finding("unused-import", file, declaration.Range,
-				"import %q (package %s) is never used", declaration.Path, alias))
+				i18n.KeyLintFindingImport, strconv.Quote(declaration.Path), alias))
 		}
 	}
 	return out
@@ -359,7 +372,7 @@ func unusedVariables(file, path string, program *ast.Program, names *resolver.Re
 			symbol, bound := names.BindingOf(let.Name)
 			if bound && symbol.Kind == resolver.SymbolVariable && counts[symbol.ID] <= 1 {
 				out = append(out, finding("unused-variable", file, let.Name.Span(),
-					"variable %q is declared but never used", let.Name.Name))
+					i18n.KeyLintFindingVariable, strconv.Quote(let.Name.Name)))
 			}
 			return true
 		})

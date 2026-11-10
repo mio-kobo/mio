@@ -51,6 +51,25 @@ waza expanded_line(data: []uint8, first: int64, end: int64, display: Display) ->
     }
     kaku result=string.from_utf8(bytes);moshi(result==mu){kaesu "";}kaesu result;
 }
+waza package_detail(message: string, language: string) -> string {
+    kaku prefix = "E_IO read package: ";
+    kaku code = "E_IO ";
+    kaku key = i18n.key_bunko_package_read;
+    moshi (string.has_prefix(message, "E_BUNKO_MISSING Bunko is not installed; use --bunko-root or MIO_BUNKO to import ")) {
+        prefix = "E_BUNKO_MISSING Bunko is not installed; use --bunko-root or MIO_BUNKO to import ";
+        code = "E_BUNKO_MISSING ";
+        key = i18n.key_bunko_missing;
+    }
+    moshi (!string.has_prefix(message, prefix)) { kaesu message; }
+    kaku bytes = string.to_bytes(message);
+    kaku tail: []uint8 = [];
+    kaku at = string.byte_len(prefix);
+    aida (at < len(bytes)) { array.push(tail, bytes[at]); at = at + 1; }
+    kaku package_path = string.from_utf8(tail);
+    moshi (package_path == mu) { kaesu message; }
+    kaesu string.concat(code, i18n.format(language, key, [package_path]));
+}
+
 koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: Options, cause: string) -> string {
     kaku display=Display {mn:unicode_data.lookup("mn"),me:unicode_data.lookup("me")};
     kaku start=locate(source,problem.span.start.offset,display);kaku finish=locate(source,problem.span.end.offset,display);
@@ -67,9 +86,9 @@ koukai waza render(problem: frontend.AnalysisDiagnostic, source: []uint8, opts: 
         string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,": ");
     }
     kaku style=theme.resolve_for(opts.color,opts.theme,"/dev/stderr");kaku color=opts.format=="human" && style.enabled;
-    kaku header=string.concat("error[",string.concat(problem.code,"]"));
+    kaku header=string.concat(i18n.text(opts.lang, i18n.key_diag_error), string.concat("[", string.concat(problem.code, "]")));
     moshi(color){string.write_string(output,theme.paint(style,"error",header));}sore{string.write_string(output,header);}
-    string.write_string(output,": ");string.write_string(output,problem.detail);string.write_string(output,"\n");
+    string.write_string(output,": ");string.write_string(output,package_detail(problem.detail, opts.lang));string.write_string(output,"\n");
     moshi(opts.format=="human"){
         moshi(has_span){string.write_string(output,"  --> ");string.write_string(output,problem.path);string.write_string(output,":");string.write_string(output,convert.format_int(start.line));string.write_string(output,":");string.write_string(output,convert.format_int(start.column));string.write_string(output,"\n");}
         moshi(has_span && len(source)>0){

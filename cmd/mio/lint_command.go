@@ -7,51 +7,39 @@ import (
 	"strings"
 
 	"Mio/internal/diagnostic"
+	"Mio/internal/i18n"
 	"Mio/internal/lint"
 	"Mio/internal/stdlib"
 )
 
-const lintUsage = `Usage: mio lint [--format=human|short|json] [--deny-warnings] <source.mio>
-       mio lint --list-rules
+func printLintHelp(out io.Writer, language i18n.Language) {
+	fmt.Fprintf(out, "%s: mio lint [--format=human|short|json] [--deny-warnings] <source.mio>\n", i18n.Text(language, i18n.KeyHelpUsage))
+	fmt.Fprintln(out, "       mio lint --list-rules")
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyCmdLint))
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyLintBehavior))
+	fmt.Fprintln(out, i18n.Text(language, i18n.KeyLintStatus))
+}
 
-Run optional static-analysis rules on a Mio source file. The file must first
-pass the same checks as "mio check"; compiler errors are reported as errors
-(exit status 2) and no lint rules run. Lint findings are warnings.
-
-Options:
-  --format=human|short   file:line:column: warning[rule]: message (default)
-  --format=json          JSON array of findings
-  --deny-warnings        Exit with status 1 when any warning is reported.
-  --list-rules           Print the available rules.
-  -h, --help             Show this help.
-
-Exit status: 0 no findings (or warnings without --deny-warnings), 1 warnings
-with --deny-warnings, 2 usage error or compiler error.
-
-Rules: unused-variable, unused-import, unreachable-code, constant-condition.
-Rules are conservative and never report a pattern that is not certain.
-`
-
-var lintRuleDescriptions = map[string]string{
-	"unused-variable":    "function-local variable that is never referenced (names starting with _ are exempt)",
-	"unused-import":      "yobu import whose package name never appears in the file",
-	"unreachable-code":   "statement after kaesu, nukeru or tsuzuku in the same block",
-	"constant-condition": "moshi condition that is literally hai/iie, or aida (iie)",
+var lintRuleDescriptions = map[string]i18n.Key{
+	"unused-variable":    i18n.KeyLintUnusedVariable,
+	"unused-import":      i18n.KeyLintUnusedImport,
+	"unreachable-code":   i18n.KeyLintUnreachableCode,
+	"constant-condition": i18n.KeyLintConstantCondition,
 }
 
 // runLint implements `mio lint`.
-func runLint(args []string, stdout, stderr io.Writer) int {
-	options := cliDiagnosticOptions{color: diagnostic.ColorNever, format: diagnostic.FormatHuman}
+func runLint(args []string, stdout, stderr io.Writer, language i18n.Language) int {
+	options := cliDiagnosticOptions{color: diagnostic.ColorNever, format: diagnostic.FormatHuman, language: language}
 	denyWarnings := false
 	path := ""
 	for _, argument := range args {
 		switch {
 		case argument == "-h" || argument == "--help":
-			fmt.Fprint(stdout, lintUsage)
+			printLintHelp(stdout, language)
 			return 0
 		case argument == "--list-rules":
 			for _, name := range lint.RuleNames {
-				fmt.Fprintf(stdout, "%-18s %s\n", name, lintRuleDescriptions[name])
+				fmt.Fprintf(stdout, "%-18s %s\n", name, i18n.Text(language, lintRuleDescriptions[name]))
 			}
 			return 0
 		case argument == "--deny-warnings":
@@ -63,14 +51,14 @@ func runLint(args []string, stdout, stderr io.Writer) int {
 		case argument == "--format=json":
 			options.format = diagnostic.FormatJSON
 		case strings.HasPrefix(argument, "-") || path != "" || argument == "":
-			fmt.Fprint(stderr, lintUsage)
+			printLintHelp(stderr, language)
 			return 2
 		default:
 			path = argument
 		}
 	}
 	if path == "" {
-		fmt.Fprint(stderr, lintUsage)
+		printLintHelp(stderr, language)
 		return 2
 	}
 	registry, err := stdlib.NewRegistry()
@@ -91,7 +79,7 @@ func runLint(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(encoded))
 	} else {
 		for _, f := range findings {
-			fmt.Fprintf(stdout, "%s:%d:%d: warning[%s]: %s\n", f.File, f.Line, f.Column, f.Rule, f.Message)
+			fmt.Fprintf(stdout, "%s:%d:%d: %s[%s]: %s\n", f.File, f.Line, f.Column, i18n.Text(language, i18n.KeyDiagWarning), f.Rule, f.LocalizedMessage(language))
 		}
 	}
 	if denyWarnings && len(findings) > 0 {

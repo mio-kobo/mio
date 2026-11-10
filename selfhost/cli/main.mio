@@ -104,7 +104,7 @@ waza write_help(text: string) -> unit {
     moshi (end > 0 && data[end - 1] == uint8(10)) { end = end - 1; }
     kaku bytes: []uint8 = []; kaku at = 0;
     aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
-    kaku value = string.from_utf8(bytes); moshi (value == mu) { fail("E_IO cannot write help", 1); kaesu; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { fail(error_message("E_IO", i18n.key_err_write_help, ""), 1); kaesu; }
     chant(value);
 }
 waza show_help(language: string, name: string) -> unit {
@@ -201,7 +201,7 @@ waza run() -> unit {
         sore { moshi (entry != "") { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; } entry = option; } } } } }
         at = at + 1;
     }
-    kaku library=bunkopath.resolve(bunko); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
+    kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
     moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_symbols, ""), 2); kaesu; }
     moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_observe, ""), 2); kaesu; }
