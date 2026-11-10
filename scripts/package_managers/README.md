@@ -25,6 +25,15 @@ Bunko resolution checks, and every required native check PASS. GitHub's asset SH
 must resolve to the exact published stable tag and its version archive branch,
 and the evidence must use the reviewed bootstrap profile for that version.
 
+A published immutable Release cannot gain assets. If the signed inventory names
+a `<target>-native-report.json`, `<target>-verification.json` or
+`<target>-package-manager-verification.json` report that the Release omitted,
+the gate copies the byte-identical attested report pinned under `evidence/<tag>/`
+and accepts it only when its SHA-256 equals the signed inventory entry. Payload
+archives, seed evidence and the signed release evidence itself are never restored
+this way; their absence fails closed. `evidence/v2.1.2/README.md` records the
+provenance of the only pinned release.
+
 For stable builds, follow the [trusted bootstrap and release verification instructions](../../docs/testing.md#stable-distribution-and-trusted-gf4).
 Use the complete `mio-stable-release-assets-<run>-<attempt>` artifact from the
 tagged run. The package-manager gate verifies the GitHub Actions attestation

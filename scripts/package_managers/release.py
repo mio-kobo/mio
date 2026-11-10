@@ -4,6 +4,7 @@
 No compiler building, credential handling or remote publishing lives here.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -17,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'distribution'))
 from package import TARGETS, digest, extract, inventory
 from seed_evidence import seed_binding, seed_identity
-from stable_release import authenticate, docker_archive
+from stable_release import authenticate, docker_archive, reports
 from supplemental_evidence import restore_logs
 from bootstrap import profile_for
 from versions import parse_tag
@@ -40,11 +41,40 @@ def immutable(path, data):
     path.write_bytes(data)
 
 
+PINNED_EVIDENCE = Path(__file__).with_name('evidence')
+
+
+def restore_pinned(assets, tag, evidence, pinned=None):
+    """Restore verification reports an immutable Release omitted.
+
+    A published immutable Release cannot gain assets, so its signed inventory
+    may name reports that are absent even though every distributed payload is
+    present. The exact attested bytes are pinned next to this module for that
+    release and copied in here; the caller still authenticates the inventory and
+    every copy against its signed SHA-256. Payloads, seed evidence and the
+    signed inventory itself are never restored, and any other missing evidence
+    fails closed.
+    """
+    directory = (pinned or PINNED_EVIDENCE) / tag
+    recoverable = set(reports())
+    for name in sorted(evidence['files']):
+        target = assets / name
+        if name not in recoverable or target.is_file():
+            continue
+        source = directory / name
+        if source.is_symlink() or not source.is_file():
+            continue
+        data = source.read_bytes()
+        if hashlib.sha256(data).hexdigest() != evidence['files'][name]:
+            raise ValueError('pinned evidence does not match signed release evidence: ' + name)
+        target.write_bytes(data)
+
+
 def validate(assets, tag, release, source):
     version = stable(tag)
     if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
         raise ValueError('published stable GitHub Release required')
-    run, kind = authenticate(assets, tag, source)
+    run, kind = authenticate(assets, tag, source, restore=lambda a, e: restore_pinned(a, tag, e))
     if profile_for(version).kind != kind:
         raise ValueError('published evidence does not use the reviewed bootstrap seed profile for this version')
     seed_path = assets / seed_identity(kind).report_name
