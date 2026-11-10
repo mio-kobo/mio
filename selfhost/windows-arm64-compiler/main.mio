@@ -109,7 +109,13 @@ waza load_package(state: PackageState, root: string, package_path: string) -> un
     array.push(state.visiting, package_path);
     kaku directory = source_directory(root, package_path);
     kaku listing = fs.read_dir(directory);
-    moshi (listing.error != mu) { state.failed[0] = hai; state.diagnostic[0] = string.concat("read package: ", package_path); array.truncate(state.visiting, len(state.visiting) - 1); kaesu; }
+    moshi (listing.error != mu) {
+        // Diagnostic detail for a failed directory read: does stat see the directory, and what did the read return?
+        kaku probe = fs.stat(directory);
+        kaku seen = "stat: missing"; moshi (probe.exists) { seen = "stat: exists"; moshi (probe.is_dir) { seen = "stat: directory"; } }
+        state.failed[0] = hai; state.diagnostic[0] = string.concat("read package: ", string.concat(package_path, string.concat(" (", string.concat(directory, string.concat(", ", string.concat(seen, ")"))))));
+        array.truncate(state.visiting, len(state.visiting) - 1); kaesu;
+    }
     kaku names: []string = [];
     kaku entry = 0;
     aida (entry < len(listing.entries)) {
