@@ -7,7 +7,17 @@ name: Native / windows-arm64
 # layer that did not run fails the job.
 on:
   workflow_dispatch:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      run_examples:
+        description: Verify examples with the native CLI after the fixed point
+        type: boolean
+        default: false
 permissions:
   contents: read
 defaults:
@@ -77,7 +87,7 @@ jobs:
       - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
         run: go build -o build/native/refvm.exe ./tests/windows-amd64/refvm
       - name: Stage A, compiler and CLI fixed points, mio test, Runtime ABI contract
-        run: python scripts/ci/native_platforms.py windows-arm64 --refvm build/native/refvm.exe --output build/native/windows-arm64
+        run: python scripts/ci/native_platforms.py windows-arm64 --refvm build/native/refvm.exe --output build/native/windows-arm64 ${{ inputs.run_examples && '--run-examples' || '' }}
       - name: Diagnose a failing native stage (compiler-A building compiler-B)
         if: failure()
         run: |
