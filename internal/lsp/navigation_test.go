@@ -36,6 +36,7 @@ func TestServerSemanticCapabilities(t *testing.T) {
 		"documentSymbolProvider",
 		"workspaceSymbolProvider",
 		"renameProvider",
+		"documentFormattingProvider",
 		"completionProvider",
 		"signatureHelpProvider",
 	} {
@@ -49,7 +50,6 @@ func TestServerSemanticCapabilities(t *testing.T) {
 	}
 	for _, forbidden := range []string{
 		"semanticTokensProvider",
-		"documentFormattingProvider",
 		"documentRangeFormattingProvider",
 		"documentOnTypeFormattingProvider",
 		"codeActionProvider",
@@ -820,6 +820,49 @@ waza main2() -> int64 {
 	}
 	if got := rename(3, "x: int64", 0, "px"); len(got) != 3 {
 		t.Fatalf("field rename edits = %#v", got)
+	}
+	h.shutdown()
+	h.exit()
+}
+
+func TestServerDocumentFormatting(t *testing.T) {
+	h := newHarness(t, Options{})
+	h.initialize()
+	text := "waza f()->int64{\nkaesu 1;\n}\n// 日本語 🙂\n"
+	uri := uriFromPath(filepath.Join(t.TempDir(), "fmt.mio"))
+	h.open(uri, text, 1)
+	response := h.request(2, "textDocument/formatting", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+		"options":      map[string]any{"tabSize": 8, "insertSpaces": false},
+	})
+	if response.Error != nil {
+		t.Fatalf("formatting: %#v", response.Error)
+	}
+	var edits []TextEdit
+	if err := json.Unmarshal(response.Result, &edits); err != nil {
+		t.Fatal(err)
+	}
+	want := "waza f() -> int64 {\n    kaesu 1;\n}\n// 日本語 🙂\n"
+	if len(edits) != 1 || edits[0].NewText != want {
+		t.Fatalf("edits = %#v", edits)
+	}
+	// 范围的结尾必须使用 UTF-16 位置（🙂 占两个单元）。
+	if edits[0].Range.Start != (Position{}) || edits[0].Range.End.Line != 4 || edits[0].Range.End.Character != 0 {
+		t.Fatalf("range = %#v", edits[0].Range)
+	}
+
+	formattedURI := uriFromPath(filepath.Join(t.TempDir(), "ok.mio"))
+	h.open(formattedURI, want, 1)
+	again := h.request(3, "textDocument/formatting", map[string]any{"textDocument": map[string]any{"uri": formattedURI}})
+	if string(again.Result) != "[]" {
+		t.Fatalf("already formatted must return [], got %s", again.Result)
+	}
+
+	brokenURI := uriFromPath(filepath.Join(t.TempDir(), "broken.mio"))
+	h.open(brokenURI, "kaku x = ;\n", 1)
+	broken := h.request(4, "textDocument/formatting", map[string]any{"textDocument": map[string]any{"uri": brokenURI}})
+	if broken.Error == nil || broken.Error.Code != codeRequestFailed {
+		t.Fatalf("unparseable buffer must be refused: %#v", broken.Error)
 	}
 	h.shutdown()
 	h.exit()
