@@ -42,7 +42,7 @@ def build(refvm, work):
     (work / "output.config").write_text(str(image))
     run = subprocess.run([str(refvm), str(ROOT / "bunko"), "run", str(ROOT / "selfhost/native-aot-windows-arm64/main.mio")],
                          cwd=work, capture_output=True, text=True, timeout=1800)
-    expect(run.returncode == 0 and "native-aot-windows-arm64: ok" in run.stdout and image.is_file(), f"lowering failed: exit={run.returncode} {run.stderr!r}")
+    expect(run.returncode == 0 and "native-aot-windows-arm64: ok" in run.stdout and image.is_file(), f"lowering failed: exit={run.returncode} stdout={run.stdout[-600:]!r} stderr={run.stderr[-600:]!r}")
     return image
 
 

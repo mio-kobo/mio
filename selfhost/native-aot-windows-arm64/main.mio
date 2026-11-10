@@ -12,6 +12,8 @@ yobu "kiso/string";
 // result as a PE32+ (ARM64) executable and writes it. Used for the go-hosted Stage A of windows-arm64.
 waza diagnostic(message: string) -> unit {
     fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n")));
+    // Windows has no /dev/stderr: the message is repeated on stdout so a failure is never silent.
+    chant(message);
 }
 
 waza compile_file(file: mochi.File, output: string) -> bool {

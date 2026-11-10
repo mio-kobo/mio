@@ -168,6 +168,8 @@ waza load_package(state: PackageState, root: string, package_path: string) -> un
 
 waza diagnostic(message: string) -> unit {
     fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n")));
+    // Windows has no /dev/stderr: the message is repeated on stdout so a failure is never silent.
+    chant(message);
 }
 
 waza lower_to_pe(bytes: []uint8, output: string) -> bool {
