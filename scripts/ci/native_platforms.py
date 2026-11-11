@@ -62,7 +62,7 @@ TCP_PACKAGE = "bunko/kiso/net/tcp"
 # Packages whose native primitives exist only on some targets (the other targets reject the program at build time or
 # report the operation unsupported). On every other target the package is reported NOT_RUN -- never PASS -- and is not a
 # required check; it becomes required there only when that target's backend lands (see docs/async-networking.md).
-TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64"), "bunko/kiso/reactor/threaded": ("linux-amd64",)}
+TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64"), "bunko/kiso/reactor/threaded": ("linux-amd64",)}
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
