@@ -478,7 +478,9 @@ waza emit_socket_transfer(code: x86_64.Assembler, ctx: WinContext, name: string,
 
 // rt.sock_nonblock: rdi = token, rsi = 0 or 1, rdx = status array -> message. ioctlsocket(socket, FIONBIO, &enabled).
 waza emit_socket_nonblock(code: x86_64.Assembler, ctx: WinContext) -> unit {
-    kaku begin = socket_frame(code, "rt.sock_nonblock", 48);
+    // 96 bytes: the Win64 shadow space (32) and the stack argument slot sit below every local (-8 .. -32) whichever alignment the routine
+    // is entered with (socket_frame rounds rsp down to 16, which moves [rsp+32] by 8 bytes between the two cases).
+    kaku begin = socket_frame(code, "rt.sock_nonblock", 96);
     x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdx);
     x86_64.call(code, "rt.sock_slot");
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
@@ -526,7 +528,9 @@ waza emit_socket_option_call(code: x86_64.Assembler, ctx: WinContext, option: in
 // failed; otherwise SO_CONNECT_TIME is 0xFFFFFFFF while the socket is not connected yet (status 10, in progress, call again) and the
 // number of seconds since the connection was made once it is.
 waza emit_socket_finish(code: x86_64.Assembler, ctx: WinContext) -> unit {
-    kaku begin = socket_frame(code, "rt.sock_finish", 64);
+    // 96 bytes, see rt.sock_nonblock: with 64 the fifth getsockopt argument at [rsp+32] overlapped the length local at [rbp-32] when
+    // the routine was entered with the standard alignment.
+    kaku begin = socket_frame(code, "rt.sock_finish", 96);
     x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
     x86_64.call(code, "rt.sock_slot");
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
