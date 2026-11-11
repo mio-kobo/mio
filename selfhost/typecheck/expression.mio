@@ -265,10 +265,12 @@ waza check_native_call(env: TypeEnvironment, file_id: int64, node_id: int64, pac
         kaku parameters: []string = []; kaku result = "string"; kaku known = name == "open";
         moshi (name == "open") { result = "resource"; }
         moshi (name == "accept") { known = hai; parameters = ["resource"]; result = "resource"; }
-        moshi (name == "status" || name == "close") { known = hai; parameters = ["resource", "bytes"]; }
+        moshi (name == "status" || name == "close" || name == "finish_connect" || name == "reactor_signal" || name == "reactor_ack") { known = hai; parameters = ["resource", "bytes"]; }
         moshi (name == "bind_ipv4" || name == "connect_ipv4") { known = hai; parameters = ["resource", "bytes", "int64", "bytes"]; }
-        moshi (name == "listen") { known = hai; parameters = ["resource", "int64", "bytes"]; }
-        moshi (name == "read" || name == "write") { known = hai; parameters = ["resource", "bytes", "int64", "int64", "bytes"]; }
+        moshi (name == "listen" || name == "set_nonblocking") { known = hai; parameters = ["resource", "int64", "bytes"]; }
+        moshi (name == "read" || name == "write" || name == "reactor_wait") { known = hai; parameters = ["resource", "bytes", "int64", "int64", "bytes"]; }
+        moshi (name == "reactor_open") { known = hai; parameters = ["int64"]; result = "resource"; }
+        moshi (name == "reactor_ctl") { known = hai; parameters = ["resource", "resource", "int64", "bytes"]; }
         moshi (!known || len(arguments) != len(parameters)) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name); kaesu 0; }
         kaku at = 0;
         aida (at < len(parameters)) {

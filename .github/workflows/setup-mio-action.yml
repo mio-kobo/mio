@@ -1,0 +1,51 @@
+name: Setup Mio Action
+on:
+  pull_request:
+    paths:
+      - '.github/actions/setup-mio/**'
+      - '.github/workflows/setup-mio-action.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  setup:
+    name: setup-mio / ${{ matrix.os }} / ${{ matrix.distribution }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        distribution: [core, full]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - id: setup
+        uses: ./.github/actions/setup-mio
+        with:
+          version: 2.1.2
+          distribution: ${{ matrix.distribution }}
+      - name: Installed binary is the requested version
+        shell: bash
+        run: |
+          mio version | tee version.txt
+          grep -q '2.1.2' version.txt
+          test "${{ steps.setup.outputs.version }}" = 2.1.2
+      - name: Second install hits the tool cache
+        id: again
+        uses: ./.github/actions/setup-mio
+        with:
+          version: 2.1.2
+          distribution: ${{ matrix.distribution }}
+      - shell: bash
+        run: test "${{ steps.again.outputs.cache-hit }}" = true
+      - name: Non-exact versions are rejected
+        id: bad
+        continue-on-error: true
+        uses: ./.github/actions/setup-mio
+        with:
+          version: latest
+      - name: Rejection was a failure
+        shell: bash
+        run: test "${{ steps.bad.outcome }}" = failure

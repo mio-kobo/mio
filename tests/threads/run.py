@@ -37,6 +37,7 @@ PROGRAMS = {
     "channel_close": b"hai\n24\nhai\n33\niie\n11\nhai\n",
     "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
     "channel_mpmc": b"600\n1379100\n",
+    "summary_copy": b"198\n5\n",
     # Stage one hardening (docs/threading-stages.md)
     "lifecycle_cycles": b"252000\n0\n126000\n",
     "invalid_handles": b"-22\n-22\n-22\niie\nhai\n7\niie\nhai\niie\n7\nhai\n-5\n",
@@ -51,8 +52,9 @@ FAULTS = {"stack_overflow": (b"hai\n", 11)}
 HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repetitions
 
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
-NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703"}
-STRESS_SKIPPED = {"reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage would take far too long
+NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",
+            "reject_escape_global": "E0701"}
+STRESS_SKIPPED = {"reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
 
 
 def main():

@@ -441,6 +441,24 @@ cost of the handoff is independent of the payload size in the measured range. Th
 in the runtime yet, the variance between runs is large for the big graphs (the collector runs concurrently), and the figures are one machine's, not a
 cross-platform result. No claim is made for other targets.
 
+### Effect summaries and escapes (third slice)
+
+The ownership analysis (Go `internal/typecheck/ownership*.go`, self-hosted `selfhost/typecheck/ownership.mio`, identical diagnostics) now has
+interprocedural summaries. A direct call of a user function whose behaviour is fully visible (no top-level variable, no closure, no indirect
+call, no unsummarisable callee, no function-typed argument, not recursive) is no longer a black box: its summary records which parameters the
+result may alias (none: the result is a fresh graph) and which parameters the call may link to each other, and only those relations are applied.
+Scalar-typed values never carry aliases. Everything else keeps the conservative rule, so a summary can only remove rejections.
+
+A soundness hole that predates this slice is closed: a callee that stored its argument in a global (or an unsummarisable callee in general)
+could publish a graph the caller then transferred. A graph that reaches a global, or that was passed to code the analysis cannot see
+(unsummarised user functions, indirect calls, any call given a function value), is now **not transferable** (E0701). Package and builtin
+functions that receive no function value cannot reach the program's globals and only merge their arguments.
+
+Tests: 45 programs run identically through the Go checker and the self-hosted checker (`TestMioTypecheckerOwnershipDifferential`); native
+programs `summary_copy` (copy transferred while the original stays in use) and `reject_escape_global` in `tests/threads`; the benchmark now
+uses the natural `deep_copy(source)` form. Still open: parameter transfer (owner decision), recursion (a fixpoint would allow summaries for
+recursive builders), field/element operands.
+
 ## 11. PR plan
 
 1. **PR-0 (this document)**: audit + specification, no behaviour change.

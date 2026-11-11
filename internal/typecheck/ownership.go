@@ -32,6 +32,11 @@ type ownershipPass struct {
 	consts   map[resolver.Symbol]struct{}
 	reached  map[resolver.Symbol]struct{} // top-level variables referenced inside any function body
 	captured map[resolver.Symbol]struct{} // variables referenced inside a function literal that does not declare them
+
+	functions  map[resolver.Symbol]*ast.FunctionStatement
+	summaries  map[resolver.Symbol]*ownSummary
+	inProgress map[resolver.Symbol]bool
+	quiet      int // > 0 while a callee is analysed only to compute its summary: diagnostics are reported by the real pass
 }
 
 type moveInfo struct {
@@ -42,18 +47,22 @@ type moveInfo struct {
 }
 
 type ownState struct {
-	dead   bool
-	moved  map[resolver.Symbol]moveInfo
-	groups map[resolver.Symbol]map[resolver.Symbol]struct{} // alias group of each reference-bearing variable (includes itself)
+	dead    bool
+	escaped map[resolver.Symbol]struct{} // graphs passed to code the analysis cannot see (it may have published them)
+	moved   map[resolver.Symbol]moveInfo
+	groups  map[resolver.Symbol]map[resolver.Symbol]struct{} // alias group of each reference-bearing variable (includes itself)
 }
 
 func newOwnState() *ownState {
-	return &ownState{moved: map[resolver.Symbol]moveInfo{}, groups: map[resolver.Symbol]map[resolver.Symbol]struct{}{}}
+	return &ownState{escaped: map[resolver.Symbol]struct{}{}, moved: map[resolver.Symbol]moveInfo{}, groups: map[resolver.Symbol]map[resolver.Symbol]struct{}{}}
 }
 
 func (s *ownState) clone() *ownState {
 	out := newOwnState()
 	out.dead = s.dead
+	for k := range s.escaped {
+		out.escaped[k] = struct{}{}
+	}
 	for k, v := range s.moved {
 		out.moved[k] = v
 	}
@@ -82,6 +91,9 @@ func ownJoin(states ...*ownState) *ownState {
 	}
 	out := live[0].clone()
 	for _, s := range live[1:] {
+		for k := range s.escaped {
+			out.escaped[k] = struct{}{}
+		}
 		for k, v := range s.moved {
 			if _, ok := out.moved[k]; !ok {
 				out.moved[k] = v
@@ -119,6 +131,7 @@ type ownFunction struct {
 	params   map[resolver.Symbol]struct{}
 	loops    []*loopContext
 	literal  bool
+	recorder *summaryRecorder // non-nil while this function is analysed to compute its effect summary
 }
 
 func (c *Checker) checkOwnership(program *ast.Program) []error {
@@ -128,6 +141,10 @@ func (c *Checker) checkOwnership(program *ast.Program) []error {
 		consts:   map[resolver.Symbol]struct{}{},
 		reached:  map[resolver.Symbol]struct{}{},
 		captured: map[resolver.Symbol]struct{}{},
+
+		functions:  map[resolver.Symbol]*ast.FunctionStatement{},
+		summaries:  map[resolver.Symbol]*ownSummary{},
+		inProgress: map[resolver.Symbol]bool{},
 	}
 	if c.resolver == nil || program == nil || !programUsesTransfer(program) {
 		return nil
@@ -136,6 +153,13 @@ func (c *Checker) checkOwnership(program *ast.Program) []error {
 		if k, ok := stmt.(*ast.ConstStatement); ok {
 			if sym, ok := c.resolver.BindingOf(k.Name); ok {
 				p.consts[sym] = struct{}{}
+			}
+		}
+	}
+	for _, stmt := range program.Statements {
+		if fn, ok := stmt.(*ast.FunctionStatement); ok {
+			if sym, bound := c.resolver.BindingOf(fn.Name); bound {
+				p.functions[sym] = fn
 			}
 		}
 	}
@@ -289,6 +313,9 @@ func (p *ownershipPass) scanReach(program *ast.Program) {
 }
 
 func (p *ownershipPass) report(code, message string, span ast.Span, help string, cause error) {
+	if p.quiet > 0 {
+		return
+	}
 	key := fmt.Sprintf("%s:%d:%d", code, span.Start.Line, span.Start.Column)
 	if _, dup := p.reported[key]; dup {
 		return
@@ -364,7 +391,10 @@ func (f *ownFunction) statement(stmt ast.Statement, st *ownState) *ownState {
 	case *ast.ExpressionStatement:
 		f.expression(n.Expr, st)
 	case *ast.ReturnStatement:
-		f.expression(n.Value, st)
+		returned := f.expression(n.Value, st)
+		if f.recorder != nil {
+			f.recorder.observe(st, returned)
+		}
 		st.dead = true
 	case *ast.BlockStatement:
 		return f.block(n, st)
@@ -459,18 +489,32 @@ func (f *ownFunction) expression(e ast.Expression, st *ownState) []resolver.Symb
 		f.pass.function(n.Parameters, n.Body, false)
 		return sources
 	case *ast.CallExpression:
+		if summary := f.pass.callSummary(n); summary != nil {
+			f.expression(n.Function, st)
+			return f.applyCall(n, summary, st)
+		}
 		var all []resolver.Symbol
 		all = append(all, f.expression(n.Function, st)...)
 		var args []resolver.Symbol
 		for _, a := range n.Arguments {
 			args = append(args, f.expression(a, st)...)
 		}
+		if f.pass.escapingCall(n) {
+			f.escape(st, args)
+		}
 		// A callee may store one argument inside another: everything passed to one call becomes one alias group.
 		f.merge(st, args)
+		if !f.pass.refBearing(n, resolver.Symbol{}, false) {
+			return nil
+		}
 		return append(all, args...)
 	default:
 		var out []resolver.Symbol
 		forEachChild(e, func(child ast.Expression) { out = append(out, f.expression(child, st)...) })
+		// A scalar (or string) value cannot alias heap state, whatever it was computed from: `src[0]`, `len(a)`.
+		if !f.pass.refBearing(e, resolver.Symbol{}, false) {
+			return nil
+		}
 		return out
 	}
 }
@@ -541,6 +585,19 @@ func (f *ownFunction) transfer(n *ast.TransferExpression, st *ownState) {
 		invalid("它被闭包捕获，闭包仍可访问它", "结束闭包对它的使用或改用闭包内的新值")
 		return
 	}
+	// A graph that is reachable from a global, or that was handed to code the analysis cannot see, may be reachable from elsewhere.
+	members := map[resolver.Symbol]struct{}{sym: {}}
+	for member := range st.groups[sym] {
+		members[member] = struct{}{}
+	}
+	for member := range members {
+		_, escaped := st.escaped[member]
+		_, global := f.pass.c.globals[member]
+		if escaped || (global && member != sym) {
+			invalid("它可能已被全局变量或分析无法看到的代码持有", "不要把该值传给会保存它的函数，或在转移前重新创建它")
+			return
+		}
+	}
 	if info, moved := st.moved[sym]; moved && !st.dead {
 		first := info.span.Start.Line
 		f.pass.report("E0703", fmt.Sprintf("%s 已经被转移过", id.Name), n.Span(),
@@ -570,6 +627,7 @@ func (f *ownFunction) assign(sym resolver.Symbol, value ast.Expression, sources 
 
 func (f *ownFunction) assignFrom(sym resolver.Symbol, value ast.Expression, sources []resolver.Symbol, st *ownState) {
 	delete(st.moved, sym)
+	delete(st.escaped, sym)
 	// Leaving the old group: the variable no longer refers to its previous graph.
 	for _, g := range st.groups {
 		delete(g, sym)
@@ -599,5 +657,15 @@ func (f *ownFunction) merge(st *ownState, syms []resolver.Symbol) {
 			g[k] = struct{}{}
 		}
 		st.groups[m] = g
+	}
+}
+
+// escape marks the graphs of the given variables (and every alias of them) as possibly published by code the analysis cannot see.
+func (f *ownFunction) escape(st *ownState, syms []resolver.Symbol) {
+	for _, sym := range syms {
+		st.escaped[sym] = struct{}{}
+		for member := range st.groups[sym] {
+			st.escaped[member] = struct{}{}
+		}
 	}
 }

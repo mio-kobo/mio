@@ -31,6 +31,7 @@ const (
 	statusPermissionDenied
 	statusWouldBlock
 	statusOther
+	statusInProgress
 )
 
 type socketState struct {
@@ -50,6 +51,13 @@ func Register(registry *mma.ModuleRegistry) error {
 		def("read", []mma.Type{mma.TypeResource, mma.TypeBytes, mma.TypeInt64, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, socketRead),
 		def("write", []mma.Type{mma.TypeResource, mma.TypeBytes, mma.TypeInt64, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, socketWrite),
 		def("close", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, socketClose),
+		def("set_nonblocking", []mma.Type{mma.TypeResource, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, socketSetNonblocking),
+		def("finish_connect", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, socketFinishConnect),
+		def("reactor_open", []mma.Type{mma.TypeInt64}, mma.TypeResource, reactorOpen),
+		def("reactor_ctl", []mma.Type{mma.TypeResource, mma.TypeResource, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, reactorCtl),
+		def("reactor_wait", []mma.Type{mma.TypeResource, mma.TypeBytes, mma.TypeInt64, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, reactorWait),
+		def("reactor_signal", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, reactorSignal),
+		def("reactor_ack", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, reactorAck),
 	}})
 }
 
@@ -244,6 +252,43 @@ func readOrWrite(call *mma.CallContext, reading bool) error {
 	return operationStatus(call, 4, int64(count), reading && count == 0 && err == nil, err)
 }
 
+// socketSetNonblocking switches O_NONBLOCK; enabled must be 0 or 1.
+func socketSetNonblocking(call *mma.CallContext) error {
+	enabled, err := intArgument(call, 1)
+	if err == nil && (enabled < 0 || enabled > 1) {
+		err = syscall.EINVAL
+	}
+	if err == nil {
+		var state *socketState
+		state, err = useSocket(call)
+		if err == nil {
+			err = syscall.SetNonblock(state.fd, enabled == 1)
+		}
+	}
+	return simpleStatus(call, 2, err)
+}
+
+// socketFinishConnect completes a nonblocking connect. While the connection is still being established it reports
+// "in progress" and may be called again; afterwards SO_ERROR is the result.
+func socketFinishConnect(call *mma.CallContext) error {
+	state, err := useSocket(call)
+	if err == nil {
+		var writable bool
+		writable, err = socketWritable(state.fd)
+		if err == nil && !writable {
+			err = syscall.EINPROGRESS
+		}
+		if err == nil {
+			var pending int
+			pending, err = syscall.GetsockoptInt(state.fd, syscall.SOL_SOCKET, syscall.SO_ERROR)
+			if err == nil && pending != 0 {
+				err = syscall.Errno(pending)
+			}
+		}
+	}
+	return simpleStatus(call, 1, err)
+}
+
 func socketClose(call *mma.CallContext) error {
 	return simpleStatus(call, 1, call.CloseResource(0, resourceType))
 }
@@ -304,6 +349,8 @@ func classify(err error) byte {
 		return statusPermissionDenied
 	case errors.Is(err, syscall.EAGAIN), errors.Is(err, syscall.EWOULDBLOCK):
 		return statusWouldBlock
+	case errors.Is(err, syscall.EINPROGRESS):
+		return statusInProgress
 	default:
 		return statusOther
 	}

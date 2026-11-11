@@ -33,6 +33,13 @@ koukai waza operation(name: string) -> int64 {
     moshi (name == "$mma::mio/sys/socket::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430") { kaesu 38; }
     moshi (name == "$mma::mio/sys/socket::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430") { kaesu 39; }
     moshi (name == "$mma::mio/sys/socket::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu 40; }
+    moshi (name == "$mma::mio/sys/socket::set_nonblocking::0a2af19668a171e5f7f873b1d1a23a4d3ebe7ca1f73a074d7b75234419859515") { kaesu 60; }
+    moshi (name == "$mma::mio/sys/socket::finish_connect::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu 61; }
+    moshi (name == "$mma::mio/sys/socket::reactor_open::e2a0babf4a727ca4f89523981320dd885733845cd378c09e6c21c159e1f42906") { kaesu 62; }
+    moshi (name == "$mma::mio/sys/socket::reactor_ctl::192e86d1345326f3b7e75658a055233648ffd9a32cf67722240f4e14905712b7") { kaesu 63; }
+    moshi (name == "$mma::mio/sys/socket::reactor_wait::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430") { kaesu 64; }
+    moshi (name == "$mma::mio/sys/socket::reactor_signal::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu 65; }
+    moshi (name == "$mma::mio/sys/socket::reactor_ack::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu 66; }
     moshi (name == "$mma::mio/fs/runtime::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_close; }
     moshi (name == "$mma::mio/fs/runtime::dir_close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu op_dir_close; }
     moshi (name == "$mma::mio/fs/runtime::dir_is_dir::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6") { kaesu op_dir_is_dir; }
@@ -80,6 +87,10 @@ koukai waza operation(name: string) -> int64 {
     kaesu op_none;
 }
 
+// Socket-module operations: 32..40 are the blocking primitives. 41..50 belong to OS threads and channels. 60 and up are the
+// nonblocking and reactor primitives (implemented on linux-amd64; fail-closed stubs elsewhere).
+koukai waza is_socket_operation(op: int64) -> bool { kaesu (op >= 32 && op <= 40) || (op >= 60 && op <= 70); }
+
 koukai waza parameter_count(op: int64) -> int64 {
     moshi (op == 32) { kaesu 0; }
     moshi (op == 33) { kaesu 2; }
@@ -100,6 +111,12 @@ koukai waza parameter_count(op: int64) -> int64 {
     moshi (op == 48) { kaesu 3; }
     moshi (op == 49) { kaesu 3; }
     moshi (op == 50) { kaesu 3; }
+    moshi (op == 60) { kaesu 3; }
+    moshi (op == 61) { kaesu 2; }
+    moshi (op == 62) { kaesu 1; }
+    moshi (op == 63) { kaesu 4; }
+    moshi (op == 64) { kaesu 5; }
+    moshi (op == 65 || op == 66) { kaesu 2; }
 
     moshi(op==31){kaesu 2;}
     moshi (op == 30) { kaesu 1; }
@@ -129,8 +146,11 @@ koukai waza parameter_count(op: int64) -> int64 {
 // Exact managed-reference arguments for the NativeFS ABI. Resource tokens and
 // integer offsets are deliberately excluded from the Shadow Frame.
 koukai waza parameter_is_root(op: int64, index: int64) -> bool {
-    moshi (op >= 32 && op <= 40) {
-        moshi (op == 33 || op == 40) { kaesu index == 1; }
+    moshi (is_socket_operation(op)) {
+        moshi (op == 33 || op == 40 || op == 61 || op == 65 || op == 66) { kaesu index == 1; }
+        moshi (op == 60) { kaesu index == 2; }
+        moshi (op == 63) { kaesu index == 3; }
+        moshi (op == 64) { kaesu index == 1 || index == 4; }
         moshi (op == 34 || op == 35) { kaesu index == 1 || index == 3; }
         moshi (op == 36) { kaesu index == 2; }
         moshi (op == 38 || op == 39) { kaesu index == 1 || index == 4; }
@@ -150,7 +170,7 @@ koukai waza parameter_is_root(op: int64, index: int64) -> bool {
 }
 
 koukai waza returns_reference(op: int64) -> bool {
-    moshi (op >= 32 && op <= 40) { kaesu op != 32 && op != 37; }
+    moshi (is_socket_operation(op)) { kaesu op != 32 && op != 37 && op != 62; }
     kaesu op == op_close || op == op_dir_close || op == op_dir_name || op == op_dir_status ||
         op == op_file_status || op == op_mkdir || op == op_read || op == op_stat || op == op_write;
 }
@@ -164,6 +184,13 @@ koukai waza entry_label(op: int64) -> string {
     moshi (op == 37) { kaesu "native_socket_accept"; }
     moshi (op == 38) { kaesu "native_socket_read"; }
     moshi (op == 39) { kaesu "native_socket_write"; }
+    moshi (op == 60) { kaesu "native_socket_set_nonblocking"; }
+    moshi (op == 61) { kaesu "native_socket_finish_connect"; }
+    moshi (op == 62) { kaesu "native_reactor_open"; }
+    moshi (op == 63) { kaesu "native_reactor_ctl"; }
+    moshi (op == 64) { kaesu "native_reactor_wait"; }
+    moshi (op == 65) { kaesu "native_reactor_signal"; }
+    moshi (op == 66) { kaesu "native_reactor_ack"; }
     moshi (op == 40) { kaesu "native_socket_close"; }
 
     moshi(op==31){kaesu "nativeos_real_path";}
