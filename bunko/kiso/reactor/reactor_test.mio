@@ -527,8 +527,13 @@ waza test_backpressure_waits_for_writable_readiness() -> unit {
     kaku op = submit(reactor, writer.handle, writable).operation;
     moshi (op == mu) { testing.expect(iie, "submit"); kaesu; }
     kaku watch = op;
+    // Writable readiness must never be spurious: if an event is reported, a write can make progress. (The converse is not required: kernels
+    // keep a low-water mark, so a one-byte write may succeed before readiness is raised, and macOS may enlarge the send buffer by itself after
+    // the first would-block, which makes an early writable event legitimate there.)
     kaku blocked = poll(reactor, 100, 8);
-    testing.expect(len(blocked.events) == 0, "no writable event while the peer buffer is full");
+    kaku probe: []uint8 = [uint8(1)];
+    kaku attempt = tcp_async.write(writer, probe, 0, 1);
+    testing.expect(len(blocked.events) == 0 || (attempt.count > 0 && attempt.error == mu), "a writable event is reported only when a write can make progress");
     kaku received = 0;
     kaku buffer = array.make[uint8](65536, uint8(0));
     kaku writable_seen = iie;
