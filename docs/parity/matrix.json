@@ -949,19 +949,20 @@
       "platform": "darwin-amd64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "darwin-amd64: kqueue backend (kqueue/kevent passed through the Darwin adapter), wake-up through a second kqueue with an EVFILT_USER event, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-amd64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#PR"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43005838558,
+        "head": "3a01c3e",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
