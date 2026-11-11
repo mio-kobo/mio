@@ -593,11 +593,13 @@ def thread_checks(report, cli, target, work):
                      "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                      note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
         return
-    # darwin-arm64 implements start, join, the word natives and so kiso/thread channels (checks darwin-thread-core, darwin-thread-programs); what
-    # must still fail closed there is join_status (join_checked), which invalid_handles.mio needs. Every other target must reject any thread program.
-    partial = target == "darwin-arm64"
-    program = "invalid_handles.mio" if partial else "basic.mio"
-    label = "thread-invalid-handles-fail-closed" if partial else "thread-natives-fail-closed"
+    # darwin-arm64 now implements every thread native (start, join, join_status, the word natives); its coverage is darwin-thread-core and
+    # darwin-thread-programs. Every other target must still reject any thread program.
+    if target == "darwin-arm64":
+        return report.check("thread-natives-fail-closed", "NOT_APPLICABLE", "native", "", note="darwin-arm64 implements the thread natives; see darwin-thread-programs")
+    partial = False
+    program = "basic.mio"
+    label = "thread-natives-fail-closed"
     image = Path(work) / ("thread-program" + EXE.get(target, ""))
     Path(work).mkdir(parents=True, exist_ok=True)
     built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads" / program), target, image)
@@ -680,7 +682,8 @@ def darwin_thread_programs(report, cli, work):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
-             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle"]
+             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
+             "shutdown_active"]
     stress = ["basic", "nested", "channel_basic", "channel_close"]
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
