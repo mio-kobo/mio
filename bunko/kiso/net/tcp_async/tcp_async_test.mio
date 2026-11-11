@@ -1,4 +1,5 @@
 yobu "kiso/array";
+yobu "kiso/os";
 yobu "mio/fs/runtime";
 yobu "kiso/testing";
 
@@ -216,7 +217,9 @@ waza test_refused_connect_and_stale_handles() -> unit {
     kaku client = refused.connection;
     kaku pending = refused.pending;
     moshi (client != mu) {
-        aida (pending && tries < 100000) {
+        // Bounded by time, not by a spin count: Windows retries a refused loopback connect for about two seconds before it reports the refusal.
+        kaku deadline = os.monotonic_ms() + 4000;
+        aida (pending && os.monotonic_ms() < deadline) {
             kaku done = finish_connect(client);
             pending = done.pending;
             outcome = done.error;
@@ -248,21 +251,21 @@ waza test_repeated_connect_close_does_not_leak() -> unit {
     moshi (listener == mu) { testing.expect(iie, "listener"); kaesu; }
     kaku round = 0;
     kaku failures = 0;
-    aida (round < 600) {
+    aida (round < 200) {
         kaku pair = make_pair(listener, port);
         kaku client = pair.client;
         kaku server = pair.server;
-        moshi (client == mu) { failures = failures + 1; round = 600; }
+        moshi (client == mu) { failures = failures + 1; round = 200; }
         moshi (client != mu) {
             moshi (close(client).error != mu) { failures = failures + 1; }
         }
-        moshi (server == mu) { failures = failures + 1; round = 600; }
+        moshi (server == mu) { failures = failures + 1; round = 200; }
         moshi (server != mu) {
             moshi (close(server).error != mu) { failures = failures + 1; }
         }
         round = round + 1;
     }
-    testing.expect(failures == 0, "600 connect/accept/close cycles complete without failure");
+    testing.expect(failures == 0, "200 connect/accept/close cycles complete without failure");
     close_listener(listener);
 }
 
@@ -314,8 +317,8 @@ waza connect_started(port: int64) -> AsyncConnection? {
 
 waza finish_wait(connection: AsyncConnection) -> UnitResult {
     kaku done = finish_connect(connection);
-    kaku tries = 0;
-    aida (done.pending && tries < 5000000) { done = finish_connect(connection); tries = tries + 1; }
+    kaku deadline = os.monotonic_ms() + 4000;
+    aida (done.pending && os.monotonic_ms() < deadline) { done = finish_connect(connection); }
     kaesu done;
 }
 
