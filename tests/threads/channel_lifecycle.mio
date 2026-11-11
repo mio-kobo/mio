@@ -1,0 +1,46 @@
+// Channel lifetime: 2000 create/use/destroy cycles, destroy twice, operations after destroy (a send is rejected and gives its graph back, a
+// receive reports closed), a destroy that races with a blocked receiver, and queued messages dropped by destroy.
+yobu "kiso/thread";
+
+kata Box { id: int64; items: []int64; }
+
+waza blocked_receiver(channel: thread.Channel<Box>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = thread.receive[Box](channel);
+        moshi (got.closed) { kaesu 1; }
+        kaesu 0;
+    };
+}
+
+waza run() -> int64 {
+    kaku filler = Box { id: -1, items: [] };
+    kaku good = 0;
+    kaku i = 0;
+    aida (i < 2000) {
+        kaku channel = thread.channel_new[Box](2, filler);
+        kaku box = Box { id: i, items: [i] };
+        kaku sent = thread.send[Box](channel, yuzuru box);
+        kaku got = thread.receive[Box](channel);
+        moshi (sent.sent && got.item.id == i && !got.closed) { good = good + 1; }
+        thread.destroy[Box](channel);
+        thread.destroy[Box](channel);
+        i = i + 1;
+    }
+    chant(good);
+    kaku channel = thread.channel_new[Box](1, filler);
+    kaku queued = Box { id: 5, items: [] };
+    thread.send[Box](channel, yuzuru queued);
+    thread.destroy[Box](channel);
+    kaku late = Box { id: 9, items: [9] };
+    kaku rejected = thread.send[Box](channel, yuzuru late);
+    chant(!rejected.sent);
+    chant(rejected.back.id);
+    kaku after = thread.receive[Box](channel);
+    chant(after.closed);
+    kaku waiting = thread.channel_new[Box](1, filler);
+    kaku h = thread.start(blocked_receiver(waiting));
+    thread.destroy[Box](waiting);
+    chant(thread.join(h));
+    kaesu 0;
+}
+run();

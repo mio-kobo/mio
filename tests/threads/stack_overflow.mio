@@ -1,0 +1,14 @@
+// A thread that overflows its 1 MiB stack hits the guard page and takes the whole process down with a fault (SIGSEGV); it never corrupts
+// the heap or another thread's stack silently. The runner expects exactly that.
+yobu "kiso/thread";
+
+waza deeper(n: int64) -> int64 { kaesu deeper(n + 1) + 1; }
+waza overflow() -> int64 { kaesu deeper(0); }
+
+waza run() -> int64 {
+    chant(hai);
+    kaku h = thread.start(overflow);
+    chant(thread.join(h));
+    kaesu 0;
+}
+run();

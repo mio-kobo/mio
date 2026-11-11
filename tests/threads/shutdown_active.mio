@@ -1,0 +1,31 @@
+// The process ends when the main thread ends, even with workers blocked on a channel and workers busy allocating: it must exit with status 0
+// promptly and must not hang or crash while a collection may be in progress.
+yobu "kiso/thread";
+
+waza churn() -> int64 {
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 100000000) { kaku cell = [i, i + 1]; t = t + cell[1]; i = i + 1; }
+    kaesu t;
+}
+waza blocked(channel: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = thread.receive[int64](channel);
+        kaesu 1;
+    };
+}
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[int64](1, 0);
+    thread.start(blocked(channel));
+    thread.start(blocked(channel));
+    thread.start(churn);
+    thread.start(churn);
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 20000) { kaku cell = [i]; t = t + cell[0]; i = i + 1; }
+    chant(t);
+    kaesu 0;
+}
+run();
+chant(hai);

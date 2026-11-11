@@ -1,0 +1,37 @@
+// Failed creation: start live threads (all blocked on a channel) until start reports an error, check the error is a negative errno
+// (-11: all 4096 handle slots in use, or the kernel refusing more threads) and that nothing was left half-registered; then release every
+// thread, join them all, and show that creating threads works again.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+waza idle(channel: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = thread.receive[int64](channel);
+        kaesu 1;
+    };
+}
+waza one() -> int64 { kaesu 1; }
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[int64](1, 0);
+    kaku handles: []int64 = [];
+    kaku failure = 0;
+    aida (failure == 0 && len(handles) < 5000) {
+        kaku h = thread.start(idle(channel));
+        moshi (h > 0) { array.push(handles, h); }
+        moshi (h <= 0) { failure = h; }
+    }
+    chant(failure < 0);
+    chant(len(handles) > 100);
+    thread.close[int64](channel);
+    kaku joined = 0;
+    kaku i = 0;
+    aida (i < len(handles)) { joined = joined + thread.join(handles[i]); i = i + 1; }
+    chant(joined == len(handles));
+    kaku again = thread.start(one);
+    chant(again > 0);
+    chant(thread.join(again));
+    thread.destroy[int64](channel);
+    kaesu 0;
+}
+run();
