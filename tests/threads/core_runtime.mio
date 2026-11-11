@@ -1,0 +1,34 @@
+// The smallest public thread surface (the mio/thread/runtime start and join natives, no channels): used to bring the thread runtime up on a
+// target before the word natives and kiso/thread exist there. Output is identical on every target that implements it.
+yobu "mio/thread/runtime";
+
+waza seven() -> int64 { kaesu 7; }
+waza nothing() -> int64 { kaesu 0; }
+
+waza sum_to(limit: int64) -> int64 {
+    kaku i = 0;
+    kaku sum = 0;
+    aida (i < limit) { kaku cell = [i, i + 1]; sum = sum + cell[0] + len(cell) - 1; i = i + 1; }
+    kaesu sum;
+}
+waza first() -> int64 { kaesu sum_to(2000); }
+waza second() -> int64 { kaesu sum_to(3000); }
+
+waza run() -> int64 {
+    kaku h = runtime.start(seven);
+    chant(h > 0);
+    chant(runtime.join(h));
+    kaku a = runtime.start(first);
+    kaku b = runtime.start(second);
+    kaku mine = sum_to(1000);
+    chant(mine);
+    chant(runtime.join(a));
+    chant(runtime.join(b));
+    // many short lifetimes through the slot table
+    kaku i = 0;
+    kaku total = 0;
+    aida (i < 200) { total = total + runtime.join(runtime.start(seven)); i = i + 1; }
+    chant(total);
+    kaesu 0;
+}
+run();

@@ -639,6 +639,32 @@ def darwin_worker_baseline(report, cli, work):
                  passed=passed, note="experimental internal worker bridge only (16 slots): evidence for the audit, not parity")
 
 
+def darwin_thread_core(report, cli, work):
+    """Public thread natives on darwin-arm64, first slice: `start` and `join` through the cooperative worker bridge (tests/threads/core_runtime.mio).
+
+    Built by the native CLI like any program (`mio build`, host target darwin-arm64), run on this host normally and with --gc-stress, repeated. Not yet a
+    parity claim: the word natives, kiso/thread and channels are still missing on this target (matrix cells I/J/K stay UNSUPPORTED).
+    """
+    expected = b"hai\n7\n500500\n2001000\n4501500\n1400\n"
+    Path(work).mkdir(parents=True, exist_ok=True)
+    failures, passed = [], []
+    for label, extra in (("normal", ()), ("gc-stress", ("--gc-stress",))):
+        image = Path(work) / ("core-" + label)
+        ok, reason, _ = cli_build(report, "darwin-thread-core-build-" + label, cli, "tests/threads/core_runtime.mio", "darwin-arm64", image, extra=extra)
+        if not ok:
+            failures.append("%s: build failed: %s" % (label, reason))
+            continue
+        for repeat in range(10):
+            code, out, err, _ = run(report, "darwin-thread-core-run-%s-%d" % (label, repeat), [image], timeout=60)
+            if code != 0 or out.encode() != expected:
+                failures.append("%s run %d: exit %s stdout %r stderr %s" % (label, repeat, code, out[:160], brief(err, 160)))
+                break
+        else:
+            passed.append(label)
+    report.check("darwin-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], required=False, passed=passed,
+                 note="start/join only; word natives, kiso/thread and channels are not available on darwin-arm64 yet")
+
+
 def contract(report, cli, target, reference="", suite="contract"):
     """tests/runtime-abi/run.py --suite contract (RA-1 cases) or differential (former pureLowerPrograms corpus)."""
     output = report.output / ("runtime-abi" if suite == "contract" else "native-differential")
@@ -836,6 +862,7 @@ def follower(args, target):
         if target == "darwin-arm64":
             darwin_profile(report, cli, work)
             darwin_worker_baseline(report, cli, work / "worker-baseline")
+            darwin_thread_core(report, cli, work / "thread-core")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)

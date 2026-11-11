@@ -3,6 +3,7 @@ yobu "kiso/encoding/mochi";
 yobu "kiso/aot/lower";
 yobu "kiso/aot/macho";
 yobu "kiso/aot/sign";
+yobu "kiso/runtime/os/darwin";
 yobu "kiso/convert";
 yobu "kiso/array";
 yobu "kiso/string";
@@ -102,9 +103,40 @@ koukai waza build_signed_source_diagnostic(root: string, entry: string, bunko_ro
     kaku decoded = mochi.decode(checked.bytes); kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
+    kaku thread_start = -1; kaku thread_join = -1; kaku scan = 0;
+    aida (scan < len(file.functions)) {
+        kaku name = file.functions[scan].name;
+        moshi (string.has_prefix(name, "$mma::mio/thread/runtime::start::")) { thread_start = scan; }
+        sore { moshi (string.has_prefix(name, "$mma::mio/thread/runtime::join::")) { thread_join = scan; } }
+        scan = scan + 1;
+    }
+    // Programs that reference the OS thread natives take the cooperative multi-mutator build (the Darwin worker bridge); every other
+    // program takes the ordinary build below, byte for byte as before.
+    // (Other thread natives, such as the word natives of kiso/thread, are declared too; one that the program really calls has no arm64
+    // routine yet and the lowering rejects the build.)
+    moshi (thread_start >= 0 || thread_join >= 0) {
+        moshi (thread_start < 0 || thread_join < 0) { kaesu NativeBuildResult { bytes: [], error: "E_THREAD darwin-arm64 thread programs must declare start and join together" }; }
+        kaesu build_signed_thread_image(file, 1073741824, gc_stress, thread_start, thread_join);
+    }
     kaku compiled = build_file_observed(file, 1073741824, gc_stress, observation, symbols);
     moshi (compiled.error != "") { kaesu compiled; }
     kaku signed = sign.adhoc(compiled.bytes);
+    moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}
+
+// Darwin ARM64 image with the thread runtime: lowered by the worker bridge, linked against libSystem's pthread symbols and ad-hoc signed.
+waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64) -> NativeBuildResult {
+    kaku lowered = lower.compile_with_public_threads(file, capacity, gc_stress, start_id, join_id);
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
+        kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
+    }
+    kaku linked = darwin.executable_appended(macho.ImageSpec { words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches },
+        darwin.worker_symbols(), lower.worker_root_words);
+    moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_MACHO ", linked.error) }; }
+    kaku signed = sign.adhoc_linked(linked.bytes);
     moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
     kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
 }
