@@ -1,0 +1,56 @@
+yobu "kiso/os";
+yobu "kiso/reactor";
+yobu "kiso/testing";
+yobu "mio/thread/runtime";
+
+// OS threads exist on linux-amd64 only (Track A of the parity work covers the other targets), so the cross-thread wake test
+// lives in its own package, run on linux-amd64 only.
+
+waza opened() -> reactor.Reactor? {
+    kaku result = reactor.open();
+    kaesu result.reactor;
+}
+
+// A wake from another OS thread ends a blocking poll(-1); repeated wakes are not lost.
+kaku shared_waker: reactor.Reactor? = mu;
+kaku shared_sleeper: reactor.Reactor? = mu;
+waza waker_entry() -> int64 {
+    kaku target = shared_waker;
+    kaku napper = shared_sleeper;
+    moshi (target == mu) { kaesu 1; }
+    moshi (napper == mu) { kaesu 2; }
+    // sleep ~80 ms in the kernel (not spinning), then wake the main thread's blocking poll
+    reactor.poll(napper, 80, 1);
+    reactor.wake(target);
+    kaesu 0;
+}
+
+waza test_wake_from_another_thread_ends_a_blocking_poll() -> unit {
+    kaku maybe = opened();
+    kaku maybe_nap = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); kaesu; }
+    moshi (maybe_nap == mu) { testing.expect(iie, "open sleeper"); reactor.close(maybe); kaesu; }
+    kaku main_reactor = maybe;
+    kaku nap = maybe_nap;
+    shared_waker = main_reactor;
+    shared_sleeper = nap;
+    kaku start = os.monotonic_ms();
+    kaku handle = runtime.start(waker_entry);
+    testing.expect(handle > 0, "the waker thread starts");
+    kaku blocked = reactor.poll(main_reactor, -1, 8);
+    kaku elapsed = os.monotonic_ms() - start;
+    testing.expect(blocked.error == mu && blocked.woken && len(blocked.events) == 0, "poll(-1) returns when another thread wakes it");
+    testing.expect(elapsed >= 60 && elapsed < 5000, "it slept until the wake (not spinning, not stuck)");
+    testing.expect(runtime.join(handle) == 0, "the waker thread finishes");
+    kaku round = 0;
+    kaku missed = 0;
+    aida (round < 20) {
+        reactor.wake(main_reactor);
+        kaku seen = reactor.poll(main_reactor, 1000, 4);
+        moshi (!seen.woken) { missed = missed + 1; }
+        round = round + 1;
+    }
+    testing.expect(missed == 0, "20 consecutive wakes are each observed by the next poll");
+    reactor.close(nap);
+    reactor.close(main_reactor);
+}
