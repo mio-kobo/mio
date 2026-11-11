@@ -1,0 +1,306 @@
+yobu "kiso/array";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+yobu "kiso/testing";
+
+// Real epoll over real loopback sockets, one thread. Timeouts are real: the only blocking point is reactor.wait.
+
+waza loopback(port: int64) -> tcp.IPv4Address {
+    kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
+}
+
+koukai kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+// Binds the first free loopback port in [base, base + 50) and reports which one it is.
+waza bind_free(base: int64) -> Bound {
+    kaku port = base;
+    kaku attempt = tcp_async.listen(loopback(port), 256);
+    aida (attempt.error != mu && port < base + 50) {
+        port = port + 1;
+        attempt = tcp_async.listen(loopback(port), 256);
+    }
+    kaesu Bound { listener: attempt.listener, port: port };
+}
+
+waza opened() -> Reactor? {
+    kaku result = open();
+    kaesu result.reactor;
+}
+
+koukai kata Pair { client: tcp_async.AsyncConnection?; server: tcp_async.AsyncConnection?; }
+
+waza connect_pair(listener: tcp_async.AsyncListener, port: int64) -> Pair {
+    kaku started = tcp_async.connect(loopback(port));
+    kaku maybe_client = started.connection;
+    moshi (started.error != mu) { kaesu Pair { client: mu, server: mu }; }
+    moshi (maybe_client == mu) { kaesu Pair { client: mu, server: mu }; }
+    kaku client = maybe_client;
+    kaku tries = 0;
+    kaku connected = !started.pending;
+    aida (!connected && tries < 100000) {
+        kaku done = tcp_async.finish_connect(client);
+        moshi (done.error != mu) { kaesu Pair { client: mu, server: mu }; }
+        connected = !done.pending;
+        tries = tries + 1;
+    }
+    kaku accepted = tcp_async.accept(listener);
+    tries = 0;
+    aida (accepted.pending && tries < 100000) { accepted = tcp_async.accept(listener); tries = tries + 1; }
+    kaku maybe_server = accepted.connection;
+    moshi (maybe_server == mu) { tcp_async.close(client); kaesu Pair { client: mu, server: mu }; }
+    kaku server = maybe_server;
+    kaesu Pair { client: client, server: server };
+}
+
+waza error_code(failure: ReactorError?) -> int64 {
+    moshi (failure == mu) { kaesu 0; }
+    awase (failure) {
+        baai InvalidArgument { kaesu 1; }
+        baai Closed { kaesu 2; }
+        baai Exhausted { kaesu 3; }
+        baai Other(message) { kaesu 9; }
+    }
+    kaesu 9;
+}
+
+waza test_lifecycle_poll_and_close() -> unit {
+    kaku maybe = opened();
+    testing.expect(maybe != mu, "a reactor opens");
+    moshi (maybe == mu) { kaesu; }
+    kaku reactor = maybe;
+    kaku idle = wait(reactor, 0, 8);
+    testing.expect(idle.error == mu && len(idle.events) == 0 && !idle.woken && idle.stale == 0, "polling an idle reactor returns nothing and does not block");
+    testing.expect(error_code(wait(reactor, 0, 0).error) == 1, "max must be 1..64");
+    testing.expect(error_code(wait(reactor, 0, 65).error) == 1, "max above 64 is rejected");
+    testing.expect(error_code(wait(reactor, -2, 8).error) == 1, "a timeout below -1 is rejected");
+    testing.expect(close(reactor).error == mu, "the reactor closes");
+    testing.expect(error_code(close(reactor).error) == 2, "closing twice reports Closed");
+    testing.expect(error_code(wait(reactor, 0, 8).error) == 2, "waiting on a closed reactor reports Closed");
+}
+
+waza test_wake_is_prompt_and_coalesced() -> unit {
+    kaku maybe = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); kaesu; }
+    kaku reactor = maybe;
+    testing.expect(wake(reactor).error == mu, "a wake is accepted");
+    kaku start = os.monotonic_ms();
+    kaku woken = wait(reactor, 5000, 8);
+    kaku elapsed = os.monotonic_ms() - start;
+    testing.expect(woken.error == mu && woken.woken && len(woken.events) == 0, "a pending wake makes wait return woken");
+    testing.expect(elapsed < 2000, "a wake does not wait out the timeout");
+    wake(reactor); wake(reactor); wake(reactor);
+    testing.expect(wait(reactor, 0, 8).woken, "several wakes are seen");
+    testing.expect(!wait(reactor, 0, 8).woken, "...as one: the wake was acknowledged");
+    close(reactor);
+}
+
+waza test_timeout_sleeps_instead_of_spinning() -> unit {
+    kaku maybe = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); kaesu; }
+    kaku reactor = maybe;
+    kaku start = os.monotonic_ms();
+    kaku result = wait(reactor, 60, 8);
+    kaku elapsed = os.monotonic_ms() - start;
+    testing.expect(result.error == mu && len(result.events) == 0 && !result.woken, "a timeout with nothing ready returns no events");
+    testing.expect(elapsed >= 50, "the thread really slept for the timeout (no busy return)");
+    testing.expect(elapsed < 2000, "and no longer than the timeout");
+    close(reactor);
+}
+
+waza start_client(port: int64) -> tcp_async.AsyncConnection? {
+    kaku started = tcp_async.connect(loopback(port));
+    kaku maybe = started.connection;
+    moshi (started.error != mu) { kaesu mu; }
+    moshi (maybe == mu) { kaesu mu; }
+    kaku client = maybe;
+    kaku tries = 0;
+    kaku connected = !started.pending;
+    aida (!connected && tries < 100000) {
+        kaku done = tcp_async.finish_connect(client);
+        moshi (done.error != mu) { kaesu mu; }
+        connected = !done.pending;
+        tries = tries + 1;
+    }
+    kaesu client;
+}
+
+waza test_listener_and_connection_readiness_and_eof() -> unit {
+    kaku bound = bind_free(43000);
+    kaku maybe_listener = bound.listener;
+    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    kaku listener = maybe_listener;
+    kaku port = bound.port;
+    kaku maybe = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); tcp_async.close_listener(listener); kaesu; }
+    kaku reactor = maybe;
+    kaku watched = register(reactor, listener.handle, readable);
+    kaku maybe_registration = watched.registration;
+    testing.expect(watched.error == mu && maybe_registration != mu, "the listener registers for readability");
+    moshi (maybe_registration == mu) { close(reactor); tcp_async.close_listener(listener); kaesu; }
+    kaku registration = maybe_registration;
+    testing.expect(len(wait(reactor, 0, 8).events) == 0, "no connection yet, no event");
+    kaku maybe_client = start_client(port);
+    testing.expect(maybe_client != mu, "a client connects to the listener");
+    moshi (maybe_client == mu) { close(reactor); tcp_async.close_listener(listener); kaesu; }
+    kaku client = maybe_client;
+    kaku ready = wait(reactor, 2000, 8);
+    testing.expect(ready.error == mu && len(ready.events) == 1, "the listener becomes readable when a connection is pending");
+    moshi (len(ready.events) == 1) {
+        testing.expect(ready.events[0].slot == registration.slot && ready.events[0].generation == registration.generation && ready.events[0].readable && !ready.events[0].writable, "the event names the registration and the readiness");
+    }
+    testing.expect(len(wait(reactor, 0, 8).events) == 1, "level-triggered: still ready until accepted");
+    kaku accepted = tcp_async.accept(listener);
+    kaku maybe_server = accepted.connection;
+    testing.expect(maybe_server != mu, "accept returns the connection");
+    moshi (maybe_server == mu) { close(reactor); tcp_async.close(client); tcp_async.close_listener(listener); kaesu; }
+    kaku server = maybe_server;
+    testing.expect(len(wait(reactor, 0, 8).events) == 0, "after accept the listener is quiet");
+    kaku data = register(reactor, server.handle, readable);
+    kaku maybe_data = data.registration;
+    moshi (maybe_data == mu) { testing.expect(iie, "register server"); kaesu; }
+    kaku data_registration = maybe_data;
+    testing.expect(len(wait(reactor, 0, 8).events) == 0, "no data yet");
+    kaku payload: []uint8 = [uint8(1), uint8(2), uint8(3)];
+    testing.expect(tcp_async.write(client, payload, 0, 3).count == 3, "client writes");
+    kaku got = wait(reactor, 2000, 8);
+    testing.expect(len(got.events) == 1 && got.events[0].slot == data_registration.slot && got.events[0].readable, "data makes the server connection readable");
+    kaku buffer: []uint8 = [uint8(0), uint8(0), uint8(0), uint8(0)];
+    testing.expect(tcp_async.read(server, buffer, 0, 4).count == 3, "the bytes are there");
+    testing.expect(len(wait(reactor, 0, 8).events) == 0, "drained: quiet again");
+    testing.expect(modify(reactor, data_registration, server.handle, 3).error == mu, "interest can be modified");
+    kaku both = wait(reactor, 1000, 8);
+    testing.expect(len(both.events) == 1 && both.events[0].writable && !both.events[0].readable, "writable is reported");
+    testing.expect(modify(reactor, data_registration, server.handle, readable).error == mu, "back to readable only");
+    tcp_async.close(client);
+    kaku eof = wait(reactor, 2000, 8);
+    testing.expect(len(eof.events) == 1 && eof.events[0].readable, "peer close shows up as readable");
+    kaku end = tcp_async.read(server, buffer, 0, 4);
+    testing.expect(end.eof && end.count == 0, "and the read reports EOF");
+    testing.expect(deregister(reactor, data_registration, server.handle).error == mu, "deregister succeeds");
+    testing.expect(error_code(deregister(reactor, data_registration, server.handle).error) == 2, "deregistering twice reports Closed");
+    testing.expect(deregister(reactor, registration, listener.handle).error == mu, "deregister the listener");
+    tcp_async.close(server);
+    tcp_async.close_listener(listener);
+    close(reactor);
+}
+
+waza test_generations_reject_stale_registrations_and_events() -> unit {
+    kaku bound = bind_free(43200);
+    kaku maybe_listener = bound.listener;
+    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    kaku listener = maybe_listener;
+    kaku port = bound.port;
+    kaku maybe = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); tcp_async.close_listener(listener); kaesu; }
+    kaku reactor = maybe;
+    kaku first = register(reactor, listener.handle, readable).registration;
+    moshi (first == mu) { testing.expect(iie, "register"); close(reactor); tcp_async.close_listener(listener); kaesu; }
+    kaku old = first;
+    testing.expect(live(reactor, old), "a fresh registration is live");
+    testing.expect(deregister(reactor, old, listener.handle).error == mu, "deregistered");
+    testing.expect(!live(reactor, old), "and no longer live");
+    kaku next = register(reactor, listener.handle, readable).registration;
+    moshi (next == mu) { testing.expect(iie, "register again"); close(reactor); tcp_async.close_listener(listener); kaesu; }
+    kaku fresh = next;
+    testing.expect(fresh.slot == old.slot && fresh.generation != old.generation, "the slot is reused with a new generation");
+    testing.expect(live(reactor, fresh) && !live(reactor, old), "only the new owner is live");
+    testing.expect(error_code(modify(reactor, old, listener.handle, 3).error) == 2, "a stale registration cannot modify the slot's new owner");
+    testing.expect(error_code(deregister(reactor, old, listener.handle).error) == 2, "a stale registration cannot deregister the new owner");
+    testing.expect(live(reactor, fresh), "the new owner survived the stale calls");
+    // A kernel event that is still in flight for the old generation: release the slot without telling the kernel.
+    release_slot(reactor, fresh.slot);
+    kaku probe = start_client(port);
+    moshi (probe != mu) {
+        kaku ghost = wait(reactor, 2000, 8);
+        testing.expect(ghost.error == mu && len(ghost.events) == 0 && ghost.stale == 1, "the stale kernel event is dropped and counted, never delivered");
+        tcp_async.close(probe);
+    }
+    tcp_async.close_listener(listener);
+    close(reactor);
+}
+
+// 200 connections: every readiness is delivered exactly once per byte, nothing is lost or attributed to the wrong owner.
+waza test_many_connections_every_readiness_delivered() -> unit {
+    kaku bound = bind_free(43300);
+    kaku maybe_listener = bound.listener;
+    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    kaku listener = maybe_listener;
+    kaku base = bound.port;
+    kaku maybe = opened();
+    moshi (maybe == mu) { testing.expect(iie, "open"); tcp_async.close_listener(listener); kaesu; }
+    kaku reactor = maybe;
+    kaku clients: []tcp_async.AsyncConnection = [];
+    kaku servers: []tcp_async.AsyncConnection = [];
+    kaku registrations: []Registration = [];
+    kaku total = 200;
+    kaku index = 0;
+    kaku failures = 0;
+    aida (index < total && failures == 0) {
+        kaku pair = connect_pair(listener, base);
+        kaku c = pair.client;
+        kaku s = pair.server;
+        moshi (c == mu) { failures = failures + 1; }
+        moshi (s == mu) { failures = failures + 1; }
+        moshi (c != mu) {
+            moshi (s != mu) {
+                kaku watched = register(reactor, s.handle, readable);
+                kaku r = watched.registration;
+                moshi (r == mu) { failures = failures + 1; tcp_async.close(c); tcp_async.close(s); }
+                moshi (r != mu) {
+                    array.push(clients, c);
+                    array.push(servers, s);
+                    array.push(registrations, r);
+                }
+            }
+        }
+        index = index + 1;
+    }
+    testing.expect(failures == 0 && len(servers) == total, "200 connections are established and registered");
+    testing.expect(len(wait(reactor, 0, 64).events) == 0, "nothing is ready before any data is sent");
+    kaku payload: []uint8 = [uint8(7)];
+    index = 0;
+    kaku sent = 0;
+    aida (index < len(clients)) {
+        moshi (tcp_async.write(clients[index], payload, 0, 1).count == 1) { sent = sent + 1; }
+        index = index + 1;
+    }
+    testing.expect(sent == total, "every client sends one byte");
+    kaku seen: []int64 = array.make[int64](len(servers), 0);
+    kaku delivered = 0;
+    kaku wrong = 0;
+    kaku stale = 0;
+    kaku rounds = 0;
+    kaku buffer: []uint8 = [uint8(0)];
+    aida (delivered < total && rounds < 1000) {
+        kaku batch = wait(reactor, 1000, 64);
+        moshi (batch.error != mu) { rounds = 1000; }
+        stale = stale + batch.stale;
+        kaku e = 0;
+        aida (e < len(batch.events)) {
+            kaku event = batch.events[e];
+            moshi (event.slot < 0 || event.slot >= len(servers) || !event.readable) { wrong = wrong + 1; }
+            moshi (event.slot >= 0 && event.slot < len(servers) && event.readable) {
+                kaku got = tcp_async.read(servers[event.slot], buffer, 0, 1);
+                moshi (got.count == 1) { seen[event.slot] = seen[event.slot] + 1; delivered = delivered + 1; }
+            }
+            e = e + 1;
+        }
+        rounds = rounds + 1;
+    }
+    kaku exact = 0;
+    index = 0;
+    aida (index < len(seen)) { moshi (seen[index] == 1) { exact = exact + 1; } index = index + 1; }
+    testing.expect(delivered == total && exact == total, "each of the 200 connections was reported ready exactly once for its byte");
+    testing.expect(wrong == 0 && stale == 0, "no event was misattributed or stale");
+    testing.expect(len(wait(reactor, 0, 64).events) == 0, "all drained: the reactor is quiet");
+    index = 0;
+    aida (index < len(clients)) {
+        deregister(reactor, registrations[index], servers[index].handle);
+        tcp_async.close(clients[index]);
+        tcp_async.close(servers[index]);
+        index = index + 1;
+    }
+    tcp_async.close_listener(listener);
+    testing.expect(close(reactor).error == mu, "the reactor closes after all registrations are gone");
+}

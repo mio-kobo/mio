@@ -43,6 +43,8 @@ var (
 			{"read", []mma.Type{r, b, i, i, b}, s}, {"write", []mma.Type{r, b, i, i, b}, s},
 			{"close", []mma.Type{r, b}, s},
 			{"set_nonblocking", []mma.Type{r, i, b}, s}, {"finish_connect", []mma.Type{r, b}, s},
+			{"reactor_open", []mma.Type{i}, r}, {"reactor_ctl", []mma.Type{r, r, i, b}, s}, {"reactor_wait", []mma.Type{r, b, i, i, b}, s},
+			{"reactor_signal", []mma.Type{r, b}, s}, {"reactor_ack", []mma.Type{r, b}, s},
 		},
 	}
 )
