@@ -53,6 +53,11 @@ func Register(registry *mma.ModuleRegistry) error {
 		def("close", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, socketClose),
 		def("set_nonblocking", []mma.Type{mma.TypeResource, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, socketSetNonblocking),
 		def("finish_connect", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, socketFinishConnect),
+		def("reactor_open", []mma.Type{mma.TypeInt64}, mma.TypeResource, reactorOpen),
+		def("reactor_ctl", []mma.Type{mma.TypeResource, mma.TypeResource, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, reactorCtl),
+		def("reactor_wait", []mma.Type{mma.TypeResource, mma.TypeBytes, mma.TypeInt64, mma.TypeInt64, mma.TypeBytes}, mma.TypeString, reactorWait),
+		def("reactor_signal", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, reactorSignal),
+		def("reactor_ack", []mma.Type{mma.TypeResource, mma.TypeBytes}, mma.TypeString, reactorAck),
 	}})
 }
 

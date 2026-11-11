@@ -413,6 +413,220 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.pop_r(code, x86_64.rbp);
     x86_64.ret(code);
 
+    // ---- reactor (epoll) primitives ----
+    // rt.reactor_open: rdi = kind (0 epoll instance, 1 eventfd) -> token (a failed handle carries the error)
+    x86_64.label(code, "rt.reactor_open");
+    x86_64.cmp_ri(code, x86_64.rdi, 0);
+    x86_64.jcc(code, x86_64.cc_e, "rt.reactor_open.epoll");
+    x86_64.cmp_ri(code, x86_64.rdi, 1);
+    x86_64.jcc(code, x86_64.cc_e, "rt.reactor_open.eventfd");
+    x86_64.mov_ri(code, x86_64.rax, -22);
+    x86_64.jmp(code, "rt.sock_wrap");
+    x86_64.label(code, "rt.reactor_open.epoll");
+    x86_64.mov_ri(code, x86_64.rdi, 524288);
+    x86_64.mov_eax_imm(code, 291);
+    x86_64.syscall(code);
+    x86_64.jmp(code, "rt.sock_wrap");
+    x86_64.label(code, "rt.reactor_open.eventfd");
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_ri(code, x86_64.rsi, 526336);
+    x86_64.mov_eax_imm(code, 290);
+    x86_64.syscall(code);
+    x86_64.jmp(code, "rt.sock_wrap");
+
+    // rt.reactor_ctl: rdi = reactor token, rsi = target token, rdx = packed (op | interest << 8 | token << 16),
+    // rcx = status array -> message. epoll_ctl with a 12-byte packed epoll_event {u32 events, u64 data}.
+    x86_64.label(code, "rt.reactor_ctl");
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 64);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rsi);
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.state");
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -24);
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.state");
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -16);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.invalid");
+    // op = packed & 255 must be 1..3
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rsi, 255);
+    x86_64.cmp_ri(code, x86_64.rsi, 1);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.invalid");
+    x86_64.cmp_ri(code, x86_64.rsi, 3);
+    x86_64.jcc(code, x86_64.cc_g, "rt.reactor_ctl.invalid");
+    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rsi);
+    // interest = (packed >> 8) & 255 must be 0..3; events = (interest & 1) + ((interest & 2) << 1)
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.shr_ri(code, x86_64.rcx, 8);
+    x86_64.and_ri(code, x86_64.rcx, 255);
+    x86_64.cmp_ri(code, x86_64.rcx, 3);
+    x86_64.jcc(code, x86_64.cc_g, "rt.reactor_ctl.invalid");
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.and_ri(code, x86_64.rax, 1);
+    x86_64.and_ri(code, x86_64.rcx, 2);
+    x86_64.shl_ri(code, x86_64.rcx, 1);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
+    // token = packed >> 16; event layout: [rbp-60] u32 events, [rbp-56] u64 data
+    x86_64.shr_ri(code, x86_64.rdx, 16);
+    // events first (an 8-byte store whose upper half is zero), then the data word that overlaps it
+    x86_64.mov_store(code, x86_64.rbp, -60, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rdx);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -32);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -48);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -40);
+    x86_64.lea(code, x86_64.r10, x86_64.rbp, -60);
+    x86_64.mov_eax_imm(code, 233);
+    x86_64.syscall(code);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, "rt.reactor_ctl.done");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.jmp(code, "rt.reactor_ctl.done");
+    x86_64.label(code, "rt.reactor_ctl.invalid");
+    x86_64.mov_ri(code, x86_64.rsi, 1);
+    x86_64.jmp(code, "rt.reactor_ctl.done");
+    x86_64.label(code, "rt.reactor_ctl.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.reactor_ctl.done");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+
+    // rt.reactor_wait: rdi = reactor token, rsi = event array (16 bytes per event: token, mask), rdx = max (1..64),
+    // rcx = timeout ms (-1 waits, 0 polls), r8 = status array (count) -> message
+    x86_64.label(code, "rt.reactor_wait");
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 816);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.r8);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.rcx);
+    x86_64.test_rr(code, x86_64.r8, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_wait.state");
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -16);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -24);
+    x86_64.cmp_ri(code, x86_64.rdx, 1);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_wait.invalid");
+    x86_64.cmp_ri(code, x86_64.rdx, 64);
+    x86_64.jcc(code, x86_64.cc_g, "rt.reactor_wait.invalid");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -32);
+    x86_64.cmp_ri(code, x86_64.rcx, -1);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_wait.invalid");
+    x86_64.mov_ri(code, x86_64.rax, 2147483647);
+    x86_64.cmp_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_g, "rt.reactor_wait.invalid");
+    // the destination array must hold 16 * max bytes
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 16);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.shl_ri(code, x86_64.rcx, 4);
+    x86_64.cmp_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_g, "rt.reactor_wait.invalid");
+    // epoll_wait(epfd, buffer, max, timeout)
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -40);
+    x86_64.lea(code, x86_64.rsi, x86_64.rbp, -816);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -24);
+    x86_64.mov_load(code, x86_64.r10, x86_64.rbp, -32);
+    x86_64.mov_eax_imm(code, 232);
+    x86_64.syscall(code);
+    x86_64.cmp_ri(code, x86_64.rax, -4);
+    x86_64.jcc(code, x86_64.cc_e, "rt.reactor_wait.none");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_wait.errno");
+    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rax);
+    // convert each 12-byte kernel event to a 16-byte record: token, mask (1 in, 2 out, 4 err, 8 hup)
+    x86_64.mov_load(code, x86_64.r9, x86_64.rbp, -16);
+    x86_64.mov_load(code, x86_64.r9, x86_64.r9, 40);
+    x86_64.lea(code, x86_64.rsi, x86_64.rbp, -816);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.label(code, "rt.reactor_wait.copy");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -48);
+    x86_64.cmp_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, "rt.reactor_wait.copied");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rax, 4294967295);
+    x86_64.and_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rsi, 4);
+    x86_64.mov_store(code, x86_64.r9, 0, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rax, 1);
+    x86_64.add_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rax, 4);
+    x86_64.shr_ri(code, x86_64.rax, 1);
+    x86_64.add_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rax, 8);
+    x86_64.shr_ri(code, x86_64.rax, 1);
+    x86_64.add_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.and_ri(code, x86_64.rax, 16);
+    x86_64.shr_ri(code, x86_64.rax, 1);
+    x86_64.add_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_store(code, x86_64.r9, 8, x86_64.r8);
+    x86_64.add_ri(code, x86_64.r9, 16);
+    x86_64.add_ri(code, x86_64.rsi, 12);
+    x86_64.add_ri(code, x86_64.rcx, 1);
+    x86_64.jmp(code, "rt.reactor_wait.copy");
+    x86_64.label(code, "rt.reactor_wait.copied");
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -48);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.jmp(code, "rt.reactor_wait.status");
+    x86_64.label(code, "rt.reactor_wait.none");
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.jmp(code, "rt.reactor_wait.status");
+    x86_64.label(code, "rt.reactor_wait.errno");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.jmp(code, "rt.reactor_wait.status");
+    x86_64.label(code, "rt.reactor_wait.invalid");
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.jmp(code, "rt.reactor_wait.status");
+    x86_64.label(code, "rt.reactor_wait.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.label(code, "rt.reactor_wait.status");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_io");
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+
+    // rt.reactor_signal / rt.reactor_ack: rdi = eventfd token, rsi = status array -> message. EAGAIN is success (the
+    // counter is already signalled / nothing is pending).
+    emit_reactor_event(code, "rt.reactor_signal", iie);
+    emit_reactor_event(code, "rt.reactor_ack", hai);
+
     // rt.sock_accept: rdi = token -> token of the accepted connection (a failed handle carries the error)
     x86_64.label(code, "rt.sock_accept");
     x86_64.call(code, "rt.sock_fd");
@@ -479,6 +693,46 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.pop_r(code, x86_64.rdi);
     x86_64.mov_ri(code, x86_64.rsi, 2);
     x86_64.jmp(code, "rt.sock_status_one");
+}
+
+waza emit_reactor_event(code: x86_64.Assembler, name: string, reading: bool) -> unit {
+    x86_64.label(code, name);
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 32);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, string.concat(name, ".state"));
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rcx);
+    x86_64.lea(code, x86_64.rsi, x86_64.rbp, -16);
+    x86_64.mov_ri(code, x86_64.rdx, 8);
+    x86_64.label(code, string.concat(name, ".again"));
+    moshi (reading) { x86_64.mov_eax_imm(code, 0); }
+    moshi (!reading) { x86_64.mov_eax_imm(code, 1); }
+    x86_64.syscall(code);
+    x86_64.cmp_ri(code, x86_64.rax, -4);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".again"));
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, string.concat(name, ".done"));
+    x86_64.cmp_ri(code, x86_64.rax, -11);
+    x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".done"));
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.jmp(code, string.concat(name, ".done"));
+    x86_64.label(code, string.concat(name, ".state"));
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, string.concat(name, ".done"));
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
 }
 
 waza emit_socket_transfer(code: x86_64.Assembler, name: string, reading: bool) -> unit {
@@ -594,5 +848,10 @@ waza socket_routine(function_name: string) -> string {
     moshi (name == "close") { kaesu "rt.sock_close"; }
     moshi (name == "set_nonblocking") { kaesu "rt.sock_nonblock"; }
     moshi (name == "finish_connect") { kaesu "rt.sock_finish"; }
+    moshi (name == "reactor_open") { kaesu "rt.reactor_open"; }
+    moshi (name == "reactor_ctl") { kaesu "rt.reactor_ctl"; }
+    moshi (name == "reactor_wait") { kaesu "rt.reactor_wait"; }
+    moshi (name == "reactor_signal") { kaesu "rt.reactor_signal"; }
+    moshi (name == "reactor_ack") { kaesu "rt.reactor_ack"; }
     kaesu "";
 }
