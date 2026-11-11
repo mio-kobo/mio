@@ -14,9 +14,9 @@ yobu "selfhost/theme";
 koukai kata Options { values: []string; flags: []bool; targets: []string; dependencies: []string; }
 kata ParseResult { options: Options; error: string; }
 kata Line { value: string; ok: bool; }
-kata Terminal { input: io.Reader; output: io.Writer; errors: io.Writer; language: string; style: theme.Theme; failed: []bool; }
+kata Terminal { input: io.Reader; output: io.Writer; errors: io.Writer; language: string; style: theme.Theme; failed: []bool; tty: bool; real: bool; }
 kata File { name: string; content: string; }
-waza options() -> Options { kaesu Options {values:["","","","","",""],flags:[iie,iie,iie,iie],targets:[],dependencies:[]}; }
+waza options() -> Options { kaesu Options {values:["","","","","",""],flags:[iie,iie,iie,iie,iie],targets:[],dependencies:[]}; }
 waza cut(value: string, first: int64, last: int64) -> string {
     kaku data=string.to_bytes(value);kaku out: []uint8=[];kaku at=first;
     aida(at<last){array.push(out,data[at]);at=at+1;}kaku text=string.from_utf8(out);moshi(text==mu){kaesu "";}kaesu text;
@@ -79,6 +79,7 @@ waza parse(args: []string) -> ParseResult {
             moshi(key=="--repo"){o.flags[3]=hai;}at=at+1;tsuzuku;
         }
         kaku yes=hai;moshi(equal>=0){moshi(value!="true" && value!="false"){kaesu ParseResult {options:o,error:"options"};}yes=value=="true";}
+        moshi(key=="--advanced"){o.flags[4]=yes;at=at+1;tsuzuku;}
         moshi(key=="--non-interactive"){o.flags[0]=yes;}sore{moshi(key=="--workflow"){o.flags[1]=yes;}sore{moshi(key=="--git-init"){o.flags[2]=yes;}sore{moshi(key=="--github" || key=="--create-repo"){o.flags[3]=yes;}sore{
             moshi(key!="--allow-git-init" && key!="--allow-git-config" && key!="--allow-connect" && key!="--allow-repo-create" && key!="--allow-auth-login"){kaesu ParseResult {options:o,error:"options"};}
         }}}}at=at+1;
@@ -89,15 +90,17 @@ waza fullname(o: Options) -> string {kaesu string.concat(o.values[0],string.conc
 waza selected(o: Options) -> []string {kaku out: []string=[];kaku known=policy_targets();kaku at=0;aida(at<len(known)){moshi(member(o.targets,known[at])){array.push(out,known[at]);}at=at+1;}kaesu out;}
 waza target_text(o: Options) -> string {kaku p=selected(o);kaku b=string.new_builder();kaku at=0;aida(at<len(p)){moshi(at>0){string.write_string(b,", ");}string.write_string(b,p[at]);at=at+1;}kaesu string.builder_string(b);}
 waza render(text: string,o: Options) -> string {
-    kaku b=string.new_builder();kaku at=0;kaku n=string.byte_len(text);
-    aida(at<n){moshi(at+1<n && cut(text,at,at+2)=="{{"){
-        kaku end=at+2;aida(end+1<n && cut(text,end,end+2)!="}}"){end=end+1;}
-        moshi(end+1<n){kaku key=cut(text,at+2,end);kaku value="";
+    kaku b=string.new_builder();kaku data=string.to_bytes(text);kaku at=0;kaku start=0;kaku n=len(data);
+    aida(at+1<n){moshi(data[at]==uint8(123) && data[at+1]==uint8(123)){
+        kaku end=at+2;aida(end+1<n && (data[end]!=uint8(125) || data[end+1]!=uint8(125))){end=end+1;}
+        moshi(end+1<n){string.write_string(b,cut(text,start,at));kaku key=cut(text,at+2,end);kaku value="";
+            moshi(key=="package"){value=o.values[1];}moshi(key=="description_toml"){value=quote(o.values[2]);}moshi(key=="platforms_toml"){value=platforms(o);}moshi(key=="dependencies_toml"){value=dependencies(o);}
             moshi(key=="name"){value=fullname(o);}moshi(key=="namespace"){value=o.values[0];}moshi(key=="description"){value=o.values[2];}moshi(key=="version"){value=o.values[3];}moshi(key=="license"){value=o.values[4];}moshi(key=="platforms"){value=target_text(o);}
-            string.write_string(b,value);at=end+2;tsuzuku;
-        }}string.write_string(b,cut(text,at,at+1));at=at+1;
-    }kaesu string.builder_string(b);
+            string.write_string(b,value);at=end+2;start=at;tsuzuku;
+        }}at=at+1;
+    }string.write_string(b,cut(text,start,n));kaesu string.builder_string(b);
 }
+
 waza platforms(o: Options) -> string {
     kaku b=string.new_builder();string.write_string(b,"[platforms]\n");kaku names=["linux","macos","windows"];kaku archs=["x86_64","arm64"];kaku at=0;
     aida(at<len(names)){kaku values: []string=[];kaku i=0;aida(i<len(archs)){moshi(member(o.targets,string.concat(names[at],string.concat("/",archs[i])))){array.push(values,archs[i]);}i=i+1;}
@@ -135,9 +138,13 @@ waza generate_with_writer(root: string,o: Options,write: (string,string) -> bool
     kaku list=files(o);kaku at=0;aida(at<len(list)){kaku written=write(path.join(dir,list[at].name),list[at].content);moshi(!written){cleanup(dir,o);kaesu "io";}at=at+1;}kaesu "";
 }
 waza output(ui: Terminal,text: string) -> unit {kaku b=string.to_bytes(text);kaku r=io.write_all(ui.output,b,0,len(b));moshi(r.error!=mu){ui.failed[0]=hai;}}
-waza message(ui: Terminal,key: string,args: []string) -> unit {output(ui,string.concat(i18n.format(ui.language,key,args),"\n"));}
+waza message(ui: Terminal,key: string,args: []string) -> unit {
+    kaku text=i18n.format(ui.language,key,args);
+    moshi(key==i18n.key_scaffold_welcome || key==i18n.key_scaffold_select_platforms || key==i18n.key_scaffold_prompt_platforms){text=theme.paint(ui.style,"command",text);}
+    output(ui,string.concat(text,"\n"));
+}
 waza line(ui: Terminal,key: string) -> Line {
-    output(ui,theme.paint(ui.style,"heading",string.concat(i18n.text(ui.language,key)," ")));moshi(ui.failed[0]){kaesu Line {value:"",ok:iie};}
+    output(ui,theme.paint(ui.style,"command",string.concat(i18n.text(ui.language,key),"\n› ")));moshi(ui.failed[0]){kaesu Line {value:"",ok:iie};}
     kaku b: []uint8=[];kaku one: []uint8=[0];aida(len(b)<=8192){kaku r=ui.input.read(one,0,1);moshi(r.error!=mu || r.count<0 || r.count>1){kaesu Line {value:"",ok:iie};}
         moshi(r.count==1){moshi(one[0]==uint8(10)){kaku v=string.from_utf8(b);moshi(v==mu){kaesu Line {value:"",ok:iie};}kaesu Line {value:string.trim_space(v),ok:hai};}array.push(b,one[0]);}
         moshi(r.eof){moshi(len(b)==0){kaesu Line {value:"",ok:iie};}kaku v=string.from_utf8(b);moshi(v==mu){kaesu Line {value:"",ok:iie};}kaesu Line {value:string.trim_space(v),ok:hai};}
@@ -146,10 +153,12 @@ waza line(ui: Terminal,key: string) -> Line {
 }
 waza yes(ui: Terminal,key: string) -> bool {kaku r=line(ui,key);kaesu r.ok && (r.value=="y"||r.value=="Y"||r.value=="yes"||r.value=="YES"||r.value=="Yes");}
 waza upper(value: string) -> string { kaku d=string.to_bytes(value);kaku at=0;aida(at<len(d)){moshi(d[at]>=uint8(97)&&d[at]<=uint8(122)){d[at]=d[at]-uint8(32);}at=at+1;}kaku result=string.from_utf8(d);moshi(result==mu){kaesu "ERROR";}kaesu result; }
-waza failure(ui: Terminal,kind: string) -> int64 {
+waza failure(ui: Terminal,kind: string) -> int64 {kaesu failure_with_detail(ui,kind,"");}
+waza failure_with_detail(ui: Terminal,kind: string,detail: string) -> int64 {
+    moshi(kind=="cancelled"){message(ui,i18n.key_scaffold_cancelled,[]);kaesu 130;}
     // Kind is a closed, internal catalog suffix; never interpolate untrusted flags.
-    kaku text=string.concat("BUNKO_E_SCAFFOLD_",string.concat(upper(kind),string.concat(" ",string.concat(i18n.format(ui.language,string.concat("scaffold.",kind),[""]),"\n"))));
-    kaku b=string.to_bytes(text);io.write_all(ui.errors,b,0,len(b));moshi(kind=="options"){kaesu 2;}kaesu 1;
+    kaku text=string.concat("BUNKO_E_SCAFFOLD_",string.concat(upper(kind),string.concat(" ",string.concat(i18n.format(ui.language,string.concat("scaffold.",kind),[detail]),"\n"))));
+    kaku b=string.to_bytes(theme.paint(ui.style,"error",text));io.write_all(ui.errors,b,0,len(b));moshi(kind=="options"){kaesu 2;}kaesu 1;
 }
 waza host_name(host: string) -> string {
     moshi(host=="darwin-arm64"){kaesu "macos/arm64";}moshi(host=="darwin-amd64"){kaesu "macos/x86_64";}moshi(host=="linux-amd64"){kaesu "linux/x86_64";}moshi(host=="linux-arm64"){kaesu "linux/arm64";}moshi(host=="windows-amd64"){kaesu "windows/x86_64";}moshi(host=="windows-arm64"){kaesu "windows/arm64";}kaesu host;
@@ -163,32 +172,31 @@ waza locate(name: string,host: string) -> string {
 }
 waza run(args: []string,root: string,ui: Terminal,compiler: string,host: string) -> int64 {
     kaku command="create";moshi(len(args)>2){command=args[2];}kaku at=3;
-    aida(at<len(args)){moshi(args[at]=="--help" || args[at]=="-h"){kaku key=i18n.key_scaffold_help_create;moshi(command=="connect"){key=i18n.key_scaffold_help_connect;}output(ui,string.concat(theme.paint(ui.style,"heading",string.concat("mio bunko ",command)),"\n"));message(ui,key,[]);message(ui,i18n.key_scaffold_native_process,[]);kaesu 0;}moshi(takes_value(args[at]) && at+1<len(args)){at=at+1;}at=at+1;}
+    aida(at<len(args)){moshi(args[at]=="--help" || args[at]=="-h"){kaku key=i18n.key_scaffold_help_create;moshi(command=="connect"){key=i18n.key_scaffold_help_connect;}output(ui,string.concat(theme.paint(ui.style,"command",string.concat("mio bunko ",command)),"\n"));message(ui,key,[]);message(ui,i18n.key_scaffold_native_process,[]);kaesu 0;}moshi(takes_value(args[at]) && at+1<len(args)){at=at+1;}at=at+1;}
     moshi(command=="connect"){kaesu failure(ui,"native_process");}
     kaku parsed=parse(args);moshi(parsed.error!=""){kaesu failure(ui,parsed.error);}kaku o=parsed.options;
-    message(ui,i18n.key_scaffold_environment,[compiler,host_name(host)]);message(ui,i18n.key_scaffold_native_process,[]);
-    kaku git=locate("git",host);kaku gh=locate("gh",host);moshi(git==""){git=i18n.text(ui.language,i18n.key_scaffold_missing);}moshi(gh==""){gh=i18n.text(ui.language,i18n.key_scaffold_missing);message(ui,i18n.key_scaffold_missing_gh,[]);}
-    message(ui,i18n.key_scaffold_tool,["Git",git]);message(ui,i18n.key_scaffold_tool,["gh",gh]);
     moshi(!o.flags[0]){
-        kaku keys=[i18n.key_scaffold_prompt_namespace,i18n.key_scaffold_prompt_name,i18n.key_scaffold_prompt_description,i18n.key_scaffold_prompt_version,i18n.key_scaffold_prompt_license];at=0;
-        aida(at<len(keys)){moshi(o.values[at]==""){kaku r=line(ui,keys[at]);moshi(!r.ok){kaesu failure(ui,"stdin");}o.values[at]=r.value;}at=at+1;}
-        moshi(len(o.targets)==0){kaku p=policy_targets();kaku b=string.new_builder();at=0;aida(at<len(p)){moshi(at>0){string.write_string(b,", ");}string.write_string(b,p[at]);at=at+1;}message(ui,i18n.key_scaffold_platform_choices,[string.builder_string(b)]);
-            kaku r=line(ui,i18n.key_scaffold_prompt_platforms);moshi(!r.ok){kaesu failure(ui,"stdin");}array.append_all(o.targets,csv(r.value));}
-        moshi(len(o.dependencies)==0){kaku r=line(ui,i18n.key_scaffold_prompt_dependencies);moshi(!r.ok){kaesu failure(ui,"stdin");}moshi(!add_dependencies(o,csv(r.value))){kaesu failure(ui,"invalid_dependency");}}
-        moshi(!o.flags[1]){o.flags[1]=yes(ui,i18n.key_scaffold_prompt_workflow);}
+        moshi(ui.real && !ui.tty){kaesu failure(ui,"non_tty");}
+        kaku result=wizard(ui,o,root,host);moshi(result!=""){kaesu failure(ui,result);}
     }
     kaku error=validate(o);moshi(error!=""){kaesu failure(ui,error);}
-    message(ui,i18n.key_scaffold_preview,[string.concat(fullname(o),string.concat("@",o.values[3])),o.values[5],target_text(o)]);
-    moshi(!o.flags[0] && !yes(ui,i18n.key_scaffold_prompt_create)){message(ui,i18n.key_scaffold_cancelled,[]);kaesu 0;}
+    moshi(len(o.dependencies)==0){message(ui,i18n.key_scaffold_summary,[o.values[3],o.values[4]]);}sore{message(ui,i18n.key_scaffold_summary_dependencies,[o.values[3],o.values[4],convert.format_int(len(o.dependencies))]);}
+    moshi(o.flags[4] && !o.flags[0] && !yes(ui,i18n.key_scaffold_prompt_create)){message(ui,i18n.key_scaffold_cancelled,[]);kaesu 0;}
     moshi(ui.failed[0]){kaesu failure(ui,"io");}
-    error=generate_with_writer(root,o,waza(p:string,text:string)->bool{kaesu fs.write_all(p,string.to_bytes(text)).error==mu;});moshi(error!=""){kaesu failure(ui,error);}
-    message(ui,i18n.key_scaffold_created,[o.values[5]]);moshi(o.flags[2] || o.flags[3]){kaesu failure(ui,"native_process");}message(ui,i18n.key_scaffold_local_only,[]);kaesu 0;
+    kaku guard=array.make[uint8](128,uint8(0));kaku guarded=os.terminal(3,guard)==0;
+    error=generate_with_writer(root,o,waza(p:string,text:string)->bool{kaesu fs.write_all(p,string.to_bytes(text)).error==mu;});
+    moshi(guarded){kaku pending=os.terminal(5,guard);moshi(pending!=0 && error==""){kaku physical=os.canonical_path(root);moshi(physical!=mu){cleanup(path.join(physical,o.values[5]),o);}error="cancelled";}kaku restored=os.terminal(4,guard);moshi(restored!=0){kaesu failure(ui,"io");}}
+    moshi(error!=""){kaesu failure(ui,error);}
+    moshi(o.flags[2] || o.flags[3]){kaesu failure(ui,"native_process");}
+    output(ui,string.concat(theme.paint(ui.style,"success",i18n.text(ui.language,i18n.key_scaffold_created)),"\n"));
+    message(ui,i18n.key_scaffold_location,[fullname(o),path.join(root,o.values[5])]);
+    message(ui,i18n.key_scaffold_next,[]);output(ui,string.concat("\n  cd ",string.concat(o.values[5],"\n  mio test .\n\n")));message(ui,i18n.key_scaffold_publish_guide,[]);kaesu 0;
 }
 koukai waza command(args: []string,language: string,style: theme.Theme,compiler: string,host: string) -> int64 {
     kaku opened_in=fs.open_read("/dev/stdin");kaku input=io.reader_from_bytes([]);kaku file_in=opened_in.file;moshi(file_in!=mu){input=fs.reader(file_in);}
     kaku opened_out=fs.open_write("/dev/stdout");kaku file_out=opened_out.file;kaku opened_err=fs.open_write("/dev/stderr");kaku file_err=opened_err.file;
     moshi(file_out==mu){moshi(file_in!=mu){fs.close(file_in);}kaesu 1;}
     moshi(file_err==mu){moshi(file_in!=mu){fs.close(file_in);}fs.close(file_out);kaesu 1;}
-    kaku ui=Terminal {input:input,output:fs.writer(file_out),errors:fs.writer(file_err),language:language,style:style,failed:[iie]};kaku result=run(args,".",ui,compiler,host);
+    kaku ui=Terminal {input:input,output:fs.writer(file_out),errors:fs.writer(file_err),language:language,style:style,failed:[iie],tty:fs.is_character_device("/dev/stdin") && fs.is_character_device("/dev/stdout"),real:hai};kaku result=run(args,".",ui,compiler,host);
     moshi(file_in!=mu){fs.close(file_in);}fs.close(file_out);fs.close(file_err);kaesu result;
 }

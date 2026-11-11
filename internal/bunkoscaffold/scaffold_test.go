@@ -326,18 +326,18 @@ func TestLocalOnlyAndInteractive(t *testing.T) {
 		}
 	}
 	m = &mockRunner{missingGit: true, missingGh: true}
-	status, out, err, root = runFixture(t, m, nil, "alice\njson\nInteractive fixture\n\n\nlinux/x86_64\n\nn\ny\n")
+	status, out, err, root = runFixture(t, m, nil, "BAD\nalice/json\nInteractive fixture\n\n1,2\n")
 	if status != 0 {
 		t.Fatal(status, out, err)
 	}
-	if !strings.Contains(out, "https://cli.github.com/") {
-		t.Fatal("missing gh instructions")
+	if strings.Contains(out, "https://cli.github.com/") || len(m.calls) != 0 {
+		t.Fatal("local wizard probed GitHub")
 	}
 	if _, e := ReadInfo(filepath.Join(root, "json")); e != nil {
 		t.Fatal(e)
 	}
-	status, _, _, root = runFixture(t, &mockRunner{missingGit: true, missingGh: true}, nil, "alice\njson\nDeclined fixture\n\n\nlinux/x86_64\n\nn\nn\n")
-	if status != 0 {
+	status, _, _, root = runFixture(t, &mockRunner{missingGit: true, missingGh: true}, nil, "alice/json\nDeclined fixture\n\x1b\n")
+	if status != 130 {
 		t.Fatal(status)
 	}
 	if _, e := os.Stat(filepath.Join(root, "json")); !os.IsNotExist(e) {
@@ -568,5 +568,90 @@ func TestReservedNamespacesAndGitEnvironment(t *testing.T) {
 		if strings.HasPrefix(strings.ToUpper(key), "GIT_") {
 			t.Fatal("inherited Git override")
 		}
+	}
+}
+
+func TestEnglishReadmeAcrossAllLocales(t *testing.T) {
+	catalogs, err := filepath.Glob("../../selfhost/i18n/locales/*.json")
+	if err != nil || len(catalogs) != 39 {
+		t.Fatal(err, len(catalogs))
+	}
+	var baseline []byte
+	for _, catalog := range catalogs {
+		locale := strings.TrimSuffix(filepath.Base(catalog), ".json")
+		t.Run(locale, func(t *testing.T) {
+			root := t.TempDir()
+			var out, stderr bytes.Buffer
+			status := Run("create", localArgs(), Context{Root: root, Language: i18n.Language(locale), Out: &out, Err: &stderr, Runner: &mockRunner{}})
+			if status != 0 {
+				t.Fatal(status, stderr.String())
+			}
+			readme, err := os.ReadFile(filepath.Join(root, "json", "README.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if baseline == nil {
+				baseline = readme
+			}
+			if !bytes.Equal(readme, baseline) {
+				t.Fatal("CLI locale changed the English README")
+			}
+			for _, required := range []string{"# alice/json", "Local fixture", "Version: **1.0.0**", "**MIT**", "linux/x86_64", "packages/alice/json/1.0.0.toml", "immutable: true", "REPLACE_WITH_REAL_POSITIVE_DECIMAL_RELEASE_ID", "mio check .", "mio test .", "python3 tools/validate.py --base upstream/main"} {
+				if !strings.Contains(string(readme), required) {
+					t.Errorf("missing %q", required)
+				}
+			}
+			if strings.Contains(string(readme), "{{") {
+				t.Fatal("unexpanded template")
+			}
+		})
+	}
+}
+
+func TestWizardValidatesBeforeLaterQuestions(t *testing.T) {
+	status, out, stderr, root := runFixture(t, &mockRunner{}, nil, "Bad/name\nalice/json\n\nFixture\n\n0\n1,2\n")
+	if status != 0 {
+		t.Fatal(out, stderr)
+	}
+	info, err := ReadInfo(filepath.Join(root, "json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Package.Version != "0.1.0" || info.Package.License != "MIT" || len(info.Platforms) != 2 {
+		t.Fatal(info)
+	}
+	if !strings.Contains(stderr, "INVALID_NAME") || !strings.Contains(stderr, "INVALID_DESCRIPTION") || !strings.Contains(stderr, "INVALID_PLATFORM") {
+		t.Fatal(stderr)
+	}
+	for _, unwanted := range []string{"gh:", "Git:", "GitHub integration?", "Exact dependencies,"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("unexpected default prompt %q", unwanted)
+		}
+	}
+}
+
+func TestInterruptDuringGenerationRollsBackOwnedFiles(t *testing.T) {
+	root := t.TempDir()
+	writes := 0
+	_, err := generate(root, fixture(), func(name string, data []byte, mode os.FileMode) error {
+		writes++
+		if writes == 1 {
+			process, e := os.FindProcess(os.Getpid())
+			if e != nil {
+				return e
+			}
+			if e = process.Signal(os.Interrupt); e != nil {
+				return e
+			}
+			time.Sleep(30 * time.Millisecond) // Let the OS signal reach the registered channel.
+		}
+		return os.WriteFile(name, data, mode)
+	})
+	var own *Error
+	if !errors.As(err, &own) || own.Kind != "cancelled" {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "json")); !os.IsNotExist(err) {
+		t.Fatal("interrupted project remains", err)
 	}
 }

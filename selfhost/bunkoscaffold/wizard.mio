@@ -1,0 +1,63 @@
+// Native wizard: no subprocesses or terminal runtime dependencies.
+waza prompt_valid(ui: Terminal,key: string,kind: string) -> Line {
+    aida(hai){kaku r=line(ui,key);moshi(!r.ok){kaesu r;}
+        moshi(r.value==escape() || r.value==control_c()){kaesu Line {value:"cancelled",ok:iie};}
+        kaku valid=valid_name(r.value);moshi(kind=="invalid_description"){valid=valid_description(r.value);}
+        moshi(valid){kaesu r;}kaku detail="";moshi(valid_description(r.value)){detail=r.value;}failure_with_detail(ui,kind,detail);
+    }kaesu Line {value:"",ok:iie};
+}
+waza platform_label(ui: Terminal,target: string,host: string) -> string {
+    kaku key=i18n.key_scaffold_platform_linux_x86_64;
+    moshi(target=="macos/arm64"){key=i18n.key_scaffold_platform_macos_arm64;}
+    moshi(target=="windows/x86_64"){key=i18n.key_scaffold_platform_windows_x86_64;}
+    kaku label=i18n.text(ui.language,key);moshi(target==host_name(host)){label=string.concat(label,string.concat("  ",i18n.text(ui.language,i18n.key_scaffold_current_device)));}kaesu label;
+}
+waza read_byte(ui: Terminal) -> int64 {
+    kaku b: []uint8=[0];kaku r=ui.input.read(b,0,1);moshi(r.error!=mu || r.count!=1){kaesu -1;}kaesu int64(b[0]);
+}
+waza escape() -> string {kaku s=string.from_utf8([uint8(27)]);moshi(s==mu){kaesu "";}kaesu s;}
+waza choose_platforms(ui: Terminal,o: Options,host: string) -> bool {
+    kaku known=policy_targets();message(ui,i18n.key_scaffold_select_platforms,[]);
+    kaku state=array.make[uint8](128,uint8(0));kaku raw=iie;
+    moshi(ui.tty && os.getenv("TERM")!="dumb"){raw=os.terminal(1,state)==0;}
+    moshi(raw){
+        message(ui,i18n.key_scaffold_keys,[]);kaku choices=array.make[bool](len(known),iie);kaku cursor=0;kaku done=iie;kaku accepted=iie;
+        aida(!done){kaku at=0;
+            aida(at<len(known)){kaku mark="[ ]";moshi(choices[at]){mark="[x]";}kaku pointer=" ";moshi(at==cursor){pointer="›";}
+                kaku text=string.concat(pointer,string.concat(" ",string.concat(mark,string.concat(" ",platform_label(ui,known[at],host)))));
+                moshi(at==cursor){text=theme.paint(ui.style,"command",text);}output(ui,string.concat(text,"\n"));at=at+1;}
+            kaku b=read_byte(ui);moshi(b<0 || b==3){done=hai;}
+            moshi(b==27){moshi(os.stdin_wait(60)<=0){done=hai;}sore{kaku next=read_byte(ui);moshi(next==91){next=read_byte(ui);moshi(next==65){cursor=cursor-1;moshi(cursor<0){cursor=len(known)-1;}}moshi(next==66){cursor=cursor+1;moshi(cursor>=len(known)){cursor=0;}}}sore{done=hai;}}}
+            moshi(b==32){choices[cursor]=!choices[cursor];}
+            moshi(b==10 || b==13){at=0;aida(at<len(known)){moshi(choices[at]){array.push(o.targets,known[at]);}at=at+1;}moshi(len(o.targets)>0){accepted=hai;done=hai;}}
+            moshi(!done){output(ui,string.concat(escape(),string.concat("[",string.concat(convert.format_int(len(known)),"A"))));}
+            moshi(ui.failed[0]){done=hai;}
+        }
+        kaku restored=os.terminal(2,state);moshi(restored!=0){failure(ui,"io");kaesu iie;}
+        kaesu accepted;
+    }
+    kaku at=0;aida(at<len(known)){output(ui,string.concat("  ",string.concat(convert.format_int(at+1),string.concat(". [ ] ",string.concat(platform_label(ui,known[at],host),"\n")))));at=at+1;}
+    aida(hai){kaku r=line(ui,i18n.key_scaffold_numbers);moshi(!r.ok){kaesu iie;}
+        moshi(r.value==escape() || r.value==control_c()){kaesu iie;}
+        kaku input=csv(r.value);kaku selected: []string=[];kaku valid=len(input)>0;at=0;
+        aida(at<len(input)){kaku found=iie;kaku i=0;aida(i<len(known)){moshi(input[at]==convert.format_int(i+1) && !member(selected,known[i])){array.push(selected,known[i]);found=hai;}i=i+1;}moshi(!found){valid=iie;}at=at+1;}
+        moshi(valid){array.append_all(o.targets,selected);kaesu hai;}failure(ui,"invalid_platform");
+    }kaesu iie;
+}
+waza wizard(ui: Terminal,o: Options,root: string,host: string) -> string {
+    message(ui,i18n.key_scaffold_welcome,[]);
+    moshi(o.values[0]=="" || o.values[1]==""){kaku r=prompt_valid(ui,i18n.key_scaffold_prompt_full_name,"invalid_name");moshi(!r.ok){moshi(r.value=="cancelled"){kaesu "cancelled";}kaesu "stdin";}kaku name=parts(r.value,uint8(47));o.values[0]=name[0];o.values[1]=name[1];}
+    moshi(!valid_name(fullname(o))){kaesu "invalid_name";}
+    kaku child=o.values[5];moshi(child==""){child=o.values[1];}moshi(!valid_child(child)){kaesu "invalid_path";}
+    moshi(fs.exists(path.join(root,child))){kaesu "exists";}
+    moshi(o.values[2]==""){kaku r=prompt_valid(ui,i18n.key_scaffold_prompt_description,"invalid_description");moshi(!r.ok){moshi(r.value=="cancelled"){kaesu "cancelled";}kaesu "stdin";}o.values[2]=r.value;}
+    moshi(len(o.targets)==0){kaku chosen=choose_platforms(ui,o,host);moshi(!chosen){kaesu "cancelled";}}
+    moshi(o.flags[4]){
+        kaku keys=[i18n.key_scaffold_prompt_version,i18n.key_scaffold_prompt_license];kaku at=0;
+        aida(at<len(keys)){moshi(o.values[at+3]==""){kaku r=line(ui,keys[at]);moshi(!r.ok){moshi(r.value=="cancelled"){kaesu "cancelled";}kaesu "stdin";}o.values[at+3]=r.value;}at=at+1;}
+        moshi(len(o.dependencies)==0){kaku r=line(ui,i18n.key_scaffold_prompt_dependencies);moshi(!r.ok){moshi(r.value=="cancelled"){kaesu "cancelled";}kaesu "stdin";}moshi(!add_dependencies(o,csv(r.value))){kaesu "invalid_dependency";}}
+        moshi(!o.flags[1]){o.flags[1]=yes(ui,i18n.key_scaffold_prompt_workflow);}
+    }kaesu "";
+}
+
+waza control_c() -> string {kaku s=string.from_utf8([uint8(3)]);moshi(s==mu){kaesu "";}kaesu s;}

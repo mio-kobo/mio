@@ -1,5 +1,10 @@
 # Bunko scaffolding handoff
 
+> The subsequent wizard redesign and English publishing guide are documented in
+> [the current review report](bunko-wizard-review.md). Its default interaction,
+> terminal support and local verification supersede the historical behavior below.
+> Historical six-host CI results below apply only to their named earlier commits.
+
 ## Scope and branch dependency
 
 Repository: <https://github.com/mio-kobo/mio>. Destination development branch:

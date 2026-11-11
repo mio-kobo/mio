@@ -233,6 +233,13 @@ def cli_checks(report, cli, target, work):
         return report.check("cli-i18n-" + name, "PASS" if not problems else "FAIL", "native",
                             "" if not problems else brief(", ".join(problems)), detail=brief(text))
     bunko_scaffold_checks.check_scaffolding(report, cli, work, run)
+    if target == "darwin-arm64":
+        variant = Path(cli).stem
+        code, out, err, _ = run(report, "scaffold-pty-" + variant,
+            [sys.executable, ROOT / "scripts/bunko/test_wizard.py", cli,
+             "--output", report.output / ("scaffold-pty-" + variant)], timeout=300)
+        report.check("bunko-wizard-pty / " + variant, "PASS" if code == 0 else "FAIL",
+                     "native", brief(out + err))
     check("bunko-help", ["--lang", "en-US", "bunko", "--help"], contains=("mio bunko add", "exact versions"))
     check("bunko-native-blocked", ["--lang", "ja-JP", "bunko", "install"], code=1, contains=("BUNKO_E_NATIVE_CAPABILITY", "未対応"))
     check("japanese", ["--lang", "ja-JP", "help"], contains=("使用方法", "コマンド"), absent=(ansi,), env={"NO_COLOR": None, "CI": None})

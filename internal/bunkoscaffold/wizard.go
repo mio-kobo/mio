@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 
 	"Mio/internal/bunkopm"
@@ -24,66 +27,81 @@ type Context struct {
 
 // Keep dynamic prompt/error suffixes in a closed, statically auditable catalog.
 var scaffoldMessages = map[string]i18n.Key{
-	"action_connect":        i18n.KeyScaffoldActionConnect,
-	"action_git_config":     i18n.KeyScaffoldActionGitConfig,
-	"action_git_init":       i18n.KeyScaffoldActionGitInit,
-	"action_login":          i18n.KeyScaffoldActionLogin,
-	"action_repo_create":    i18n.KeyScaffoldActionRepoCreate,
-	"active_account":        i18n.KeyScaffoldActiveAccount,
-	"auth":                  i18n.KeyScaffoldAuth,
-	"cancelled":             i18n.KeyScaffoldCancelled,
-	"cmd_connect":           i18n.KeyScaffoldCmdConnect,
-	"cmd_create":            i18n.KeyScaffoldCmdCreate,
-	"connected":             i18n.KeyScaffoldConnected,
-	"created":               i18n.KeyScaffoldCreated,
-	"declined":              i18n.KeyScaffoldDeclined,
-	"environment":           i18n.KeyScaffoldEnvironment,
-	"exists":                i18n.KeyScaffoldExists,
-	"git_config":            i18n.KeyScaffoldGitConfig,
-	"help_connect":          i18n.KeyScaffoldHelpConnect,
-	"help_create":           i18n.KeyScaffoldHelpCreate,
-	"interactive_timeout":   i18n.KeyScaffoldInteractiveTimeout,
-	"invalid_dependency":    i18n.KeyScaffoldInvalidDependency,
-	"invalid_description":   i18n.KeyScaffoldInvalidDescription,
-	"invalid_license":       i18n.KeyScaffoldInvalidLicense,
-	"invalid_name":          i18n.KeyScaffoldInvalidName,
-	"invalid_path":          i18n.KeyScaffoldInvalidPath,
-	"invalid_platform":      i18n.KeyScaffoldInvalidPlatform,
-	"invalid_version":       i18n.KeyScaffoldInvalidVersion,
-	"io":                    i18n.KeyScaffoldIo,
-	"local_only":            i18n.KeyScaffoldLocalOnly,
-	"missing":               i18n.KeyScaffoldMissing,
-	"missing_gh":            i18n.KeyScaffoldMissingGh,
-	"missing_git":           i18n.KeyScaffoldMissingGit,
-	"multiple_accounts":     i18n.KeyScaffoldMultipleAccounts,
-	"namespace_auth":        i18n.KeyScaffoldNamespaceAuth,
-	"native_process":        i18n.KeyScaffoldNativeProcess,
-	"not_package":           i18n.KeyScaffoldNotPackage,
-	"options":               i18n.KeyScaffoldOptions,
-	"platform_choices":      i18n.KeyScaffoldPlatformChoices,
-	"preview":               i18n.KeyScaffoldPreview,
-	"proceed":               i18n.KeyScaffoldProceed,
-	"process":               i18n.KeyScaffoldProcess,
-	"prompt_create":         i18n.KeyScaffoldPromptCreate,
-	"prompt_dependencies":   i18n.KeyScaffoldPromptDependencies,
-	"prompt_description":    i18n.KeyScaffoldPromptDescription,
-	"prompt_github":         i18n.KeyScaffoldPromptGithub,
-	"prompt_license":        i18n.KeyScaffoldPromptLicense,
-	"prompt_name":           i18n.KeyScaffoldPromptName,
-	"prompt_namespace":      i18n.KeyScaffoldPromptNamespace,
-	"prompt_platforms":      i18n.KeyScaffoldPromptPlatforms,
-	"prompt_repo":           i18n.KeyScaffoldPromptRepo,
-	"prompt_version":        i18n.KeyScaffoldPromptVersion,
-	"prompt_visibility":     i18n.KeyScaffoldPromptVisibility,
-	"prompt_workflow":       i18n.KeyScaffoldPromptWorkflow,
-	"remote_preview":        i18n.KeyScaffoldRemotePreview,
-	"repository_create":     i18n.KeyScaffoldRepositoryCreate,
-	"repository_created":    i18n.KeyScaffoldRepositoryCreated,
-	"repository_permission": i18n.KeyScaffoldRepositoryPermission,
-	"stdin":                 i18n.KeyScaffoldStdin,
-	"timeout":               i18n.KeyScaffoldTimeout,
-	"tool":                  i18n.KeyScaffoldTool,
-	"workflow_dependencies": i18n.KeyScaffoldWorkflowDependencies,
+	"non_tty":                 i18n.KeyScaffoldNonTty,
+	"publish_guide":           i18n.KeyScaffoldPublishGuide,
+	"next":                    i18n.KeyScaffoldNext,
+	"location":                i18n.KeyScaffoldLocation,
+	"summary_dependencies":    i18n.KeyScaffoldSummaryDependencies,
+	"summary":                 i18n.KeyScaffoldSummary,
+	"numbers":                 i18n.KeyScaffoldNumbers,
+	"keys":                    i18n.KeyScaffoldKeys,
+	"platform_windows_x86_64": i18n.KeyScaffoldPlatformWindowsX8664,
+	"platform_macos_arm64":    i18n.KeyScaffoldPlatformMacosArm64,
+	"platform_linux_x86_64":   i18n.KeyScaffoldPlatformLinuxX8664,
+	"current_device":          i18n.KeyScaffoldCurrentDevice,
+	"select_platforms":        i18n.KeyScaffoldSelectPlatforms,
+	"prompt_full_name":        i18n.KeyScaffoldPromptFullName,
+	"welcome":                 i18n.KeyScaffoldWelcome,
+	"action_connect":          i18n.KeyScaffoldActionConnect,
+	"action_git_config":       i18n.KeyScaffoldActionGitConfig,
+	"action_git_init":         i18n.KeyScaffoldActionGitInit,
+	"action_login":            i18n.KeyScaffoldActionLogin,
+	"action_repo_create":      i18n.KeyScaffoldActionRepoCreate,
+	"active_account":          i18n.KeyScaffoldActiveAccount,
+	"auth":                    i18n.KeyScaffoldAuth,
+	"cancelled":               i18n.KeyScaffoldCancelled,
+	"cmd_connect":             i18n.KeyScaffoldCmdConnect,
+	"cmd_create":              i18n.KeyScaffoldCmdCreate,
+	"connected":               i18n.KeyScaffoldConnected,
+	"created":                 i18n.KeyScaffoldCreated,
+	"declined":                i18n.KeyScaffoldDeclined,
+	"environment":             i18n.KeyScaffoldEnvironment,
+	"exists":                  i18n.KeyScaffoldExists,
+	"git_config":              i18n.KeyScaffoldGitConfig,
+	"help_connect":            i18n.KeyScaffoldHelpConnect,
+	"help_create":             i18n.KeyScaffoldHelpCreate,
+	"interactive_timeout":     i18n.KeyScaffoldInteractiveTimeout,
+	"invalid_dependency":      i18n.KeyScaffoldInvalidDependency,
+	"invalid_description":     i18n.KeyScaffoldInvalidDescription,
+	"invalid_license":         i18n.KeyScaffoldInvalidLicense,
+	"invalid_name":            i18n.KeyScaffoldInvalidName,
+	"invalid_path":            i18n.KeyScaffoldInvalidPath,
+	"invalid_platform":        i18n.KeyScaffoldInvalidPlatform,
+	"invalid_version":         i18n.KeyScaffoldInvalidVersion,
+	"io":                      i18n.KeyScaffoldIo,
+	"local_only":              i18n.KeyScaffoldLocalOnly,
+	"missing":                 i18n.KeyScaffoldMissing,
+	"missing_gh":              i18n.KeyScaffoldMissingGh,
+	"missing_git":             i18n.KeyScaffoldMissingGit,
+	"multiple_accounts":       i18n.KeyScaffoldMultipleAccounts,
+	"namespace_auth":          i18n.KeyScaffoldNamespaceAuth,
+	"native_process":          i18n.KeyScaffoldNativeProcess,
+	"not_package":             i18n.KeyScaffoldNotPackage,
+	"options":                 i18n.KeyScaffoldOptions,
+	"platform_choices":        i18n.KeyScaffoldPlatformChoices,
+	"preview":                 i18n.KeyScaffoldPreview,
+	"proceed":                 i18n.KeyScaffoldProceed,
+	"process":                 i18n.KeyScaffoldProcess,
+	"prompt_create":           i18n.KeyScaffoldPromptCreate,
+	"prompt_dependencies":     i18n.KeyScaffoldPromptDependencies,
+	"prompt_description":      i18n.KeyScaffoldPromptDescription,
+	"prompt_github":           i18n.KeyScaffoldPromptGithub,
+	"prompt_license":          i18n.KeyScaffoldPromptLicense,
+	"prompt_name":             i18n.KeyScaffoldPromptName,
+	"prompt_namespace":        i18n.KeyScaffoldPromptNamespace,
+	"prompt_platforms":        i18n.KeyScaffoldPromptPlatforms,
+	"prompt_repo":             i18n.KeyScaffoldPromptRepo,
+	"prompt_version":          i18n.KeyScaffoldPromptVersion,
+	"prompt_visibility":       i18n.KeyScaffoldPromptVisibility,
+	"prompt_workflow":         i18n.KeyScaffoldPromptWorkflow,
+	"remote_preview":          i18n.KeyScaffoldRemotePreview,
+	"repository_create":       i18n.KeyScaffoldRepositoryCreate,
+	"repository_created":      i18n.KeyScaffoldRepositoryCreated,
+	"repository_permission":   i18n.KeyScaffoldRepositoryPermission,
+	"stdin":                   i18n.KeyScaffoldStdin,
+	"timeout":                 i18n.KeyScaffoldTimeout,
+	"tool":                    i18n.KeyScaffoldTool,
+	"workflow_dependencies":   i18n.KeyScaffoldWorkflowDependencies,
 }
 
 func (c *Context) text(key string, args ...string) string {
@@ -93,11 +111,21 @@ func (c *Context) text(key string, args ...string) string {
 	}
 	return i18n.Format(c.Language, scaffoldMessages[key], values...)
 }
-func (c *Context) print(key string, args ...string) { fmt.Fprintln(c.Out, c.text(key, args...)) }
+func (c *Context) print(key string, args ...string) {
+	text := c.text(key, args...)
+	if c.Paint != nil && (key == "created" || key == "welcome" || key == "select_platforms" || key == "prompt_platforms") {
+		role := "command"
+		if key == "created" {
+			role = "success"
+		}
+		text = c.Paint(role, text)
+	}
+	fmt.Fprintln(c.Out, text)
+}
 func (c *Context) line(key string) (string, error) {
-	prompt := c.text(key) + " "
+	prompt := c.text(key) + "\n› "
 	if c.Paint != nil {
-		prompt = c.Paint("heading", prompt)
+		prompt = c.Paint("command", prompt)
 	}
 	fmt.Fprint(c.Out, prompt)
 	var b strings.Builder
@@ -131,6 +159,7 @@ func (r *repeat) Set(s string) error { *r = append(*r, s); return nil }
 
 type Options struct {
 	Spec                                                                    Spec
+	Advanced                                                                bool
 	NonInteractive, GitInit, Github, NewRepo                                bool
 	Repo, Visibility, AllowedAccount                                        string
 	AllowGitInit, AllowGitConfig, AllowConnect, AllowRepoCreate, AllowLogin bool
@@ -141,6 +170,7 @@ func Parse(command string, args []string) (Options, error) {
 	var targets, deps repeat
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	f.BoolVar(&o.Advanced, "advanced", false, "")
 	f.BoolVar(&o.NonInteractive, "non-interactive", false, "")
 	f.StringVar(&o.Spec.Namespace, "namespace", "", "")
 	f.StringVar(&o.Spec.Name, "name", "", "")
@@ -242,7 +272,7 @@ func Run(command string, args []string, c Context) int {
 	c.reader = bufio.NewReader(c.In)
 	if wantsHelp(args) {
 		if c.Paint != nil {
-			fmt.Fprintln(c.Out, c.Paint("heading", "mio bunko "+command))
+			fmt.Fprintln(c.Out, c.Paint("command", "mio bunko "+command))
 		}
 		c.print("help_" + command)
 		return 0
@@ -252,20 +282,9 @@ func Run(command string, args []string, c Context) int {
 	if e != nil {
 		return c.failure(e)
 	}
-	env := detect(c.Runner)
-	c.print("environment", bunkopm.SafeText(c.Compiler), bunkopm.SafeText(c.Host))
-	for _, entry := range []struct {
-		name string
-		tool Tool
-	}{{"Git", env.Git}, {"gh", env.Gh}} {
-		value := entry.tool.Version
-		if entry.tool.Path == "" {
-			value = c.text("missing")
-		}
-		c.print("tool", entry.name, bunkopm.SafeText(value))
-	}
-	if env.Gh.Path == "" {
-		c.print("missing_gh")
+	var env Environment
+	if command == "connect" || o.GitInit || o.Github {
+		env = detect(c.Runner)
 	}
 	if command == "connect" {
 		e = c.connect(c.Root, o, env)
@@ -281,40 +300,93 @@ func Run(command string, args []string, c Context) int {
 		return c.failure(invalid("options", ""))
 	}
 	if !o.NonInteractive {
-		for _, p := range []struct {
-			field *string
-			key   string
-		}{{&o.Spec.Namespace, "namespace"}, {&o.Spec.Name, "name"}, {&o.Spec.Description, "description"}, {&o.Spec.Version, "version"}, {&o.Spec.License, "license"}} {
-			if *p.field == "" {
-				*p.field, e = c.line("prompt_" + p.key)
-				if e != nil {
-					return c.failure(e)
+		if file, ok := c.In.(*os.File); ok && !terminalInput(file) {
+			return c.failure(invalid("non_tty", ""))
+		}
+		c.print("welcome")
+		if o.Spec.Namespace == "" || o.Spec.Name == "" {
+			for {
+				v, err := c.line("prompt_full_name")
+				if err != nil {
+					return c.failure(err)
 				}
+				if v == "\x1b" || v == "\x03" {
+					c.print("cancelled")
+					return 130
+				}
+				if !bunkopm.ValidName(v) {
+					c.failure(invalid("invalid_name", v))
+					continue
+				}
+				o.Spec.Namespace, o.Spec.Name, _ = strings.Cut(v, "/")
+				break
+			}
+		}
+		if !bunkopm.ValidName(o.Spec.FullName()) {
+			return c.failure(invalid("invalid_name", o.Spec.FullName()))
+		}
+		child := o.Spec.Directory
+		if child == "" {
+			child = o.Spec.Name
+		}
+		if !validChild(child) {
+			return c.failure(invalid("invalid_path", child))
+		}
+		if _, err := os.Lstat(filepath.Join(c.Root, child)); !os.IsNotExist(err) {
+			return c.failure(invalid("exists", child))
+		}
+		if o.Spec.Description == "" {
+			for {
+				v, err := c.line("prompt_description")
+				if err != nil {
+					return c.failure(err)
+				}
+				if v == "\x1b" || v == "\x03" {
+					c.print("cancelled")
+					return 130
+				}
+				if !validDescription(v) {
+					c.failure(invalid("invalid_description", ""))
+					continue
+				}
+				o.Spec.Description = v
+				break
 			}
 		}
 		if len(o.Spec.Targets) == 0 {
-			c.print("platform_choices", strings.Join(Targets(), ", "))
-			v, e := c.line("prompt_platforms")
-			if e != nil {
-				return c.failure(e)
+			var err error
+			o.Spec.Targets, err = c.choosePlatforms()
+			if err != nil {
+				return c.failure(err)
 			}
-			o.Spec.Targets = split(v)
 		}
-		if len(o.Spec.Dependencies) == 0 {
-			v, e := c.line("prompt_dependencies")
-			if e != nil {
-				return c.failure(e)
-			}
-			if v != "" {
-				parsed, e := Parse("create", []string{"--dependency", v})
+		if o.Advanced {
+			if o.Spec.Version == "" {
+				o.Spec.Version, e = c.line("prompt_version")
 				if e != nil {
 					return c.failure(e)
 				}
+			}
+			if o.Spec.License == "" {
+				o.Spec.License, e = c.line("prompt_license")
+				if e != nil {
+					return c.failure(e)
+				}
+			}
+			if len(o.Spec.Dependencies) == 0 {
+				v, err := c.line("prompt_dependencies")
+				if err != nil {
+					return c.failure(err)
+				}
+				parsed, err := Parse("create", []string{"--dependency", v})
+				if err != nil {
+					return c.failure(err)
+				}
 				o.Spec.Dependencies = parsed.Spec.Dependencies
 			}
-		}
-		if !o.Spec.Workflow {
-			o.Spec.Workflow = c.yes("prompt_workflow")
+			if !o.Spec.Workflow {
+				o.Spec.Workflow = c.yes("prompt_workflow")
+			}
 		}
 	}
 	if o.Spec.Version == "" {
@@ -326,8 +398,12 @@ func Run(command string, args []string, c Context) int {
 	if e = o.Spec.Validate(); e != nil {
 		return c.failure(e)
 	}
-	c.print("preview", o.Spec.FullName()+"@"+o.Spec.Version, o.Spec.Directory, strings.Join(o.Spec.Targets, ", "))
-	if !o.NonInteractive && !c.yes("prompt_create") {
+	if len(o.Spec.Dependencies) == 0 {
+		c.print("summary", o.Spec.Version, o.Spec.License)
+	} else {
+		c.print("summary_dependencies", o.Spec.Version, o.Spec.License, strconv.Itoa(len(o.Spec.Dependencies)))
+	}
+	if o.Advanced && !o.NonInteractive && !c.yes("prompt_create") {
 		c.print("cancelled")
 		return 0
 	}
@@ -335,8 +411,12 @@ func Run(command string, args []string, c Context) int {
 	if e != nil {
 		return c.failure(e)
 	}
-	c.print("created", bunkopm.SafeText(dir))
-	if o.GitInit || (!o.NonInteractive && env.Git.Path != "") {
+	c.print("created")
+	c.print("location", o.Spec.FullName(), bunkopm.SafeText(dir))
+	c.print("next")
+	fmt.Fprintf(c.Out, "\n  cd %s\n  mio test .\n\n", o.Spec.Directory)
+	c.print("publish_guide")
+	if o.GitInit {
 		if env.Git.Path == "" {
 			return c.failure(invalid("missing_git", ""))
 		}
@@ -346,26 +426,33 @@ func Run(command string, args []string, c Context) int {
 			}
 		}
 	}
-	if !o.Github && !o.NonInteractive && env.Gh.Path != "" {
+	if !o.Github && o.Advanced && !o.NonInteractive && env.Gh.Path != "" {
 		o.Github = c.yes("prompt_github")
 	}
 	if o.Github {
 		if e = c.connect(dir, o, env); e != nil && !isDeclined(e) {
 			return c.failure(e)
 		}
-	} else {
-		c.print("local_only")
 	}
 	return 0
 }
 func (c *Context) failure(e error) int {
+	var cancellation *Error
+	if errors.As(e, &cancellation) && cancellation.Kind == "cancelled" {
+		c.print("cancelled")
+		return 130
+	}
 	kind, detail := "io", e.Error()
 	var own *Error
 	if errors.As(e, &own) {
 		kind = own.Kind
 		detail = own.Detail
 	}
-	fmt.Fprintln(c.Err, "BUNKO_E_SCAFFOLD_"+strings.ToUpper(kind), c.text(kind, bunkopm.SafeText(detail)))
+	text := "BUNKO_E_SCAFFOLD_" + strings.ToUpper(kind) + " " + c.text(kind, bunkopm.SafeText(detail))
+	if c.Paint != nil {
+		text = c.Paint("error", text)
+	}
+	fmt.Fprintln(c.Err, text)
 	if kind == "options" {
 		return 2
 	}

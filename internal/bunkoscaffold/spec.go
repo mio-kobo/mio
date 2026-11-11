@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -175,7 +176,14 @@ func Files(s Spec) (map[string]string, error) {
 	if _, e = bunkopm.ParseManifest([]byte(deps)); e != nil {
 		return nil, e
 	}
-	replace := strings.NewReplacer("{{name}}", s.FullName(), "{{namespace}}", s.Namespace, "{{description}}", s.Description, "{{version}}", s.Version, "{{license}}", s.License, "{{platforms}}", strings.Join(s.Targets, ", "))
+	platformText, _ := encode(struct {
+		Platforms map[string][]string `toml:"platforms"`
+	}{s.Info().Platforms})
+	descriptionText, _ := encode(struct {
+		Description string `toml:"description"`
+	}{s.Description})
+	descriptionValue := strings.TrimSpace(strings.TrimPrefix(descriptionText, "description = "))
+	replace := strings.NewReplacer("{{package}}", s.Name, "{{description_toml}}", descriptionValue, "{{platforms_toml}}", strings.TrimSpace(platformText), "{{dependencies_toml}}", strings.TrimSpace(deps), "{{name}}", s.FullName(), "{{namespace}}", s.Namespace, "{{description}}", s.Description, "{{version}}", s.Version, "{{license}}", s.License, "{{platforms}}", strings.Join(s.Targets, ", "))
 	licenseKey := "license_mit"
 	if s.License == "Apache-2.0" {
 		licenseKey = "license_apache"
@@ -217,6 +225,9 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 		return "", e
 	}
 	dst := filepath.Join(physical, s.Directory)
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	defer signal.Stop(interrupts)
 	if e = os.Mkdir(dst, 0700); e != nil {
 		return "", invalid("exists", dst)
 	}
@@ -237,6 +248,11 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		select {
+		case <-interrupts:
+			return "", invalid("cancelled", "")
+		default:
+		}
 		p := filepath.Join(dst, filepath.FromSlash(name))
 		if e = os.MkdirAll(filepath.Dir(p), 0700); e != nil {
 			return "", invalid("io", e.Error())
@@ -244,6 +260,11 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 		if e = write(p, []byte(files[name]), 0644); e != nil {
 			return "", invalid("io", e.Error())
 		}
+	}
+	select {
+	case <-interrupts:
+		return "", invalid("cancelled", "")
+	default:
 	}
 	complete = true
 	return dst, nil

@@ -17,6 +17,23 @@ mio bunko create --non-interactive --namespace alice --name json \
   --platform linux/x86_64 --platform macos/arm64
 ```
 
+The default wizard asks only for the full `namespace/name`, a description and
+explicit publishing platforms. It validates names immediately and allows retries.
+Version `0.1.0`, MIT and no dependencies are defaults. Git, GitHub and workflows
+are disabled; default creation does not probe tools or authentication.
+
+On macOS ARM64, use Up/Down to move, Space to toggle and Enter to confirm.
+Nothing is preselected, including the labelled current device. Empty selection
+cannot be confirmed; Esc or Ctrl+C cancels before files are created. The native
+terminal bridge saves/restores input settings without external commands. Other
+native backends currently use the numeric fallback; `TERM=dumb` also selects
+that mode. Enter comma-separated numbers and at least one approved target.
+Non-TTY input fails promptly with flag instructions, even when stdin stays open.
+Use `--non-interactive` for pipelines and automation.
+
+`--advanced` adds version, license, dependency and workflow questions and a final
+confirmation. All existing explicit advanced flags remain available.
+
 Names use two lowercase ASCII segments, each 1–39 characters with single internal
 hyphens. Versions are exactly `major.minor.patch`, each component 1–9 digits,
 without leading zeroes except `0`. Version defaults to `0.1.0`; license defaults
@@ -55,7 +72,7 @@ Generated files:
 | package_test.mio | Executable `test_hello()` unit test |
 | bunko.toml | Exact local dependency declarations only |
 | bunko.package.toml | Local package metadata and selected publishing platforms |
-| README.md | Development commands and archive exclusions |
+| README.md | English development, archive, immutable release and official index submission guide |
 | LICENSE | Full selected license text |
 | .gitignore | Compiler/cache output exclusions |
 | .github/workflows/mio-test.yml | Optional dependency-free test workflow |
@@ -69,7 +86,12 @@ The existing `bunko.toml` dependency-only schema is unchanged. The separate loca
 metadata file is not an index record or a new archive format. A Bunko V1 upload
 must place eligible `.mio`, README and license files directly at the archive root.
 Exclude both TOML files, `.gitignore`, `.git/` and `.github/`; do not upload this
-development directory wholesale. Publishing is a future, separate operation.
+development directory wholesale. Publishing remains a separate manual operation.
+The English README is identical for every CLI locale, apart from user metadata.
+It contains an explicit safe archive recipe, real GitHub ID/digest retrieval,
+placeholder index TOML, validation commands, PR/CI/review steps and official links.
+No README prose is stored in the i18n catalogs; the shared English JSON template
+is embedded by Go and generated into Mio assets.
 
 `--workflow` generates a read-only, explicitly selected target matrix using
 the index-pinned Mio **2.1.0** through the existing official setup action pinned
@@ -82,6 +104,7 @@ native installation is unavailable. The repository's existing version banner
 
 | Option | Meaning |
 | --- | --- |
+| --advanced | Ask additional local configuration questions and confirm creation |
 | --non-interactive | Read values and permissions from flags; never ask |
 | --namespace, --name, --description | Required package fields |
 | --version, --license | Initial exact version and MIT or Apache-2.0 |
@@ -101,8 +124,10 @@ native installation is unavailable. The repository's existing version banner
 | --allow-auth-login | Separate consent to official gh browser authentication |
 | --allow-account | Exact active login confirmation when multiple accounts exist |
 
-Interactive final creation and every external/configuration permission default to
-No. Declining keeps the local package. Consent to repository creation does not
+The default wizard creates the package after its three valid answers. Advanced
+final confirmation and every external/configuration permission default to No.
+Declining the final creation confirmation makes no files. Declining an optional
+external action keeps the local package. Consent to repository creation does not
 authorize connection, Git initialization, configuration or any push. No scaffold
 command creates commits, pushes, publishes releases, or submits index PRs.
 
@@ -115,12 +140,10 @@ mio bunko connect --repo alice/json
 mio bunko connect --repo alice/json --create-repo --visibility private
 ```
 
-The default local operation discovers OS/CPU/compiler and local Git/gh versions,
-but does not query authentication or make network requests. Native discovery
-currently reports executable paths only, with an explicit version/process
-capability diagnostic. Missing gh points to <https://cli.github.com/>; nothing
-is installed automatically. If explicitly requested tools are missing or an
-integration step fails, creation retains the local package and reports failure.
+Local creation never discovers Git/gh or queries authentication. Tool detection
+runs only for explicit Git/GitHub flags or `connect`. Native integration remains
+unsupported and reports the existing capability diagnostic. Missing tools are
+never installed automatically. Integration failures preserve the local package.
 
 The reference runner uses executable discovery and structured argument arrays,
 bounded captured output and timeouts (5 seconds for versions, 15 for auth,
@@ -156,3 +179,18 @@ New keys in the other 36 locales currently use English pending translation.
 
 See [handoff and verified evidence](bunko-scaffold-handoff.md) for native blockers,
 test commands and the next authorized development phase.
+
+## Native wizard regression tests
+
+On macOS ARM64, after building the current native CLI:
+
+```sh
+python3.12 scripts/bunko/test_wizard.py /absolute/path/to/mio --output build/wizard-evidence
+```
+
+The existing native CI driver runs these tests for both Full and Core macOS
+ARM64 images. They exercise real OS PTYs (no mock terminal), all 39 locale README
+outputs, three localized interactions, retries, multi-selection, cancellation,
+NO_COLOR, numeric fallback, non-TTY refusal, generated check/test and the archive
+recipe. Python is test tooling only. Other hosts retain their existing native
+scaffold and security checks; numeric selection is the native runtime fallback.

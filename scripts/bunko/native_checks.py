@@ -46,9 +46,8 @@ def check_scaffolding(report, cli, work, runner):
         else:args += [option,value]
         code,out,err,_=run(report,'scaffold-invalid-'+diagnostic.lower(),[cli,'--lang=en-US','bunko','create','--non-interactive',*args],cwd=root,env=env)
         check('bunko-create-'+diagnostic.lower(),'PASS' if code!=0 and 'BUNKO_E_SCAFFOLD_'+diagnostic in out+err and not (work/'escape').exists() else 'FAIL','native','')
-    answers='fixture\ninteractive\nInteractive native fixture\n\n\nlinux/x86_64\n\nn\ny\n'.encode()
-    code,out,err,_=run(report,'scaffold-interactive',[cli,'--lang=en-US','bunko','create'],cwd=root,stdin=answers,env=env)
-    check('bunko-create-interactive','PASS' if code==0 and (root/'interactive'/'package_test.mio').is_file() else 'FAIL','native',err if code else '')
+    code,out,err,_=run(report,'scaffold-non-tty',[cli,'--lang=en-US','bunko','create'],cwd=root,stdin=b'',env=env)
+    check('bunko-create-non-tty','PASS' if code!=0 and 'BUNKO_E_SCAFFOLD_NON_TTY' in out+err else 'FAIL','native',err if code==0 else '')
     # The whole operation works with an empty PATH: no Go, Python, Git, gh or shell runtime fallback.
     code,out,err,_=run(report,'scaffold-compile',[cli,'--lang=en-US','check',package],cwd=root,env=env)
     check('bunko-generated-compile','PASS' if code==0 else 'FAIL','native',err if code else '')
