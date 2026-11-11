@@ -1,0 +1,31 @@
+// Diagnostic for the live-thread limit: starts blocked threads, printing the count every 8 starts and the first error, then releases and joins
+// them all. Run by CI with its output recorded (no fixed expectation); creation_limit.mio is the checked version.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+waza idle(channel: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = thread.receive[int64](channel);
+        kaesu 1;
+    };
+}
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[int64](1, 0);
+    kaku handles: []int64 = [];
+    kaku failure = 0;
+    aida (failure == 0 && len(handles) < 200) {
+        kaku h = thread.start(idle(channel));
+        moshi (h > 0) { array.push(handles, h); }
+        moshi (h <= 0) { failure = h; }
+        moshi (len(handles) - (len(handles) / 8) * 8 == 0) { chant(len(handles)); }
+    }
+    chant(failure);
+    thread.close[int64](channel);
+    kaku joined = 0;
+    kaku i = 0;
+    aida (i < len(handles)) { joined = joined + thread.join(handles[i]); i = i + 1; }
+    chant(joined);
+    kaesu 0;
+}
+run();

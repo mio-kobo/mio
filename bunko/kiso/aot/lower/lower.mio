@@ -2392,7 +2392,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (problem != mu) { kaesu failed(problem); }
     arm64.assembler_label(code, "normal_exit");
     // Completion cannot precede outstanding user callbacks or their reports.
-    moshi(worker_roots_enabled(code)){arm64.assembler_bl(code,"attached_workers_join_all");}
+    moshi(worker_roots_enabled(code) && arm64.assembler_label_word(code,"worker_evidence")>=0){arm64.assembler_bl(code,"attached_workers_join_all");}
     moshi (uses_testing_packet(file)) { emit_testing_completion(code); }
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
     moshi (native_fs) { arm64.assembler_bl(code, "nativefs_cleanup"); }

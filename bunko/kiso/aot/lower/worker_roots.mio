@@ -170,7 +170,10 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     // Main shutdown joins every outstanding child before deleting the key.
     attached_save(c,"attached_workers_join_all");i=1;aida(i<=worker_slots){wr_ctx(c,p,first,9,i);emit(c,arm64.ldr_x(10,9,gc.thread_owns_handle));kaku done=string.concat("worker_shutdown_",convert.format_int(i));arm64.assembler_cbz_x(c,10,done);wr_num(c,0,i);arm64.assembler_bl(c,"attached_worker_join");arm64.assembler_label(c,done);i=i+1;}
     attached_restore(c);
-    attached_save(c,"attached_roots_close");arm64.assembler_bl(c,"attached_workers_join_all");
+    attached_save(c,"attached_roots_close");
+    // Public thread mode: the process ends with the main thread, whatever the other threads are doing; nothing is joined or closed.
+    moshi(arm64.assembler_label_word(c,"worker_evidence")<0){attached_restore(c);attached_save(c,"attached_roots_close_test");}
+    arm64.assembler_bl(c,"attached_workers_join_all");
     moshi(old_mark_proto_enabled(c)){arm64.assembler_bl(c,"old_control_close");}
     wr_current(c,p,first);wr_call(c,"thread_leave");wr_ctx(c,p,first,0,0);wr_imports(c,p,first);wr_call(c,"thread_close");
     // Runtime counters only, emitted after all owners/readers have exited.

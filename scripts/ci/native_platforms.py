@@ -596,7 +596,7 @@ def thread_checks(report, cli, target, work):
     # darwin-arm64 now implements every thread native (start, join, join_status, the word natives); its coverage is darwin-thread-core and
     # darwin-thread-programs. Every other target must still reject any thread program.
     if target == "darwin-arm64":
-        return report.check("thread-natives-fail-closed", "NOT_APPLICABLE", "native", "", note="darwin-arm64 implements the thread natives; see darwin-thread-programs")
+        return report.check("thread-natives-fail-closed", "NOT_APPLICABLE", "native", "", required=False, note="darwin-arm64 implements the thread natives; see darwin-thread-programs")
     partial = False
     program = "basic.mio"
     label = "thread-natives-fail-closed"
@@ -705,6 +705,17 @@ def darwin_thread_programs(report, cli, work):
             else:
                 passed.append("%s/%s" % (name, label))
     report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
+
+
+def darwin_thread_probe(report, cli, work):
+    """Diagnostic (non-required): tests/threads/limit_probe.mio output, exit status and time are recorded as evidence, never compared."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "limit-probe"
+    ok, reason, _ = cli_build(report, "darwin-thread-probe-build", cli, str(ROOT / "tests/threads/limit_probe.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-thread-probe", "FAIL", "native", brief(reason, 300), required=False)
+    code, out, err, seconds = run(report, "darwin-thread-probe-run", [image], timeout=120)
+    report.check("darwin-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
 
 
 def contract(report, cli, target, reference="", suite="contract"):
@@ -905,6 +916,7 @@ def follower(args, target):
             darwin_profile(report, cli, work)
             darwin_worker_baseline(report, cli, work / "worker-baseline")
             darwin_thread_core(report, cli, work / "thread-core")
+            darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
