@@ -1,0 +1,17 @@
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/io";
+yobu "kiso/os";
+yobu "kiso/string";
+waza run() -> unit {
+    kaku state=array.make[uint8](128,uint8(0));
+    moshi(os.terminal(3,state)!=0){os.exit(10);kaesu;}
+    fs.write_all("/dev/stdout",string.to_bytes("guarded\n"));
+    kaku opened=fs.open_read("/dev/stdin");kaku file=opened.file;
+    moshi(file==mu){os.terminal(4,state);os.exit(11);kaesu;}
+    kaku reader=fs.reader(file);kaku one: []uint8=[0];reader.read(one,0,1);moshi(file!=mu){fs.close(file);}
+    moshi(os.terminal(5,state)==1){fs.write_all("/dev/stdout",string.to_bytes("pending\n"));}
+    os.terminal(4,state);
+    fs.write_all("/dev/stdout",string.to_bytes("unexpected\n"));os.exit(12);
+}
+run();

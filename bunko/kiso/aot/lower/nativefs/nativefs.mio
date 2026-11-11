@@ -24,6 +24,7 @@ koukai teisu op_stat = 13;
 koukai teisu op_write = 14;
 
 koukai waza operation(name: string) -> int64 {
+    moshi (name == "$mma::mio/os/runtime::terminal::70ac3b361d4ba108aeefdd952d76d4590a62bb1ce0a04031189b6b1dc7419a6d") { kaesu 71; }
     moshi (name == "$mma::mio/sys/socket::open::2bd390f6a00486b5badde861e398d7014c8e331b8946668924bd7048c8bd76d7") { kaesu 32; }
     moshi (name == "$mma::mio/sys/socket::status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93") { kaesu 33; }
     moshi (name == "$mma::mio/sys/socket::bind_ipv4::f5e8d492393d1d5f642e3573af501663920a9be9788fbeda8b1f38deb28ffecd") { kaesu 34; }
@@ -160,7 +161,7 @@ koukai waza parameter_is_root(op: int64, index: int64) -> bool {
     moshi (op == 27 || op == 28 || op == 31) { kaesu hai; }
     moshi (op == 25) { kaesu index < 5; }
     moshi (op == 20 || op == 21 || op == 23 || op == 24) { kaesu hai; }
-    moshi (op == 17) { kaesu index == 1; }
+    moshi (op == 17 || op == 71) { kaesu index == 1; }
     moshi (op == 18) { kaesu index == 0; }
     moshi (op == op_open || op == op_open_dir) { kaesu index == 0; }
     moshi (op == op_stat || op == op_mkdir) { kaesu index == 0 || index == 1; }
@@ -176,6 +177,7 @@ koukai waza returns_reference(op: int64) -> bool {
 }
 
 koukai waza entry_label(op: int64) -> string {
+    moshi (op == 71) { kaesu "nativeos_terminal"; }
     moshi (op == 32) { kaesu "native_socket_open"; }
     moshi (op == 33) { kaesu "native_socket_status"; }
     moshi (op == 34) { kaesu "native_socket_bind_ipv4"; }

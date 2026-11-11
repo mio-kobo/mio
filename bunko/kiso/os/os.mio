@@ -68,3 +68,9 @@ koukai waza executable_path() -> string? {
     kaku bytes=array.make[uint8](4096,uint8(0));kaku size=runtime.real_path("",bytes);
     moshi(size<=0 || size>=len(bytes)){kaesu mu;}moshi(bytes[size-1]==uint8(0)){size=size-1;}array.truncate(bytes,size);kaesu string.from_utf8(bytes);
 }
+
+// Terminal state is an opaque caller-owned buffer (at least 128 bytes).
+// 0 probes stdin+stdout, 1 saves state and enters byte input, 2 restores it.
+// 3 blocks SIGINT while saving its mask, 4 restores the mask, 5 tests pending SIGINT.
+// Negative results mean unavailable; never invoke an external terminal utility.
+koukai waza terminal(mode: int64, state: []uint8) -> int64 { kaesu runtime.terminal(mode,state); }

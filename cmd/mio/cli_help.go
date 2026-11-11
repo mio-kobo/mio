@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode"
 
+	"Mio/internal/bunkoscaffold"
 	"Mio/internal/i18n"
 )
 
@@ -40,7 +41,7 @@ const (
 
 func helpCommands() []helpEntry {
 	return []helpEntry{
-		{name: "bunko", group: helpGroupTools, description: i18n.KeyCmdBunko, usage: "mio bunko <init|add|remove|install|list|info|search> [arguments]", options: []string{"lang", "color", "theme"}},
+		{name: "bunko", group: helpGroupTools, description: i18n.KeyCmdBunko, usage: "mio bunko <init|add|remove|install|list|info|search|create|connect> [arguments]", options: []string{"lang", "color", "theme"}},
 		{name: "help", group: helpGroupGeneral, description: i18n.KeyCmdHelp, usage: "mio help [command]", options: []string{"lang", "color", "theme"}},
 		{name: "version", group: helpGroupGeneral, description: i18n.KeyCmdVersion, usage: "mio version", options: []string{"lang", "color", "theme"}},
 		{name: "build", group: helpGroupCompilation, description: i18n.KeyCmdBuild, usage: "mio build <source> [options]", options: []string{"output", "target", "emit", "symbols", "gc_stress", "observe", "bunko", "format", "color", "theme", "lang", "verbose"}},
@@ -557,6 +558,9 @@ func globalOptionValue(argument, prefix string) string {
 }
 
 func globalOptionTakesValue(argument string) bool {
+	if argument != "--version" && bunkoscaffold.TakesValue(argument) {
+		return true
+	}
 	switch argument {
 	case "-o", "--bunko-root", "--target", "--emit-symbols":
 		return true
@@ -629,7 +633,7 @@ func parseGlobalOptions(args []string) parsedGlobals {
 				result.color = value
 			}
 			at++
-		case globalOptionTakesValue(argument) && at+1 < len(args):
+		case (globalOptionTakesValue(argument) || (argument == "--version" && len(result.args) >= 2 && result.args[0] == "bunko" && result.args[1] == "create")) && at+1 < len(args):
 			result.args = append(result.args, argument, args[at+1])
 			at += 2
 		default:

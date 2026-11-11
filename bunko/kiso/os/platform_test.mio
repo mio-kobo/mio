@@ -74,3 +74,8 @@ waza test_process_errors() -> unit {
     testing.expect(spawn_test(missing, [missing], "a", "b", "c", 3601) == 126, "more than 3600 seconds is a setup failure (126)");
     testing.expect(stdin_wait(-2) == -22 && stdin_wait(2147483648) == -22, "invalid stdin timeouts are -EINVAL");
 }
+
+waza test_terminal_rejects_invalid_state_without_changes() -> unit {
+    testing.expect(terminal(99,[])<0,"unknown terminal mode and empty state fail closed");
+    testing.expect(terminal(2,[uint8(0)])<0,"restoration requires a complete opaque state buffer");
+}

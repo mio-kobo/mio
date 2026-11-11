@@ -1,0 +1,202 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/fs";
+yobu "kiso/io";
+yobu "kiso/os";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "kiso/utf8";
+yobu "selfhost/i18n";
+yobu "selfhost/theme";
+
+// Mutable option cells follow the native CLI's existing array-state convention.
+// No installer, publisher, Git process or GitHub API is called from this module.
+koukai kata Options { values: []string; flags: []bool; targets: []string; dependencies: []string; }
+kata ParseResult { options: Options; error: string; }
+kata Line { value: string; ok: bool; }
+kata Terminal { input: io.Reader; output: io.Writer; errors: io.Writer; language: string; style: theme.Theme; failed: []bool; tty: bool; real: bool; }
+kata File { name: string; content: string; }
+waza options() -> Options { kaesu Options {values:["","","","","",""],flags:[iie,iie,iie,iie,iie],targets:[],dependencies:[]}; }
+waza cut(value: string, first: int64, last: int64) -> string {
+    kaku data=string.to_bytes(value);kaku out: []uint8=[];kaku at=first;
+    aida(at<last){array.push(out,data[at]);at=at+1;}kaku text=string.from_utf8(out);moshi(text==mu){kaesu "";}kaesu text;
+}
+waza parts(value: string, separator: uint8) -> []string {
+    kaku out: []string=[];kaku data=string.to_bytes(value);kaku start=0;kaku at=0;
+    aida(at<=len(data)){moshi(at==len(data) || data[at]==separator){array.push(out,cut(value,start,at));start=at+1;}at=at+1;}kaesu out;
+}
+waza csv(value: string) -> []string {kaku out: []string=[];kaku values=parts(value,uint8(44));kaku at=0;aida(at<len(values)){kaku v=string.trim_space(values[at]);moshi(v!=""){array.push(out,v);}at=at+1;}kaesu out;}
+waza member(values: []string, value: string) -> bool {kaku at=0;aida(at<len(values)){moshi(values[at]==value){kaesu hai;}at=at+1;}kaesu iie;}
+koukai waza valid_segment(value: string) -> bool {
+    kaku data=string.to_bytes(value);moshi(len(data)<1 || len(data)>39){kaesu iie;}kaku at=0;kaku hyphen=hai;
+    aida(at<len(data)){kaku b=data[at];kaku letter=(b>=uint8(97)&&b<=uint8(122))||(b>=uint8(48)&&b<=uint8(57));
+        moshi(!letter && (b!=uint8(45)||hyphen)){kaesu iie;}hyphen=b==uint8(45);at=at+1;}
+    kaesu !hyphen;
+}
+koukai waza valid_name(value: string) -> bool {kaku p=parts(value,uint8(47));kaesu len(p)==2 && valid_segment(p[0]) && valid_segment(p[1]);}
+koukai waza valid_version(value: string) -> bool {
+    kaku p=parts(value,uint8(46));moshi(len(p)!=3){kaesu iie;}kaku at=0;
+    aida(at<len(p)){kaku d=string.to_bytes(p[at]);moshi(len(d)<1 || len(d)>9 || (len(d)>1 && d[0]==uint8(48))){kaesu iie;}
+        kaku i=0;aida(i<len(d)){moshi(d[i]<uint8(48)||d[i]>uint8(57)){kaesu iie;}i=i+1;}at=at+1;}kaesu hai;
+}
+waza valid_description(value: string) -> bool {
+    moshi(string.trim_space(value)=="" || string.rune_count(value)>240){kaesu iie;}kaku d=string.to_bytes(value);kaku at=0;
+    aida(at<len(d)){kaku r=utf8.decode_one(d,at);moshi(!r.valid || r.width<=0){kaesu iie;}kaku v=int64(r.value);
+        moshi(v<32 || (v>=127&&v<=159) || (v>=8234&&v<=8238) || (v>=8294&&v<=8297) || v==8206 || v==8207){kaesu iie;}at=at+r.width;}kaesu hai;
+}
+waza valid_child(value: string) -> bool {
+    moshi(!valid_segment(value)||value=="con"||value=="prn"||value=="aux"||value=="nul"){kaesu iie;}
+    kaku d=string.to_bytes(value);moshi(len(d)==4 && (string.has_prefix(value,"com")||string.has_prefix(value,"lpt")) && d[3]>=uint8(49) && d[3]<=uint8(57)){kaesu iie;}kaesu hai;
+}
+waza add_dependencies(o: Options, values: []string) -> bool {
+    kaku at=0;aida(at<len(values)){kaku d=parts(values[at],uint8(64));moshi(len(d)!=2 || !valid_name(d[0]) || !valid_version(d[1]) || string.has_prefix(d[0],"kiso/")){kaesu iie;}
+        kaku i=0;kaku exists=iie;aida(i<len(o.dependencies)){kaku previous=parts(o.dependencies[i],uint8(64));moshi(previous[0]==d[0]){moshi(previous[1]!=d[1]){kaesu iie;}exists=hai;}i=i+1;}
+        moshi(!exists){array.push(o.dependencies,values[at]);}moshi(len(o.dependencies)>256){kaesu iie;}at=at+1;}kaesu hai;
+}
+waza validate(o: Options) -> string {
+    moshi(!valid_segment(o.values[0]) || !valid_segment(o.values[1])){kaesu "invalid_name";}
+    moshi(o.values[3]==""){o.values[3]="0.1.0";}moshi(o.values[4]==""){o.values[4]="MIT";}moshi(o.values[5]==""){o.values[5]=o.values[1];}
+    moshi(!valid_version(o.values[3])){kaesu "invalid_version";}moshi(!valid_description(o.values[2])){kaesu "invalid_description";}
+    moshi(o.values[4]!="MIT" && o.values[4]!="Apache-2.0"){kaesu "invalid_license";}moshi(!valid_child(o.values[5])){kaesu "invalid_path";}
+    moshi(len(o.targets)==0){kaesu "invalid_platform";}kaku known=policy_targets();kaku at=0;
+    aida(at<len(o.targets)){moshi(!member(known,o.targets[at])){kaesu "invalid_platform";}kaku i=0;aida(i<at){moshi(o.targets[i]==o.targets[at]){kaesu "invalid_platform";}i=i+1;}at=at+1;}
+    moshi(o.flags[1] && len(o.dependencies)>0){kaesu "workflow_dependencies";}kaesu "";
+}
+koukai waza takes_value(option: string) -> bool {
+    kaesu option=="--namespace" || option=="--name" || option=="--description" || option=="--version" || option=="--license" || option=="--directory" || option=="--platform" || option=="--dependency" || option=="--repo" || option=="--visibility" || option=="--allow-account";
+}
+waza parse(args: []string) -> ParseResult {
+    kaku o=options();kaku at=3;
+    aida(at<len(args)){kaku option=args[at];kaku key=option;kaku value="";kaku equal=string.index(option,"=");
+        moshi(equal>0){key=cut(option,0,equal);value=cut(option,equal+1,string.byte_len(option));}
+        kaku field= -1;
+        moshi(key=="--namespace"){field=0;}moshi(key=="--name"){field=1;}moshi(key=="--description"){field=2;}moshi(key=="--version"){field=3;}moshi(key=="--license"){field=4;}moshi(key=="--directory"){field=5;}
+        kaku takes=field>=0 || key=="--platform" || key=="--dependency" || key=="--repo" || key=="--visibility" || key=="--allow-account";
+        moshi(takes){moshi(equal<0){at=at+1;moshi(at>=len(args)){kaesu ParseResult {options:o,error:"options"};}value=args[at];}
+            moshi(field>=0){o.values[field]=value;}
+            moshi(key=="--platform"){array.append_all(o.targets,csv(value));}
+            moshi(key=="--dependency" && !add_dependencies(o,csv(value))){kaesu ParseResult {options:o,error:"invalid_dependency"};}
+            moshi(key=="--repo"){o.flags[3]=hai;}at=at+1;tsuzuku;
+        }
+        kaku yes=hai;moshi(equal>=0){moshi(value!="true" && value!="false"){kaesu ParseResult {options:o,error:"options"};}yes=value=="true";}
+        moshi(key=="--advanced"){o.flags[4]=yes;at=at+1;tsuzuku;}
+        moshi(key=="--non-interactive"){o.flags[0]=yes;}sore{moshi(key=="--workflow"){o.flags[1]=yes;}sore{moshi(key=="--git-init"){o.flags[2]=yes;}sore{moshi(key=="--github" || key=="--create-repo"){o.flags[3]=yes;}sore{
+            moshi(key!="--allow-git-init" && key!="--allow-git-config" && key!="--allow-connect" && key!="--allow-repo-create" && key!="--allow-auth-login"){kaesu ParseResult {options:o,error:"options"};}
+        }}}}at=at+1;
+    }kaesu ParseResult {options:o,error:""};
+}
+waza quote(value: string) -> string {kaku d=string.to_bytes(value);kaku out: []uint8=[34];kaku at=0;aida(at<len(d)){moshi(d[at]==uint8(34)||d[at]==uint8(92)){array.push(out,uint8(92));}array.push(out,d[at]);at=at+1;}array.push(out,uint8(34));kaku text=string.from_utf8(out);moshi(text==mu){kaesu "\"\"";}kaesu text;}
+waza fullname(o: Options) -> string {kaesu string.concat(o.values[0],string.concat("/",o.values[1]));}
+waza selected(o: Options) -> []string {kaku out: []string=[];kaku known=policy_targets();kaku at=0;aida(at<len(known)){moshi(member(o.targets,known[at])){array.push(out,known[at]);}at=at+1;}kaesu out;}
+waza target_text(o: Options) -> string {kaku p=selected(o);kaku b=string.new_builder();kaku at=0;aida(at<len(p)){moshi(at>0){string.write_string(b,", ");}string.write_string(b,p[at]);at=at+1;}kaesu string.builder_string(b);}
+waza render(text: string,o: Options) -> string {
+    kaku b=string.new_builder();kaku data=string.to_bytes(text);kaku at=0;kaku start=0;kaku n=len(data);
+    aida(at+1<n){moshi(data[at]==uint8(123) && data[at+1]==uint8(123)){
+        kaku end=at+2;aida(end+1<n && (data[end]!=uint8(125) || data[end+1]!=uint8(125))){end=end+1;}
+        moshi(end+1<n){string.write_string(b,cut(text,start,at));kaku key=cut(text,at+2,end);kaku value="";
+            moshi(key=="package"){value=o.values[1];}moshi(key=="description_toml"){value=quote(o.values[2]);}moshi(key=="platforms_toml"){value=platforms(o);}moshi(key=="dependencies_toml"){value=dependencies(o);}
+            moshi(key=="name"){value=fullname(o);}moshi(key=="namespace"){value=o.values[0];}moshi(key=="description"){value=o.values[2];}moshi(key=="version"){value=o.values[3];}moshi(key=="license"){value=o.values[4];}moshi(key=="platforms"){value=target_text(o);}
+            string.write_string(b,value);at=end+2;start=at;tsuzuku;
+        }}at=at+1;
+    }string.write_string(b,cut(text,start,n));kaesu string.builder_string(b);
+}
+
+waza platforms(o: Options) -> string {
+    kaku b=string.new_builder();string.write_string(b,"[platforms]\n");kaku names=["linux","macos","windows"];kaku archs=["x86_64","arm64"];kaku at=0;
+    aida(at<len(names)){kaku values: []string=[];kaku i=0;aida(i<len(archs)){moshi(member(o.targets,string.concat(names[at],string.concat("/",archs[i])))){array.push(values,archs[i]);}i=i+1;}
+        moshi(len(values)>0){string.write_string(b,string.concat(names[at]," = ["));i=0;aida(i<len(values)){moshi(i>0){string.write_string(b,", ");}string.write_string(b,quote(values[i]));i=i+1;}string.write_string(b,"]\n");}at=at+1;
+    }kaesu string.builder_string(b);
+}
+waza less(a: string,b: string) -> bool {kaku x=string.to_bytes(a);kaku y=string.to_bytes(b);kaku at=0;aida(at<len(x)&&at<len(y)){moshi(x[at]!=y[at]){kaesu x[at]<y[at];}at=at+1;}kaesu len(x)<len(y);}
+waza dependencies(o: Options) -> string {
+    kaku values: []string=[];array.append_all(values,o.dependencies);kaku at=1;
+    aida(at<len(values)){kaku i=at;aida(i>0 && less(values[i],values[i-1])){kaku temp=values[i];values[i]=values[i-1];values[i-1]=temp;i=i-1;}at=at+1;}
+    kaku b=string.new_builder();string.write_string(b,"[dependencies]\n");at=0;aida(at<len(values)){kaku p=parts(values[at],uint8(64));string.write_string(b,string.concat(quote(p[0]),string.concat(" = ",string.concat(quote(p[1]),"\n"))));at=at+1;}kaesu string.builder_string(b);
+}
+waza info(o: Options) -> string {
+    kaku b=string.new_builder();string.write_string(b,"[package]\nname = ");string.write_string(b,quote(fullname(o)));string.write_string(b,"\ndescription = ");string.write_string(b,quote(o.values[2]));string.write_string(b,"\nversion = ");string.write_string(b,quote(o.values[3]));string.write_string(b,"\nlicense = ");string.write_string(b,quote(o.values[4]));string.write_string(b,"\n\n");string.write_string(b,platforms(o));kaesu string.builder_string(b);
+}
+waza workflow(o: Options) -> string {
+    kaku b=string.new_builder();string.write_string(b,asset_workflow_header());kaku targets=selected(o);kaku at=0;
+    aida(at<len(targets)){kaku runner="ubuntu-24.04";moshi(targets[at]=="macos/arm64"){runner="macos-15";}moshi(targets[at]=="windows/x86_64"){runner="windows-2025";}
+        string.write_string(b,string.concat("          - {target: ",string.concat(targets[at],string.concat(", runner: ",string.concat(runner,"}\n")))));at=at+1;}
+    string.write_string(b,asset_workflow_footer());kaesu string.builder_string(b);
+}
+waza files(o: Options) -> []File {
+    kaku license=asset_license_mit();moshi(o.values[4]=="Apache-2.0"){license=asset_license_apache();}
+    kaku out=[File {name:"package.mio",content:asset_source()},File {name:"package_test.mio",content:asset_test()},File {name:"README.md",content:render(asset_readme(),o)},File {name:"LICENSE",content:render(license,o)},File {name:".gitignore",content:asset_gitignore()},File {name:"bunko.toml",content:dependencies(o)},File {name:"bunko.package.toml",content:info(o)}];
+    moshi(o.flags[1]){array.push(out,File {name:".github/workflows/mio-test.yml",content:workflow(o)});}kaesu out;
+}
+waza cleanup(dir: string,o: Options) -> unit {kaku list=files(o);kaku at=0;aida(at<len(list)){os.remove(path.join(dir,list[at].name));at=at+1;}os.remove_dir(path.join(dir,".github/workflows"));os.remove_dir(path.join(dir,".github"));os.remove_dir(dir);}
+waza generate_with_writer(root: string,o: Options,write: (string,string) -> bool) -> string {
+    kaku physical=os.canonical_path(root);moshi(physical==mu){kaesu "io";}kaku dir=path.join(physical,o.values[5]);
+    kaku created=fs.create_dir(dir);moshi(created.error!=mu){kaesu "exists";}
+    moshi(os.chmod(dir,448)!=0){os.remove_dir(dir);kaesu "io";}
+    moshi(o.flags[1]){moshi(fs.create_dir(path.join(dir,".github")).error!=mu || fs.create_dir(path.join(dir,".github/workflows")).error!=mu){cleanup(dir,o);kaesu "io";}}
+    // Keep the indirect result in a local: legacy self-bootstrap lowerers infer
+    // callback return shape from the store before the conditional consumes it.
+    kaku list=files(o);kaku at=0;aida(at<len(list)){kaku written=write(path.join(dir,list[at].name),list[at].content);moshi(!written){cleanup(dir,o);kaesu "io";}at=at+1;}kaesu "";
+}
+waza output(ui: Terminal,text: string) -> unit {kaku b=string.to_bytes(text);kaku r=io.write_all(ui.output,b,0,len(b));moshi(r.error!=mu){ui.failed[0]=hai;}}
+waza message(ui: Terminal,key: string,args: []string) -> unit {
+    kaku text=i18n.format(ui.language,key,args);
+    moshi(key==i18n.key_scaffold_welcome || key==i18n.key_scaffold_select_platforms || key==i18n.key_scaffold_prompt_platforms){text=theme.paint(ui.style,"command",text);}
+    output(ui,string.concat(text,"\n"));
+}
+waza line(ui: Terminal,key: string) -> Line {
+    output(ui,theme.paint(ui.style,"command",string.concat(i18n.text(ui.language,key),"\n› ")));moshi(ui.failed[0]){kaesu Line {value:"",ok:iie};}
+    kaku b: []uint8=[];kaku one: []uint8=[0];aida(len(b)<=8192){kaku r=ui.input.read(one,0,1);moshi(r.error!=mu || r.count<0 || r.count>1){kaesu Line {value:"",ok:iie};}
+        moshi(r.count==1){moshi(one[0]==uint8(10)){kaku v=string.from_utf8(b);moshi(v==mu){kaesu Line {value:"",ok:iie};}kaesu Line {value:string.trim_space(v),ok:hai};}array.push(b,one[0]);}
+        moshi(r.eof){moshi(len(b)==0){kaesu Line {value:"",ok:iie};}kaku v=string.from_utf8(b);moshi(v==mu){kaesu Line {value:"",ok:iie};}kaesu Line {value:string.trim_space(v),ok:hai};}
+        moshi(r.count==0){kaesu Line {value:"",ok:iie};}
+    }kaesu Line {value:"",ok:iie};
+}
+waza yes(ui: Terminal,key: string) -> bool {kaku r=line(ui,key);kaesu r.ok && (r.value=="y"||r.value=="Y"||r.value=="yes"||r.value=="YES"||r.value=="Yes");}
+waza upper(value: string) -> string { kaku d=string.to_bytes(value);kaku at=0;aida(at<len(d)){moshi(d[at]>=uint8(97)&&d[at]<=uint8(122)){d[at]=d[at]-uint8(32);}at=at+1;}kaku result=string.from_utf8(d);moshi(result==mu){kaesu "ERROR";}kaesu result; }
+waza failure(ui: Terminal,kind: string) -> int64 {kaesu failure_with_detail(ui,kind,"");}
+waza failure_with_detail(ui: Terminal,kind: string,detail: string) -> int64 {
+    moshi(kind=="cancelled"){message(ui,i18n.key_scaffold_cancelled,[]);kaesu 130;}
+    // Kind is a closed, internal catalog suffix; never interpolate untrusted flags.
+    kaku text=string.concat("BUNKO_E_SCAFFOLD_",string.concat(upper(kind),string.concat(" ",string.concat(i18n.format(ui.language,string.concat("scaffold.",kind),[detail]),"\n"))));
+    kaku b=string.to_bytes(theme.paint(ui.style,"error",text));io.write_all(ui.errors,b,0,len(b));moshi(kind=="options"){kaesu 2;}kaesu 1;
+}
+waza host_name(host: string) -> string {
+    moshi(host=="darwin-arm64"){kaesu "macos/arm64";}moshi(host=="darwin-amd64"){kaesu "macos/x86_64";}moshi(host=="linux-amd64"){kaesu "linux/x86_64";}moshi(host=="linux-arm64"){kaesu "linux/arm64";}moshi(host=="windows-amd64"){kaesu "windows/x86_64";}moshi(host=="windows-arm64"){kaesu "windows/arm64";}kaesu host;
+}
+waza locate(name: string,host: string) -> string {
+    kaku windows=string.has_prefix(host,"windows");kaku separator=uint8(58);kaku file=name;moshi(windows){separator=uint8(59);file=string.concat(name,".exe");}
+    kaku dirs=parts(os.getenv("PATH"),separator);kaku at=0;aida(at<len(dirs) && at<256){kaku directory=string.trim_space(dirs[at]);kaku d=string.to_bytes(directory);
+        moshi(len(d)>=2 && d[0]==uint8(34) && d[len(d)-1]==uint8(34)){directory=cut(directory,1,len(d)-1);d=string.to_bytes(directory);}
+        kaku absolute=path.is_abs(directory);moshi(windows){absolute=absolute || (len(d)>=3 && d[1]==uint8(58) && (d[2]==uint8(92)||d[2]==uint8(47))) || (len(d)>=2 && d[0]==uint8(92) && d[1]==uint8(92));}
+        moshi(absolute){kaku p=path.join(directory,file);moshi(fs.is_file(p)){kaesu p;}}at=at+1;}kaesu "";
+}
+waza run(args: []string,root: string,ui: Terminal,compiler: string,host: string) -> int64 {
+    kaku command="create";moshi(len(args)>2){command=args[2];}kaku at=3;
+    aida(at<len(args)){moshi(args[at]=="--help" || args[at]=="-h"){kaku key=i18n.key_scaffold_help_create;moshi(command=="connect"){key=i18n.key_scaffold_help_connect;}output(ui,string.concat(theme.paint(ui.style,"command",string.concat("mio bunko ",command)),"\n"));message(ui,key,[]);message(ui,i18n.key_scaffold_native_process,[]);kaesu 0;}moshi(takes_value(args[at]) && at+1<len(args)){at=at+1;}at=at+1;}
+    moshi(command=="connect"){kaesu failure(ui,"native_process");}
+    kaku parsed=parse(args);moshi(parsed.error!=""){kaesu failure(ui,parsed.error);}kaku o=parsed.options;
+    moshi(!o.flags[0]){
+        moshi(ui.real && !ui.tty){kaesu failure(ui,"non_tty");}
+        kaku result=wizard(ui,o,root,host);moshi(result!=""){kaesu failure(ui,result);}
+    }
+    kaku error=validate(o);moshi(error!=""){kaesu failure(ui,error);}
+    moshi(len(o.dependencies)==0){message(ui,i18n.key_scaffold_summary,[o.values[3],o.values[4]]);}sore{message(ui,i18n.key_scaffold_summary_dependencies,[o.values[3],o.values[4],convert.format_int(len(o.dependencies))]);}
+    moshi(o.flags[4] && !o.flags[0] && !yes(ui,i18n.key_scaffold_prompt_create)){message(ui,i18n.key_scaffold_cancelled,[]);kaesu 0;}
+    moshi(ui.failed[0]){kaesu failure(ui,"io");}
+    kaku guard=array.make[uint8](128,uint8(0));kaku guarded=os.terminal(3,guard)==0;
+    error=generate_with_writer(root,o,waza(p:string,text:string)->bool{kaesu fs.write_all(p,string.to_bytes(text)).error==mu;});
+    moshi(guarded){kaku pending=os.terminal(5,guard);moshi(pending!=0 && error==""){kaku physical=os.canonical_path(root);moshi(physical!=mu){cleanup(path.join(physical,o.values[5]),o);}error="cancelled";}kaku restored=os.terminal(4,guard);moshi(restored!=0){kaesu failure(ui,"io");}}
+    moshi(error!=""){kaesu failure(ui,error);}
+    moshi(o.flags[2] || o.flags[3]){kaesu failure(ui,"native_process");}
+    output(ui,string.concat(theme.paint(ui.style,"success",i18n.text(ui.language,i18n.key_scaffold_created)),"\n"));
+    message(ui,i18n.key_scaffold_location,[fullname(o),path.join(root,o.values[5])]);
+    message(ui,i18n.key_scaffold_next,[]);output(ui,string.concat("\n  cd ",string.concat(o.values[5],"\n  mio test .\n\n")));message(ui,i18n.key_scaffold_publish_guide,[]);kaesu 0;
+}
+koukai waza command(args: []string,language: string,style: theme.Theme,compiler: string,host: string) -> int64 {
+    kaku opened_in=fs.open_read("/dev/stdin");kaku input=io.reader_from_bytes([]);kaku file_in=opened_in.file;moshi(file_in!=mu){input=fs.reader(file_in);}
+    kaku opened_out=fs.open_write("/dev/stdout");kaku file_out=opened_out.file;kaku opened_err=fs.open_write("/dev/stderr");kaku file_err=opened_err.file;
+    moshi(file_out==mu){moshi(file_in!=mu){fs.close(file_in);}kaesu 1;}
+    moshi(file_err==mu){moshi(file_in!=mu){fs.close(file_in);}fs.close(file_out);kaesu 1;}
+    kaku ui=Terminal {input:input,output:fs.writer(file_out),errors:fs.writer(file_err),language:language,style:style,failed:[iie],tty:fs.is_character_device("/dev/stdin") && fs.is_character_device("/dev/stdout"),real:hai};kaku result=run(args,".",ui,compiler,host);
+    moshi(file_in!=mu){fs.close(file_in);}fs.close(file_out);fs.close(file_err);kaesu result;
+}

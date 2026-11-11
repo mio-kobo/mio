@@ -1,0 +1,44 @@
+yobu "kiso/aot/arm64";
+
+// Darwin ARM64 termios ABI: 72 bytes, tcflag_t is 64-bit, c_cc at 32.
+// Caller owns the saved state; no heap references survive an ioctl. Other
+// backends return ENOTSUP and the CLI uses its numeric selection fallback.
+waza emit_terminal_runtime(code: arm64.Assembler) -> unit {
+    arm64.assembler_label(code,"nativeos_terminal");
+    moshi(arm64.assembler_label_word(code,"linux_abi")>=0 || arm64.assembler_label_word(code,"windows_abi")>=0){
+        emit(code,arm64.movn_x(0,94,0));emit(code,arm64.ret());kaesu;
+    }
+    enter(code);emit(code,arm64.sub_imm_x(31,31,112,iie));
+    emit(code,arm64.str_x(0,31,80));emit(code,arm64.ldr_x(9,1,8));emit(code,arm64.cmp_imm_x(9,128,iie));arm64.assembler_b_cond(code,3,"terminal_invalid");
+    emit(code,arm64.ldr_x(9,1,40));emit(code,arm64.add_imm_x(9,9,32,iie));emit(code,arm64.str_x(9,31,88));
+    // Guard local publication against SIGINT. Darwin's sigprocmask syscall
+    // takes pointers to 32-bit sigsets (unlike its historical libc ABI).
+    emit(code,arm64.cmp_imm_x(0,3,iie));arm64.assembler_b_cond(code,0,"terminal_block_interrupt");
+    emit(code,arm64.cmp_imm_x(0,4,iie));arm64.assembler_b_cond(code,0,"terminal_unblock_interrupt");
+    emit(code,arm64.cmp_imm_x(0,5,iie));arm64.assembler_b_cond(code,0,"terminal_pending_interrupt");
+    emit(code,arm64.cmp_imm_x(0,2,iie));arm64.assembler_b_cond(code,0,"terminal_restore");
+    emit(code,arm64.cmp_imm_x(0,1,iie));arm64.assembler_b_cond(code,8,"terminal_invalid");
+    // Probe stdout too, so redirected output never receives cursor controls.
+    bits(code,0,1);bits(code,1,1078490131);emit(code,arm64.add_imm_x(2,31,0,iie));bits(code,16,54);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");
+    bits(code,0,0);bits(code,1,1078490131);emit(code,arm64.ldr_x(2,31,88));bits(code,16,54);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");
+    emit(code,arm64.ldr_x(9,31,80));arm64.assembler_cbz_x(code,9,"terminal_ok");
+    // Copy original state into a stack-local termios, preserving the caller's copy.
+    emit(code,arm64.ldr_x(10,31,88));kaku at=0;
+    aida(at<72){emit(code,arm64.ldr_x(9,10,at));emit(code,arm64.str_x(9,31,at));at=at+8;}
+    emit(code,arm64.ldr_x(9,31,24));bits(code,10,1432);emit(code,arm64.movn_x(11,0,0));emit(code,arm64.eor_x(10,10,11));emit(code,arm64.and_x(9,9,10));emit(code,arm64.str_x(9,31,24));
+    bits(code,9,1);emit(code,arm64.strb_w(9,31,48));emit(code,arm64.strb_w(31,31,49));
+    emit(code,arm64.add_imm_x(2,31,0,iie));arm64.assembler_b(code,"terminal_set");
+    arm64.assembler_label(code,"terminal_restore");emit(code,arm64.ldr_x(2,31,88));
+    arm64.assembler_label(code,"terminal_set");bits(code,0,0);bits(code,1,2152231956);bits(code,16,54);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");
+    arm64.assembler_b(code,"terminal_ok");
+    arm64.assembler_label(code,"terminal_block_interrupt");
+    bits(code,9,2);emit(code,arm64.str_x(9,31,0));bits(code,0,1);emit(code,arm64.add_imm_x(1,31,0,iie));emit(code,arm64.ldr_x(2,31,88));emit(code,arm64.add_imm_x(2,2,96,iie));bits(code,16,48);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");arm64.assembler_b(code,"terminal_ok");
+    arm64.assembler_label(code,"terminal_unblock_interrupt");
+    bits(code,0,3);emit(code,arm64.ldr_x(1,31,88));emit(code,arm64.add_imm_x(1,1,96,iie));bits(code,2,0);bits(code,16,48);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");arm64.assembler_b(code,"terminal_ok");
+    arm64.assembler_label(code,"terminal_pending_interrupt");
+    emit(code,arm64.str_x(31,31,0));emit(code,arm64.add_imm_x(0,31,0,iie));bits(code,16,52);emit(code,arm64.svc(128));arm64.assembler_b_cond(code,2,"terminal_errno");emit(code,arm64.ldr_x(0,31,0));bits(code,9,2);emit(code,arm64.and_x(0,0,9));emit(code,arm64.lsr_x(0,0,1));arm64.assembler_b(code,"terminal_done");
+    arm64.assembler_label(code,"terminal_ok");bits(code,0,0);arm64.assembler_b(code,"terminal_done");
+    arm64.assembler_label(code,"terminal_invalid");bits(code,0,22);
+    arm64.assembler_label(code,"terminal_errno");emit(code,arm64.sub_x(0,31,0));
+    arm64.assembler_label(code,"terminal_done");emit(code,arm64.add_imm_x(31,31,112,iie));leave(code);
+}

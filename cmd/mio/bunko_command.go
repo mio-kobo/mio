@@ -20,6 +20,7 @@ type bunkoCommand struct {
 
 func bunkoCommands() []bunkoCommand {
 	return []bunkoCommand{
+		{"create", "create [options]", i18n.KeyScaffoldCmdCreate}, {"connect", "connect [options]", i18n.KeyScaffoldCmdConnect},
 		{"init", "init", i18n.KeyBunkoInitHelp}, {"add", "add <namespace/package@version>", i18n.KeyBunkoAddHelp},
 		{"remove", "remove <namespace/package>", i18n.KeyBunkoRemoveHelp}, {"install", "install", i18n.KeyBunkoInstallHelp},
 		{"list", "list", i18n.KeyBunkoListHelp}, {"info", "info <namespace/package>", i18n.KeyBunkoInfoHelp},
@@ -27,6 +28,9 @@ func bunkoCommands() []bunkoCommand {
 	}
 }
 func runBunko(args []string, out, stderr io.Writer, lang i18n.Language, theme helpTheme) int {
+	if len(args) > 0 && (args[0] == "create" || args[0] == "connect") {
+		return runBunkoScaffold(args, os.Stdin, out, stderr, lang, theme)
+	}
 	help := len(args) == 0
 	for _, arg := range args {
 		if arg == "--help" || arg == "-h" {
