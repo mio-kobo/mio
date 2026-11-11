@@ -17,12 +17,14 @@ teisu import_socket_accept = 39;
 teisu import_socket_recv = 40;
 teisu import_socket_send = 41;
 teisu import_socket_close = 42;
+teisu import_socket_ioctl = 43;
+teisu import_socket_getsockopt = 44;
 teisu socket_state = 20; // 20 open, 20 + status failed. File states occupy 1 through 17.
 
 waza winsock_imports() -> pe.ImportLibrary {
     kaesu pe.ImportLibrary { name: "WS2_32.dll", symbols: [
         "WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
-        "bind", "connect", "listen", "accept", "recv", "send", "closesocket"] };
+        "bind", "connect", "listen", "accept", "recv", "send", "closesocket", "ioctlsocket", "getsockopt"] };
 }
 
 waza winsock_started_cell() -> int64 { kaesu gc_state() + 104; }
@@ -326,6 +328,12 @@ waza emit_socket_address(code: x86_64.Assembler, ctx: WinContext, name: string, 
     moshi (binding) { import_call(code, ctx, import_socket_bind); }
     sore { import_call(code, ctx, import_socket_connect); }
     x86_64.call(code, "rt.sock_int_status");
+    // A nonblocking connect reports WSAEWOULDBLOCK (status 8) while it is in progress: that is status 10 (in progress), not "would block".
+    moshi (!binding) {
+        x86_64.cmp_ri(code, x86_64.rax, 8);
+        x86_64.jcc(code, x86_64.cc_ne, string.concat(name, ".done"));
+        x86_64.mov_ri(code, x86_64.rax, 10);
+    }
     moshi (binding) {
         // Exclusive TCP bind also reports WSAEACCES for overlapping wildcard
         // listeners and reserved ports. Both mean the local endpoint is unavailable.
@@ -468,6 +476,97 @@ waza emit_socket_transfer(code: x86_64.Assembler, ctx: WinContext, name: string,
     close_frame(code, ctx, begin, 0);
 }
 
+// rt.sock_nonblock: rdi = token, rsi = 0 or 1, rdx = status array -> message. ioctlsocket(socket, FIONBIO, &enabled).
+waza emit_socket_nonblock(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku begin = socket_frame(code, "rt.sock_nonblock", 48);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdx);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_nonblock.state");
+    x86_64.cmp_ri(code, x86_64.rsi, 1);
+    x86_64.jcc(code, x86_64.cc_a, "rt.sock_nonblock.invalid");
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rsi);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 2147772030); // FIONBIO
+    x86_64.lea(code, x86_64.r8, x86_64.rbp, -24);
+    import_call(code, ctx, import_socket_ioctl);
+    x86_64.call(code, "rt.sock_int_status");
+    x86_64.jmp(code, "rt.sock_nonblock.done");
+    x86_64.label(code, "rt.sock_nonblock.invalid");
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.jmp(code, "rt.sock_nonblock.done");
+    x86_64.label(code, "rt.sock_nonblock.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.label(code, "rt.sock_nonblock.done");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
+// One getsockopt(socket, SOL_SOCKET, option, &value, &length) with value pre-set to 0 and length 4: rax = 0 on success (value at [rbp-24]),
+// otherwise the classified status. Uses the frame slots -16 (socket), -24 (value) and -32 (length).
+waza emit_socket_option_call(code: x86_64.Assembler, ctx: WinContext, option: int64) -> unit {
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rax, 4);
+    x86_64.mov_store(code, x86_64.rbp, -32, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -16);
+    x86_64.mov_ri(code, x86_64.rdx, 65535); // SOL_SOCKET
+    x86_64.mov_ri(code, x86_64.r8, option);
+    x86_64.lea(code, x86_64.r9, x86_64.rbp, -24);
+    x86_64.lea(code, x86_64.rax, x86_64.rbp, -32);
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax);
+    import_call(code, ctx, import_socket_getsockopt);
+    x86_64.call(code, "rt.sock_int_status");
+}
+
+// rt.sock_finish: rdi = token, rsi = status array -> message. Completes a nonblocking connect: SO_ERROR holds the failure of a connect that
+// failed; otherwise SO_CONNECT_TIME is 0xFFFFFFFF while the socket is not connected yet (status 10, in progress, call again) and the
+// number of seconds since the connection was made once it is.
+waza emit_socket_finish(code: x86_64.Assembler, ctx: WinContext) -> unit {
+    kaku begin = socket_frame(code, "rt.sock_finish", 64);
+    x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsi);
+    x86_64.call(code, "rt.sock_slot");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_finish.state");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rax);
+    emit_socket_option_call(code, ctx, 4103); // SO_ERROR 0x1007
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_finish.done");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -24);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967295);
+    x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_finish.connected");
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.connected");
+    emit_socket_option_call(code, ctx, 28684); // SO_CONNECT_TIME 0x700C
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_finish.done");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -24);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967295);
+    x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_finish.pending");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.pending");
+    x86_64.mov_ri(code, x86_64.rax, 10);
+    x86_64.jmp(code, "rt.sock_finish.done");
+    x86_64.label(code, "rt.sock_finish.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.label(code, "rt.sock_finish.done");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.call(code, "rt.sock_status_one");
+    emit_epilogue(code);
+    close_frame(code, ctx, begin, 0);
+}
+
 waza emit_socket_runtime(code: x86_64.Assembler, ctx: WinContext) -> unit {
     emit_socket_status(code);
     emit_socket_errors(code, ctx);
@@ -478,6 +577,8 @@ waza emit_socket_runtime(code: x86_64.Assembler, ctx: WinContext) -> unit {
     emit_socket_listen(code, ctx);
     emit_socket_transfer(code, ctx, "rt.sock_read", hai);
     emit_socket_transfer(code, ctx, "rt.sock_write", iie);
+    emit_socket_nonblock(code, ctx);
+    emit_socket_finish(code, ctx);
 }
 
 // "$mma::mio/sys/socket::<name>::<hash>" -> routine, or "" when the function is not a socket primitive.
@@ -499,5 +600,7 @@ waza socket_routine(function_name: string) -> string {
     moshi (name == "read") { kaesu "rt.sock_read"; }
     moshi (name == "write") { kaesu "rt.sock_write"; }
     moshi (name == "close") { kaesu "rt.sock_close"; }
+    moshi (name == "set_nonblocking") { kaesu "rt.sock_nonblock"; }
+    moshi (name == "finish_connect") { kaesu "rt.sock_finish"; }
     kaesu "";
 }
