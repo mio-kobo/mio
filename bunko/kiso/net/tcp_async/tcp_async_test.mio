@@ -1,3 +1,5 @@
+yobu "kiso/array";
+yobu "mio/fs/runtime";
 yobu "kiso/testing";
 
 // Real loopback sockets on one thread. Nothing here waits: every operation either makes progress or reports pending.
@@ -248,4 +250,40 @@ waza test_repeated_connect_close_does_not_leak() -> unit {
     }
     testing.expect(failures == 0, "2000 connect/accept/close cycles complete without failure");
     close_listener(listener);
+}
+
+// The Linux handle table has 4096 slots (it had 64), so more than 64 handles can be open at once and slots are reused after
+// the table was nearly full. Directory state exists only for slots 0..63; a socket in a higher slot handed to a directory
+// function must simply report "not a directory". (This last check is a behaviour check: the guard in rt.fs_dir_slot is
+// defence in depth, and removing it does not change this test's result, so the test does not prove the guard.)
+waza test_high_slot_socket_is_not_a_directory() -> unit {
+    kaku port_base = 42500;
+    kaku attempt = listen(loopback(port_base), 4);
+    kaku port = port_base;
+    aida (attempt.error != mu && port < port_base + 50) { port = port + 1; attempt = listen(loopback(port), 4); }
+    kaku maybe = attempt.listener;
+    moshi (maybe == mu) { testing.expect(iie, "listener"); kaesu; }
+    kaku listener = maybe;
+    kaku held: []AsyncListener = [];
+    kaku count = 0;
+    kaku port2 = 42600;
+    aida (count < 100) {
+        kaku more = listen(loopback(port2 + count), 1);
+        kaku extra = more.listener;
+        moshi (extra != mu) { array.push(held, extra); }
+        count = count + 1;
+    }
+    testing.expect(len(held) > 70, "more than 64 handles can be open at once");
+    kaku last = held[len(held) - 1];
+    testing.expect(!runtime.dir_next(last.handle), "a socket in a high slot is not a directory");
+    testing.expect(!runtime.dir_next(listener.handle), "a socket in a low slot is not a directory either");
+    kaku closed = 0;
+    kaku at = 0;
+    aida (at < len(held)) { moshi (close_listener(held[at]).error == mu) { closed = closed + 1; } at = at + 1; }
+    testing.expect(closed == len(held), "every listener closes and frees its slot");
+    close_listener(listener);
+    kaku again = listen(loopback(port2), 1);
+    kaku reused = again.listener;
+    testing.expect(reused != mu, "slots are reusable after the table was nearly full");
+    moshi (reused != mu) { close_listener(reused); }
 }
