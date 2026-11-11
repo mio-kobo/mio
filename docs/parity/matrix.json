@@ -642,19 +642,20 @@
       "platform": "linux-arm64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "linux-arm64: epoll backend through direct Linux system calls (epoll_create1/ctl/pwait, eventfd2), bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-reactor / linux-arm64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#81"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43001794132,
+        "head": "a2d6474",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
@@ -1252,19 +1253,20 @@
       "platform": "darwin-arm64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "darwin-arm64: kqueue backend (kqueue/kevent), wake-up through a second kqueue with an EVFILT_USER event, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-reactor / linux-arm64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#81"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43001794132,
+        "head": "a2d6474",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
