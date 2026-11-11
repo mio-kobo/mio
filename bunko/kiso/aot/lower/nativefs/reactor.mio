@@ -1,0 +1,149 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Darwin AArch64 reactor (group M): kqueue backend of the mio/sys/socket reactor primitives (kiso/reactor). Level-triggered
+// EVFILT_READ / EVFILT_WRITE (no EV_CLEAR). The wake-up descriptor (reactor_open kind 1) is a second kqueue registered with the poll
+// kqueue for EVFILT_READ (a kqueue is readable while it has pending events); reactor_signal triggers an EVFILT_USER event on it and
+// reactor_ack consumes that event. Kernel structure struct kevent (64-bit): ident 0, filter int16 8, flags uint16 10, fflags uint32 12,
+// data int64 16, udata 24 (32 bytes). Syscalls: kqueue 362, kevent 363. Status codes are the shared socket codes; errno values are Darwin's.
+// The same code is emitted for linux-arm64 and windows-arm64, where kqueue/kevent reach the adapters and fail with ENOSYS (status 11,
+// "unsupported"): those targets get their own backends in later increments.
+
+waza rx(code: arm64.Assembler, value: arm64.Instruction) -> unit { emit(code, value); }
+waza rb(code: arm64.Assembler, target: string) -> unit { arm64.assembler_b(code, target); }
+waza rc(code: arm64.Assembler, condition: int64, target: string) -> unit { arm64.assembler_b_cond(code, condition, target); }
+waza rz(code: arm64.Assembler, reg: int64, target: string) -> unit { arm64.assembler_cbz_x(code, reg, target); }
+waza rnz(code: arm64.Assembler, reg: int64, target: string) -> unit { arm64.assembler_cbnz_x(code, reg, target); }
+waza rl(code: arm64.Assembler, target: string) -> unit { arm64.assembler_bl(code, target); }
+waza rlabel(code: arm64.Assembler, name: string) -> unit { arm64.assembler_label(code, name); }
+
+// Looks the token in register x0 up as a socket-table handle; leaves the descriptor in x9 or branches to `closed` (status EBADF).
+waza lookup_fd(code: arm64.Assembler, closed: string) -> unit {
+    rx(code, arm64.movz_x(1, 3, 0)); rl(code, "nativefs_handle_lookup"); rz(code, 0, closed);
+    rx(code, arm64.ldr_x(9, 0, 0)); rx(code, arm64.cmp_imm_x(9, 0, iie)); rc(code, 11, closed);
+}
+
+koukai waza emit_reactor_runtime(code: arm64.Assembler, empty: int64) -> unit {
+    // ---- reactor_open(kind x0): kind 0 poll kqueue, 1 wake kqueue; any other kind is an invalid argument. Returns a handle token.
+    rlabel(code, "native_reactor_open"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 32, iie));
+    rx(code, arm64.cmp_imm_x(0, 1, iie)); rc(code, 8, "native_reactor_open_invalid");
+    rx(code, arm64.movz_x(16, 362, 0)); rx(code, arm64.svc(128)); rc(code, 2, "native_reactor_open_error");
+    mov(code, 1, 0); rx(code, arm64.movz_x(2, 0, 0)); rb(code, "native_reactor_open_alloc");
+    rlabel(code, "native_reactor_open_error"); mov(code, 2, 0); rx(code, arm64.movn_x(1, 0, 0)); rb(code, "native_reactor_open_alloc");
+    rlabel(code, "native_reactor_open_invalid"); rx(code, arm64.movz_x(2, 22, 0)); rx(code, arm64.movn_x(1, 0, 0));
+    rlabel(code, "native_reactor_open_alloc"); rx(code, arm64.str_x(1, 31, 8)); rx(code, arm64.movz_x(0, 3, 0)); rl(code, "nativefs_handle_alloc");
+    rx(code, arm64.str_x(0, 31, 0)); rnz(code, 0, "native_reactor_open_done");
+    rx(code, arm64.ldr_x(0, 31, 8)); rx(code, arm64.cmp_imm_x(0, 0, iie)); rc(code, 11, "native_reactor_open_done"); rx(code, arm64.movz_x(16, 6, 0)); rx(code, arm64.svc(128));
+    rlabel(code, "native_reactor_open_done"); rx(code, arm64.ldr_x(0, 31, 0)); leave(code);
+
+    // ---- change(kq x0, ident x1, filter x2 (1 read, 2 write), flags x3, udata x4) -> errno in x0 (0 ok). A delete of an unregistered
+    // filter (ENOENT) is not an error.
+    rlabel(code, "native_reactor_change"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 64, iie));
+    rx(code, arm64.str_x(3, 31, 32)); rx(code, arm64.str_x(1, 31, 0));
+    rx(code, arm64.movz_x(9, 0, 0)); rx(code, arm64.sub_x(9, 9, 2)); bits(code, 10, 65535); rx(code, arm64.and_x(9, 9, 10));
+    rx(code, arm64.lsl_x(10, 3, 16)); rx(code, arm64.orr_x(9, 9, 10)); rx(code, arm64.str_w(9, 31, 8));
+    rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.str_w(10, 31, 12)); rx(code, arm64.str_x(10, 31, 16)); rx(code, arm64.str_x(4, 31, 24));
+    rx(code, arm64.add_imm_x(1, 31, 0, iie)); rx(code, arm64.movz_x(2, 1, 0)); rx(code, arm64.movz_x(3, 0, 0)); rx(code, arm64.movz_x(4, 0, 0)); rx(code, arm64.movz_x(5, 0, 0));
+    rx(code, arm64.movz_x(16, 363, 0)); rx(code, arm64.svc(128)); rc(code, 2, "native_reactor_change_error");
+    rx(code, arm64.movz_x(0, 0, 0)); rb(code, "native_reactor_change_done");
+    rlabel(code, "native_reactor_change_error"); rx(code, arm64.ldr_x(9, 31, 32)); rx(code, arm64.cmp_imm_x(9, 2, iie)); rc(code, 1, "native_reactor_change_done");
+    rx(code, arm64.cmp_imm_x(0, 2, iie)); rc(code, 1, "native_reactor_change_done"); rx(code, arm64.movz_x(0, 0, 0));
+    rlabel(code, "native_reactor_change_done"); leave(code);
+
+    // ---- reactor_ctl(reactor x0, target x1, packed x2 = op | interest << 8 | token << 16, status x3): op 1 add, 2 delete, 3 modify;
+    // interest bit 0 readable (EVFILT_READ), bit 1 writable (EVFILT_WRITE).
+    rlabel(code, "native_reactor_ctl"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 80, iie));
+    rx(code, arm64.str_x(3, 31, 0)); rx(code, arm64.str_x(2, 31, 8)); rx(code, arm64.str_x(1, 31, 16));
+    lookup_fd(code, "native_reactor_ctl_closed"); rx(code, arm64.str_x(9, 31, 24));
+    rx(code, arm64.ldr_x(0, 31, 16)); lookup_fd(code, "native_reactor_ctl_closed"); rx(code, arm64.str_x(9, 31, 32));
+    rx(code, arm64.ldr_x(9, 31, 8)); rx(code, arm64.cmp_imm_x(9, 0, iie)); rc(code, 11, "native_reactor_ctl_invalid");
+    bits(code, 11, 255); rx(code, arm64.and_x(10, 9, 11)); rx(code, arm64.sub_imm_x(12, 10, 1, iie)); rx(code, arm64.cmp_imm_x(12, 2, iie)); rc(code, 8, "native_reactor_ctl_invalid");
+    rx(code, arm64.str_x(10, 31, 48)); rx(code, arm64.lsr_x(12, 9, 8)); rx(code, arm64.and_x(12, 12, 11)); rx(code, arm64.cmp_imm_x(12, 3, iie)); rc(code, 8, "native_reactor_ctl_invalid");
+    rx(code, arm64.str_x(12, 31, 56)); rx(code, arm64.lsr_x(13, 9, 16)); rx(code, arm64.str_x(13, 31, 40));
+    kaku filter = 1;
+    aida (filter <= 2) {
+        kaku tag = string.concat("native_reactor_ctl_f", convert.format_int(filter));
+        rx(code, arm64.ldr_x(10, 31, 48)); rx(code, arm64.cmp_imm_x(10, 2, iie)); rc(code, 0, string.concat(tag, "_delete"));
+        rx(code, arm64.ldr_x(12, 31, 56)); rx(code, arm64.movz_x(11, filter, 0)); rx(code, arm64.and_x(13, 12, 11)); rnz(code, 13, string.concat(tag, "_add"));
+        rx(code, arm64.cmp_imm_x(10, 3, iie)); rc(code, 0, string.concat(tag, "_delete")); rb(code, string.concat(tag, "_next"));
+        rlabel(code, string.concat(tag, "_add")); rx(code, arm64.movz_x(3, 5, 0)); rb(code, string.concat(tag, "_call"));
+        rlabel(code, string.concat(tag, "_delete")); rx(code, arm64.movz_x(3, 2, 0));
+        rlabel(code, string.concat(tag, "_call"));
+        rx(code, arm64.ldr_x(0, 31, 24)); rx(code, arm64.ldr_x(1, 31, 32)); rx(code, arm64.movz_x(2, filter, 0)); rx(code, arm64.ldr_x(4, 31, 40));
+        rl(code, "native_reactor_change"); rnz(code, 0, "native_reactor_ctl_status");
+        rlabel(code, string.concat(tag, "_next"));
+        filter = filter + 1;
+    }
+    rx(code, arm64.movz_x(0, 0, 0)); rb(code, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_closed"); rx(code, arm64.movz_x(0, 9, 0)); rb(code, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_invalid"); rx(code, arm64.movz_x(0, 22, 0));
+    rlabel(code, "native_reactor_ctl_status"); socket_status_return(code, 0, empty);
+
+    // ---- reactor_wait(reactor x0, events x1, max x2 (1..64), timeout_ms x3 (-1 waits, 0 polls), status x4): 16-byte records
+    // (token, mask: 1 readable, 2 writable, 4 error, 8 hangup) into the events array; the count goes to the status array.
+    // EINTR reports zero events. Frame: 0..63 locals, 64 count, 128.. kernel kevent buffer (64 * 32 bytes).
+    rlabel(code, "native_reactor_wait"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 2208, iie));
+    rx(code, arm64.str_x(1, 31, 0)); rx(code, arm64.str_x(2, 31, 8)); rx(code, arm64.str_x(3, 31, 16)); rx(code, arm64.str_x(4, 31, 24));
+    lookup_fd(code, "native_reactor_wait_closed"); rx(code, arm64.str_x(9, 31, 32));
+    rx(code, arm64.ldr_x(9, 31, 8)); rx(code, arm64.sub_imm_x(10, 9, 1, iie)); rx(code, arm64.cmp_imm_x(10, 63, iie)); rc(code, 8, "native_reactor_wait_invalid");
+    rx(code, arm64.ldr_x(9, 31, 16)); rx(code, arm64.add_imm_x(10, 9, 1, iie)); rx(code, arm64.cmp_imm_x(10, 0, iie)); rc(code, 11, "native_reactor_wait_invalid");
+    bits(code, 11, 2147483647); rx(code, arm64.cmp_x(9, 11)); rc(code, 12, "native_reactor_wait_invalid");
+    rx(code, arm64.ldr_x(0, 31, 0)); rz(code, 0, "native_reactor_wait_invalid"); rl(code, "nativefs_array_ptr"); rx(code, arm64.str_x(0, 31, 40));
+    rx(code, arm64.ldr_x(10, 31, 8)); rx(code, arm64.lsl_x(10, 10, 4)); rx(code, arm64.cmp_x(1, 10)); rc(code, 3, "native_reactor_wait_invalid");
+    rx(code, arm64.ldr_x(9, 31, 16)); rx(code, arm64.cmp_imm_x(9, 0, iie)); rc(code, 11, "native_reactor_wait_infinite");
+    rx(code, arm64.movz_x(10, 1000, 0)); rx(code, arm64.udiv_x(11, 9, 10)); rx(code, arm64.msub_x(12, 11, 10, 9)); bits(code, 13, 1000000); rx(code, arm64.mul_x(12, 12, 13));
+    rx(code, arm64.str_x(11, 31, 48)); rx(code, arm64.str_x(12, 31, 56)); rx(code, arm64.add_imm_x(5, 31, 48, iie)); rb(code, "native_reactor_wait_call");
+    rlabel(code, "native_reactor_wait_infinite"); rx(code, arm64.movz_x(5, 0, 0));
+    rlabel(code, "native_reactor_wait_call");
+    rx(code, arm64.ldr_x(0, 31, 32)); rx(code, arm64.movz_x(1, 0, 0)); rx(code, arm64.movz_x(2, 0, 0)); rx(code, arm64.add_imm_x(3, 31, 128, iie)); rx(code, arm64.ldr_x(4, 31, 8));
+    rx(code, arm64.movz_x(16, 363, 0)); rx(code, arm64.svc(128)); rc(code, 2, "native_reactor_wait_error");
+    rx(code, arm64.str_x(0, 31, 64)); rx(code, arm64.ldr_x(9, 31, 40)); rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.add_imm_x(11, 31, 128, iie));
+    rlabel(code, "native_reactor_wait_copy");
+    rx(code, arm64.ldr_x(12, 31, 64)); rx(code, arm64.cmp_x(10, 12)); rc(code, 2, "native_reactor_wait_copied");
+    rx(code, arm64.ldr_x(13, 11, 24)); rx(code, arm64.str_x(13, 9, 0));
+    rx(code, arm64.ldrh_w(14, 11, 8)); rx(code, arm64.ldrh_w(15, 11, 10)); rx(code, arm64.movz_x(13, 0, 0));
+    rx(code, arm64.movz_x(12, 65535, 0)); rx(code, arm64.cmp_x(14, 12)); rc(code, 1, "native_reactor_wait_not_read"); rx(code, arm64.movz_x(12, 1, 0)); rx(code, arm64.orr_x(13, 13, 12));
+    rlabel(code, "native_reactor_wait_not_read");
+    rx(code, arm64.movz_x(12, 65534, 0)); rx(code, arm64.cmp_x(14, 12)); rc(code, 1, "native_reactor_wait_not_write"); rx(code, arm64.movz_x(12, 2, 0)); rx(code, arm64.orr_x(13, 13, 12));
+    rlabel(code, "native_reactor_wait_not_write");
+    rx(code, arm64.movz_x(12, 16384, 0)); rx(code, arm64.and_x(12, 12, 15)); rz(code, 12, "native_reactor_wait_no_error"); rx(code, arm64.movz_x(12, 4, 0)); rx(code, arm64.orr_x(13, 13, 12));
+    rlabel(code, "native_reactor_wait_no_error");
+    rx(code, arm64.movz_x(12, 32768, 0)); rx(code, arm64.and_x(12, 12, 15)); rz(code, 12, "native_reactor_wait_no_eof"); rx(code, arm64.movz_x(12, 8, 0)); rx(code, arm64.orr_x(13, 13, 12));
+    rlabel(code, "native_reactor_wait_no_eof");
+    rx(code, arm64.str_x(13, 9, 8)); rx(code, arm64.add_imm_x(9, 9, 16, iie)); rx(code, arm64.add_imm_x(11, 11, 32, iie)); rx(code, arm64.add_imm_x(10, 10, 1, iie)); rb(code, "native_reactor_wait_copy");
+    rlabel(code, "native_reactor_wait_copied");
+    rx(code, arm64.ldr_x(9, 31, 64)); rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.movz_x(11, 0, 0)); rb(code, "native_reactor_wait_status");
+    rlabel(code, "native_reactor_wait_error");
+    rx(code, arm64.movz_x(9, 0, 0)); rx(code, arm64.movz_x(10, 0, 0)); mov(code, 11, 0); rx(code, arm64.cmp_imm_x(11, 4, iie)); rc(code, 1, "native_reactor_wait_status"); rx(code, arm64.movz_x(11, 0, 0)); rb(code, "native_reactor_wait_status");
+    rlabel(code, "native_reactor_wait_closed"); rx(code, arm64.movz_x(9, 0, 0)); rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.movz_x(11, 9, 0)); rb(code, "native_reactor_wait_status");
+    rlabel(code, "native_reactor_wait_invalid"); rx(code, arm64.movz_x(9, 0, 0)); rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.movz_x(11, 22, 0));
+    rlabel(code, "native_reactor_wait_status");
+    rx(code, arm64.ldr_x(12, 31, 24)); rx(code, arm64.ldr_x(13, 12, 8)); rx(code, arm64.cmp_imm_x(13, 10, iie)); rc(code, 3, "native_reactor_wait_return");
+    rx(code, arm64.ldr_x(12, 12, 40)); rx(code, arm64.add_imm_x(12, 12, 32, iie)); rx(code, arm64.str_x(9, 12, 0)); rx(code, arm64.add_imm_x(13, 12, 8, iie)); rx(code, arm64.strb_w(10, 13, 0));
+    mov(code, 0, 11); rx(code, arm64.movz_x(1, 0, 0)); rl(code, "native_socket_classify"); rx(code, arm64.add_imm_x(13, 12, 9, iie)); rx(code, arm64.strb_w(0, 13, 0));
+    rlabel(code, "native_reactor_wait_return"); empty_return(code, empty);
+
+    // ---- reactor_signal(wake x0, status x1): ADD an EVFILT_USER event (EV_CLEAR) to the wake kqueue and trigger it (NOTE_TRIGGER), in one
+    // kevent call; repeating it keeps the event pending (wakes coalesce).
+    rlabel(code, "native_reactor_signal"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 112, iie));
+    rx(code, arm64.str_x(1, 31, 0)); lookup_fd(code, "native_reactor_signal_closed"); rx(code, arm64.str_x(9, 31, 8));
+    rx(code, arm64.movz_x(10, 1, 0)); rx(code, arm64.str_x(10, 31, 16)); bits(code, 10, 2228214); rx(code, arm64.str_w(10, 31, 24));
+    rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.str_w(10, 31, 28)); rx(code, arm64.str_x(10, 31, 32)); rx(code, arm64.str_x(10, 31, 40));
+    rx(code, arm64.movz_x(10, 1, 0)); rx(code, arm64.str_x(10, 31, 48)); bits(code, 10, 65526); rx(code, arm64.str_w(10, 31, 56));
+    bits(code, 10, 16777216); rx(code, arm64.str_w(10, 31, 60)); rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.str_x(10, 31, 64)); rx(code, arm64.str_x(10, 31, 72));
+    rx(code, arm64.ldr_x(0, 31, 8)); rx(code, arm64.add_imm_x(1, 31, 16, iie)); rx(code, arm64.movz_x(2, 2, 0)); rx(code, arm64.movz_x(3, 0, 0)); rx(code, arm64.movz_x(4, 0, 0)); rx(code, arm64.movz_x(5, 0, 0));
+    rx(code, arm64.movz_x(16, 363, 0)); rx(code, arm64.svc(128)); rc(code, 2, "native_reactor_signal_status"); rx(code, arm64.movz_x(0, 0, 0)); rb(code, "native_reactor_signal_status");
+    rlabel(code, "native_reactor_signal_closed"); rx(code, arm64.movz_x(0, 9, 0));
+    rlabel(code, "native_reactor_signal_status"); socket_status_return(code, 0, empty);
+
+    // ---- reactor_ack(wake x0, status x1): consume the pending EVFILT_USER event (zero timeout); nothing pending is success.
+    rlabel(code, "native_reactor_ack"); enter(code); rx(code, arm64.sub_imm_x(31, 31, 80, iie));
+    rx(code, arm64.str_x(1, 31, 0)); lookup_fd(code, "native_reactor_ack_closed");
+    rx(code, arm64.movz_x(10, 0, 0)); rx(code, arm64.str_x(10, 31, 48)); rx(code, arm64.str_x(10, 31, 56));
+    rx(code, arm64.movz_x(1, 0, 0)); rx(code, arm64.movz_x(2, 0, 0)); rx(code, arm64.add_imm_x(3, 31, 16, iie)); rx(code, arm64.movz_x(4, 1, 0)); rx(code, arm64.add_imm_x(5, 31, 48, iie));
+    mov(code, 0, 9); rx(code, arm64.movz_x(16, 363, 0)); rx(code, arm64.svc(128)); rc(code, 2, "native_reactor_ack_error"); rx(code, arm64.movz_x(0, 0, 0)); rb(code, "native_reactor_ack_status");
+    rlabel(code, "native_reactor_ack_error"); rx(code, arm64.cmp_imm_x(0, 4, iie)); rc(code, 1, "native_reactor_ack_status"); rx(code, arm64.movz_x(0, 0, 0)); rb(code, "native_reactor_ack_status");
+    rlabel(code, "native_reactor_ack_closed"); rx(code, arm64.movz_x(0, 9, 0));
+    rlabel(code, "native_reactor_ack_status"); socket_status_return(code, 0, empty);
+}
