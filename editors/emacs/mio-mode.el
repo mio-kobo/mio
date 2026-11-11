@@ -5,7 +5,7 @@
 
 (defconst mio-font-lock-keywords
   `((,(regexp-opt '("kaku" "waza" "teisu" "kata" "sentaku" "koukai"
-                    "moshi" "sore" "aida" "awase" "baai" "kaesu" "nukeru" "tsuzuku" "yobu") 'symbols)
+                    "moshi" "sore" "aida" "awase" "baai" "kaesu" "nukeru" "tsuzuku" "yobu" "yuzuru") 'symbols)
      . font-lock-keyword-face)
     (,(regexp-opt '("hai" "iie" "mu") 'symbols) . font-lock-constant-face)
     (,(regexp-opt '("int8" "int16" "int32" "int64" "uint8" "uint16" "uint32" "float32"
