@@ -180,6 +180,15 @@
       "evidence": "artifact native-report-darwin-arm64-42996933167-1",
       "limits": "start and join only: no word natives, no kiso/thread, no channels, join of an invalid handle traps, at most 16 live threads (a 17th start is a runtime error); cells I/J/K stay UNSUPPORTED",
       "follow_up": "the stale thread-natives-fail-closed check failed on darwin-arm64 because threads now run there: it is replaced on that target by thread-channels-fail-closed (channel programs must still be rejected)"
+    },
+    {
+      "step": 4,
+      "what": "word natives and kiso/thread channels on darwin-arm64 (PR #79 commit d940944)",
+      "status": "MEASURED",
+      "result": "hosted macos-15 ARM64, run 43002395379: darwin-thread-programs 11 of 12 cases PASS (basic, captures, many, channel_basic, channel_close, channel_graphs, channel_mpmc, summary_copy normal; basic, channel_basic, channel_close under --gc-stress); nested FAIL (exit 1: threads started or joined from a non-main thread hit runtime_error); thread-invalid-handles-fail-closed PASS",
+      "evidence": "artifact native-report-darwin-arm64-43002395379-1",
+      "limits": "start/join only from the main thread; no join_status/join_checked; no generation-checked handles; word_wait polls with a 50us timed sleep; 16 live threads; 16384 channels per process; not yet run: gc_stress, reclaim, lifecycle, creation_limit, shutdown, races, faults, negatives; cells I/J/K stay UNSUPPORTED until these pass",
+      "next": "allow nested start/join (slot allocation lock), then join_status and generation handles, then the remaining tests/threads programs"
     }
   ]
 }
