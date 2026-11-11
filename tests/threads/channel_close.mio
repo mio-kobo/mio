@@ -1,0 +1,35 @@
+// Failure and shutdown semantics: a send on a closed channel is rejected and hands the graph back (the sender keeps ownership); a sender
+// blocked on a full channel is released by close the same way; receivers drain what was queued and then see the channel closed.
+yobu "kiso/thread";
+
+kata Packet { id: int64; payload: []int64; }
+
+waza run() -> int64 {
+    kaku filler = Packet { id: -1, payload: [] };
+    kaku channel = thread.channel_new[Packet](1, filler);
+    kaku first = Packet { id: 11, payload: [1, 2, 3] };
+    kaku sent = thread.send[Packet](channel, yuzuru first);
+    chant(sent.sent);
+    // the channel is full: this sender blocks until close releases it, and its packet comes back inside the result
+    kaku blocked = waza () -> int64 {
+        kaku packet = Packet { id: 22, payload: [4, 5] };
+        kaku outcome = thread.send[Packet](channel, yuzuru packet);
+        moshi (outcome.sent) { kaesu -1; }
+        kaesu outcome.back.id + len(outcome.back.payload);
+    };
+    kaku handle = thread.start(blocked);
+    thread.close[Packet](channel);
+    chant(thread.join(handle));
+    kaku late = Packet { id: 33, payload: [] };
+    kaku rejected = thread.send[Packet](channel, yuzuru late);
+    chant(!rejected.sent);
+    chant(rejected.back.id);
+    kaku drained = thread.receive[Packet](channel);
+    chant(drained.closed);
+    chant(drained.item.id);
+    kaku end = thread.receive[Packet](channel);
+    chant(end.closed);
+    thread.destroy[Packet](channel);
+    kaesu 0;
+}
+run();

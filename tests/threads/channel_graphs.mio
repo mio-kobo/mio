@@ -1,0 +1,61 @@
+// Arbitrary graphs cross the channel without copying: shared sub-objects stay shared, cycles stay cycles, a 2000-deep chain and a
+// 20000-node tree arrive intact. The receiver mutates through one path and observes it through the other.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Node { id: int64; shared: []int64; links: []Node; }
+
+waza chain(depth: int64) -> Node {
+    kaku head = Node { id: 0, shared: [], links: [] };
+    kaku i = 1;
+    aida (i <= depth) { head = Node { id: i, shared: [], links: [head] }; i = i + 1; }
+    kaesu head;
+}
+
+waza wide(count: int64) -> Node {
+    kaku children: []Node = [];
+    kaku i = 0;
+    aida (i < count) { array.push(children, Node { id: i, shared: [i], links: [] }); i = i + 1; }
+    kaesu Node { id: -7, shared: [], links: children };
+}
+
+waza run() -> int64 {
+    kaku filler = Node { id: -1, shared: [], links: [] };
+    kaku channel = thread.channel_new[Node](3, filler);
+    kaku sender = waza () -> int64 {
+        // shared sub-object and a cycle: parent -> child -> parent, both pointing at one shared array
+        kaku common = [5];
+        kaku parent = Node { id: 1, shared: common, links: [] };
+        kaku child = Node { id: 2, shared: common, links: [parent] };
+        array.push(parent.links, child);
+        kaku a = thread.send[Node](channel, yuzuru parent);
+        kaku deep = chain(2000);
+        kaku b = thread.send[Node](channel, yuzuru deep);
+        kaku tree = wide(20000);
+        kaku c = thread.send[Node](channel, yuzuru tree);
+        thread.close[Node](channel);
+        moshi (a.sent && b.sent && c.sent) { kaesu 3; }
+        kaesu -1;
+    };
+    kaku handle = thread.start(sender);
+    kaku one = thread.receive[Node](channel);
+    kaku node = one.item;
+    node.shared[0] = 99;
+    chant(node.links[0].shared[0]);
+    chant(node.links[0].links[0].id);
+    kaku two = thread.receive[Node](channel);
+    kaku walk = two.item;
+    kaku depth = 0;
+    aida (len(walk.links) > 0) { walk = walk.links[0]; depth = depth + 1; }
+    chant(depth);
+    kaku three = thread.receive[Node](channel);
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < len(three.item.links)) { total = total + three.item.links[i].id + three.item.links[i].shared[0]; i = i + 1; }
+    chant(total);
+    chant(thread.receive[Node](channel).closed);
+    chant(thread.join(handle));
+    thread.destroy[Node](channel);
+    kaesu 0;
+}
+run();
