@@ -2,7 +2,7 @@
   "schema_version": 1,
   "track": "B (nonblocking TCP and Reactor; groups L and M)",
   "directive": "PARITY_25_CELLS_TASK.md",
-  "note": "Independent ledger: PR #78 (docs/parity/matrix.json) was not merged on the baseline, so this file does not touch it. Statuses are derived from code and native execution evidence, never from labels. SKIPPED, UNSUPPORTED, NOT_RUN, mock-only and build-only are never PASS.",
+  "note": "Independent ledger: PR #78 (docs/parity/matrix.json) was not merged on the baseline, so this file does not touch it. Statuses are derived from code and native execution evidence, never from labels. SKIPPED, UNSUPPORTED, NOT_RUN, mock-only and build-only are never PASS. The authoritative matrix is docs/parity/matrix.json (PR #78); this file keeps the async-track detail.",
   "baseline": {
     "branch": "Mio-2.2.0",
     "commit": "94316df",
@@ -52,26 +52,50 @@
     },
     "darwin-arm64": {
       "L": {
-        "status": "IN_PROGRESS",
-        "work": "AArch64 routines for set_nonblocking (ioctl FIONBIO) and finish_connect (poll + getsockopt SO_ERROR), EINPROGRESS classified as in-progress, NativeFS handle table 32 -> 4096 slots",
-        "blocker": "needs a green Native / darwin-arm64 run of the tcp_async package"
+        "status": "VALIDATED_BY_CI",
+        "evidence": "native mio test bunko/kiso/net/tcp_async (9 tests) in the Native job of the target",
+        "pr": [
+          "#80"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/42996397268"
+        ],
+        "head": "2bf061b"
       },
       "M": {
-        "status": "IN_PROGRESS",
-        "work": "kqueue backend (kqueue/kevent syscalls 362/363): level-triggered EVFILT_READ/WRITE, wake-up through a second kqueue carrying an EVFILT_USER event, EINTR as zero events; status 11 (unsupported) where kqueue is unavailable (ENOSYS through the linux-arm64 / windows-arm64 adapters)",
-        "blocker": "needs a green Native / darwin-arm64 run of kiso/reactor and the darwin-reactor check (tests/reactor/run.py)",
-        "dev_aid": "a unicorn model of the Darwin syscalls ran the stress and 100-connection load programs locally; it is a development aid built from my own understanding of kqueue and is not evidence"
+        "status": "VALIDATED_BY_CI",
+        "pr": [
+          "#81"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/43001794132"
+        ],
+        "head": "a2d6474",
+        "evidence": "native mio test bunko/kiso/reactor (12 tests) and the darwin-reactor harness check (stress, gc-stress, 1000-connection idle-efficiency load, EINTR) on the macOS ARM64 runner: kqueue backend"
       }
     },
     "linux-arm64": {
       "L": {
-        "status": "IN_PROGRESS",
-        "work": "same AArch64 routines through the Linux adapter (ioctl, getsockopt and errno-value translation added to linuxabi.mio)",
-        "blocker": "needs a green linux-arm64 run (ubuntu-24.04-arm)"
+        "status": "VALIDATED_BY_CI",
+        "evidence": "native mio test bunko/kiso/net/tcp_async (9 tests) in the Native job of the target",
+        "pr": [
+          "#80"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/42996397268"
+        ],
+        "head": "2bf061b"
       },
       "M": {
-        "status": "UNSUPPORTED_FAIL_CLOSED",
-        "next": "epoll through the AArch64 Linux syscall numbers"
+        "status": "VALIDATED_BY_CI",
+        "pr": [
+          "#81"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/43001794132"
+        ],
+        "head": "a2d6474",
+        "evidence": "native mio test bunko/kiso/reactor (12 tests) and the linux-arm64-reactor harness check on the ubuntu-24.04-arm runner: epoll backend through direct Linux system calls"
       }
     },
     "darwin-amd64": {
