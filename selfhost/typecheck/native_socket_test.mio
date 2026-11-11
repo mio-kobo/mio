@@ -1,10 +1,12 @@
 yobu "kiso/testing";
 waza test_native_socket_signatures() -> unit {
-    kaku good = check_source("yobu \"mio/sys/socket\"; kaku h=socket.open(); kaku s:[]uint8=[0]; socket.status(h,s); socket.bind_ipv4(h,[uint8(127),uint8(0),uint8(0),uint8(1)],0,s); socket.listen(h,8,s); kaku a=socket.accept(h); socket.connect_ipv4(a,[uint8(127),uint8(0),uint8(0),uint8(1)],80,s); kaku io:[]uint8=[0,0,0,0,0,0,0,0,0,0]; socket.read(a,s,0,1,io); socket.write(a,s,0,1,io); socket.close(a,s); socket.set_nonblocking(a,1,s); socket.finish_connect(a,s);");
+    kaku good = check_source("yobu \"mio/sys/socket\"; kaku h=socket.open(); kaku s:[]uint8=[0]; socket.status(h,s); socket.bind_ipv4(h,[uint8(127),uint8(0),uint8(0),uint8(1)],0,s); socket.listen(h,8,s); kaku a=socket.accept(h); socket.connect_ipv4(a,[uint8(127),uint8(0),uint8(0),uint8(1)],80,s); kaku io:[]uint8=[0,0,0,0,0,0,0,0,0,0]; socket.read(a,s,0,1,io); socket.write(a,s,0,1,io); socket.close(a,s); socket.set_nonblocking(a,1,s); socket.finish_connect(a,s); kaku ep=socket.reactor_open(0); socket.reactor_ctl(ep,a,65793,s); socket.reactor_wait(ep,io,8,0,s); socket.reactor_signal(ep,s); socket.reactor_ack(ep,s);");
     testing.expect(len(good.errors)==0,"all actual socket signatures type check");
     kaku bad=check_source("yobu \"mio/sys/socket\"; socket.status(1,[uint8(0)]);");testing.expect(len(bad.errors)>0,"integer cannot impersonate socket resource");
     bad=check_source("yobu \"mio/sys/socket\"; kaku h=socket.open(); kaku s:[]uint8=[0]; socket.set_nonblocking(h,s);");testing.expect(len(bad.errors)>0,"set_nonblocking arity rejected");
     bad=check_source("yobu \"mio/sys/socket\"; kaku h=socket.open(); socket.finish_connect(1,[uint8(0)]);");testing.expect(len(bad.errors)>0,"finish_connect needs a socket resource");
+    bad=check_source("yobu \"mio/sys/socket\"; kaku s:[]uint8=[0]; kaku h=socket.open(); socket.reactor_ctl(h,h,1,s,s);");testing.expect(len(bad.errors)>0,"reactor_ctl arity rejected");
+    bad=check_source("yobu \"mio/sys/socket\"; kaku h=socket.open(); socket.reactor_open(h);");testing.expect(len(bad.errors)>0,"reactor_open needs an int64 kind");
     bad=check_source("yobu \"mio/sys/socket\"; socket.open(1);");testing.expect(len(bad.errors)>0,"wrong arity rejected");
     bad=check_source("yobu \"mio/sys/socket\"; socket.unknown();");testing.expect(len(bad.errors)>0,"unknown primitive rejected");
 }

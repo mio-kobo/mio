@@ -1,6 +1,6 @@
 # Mio native asynchronous networking and M-task runtime — audit, contracts and phased plan
 
-Status: **Phase A implemented on Linux AMD64 (this document's first milestone); Phases B–E are plans.**
+Status: **Phase A (nonblocking TCP) and Phase B (epoll reactor) implemented on Linux AMD64; Phases C–E are plans.**
 Base: `Mio-2.2.0` at `4236836` (PRs #59 yuzuru ownership and #63 Linux thread primitives are merged in this base).
 Terminology used below: *Implemented* (in the tree), *Tested locally* (run on the stated host), *Validated by CI* (a green run of the
 named workflow), *Available on target X* (native execution evidence on X), *Experimental*, *Planned*.
@@ -63,7 +63,7 @@ named workflow), *Available on target X* (native execution evidence on X), *Expe
 
 | target | `tcp_async` | evidence |
 |---|---|---|
-| linux-amd64 | **Available**: nonblocking accept/connect/read/write, SO_ERROR completion | native `mio test` of `bunko/kiso/net/tcp_async` (5 tests, real loopback sockets) run locally on linux-amd64 with a compiler built from this tree; CI result recorded in the PR |
+| linux-amd64 | **Available**: nonblocking accept/connect/read/write, SO_ERROR completion; `kiso/reactor` (epoll) | native `mio test` of `bunko/kiso/net/tcp_async` (5 tests, real loopback sockets) run locally on linux-amd64 with a compiler built from this tree; CI result recorded in the PR |
 | darwin-arm64 / linux-arm64 / windows-arm64 | not available: the AArch64 lowering declares the two primitives as fail-closed stubs (`native_socket_set_nonblocking`/`native_socket_finish_connect`) that report an `Other` (ENOSYS) status, so existing programs (including `kiso/net/tcp`) build and run unchanged while `tcp_async` operations fail with an error — never silently succeed | **NOT_RUN** |
 | darwin-amd64 | not available: reuses the Linux lowering through the `darwin_syscall` adapter; the unmapped syscalls return `ENOSYS`, so operations report an `Other` error — fail closed | **NOT_RUN** |
 | windows-amd64 | not available: unknown socket functions lower to `rt.os_unsupported` | **NOT_RUN** |
@@ -142,23 +142,40 @@ signatures. The Go reference VM runs the same package (`go run ./cmd/mio test bu
 Not yet covered (Phase B/C needs a scheduler to be meaningful): hundreds/1000/10000 concurrent connections, slow readers, connection reset, timers, cancellation,
 fairness, long-duration stability, GC-under-suspension.
 
-## 3. Phase B — portable reactor (planned)
+## 3. Phase B — portable reactor (implemented on linux-amd64)
 
-Contract (OS independent, implemented per backend):
+Status: **Implemented and tested locally on linux-amd64** (native epoll over real loopback sockets); darwin/windows/ARM64 are **NOT_RUN** (primitives fail closed).
 
-```
-submit(op)        register interest (fd/token, kind, waker id)   -> Ok | Error
-poll(timeout)     wait (the only blocking call) and collect completions -> [Event]
-cancel(op)        remove interest; guarantees no event for op is delivered after it returns
-wake()            make a concurrent/pending poll return (eventfd on Linux)
-close(reactor)    deregister everything, release resources
-```
+OS contract (five primitives of `mio/sys/socket`; the reactor handle and the wake eventfd are ordinary handle-table entries, so `close` and stale-handle
+behaviour are the ones of sockets):
 
-Rules: events carry `(slot, generation)`; an event whose generation no longer matches the live registration is dropped (stale); a registration is removed
-*before* its descriptor is closed; one completion per registration (double completion is an invariant violation, tested). Linux: level-triggered epoll +
-eventfd. Darwin: kqueue (EV_ADD|EV_CLEAR decided separately, level-triggered by default). Windows: IOCP with an operation object that owns the OVERLAPPED and
-the buffer until the completion packet for that operation has been dequeued, *including* after `CancelIoEx`; the shared contract is the operation
-(`submit/poll/cancel`), not the readiness shape.
+| primitive | meaning |
+|---|---|
+| `reactor_open(kind) -> resource` | kind 0: `epoll_create1`; kind 1: `eventfd2` (nonblocking) used as the wake-up descriptor |
+| `reactor_ctl(reactor, target, op/interest/token packed, status)` | `epoll_ctl` add (1) / delete (2) / modify (3); interest bit 0 readable, bit 1 writable; the 64-bit token travels in the kernel's data word |
+| `reactor_wait(reactor, events, max, timeout_ms, status)` | `epoll_wait` (the only blocking call): 1..64 events as 16-byte `(token, mask)` records; mask 1 readable, 2 writable, 4 error, 8 hangup; EINTR reports zero events |
+| `reactor_signal` / `reactor_ack` | add to / reset the eventfd counter; EAGAIN is success (already signalled / nothing pending) |
+
+The portable layer is `kiso/reactor` (pure Mio): `open register modify deregister wait wake close`, documented in `bunko/kiso/reactor/README.md`.
+
+Rules implemented and tested: events carry the opaque token `generation * 1048576 + slot + 1`, token 0 is the wake descriptor; an event whose generation no longer
+matches a live registration is dropped and counted (`stale`); `deregister` releases the slot even when the socket was already closed and a stale `Registration` cannot
+touch the slot's new owner; level-triggered epoll, so readiness persists until drained and cannot be lost between `wait` calls; `wait(timeout)` sleeps in the kernel
+(tested: a 60 ms wait takes >= 50 ms) and a wake ends a 5 s wait at once; several wakes coalesce into one; close releases both descriptors and invalidates all registrations.
+
+Platform design for phase D (not implemented): Darwin kqueue (same readiness shape, `EVFILT_READ/WRITE` + `EVFILT_USER` for wake); Windows IOCP is *completion* based and gets
+its own adapter behind the same `submit/poll/cancel/wake` contract: the operation object owns the `OVERLAPPED` and the buffer until the completion packet has been dequeued,
+including after `CancelIoEx`.
+
+### 3.1 Runtime change needed for scale: Linux handle table 64 -> 4096
+
+The Linux runtime's NativeFS handle table (shared by files, directories and sockets) had 64 slots and an 8-bit slot field in the resource token, so a program could hold
+at most 64 open sockets. A 200-connection reactor test failed against it (handle exhaustion), and the stated goal is >= 1000 concurrent connections. Changed (Linux x86-64 only, internal
+layout, no language-visible change): the token is now `generation << 16 | (slot + 1)`; the table has 4096 x 24 bytes, placed after the directory buffers; the Mochi globals and the
+image's `bss` shift by 98304 bytes; directory handles are allocated only in slots 0..63 (the directory table and buffers keep their 64 entries) and `rt.fs_dir_slot` reports "not a
+directory" for any handle in a higher slot, so a socket token handed to a directory function cannot index outside the directory table. Tested by the full reactor package
+(200 simultaneous connections = 400 handles), the existing `kiso/fs`, `kiso/os`, `kiso/io`, TCP packages, the runtime-ABI contract suite (16 PASS) and the thread/channel witness.
+Darwin and Windows keep their own tables; their limits are unchanged and will be measured in phase D.
 
 ## 4. Phase C — single-threaded tasks (planned; no new keyword)
 
