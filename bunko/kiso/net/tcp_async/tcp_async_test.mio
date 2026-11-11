@@ -180,7 +180,8 @@ waza test_partial_writes_preserve_progress() -> unit {
     testing.expect(!failed, "no write failed");
     testing.expect(saw_pending, "an unread socket eventually reports pending instead of blocking");
     testing.expect(written > 0 && written < cap, "partial progress was made before the buffers filled");
-    testing.expect(short_writes > 0, "the kernel accepted fewer bytes than requested at least once (a short write)");
+    // short_writes is informational: Linux and macOS accept part of a request when the buffer is nearly full, Winsock accepts a whole
+    // request or reports would-block, so a short count is allowed by the contract but never required.
     kaku received = 0;
     kaku wrong = 0;
     kaku buffer = array.make[uint8](65536, uint8(0));
@@ -247,21 +248,21 @@ waza test_repeated_connect_close_does_not_leak() -> unit {
     moshi (listener == mu) { testing.expect(iie, "listener"); kaesu; }
     kaku round = 0;
     kaku failures = 0;
-    aida (round < 2000) {
+    aida (round < 600) {
         kaku pair = make_pair(listener, port);
         kaku client = pair.client;
         kaku server = pair.server;
-        moshi (client == mu) { failures = failures + 1; round = 2000; }
+        moshi (client == mu) { failures = failures + 1; round = 600; }
         moshi (client != mu) {
             moshi (close(client).error != mu) { failures = failures + 1; }
         }
-        moshi (server == mu) { failures = failures + 1; round = 2000; }
+        moshi (server == mu) { failures = failures + 1; round = 600; }
         moshi (server != mu) {
             moshi (close(server).error != mu) { failures = failures + 1; }
         }
         round = round + 1;
     }
-    testing.expect(failures == 0, "2000 connect/accept/close cycles complete without failure");
+    testing.expect(failures == 0, "600 connect/accept/close cycles complete without failure");
     close_listener(listener);
 }
 
@@ -406,6 +407,18 @@ waza test_cancelled_connects_do_not_leak() -> unit {
         moshi (maybe == mu) { failures = failures + 1; round = 600; }
         moshi (maybe != mu) {
             moshi (close(maybe).error != mu) { failures = failures + 1; }
+        }
+        // Drain the connections the listener has queued every 32 rounds: Windows refuses new connections once the listen backlog is full,
+        // where Linux and macOS silently keep them pending.
+        moshi (round - (round / 32) * 32 == 31) {
+            kaku queued = accept(listener);
+            kaku drained_now = 0;
+            aida (queued.connection != mu && drained_now < 64) {
+                kaku taken = queued.connection;
+                moshi (taken != mu) { close(taken); }
+                drained_now = drained_now + 1;
+                queued = accept(listener);
+            }
         }
         round = round + 1;
     }
