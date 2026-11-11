@@ -3,10 +3,14 @@
 This change is a **partial implementation for the Mio-2.2.0 branch**, not a
 production-ready native package manager. The seven commands work in the Go
 reference CLI. Native distributions provide command discovery and localized
-help, but every operational `mio bunko` invocation returns the nonzero
+help, but the original seven operational `mio bunko` commands return the nonzero
 `BUNKO_E_NATIVE_CAPABILITY` diagnostic without changing files. Native external
 package imports are not implemented. Do not advertise installation in Core or
 Full until those gaps are closed.
+
+The dependent scaffolding change adds native local `mio bunko create` separately;
+see [package scaffolding](bunko-scaffold.md). It does not enable native package
+installation, external imports or Git/GitHub subprocess integration.
 
 ## Reference CLI
 

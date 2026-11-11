@@ -1,5 +1,6 @@
 yobu "kiso/os";
 yobu "selfhost/bunkopath";
+yobu "selfhost/bunkoscaffold";
 yobu "kiso/array";
 yobu "kiso/convert";
 yobu "kiso/fs";
@@ -85,7 +86,7 @@ waza global_options(args: []string) -> Globals {
             moshi (error == "") { selected_color = value; }
             at = at + 1; tsuzuku;
         }
-        moshi (takes_value(option) && at + 1 < len(args)) { array.push(rest, option); at = at + 1; array.push(rest, args[at]); at = at + 1; tsuzuku; }
+        moshi ((takes_value(option) || (bunkoscaffold.takes_value(option) && (option!="--version" || (len(rest)>=3 && rest[1]=="bunko" && rest[2]=="create")))) && at + 1 < len(args)) { array.push(rest, option); at = at + 1; array.push(rest, args[at]); at = at + 1; tsuzuku; }
         array.push(rest, option); at = at + 1;
     }
     moshi (at < len(args)) { array.append_all(rest, slice_array(args, at, len(args))); }
@@ -142,8 +143,8 @@ waza bunko_command(args: []string, language: string) -> unit {
     moshi (help) {
         show_help(language, "bunko");
         chant(i18n.text(language, i18n.key_bunko_cli_help));
-        kaku names = ["init", "add <namespace/package@version>", "remove <namespace/package>", "install", "list", "info <namespace/package>", "search <query>"];
-        kaku keys = [i18n.key_bunko_init_help, i18n.key_bunko_add_help, i18n.key_bunko_remove_help, i18n.key_bunko_install_help, i18n.key_bunko_list_help, i18n.key_bunko_info_help, i18n.key_bunko_search_help];
+        kaku names = ["init", "add <namespace/package@version>", "remove <namespace/package>", "install", "list", "info <namespace/package>", "search <query>","create [options]","connect [options]"];
+        kaku keys = [i18n.key_bunko_init_help, i18n.key_bunko_add_help, i18n.key_bunko_remove_help, i18n.key_bunko_install_help, i18n.key_bunko_list_help, i18n.key_bunko_info_help, i18n.key_bunko_search_help,i18n.key_scaffold_cmd_create,i18n.key_scaffold_cmd_connect];
         at = 0; aida (at < len(names)) {
             moshi (selected == "" || selected == "--help" || selected == "-h" || names[at] == selected || string.has_prefix(names[at], string.concat(selected, " "))) {
                 chant(string.concat("mio bunko ", names[at])); chant(i18n.text(language, keys[at]));
@@ -167,7 +168,10 @@ waza run() -> unit {
     kaku args = globals.rest;
     moshi (len(args) < 2) { show_help(language, ""); kaesu; }
     kaku command = args[1];
-    moshi (command == "bunko") { bunko_command(args, language); kaesu; }
+    moshi (command == "bunko") {
+        moshi (len(args)>2 && (args[2]=="create" || args[2]=="connect")) { os.exit(bunkoscaffold.command(args,language,cli_theme,version_name(),pipeline.host_target())); kaesu; }
+        bunko_command(args, language); kaesu;
+    }
     moshi (command == "test") { os.exit(testrunner.command(args, language, color, selected_theme)); kaesu; }
     moshi (command == "lsp") { os.exit(rpc.run_command(args, language)); kaesu; }
     moshi (command == "version" || command == "--version") {

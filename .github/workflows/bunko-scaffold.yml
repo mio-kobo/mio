@@ -1,0 +1,54 @@
+name: Bunko scaffolding
+on:
+  pull_request:
+    branches: ['Mio-[0-9]*', 'feat/v2.2-bunko-package-manager']
+    paths:
+      - 'internal/bunkoscaffold/**'
+      - 'selfhost/bunkoscaffold/**'
+      - 'selfhost/cli/**'
+      - 'selfhost/i18n/**'
+      - 'selfhost/usage/**'
+      - 'cmd/mio/**'
+      - 'scripts/bunko/**'
+      - 'scripts/ci/native_platforms.py'
+      - '.github/workflows/bunko-scaffold.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bunko-scaffold-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    name: Scaffold / regression and catalogs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - run: python scripts/bunko/generate.py --check
+      - run: python scripts/i18n/catalog.py check --check-generated
+      - run: python scripts/i18n/test_catalog.py
+      - run: bash scripts/ci/selftest.sh
+      - run: go test -race ./internal/bunkoscaffold -count=1 -timeout 5m
+      - name: CLI and loader regressions for the stacked PR
+        if: github.base_ref == 'feat/v2.2-bunko-package-manager'
+        run: go test ./cmd/mio ./internal/bunko ./internal/lsp ./internal/i18n ./editors -count=1 -timeout 10m
+  native:
+    # On Mio-* the existing Native workflow already runs; do not duplicate it.
+    # This call gives the stacked PR the same six-platform native verification.
+    if: github.base_ref == 'feat/v2.2-bunko-package-manager' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/native.yml
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    with:
+      run_examples: false

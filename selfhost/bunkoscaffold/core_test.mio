@@ -1,0 +1,45 @@
+yobu "kiso/testing";
+yobu "kiso/bytes";
+
+waza fixture_options(name: string) -> Options {kaku o=options();o.values[0]="fixture";o.values[1]=name;o.values[2]="Native scaffold fixture";o.values[3]="0.1.0";o.values[4]="MIT";o.values[5]=name;array.push(o.targets,"linux/x86_64");kaesu o;}
+waza scratch_root(name: string) -> string {kaku root="/tmp";moshi(!fs.is_dir(root)){root=os.getenv("TEMP");}kaku dir=path.join(root,string.concat("mio-scaffold-",string.concat(convert.format_int(os.pid()),string.concat("-",name))));testing.expect(fs.create_dir(dir).error==mu,"private scratch directory");kaesu dir;}
+waza terminal(input: string,output: bytes.ByteBuffer,errors: bytes.ByteBuffer) -> Terminal {kaesu Terminal {input:io.reader_from_bytes(string.to_bytes(input)),output:io.writer_to_buffer(output),errors:io.writer_to_buffer(errors),language:"en-US",style:theme.Theme {enabled:iie,depth:theme.depth_ansi,palette:theme.palette_neutral},failed:[iie]};}
+waza test_exact_names_versions_platforms() -> unit {
+    testing.expect(valid_name("alice/json") && valid_name("a-b/pkg1"),"official package names");
+    testing.expect(!valid_name("../json") && !valid_name("Alice/json") && !valid_name("a/a--b"),"invalid names");
+    testing.expect(valid_version("0.1.0") && valid_version("999999999.0.1"),"exact numeric versions");
+    testing.expect(!valid_version("latest") && !valid_version("^1.0.0") && !valid_version("~1.0.0") && !valid_version("01.0.0") && !valid_version("1.0.0-rc.1"),"no floating or prerelease versions");
+    kaku o=fixture_options("sample");testing.expect(validate(o)=="","valid local specification");array.push(o.targets,"windows/arm64");testing.expect(validate(o)=="invalid_platform","index does not yet admit six targets");
+    testing.expect(!valid_child("../escape") && !valid_child("/absolute") && !valid_child("con"),"portable direct child only");
+}
+waza test_noninteractive_creation() -> unit {
+    kaku root=scratch_root("flags");kaku output=bytes.new_buffer();kaku errors=bytes.new_buffer();kaku ui=terminal("",output,errors);
+    kaku args=["mio","bunko","create","--non-interactive","--namespace","alice","--name","json","--description","A local fixture","--version","1.0.0","--license","MIT","--platform","linux/x86_64"];
+    testing.expect(run(args,root,ui,"2.2.0-fixture","linux-amd64")==0,"noninteractive local creation");
+    kaku dir=path.join(root,"json");testing.expect(fs.is_file(path.join(dir,"package.mio")) && fs.is_file(path.join(dir,"package_test.mio")) && fs.is_file(path.join(dir,"bunko.toml")) && fs.is_file(path.join(dir,"LICENSE")),"usable source and test package");
+    testing.expect(run(args,root,ui,"2.2.0-fixture","linux-amd64")!=0,"existing destination is never overwritten");cleanup(dir,fixture_options("json"));os.remove_dir(root);
+}
+waza test_interactive_creation_and_rejection() -> unit {
+    kaku root=scratch_root("interactive");kaku output=bytes.new_buffer();kaku errors=bytes.new_buffer();kaku input="alice\njson\nInteractive fixture\n\n\nlinux/x86_64\n\nn\ny\n";
+    testing.expect(run(["mio","bunko","create"],root,terminal(input,output,errors),"2.2.0","darwin-arm64")==0,"wizard with explicit publishing target and final approval");
+    cleanup(path.join(root,"json"),fixture_options("json"));
+    input="alice\njson\nInteractive fixture\n\n\nlinux/x86_64\n\nn\nn\n";
+    testing.expect(run(["mio","bunko","create"],root,terminal(input,output,errors),"2.2.0","darwin-arm64")==0 && !fs.exists(path.join(root,"json")),"declining final preview makes no files");os.remove_dir(root);
+}
+waza test_dependency_declarations_and_workflow_boundary() -> unit {
+    kaku o=fixture_options("deps");testing.expect(add_dependencies(o,["alice/json@1.0.0","bob/text@2.0.0"]),"exact declarations");
+    testing.expect(!add_dependencies(o,["alice/json@2.0.0"]),"one version per package");testing.expect(!add_dependencies(o,["kiso/fs@1.0.0"]),"standard library remains reserved");
+    testing.expect(string.contains(dependencies(o),"\"alice/json\" = \"1.0.0\""),"manifest uses exact versions");o.flags[1]=hai;testing.expect(validate(o)=="workflow_dependencies","workflow cannot silently rely on unavailable native installation");
+    kaku plain=fixture_options("workflow");plain.flags[1]=hai;testing.expect(string.contains(workflow(plain),"mio-kobo/mio/.github/actions/setup-mio@94316df") && string.contains(workflow(plain),"ubuntu-24.04"),"official pinned setup action and policy target");
+}
+waza test_partial_write_failure_cleanup() -> unit {
+    kaku root=scratch_root("partial");kaku o=fixture_options("partial");kaku count=[0];
+    kaku result=generate_with_writer(root,o,waza(p:string,text:string)->bool{count[0]=count[0]+1;moshi(count[0]==2){kaesu iie;}kaesu fs.write_all(p,string.to_bytes(text)).error==mu;});
+    testing.expect(result=="io" && !fs.exists(path.join(root,"partial")),"a failed local write leaves no half project");os.remove_dir(root);
+}
+waza test_description_escaping_and_native_process_boundary() -> unit {
+    kaku o=fixture_options("escaped");o.values[2]="A \"quoted\" \\ description";testing.expect(string.contains(info(o),"\\\"quoted\\\"") && string.contains(info(o),"\\\\ description"),"metadata is escaped TOML");
+    kaku output=bytes.new_buffer();kaku errors=bytes.new_buffer();kaku ui=terminal("y\n",output,errors);
+    testing.expect(run(["mio","bunko","connect"],".",ui,"2.2.0","windows-arm64")!=0,"native connection is explicitly unsupported, without starting tools");
+    testing.expect(bytes.buffer_len(errors)>0,"native process blocker has a diagnostic");
+}

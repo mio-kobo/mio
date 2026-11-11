@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 
 import examples_native
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "bunko"))
+import native_checks as bunko_scaffold_checks
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/windows-amd64"))
@@ -230,6 +232,7 @@ def cli_checks(report, cli, target, work):
                 problems.append("unexpected %r" % value)
         return report.check("cli-i18n-" + name, "PASS" if not problems else "FAIL", "native",
                             "" if not problems else brief(", ".join(problems)), detail=brief(text))
+    bunko_scaffold_checks.check_scaffolding(report, cli, work, run)
     check("bunko-help", ["--lang", "en-US", "bunko", "--help"], contains=("mio bunko add", "exact versions"))
     check("bunko-native-blocked", ["--lang", "ja-JP", "bunko", "install"], code=1, contains=("BUNKO_E_NATIVE_CAPABILITY", "未対応"))
     check("japanese", ["--lang", "ja-JP", "help"], contains=("使用方法", "コマンド"), absent=(ansi,), env={"NO_COLOR": None, "CI": None})

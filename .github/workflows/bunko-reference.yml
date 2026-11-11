@@ -1,9 +1,12 @@
 name: Bunko reference
 on:
   pull_request:
-    branches: ['Mio-[0-9]*']
+    branches: ['Mio-[0-9]*', 'feat/v2.2-bunko-package-manager']
     paths:
       - 'internal/bunkopm/**'
+      - 'internal/bunkoscaffold/**'
+      - 'selfhost/bunkoscaffold/**'
+      - 'scripts/bunko/**'
       - 'internal/bunko/**'
       - 'cmd/mio/**'
       - 'go.mod'
@@ -53,3 +56,10 @@ jobs:
         run: go test ./internal/bunkopm ./internal/bunko -count=1 -timeout 5m
       - name: Reference CLI and installed import execution
         run: go test ./cmd/mio -run TestBunko -count=1 -timeout 5m
+      - name: Reference scaffold permissions, paths and subprocess deadlines
+        run: go test -v ./internal/bunkoscaffold -count=1 -timeout 5m
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Check shared native/reference scaffold assets
+        run: python scripts/bunko/generate.py --check
