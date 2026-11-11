@@ -35,9 +35,9 @@ waza test_windows_adapter_calls_win32_through_iat_patches() -> unit {
         }
         at = at + 1;
     }
-    testing.expect(len(slots) == 44, "every one of the 44 imports is called by the adapter");
+    testing.expect(len(slots) == 46, "every one of the 46 imports is called by the adapter");
     kaku imports = windows_imports();
-    testing.expect(len(imports) == 88 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[64] == "ws2_32.dll" && imports[65] == "WSAStartup" && imports[86] == "shell32.dll" && imports[87] == "CommandLineToArgvW", "import list: (library, symbol) pairs grouped by library in IAT order");
+    testing.expect(len(imports) == 92 && imports[0] == "kernel32.dll" && imports[1] == "ExitProcess" && imports[64] == "ws2_32.dll" && imports[65] == "WSAStartup" && imports[90] == "shell32.dll" && imports[91] == "CommandLineToArgvW", "import list: (library, symbol) pairs grouped by library in IAT order");
 }
 
 waza array_push_slot(slots: []int64, value: int64) -> unit { array.push(slots, value); }
@@ -137,7 +137,7 @@ waza test_windows_adapter_has_winsock_blocks_and_wsa_error_mapping() -> unit {
     testing.expect(missing == 0, "every socket block exists");
     kaku imports = windows_imports(); kaku seen = 0; at = 0;
     aida (at < len(imports)) { moshi (imports[at] == "ws2_32.dll") { seen = seen + 1; } at = at + 2; }
-    testing.expect(seen == 11, "eleven ws2_32 imports, grouped after kernel32");
+    testing.expect(seen == 13, "thirteen ws2_32 imports, grouped after kernel32");
 }
 
 // POSIX semantics: read(fd, buf, 0) and write(fd, buf, 0) return 0 immediately; ReadFile with 0 bytes on a socket would block

@@ -26,7 +26,7 @@ koukai waza windows_imports() -> []string {
         "GetExitCodeProcess", "TerminateProcess", "SetHandleInformation", "GetStartupInfoW", "GetFileType", "PeekNamedPipe", "Sleep"];
     kaku pairs: []string = []; kaku at = 0;
     aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
-    kaku sockets = ["WSAStartup", "WSASocketW", "bind", "connect", "listen", "accept", "setsockopt", "closesocket", "WSAGetLastError", "ioctlsocket", "getsockopt"];
+    kaku sockets = ["WSAStartup", "WSASocketW", "bind", "connect", "listen", "accept", "setsockopt", "closesocket", "WSAGetLastError", "ioctlsocket", "getsockopt", "recv", "send"];
     at = 0;
     aida (at < len(sockets)) { array.push(pairs, "ws2_32.dll"); array.push(pairs, sockets[at]); at = at + 1; }
     array.push(pairs, "shell32.dll"); array.push(pairs, "CommandLineToArgvW");
@@ -211,11 +211,16 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
 
     // ---- read(fd, buffer, length) -> ReadFile; a broken pipe or end of file reads as 0 bytes
     wx_label(c, "wx_read");
-    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152)); wx(c, arm64.str_x(0, 31, 168));
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     // POSIX: a zero-length read returns 0 at once; ReadFile(0 bytes) on a socket or pipe would wait for data
     wx(c, arm64.ldr_x(2, 31, 152)); wx_cbnz(c, 2, "wx_read_nonzero"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_read_nonzero");
+    // a socket (descriptor >= 64) reads with recv: ReadFile on a Winsock socket ignores nonblocking mode
+    wx(c, arm64.ldr_x(9, 31, 168)); wx_cmpi(c, 9, 64); wx_bcc(c, 3, "wx_read_file");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx_li(c, 3, 0);
+    wx_call(c, patches, "recv"); wx_bool(c); wx_li(c, 9, 4294967295); wx(c, arm64.cmp_x(0, 9)); wx_bcc(c, 0, "wx_net_failed"); wx_b(c, "wx_ok");
+    wx_label(c, "wx_read_file");
     wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
     wx_call(c, patches, "ReadFile"); wx_bool(c); wx_cbz(c, 0, "wx_read_failed");
     wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
@@ -227,10 +232,14 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
 
     // ---- write(fd, buffer, length) -> WriteFile
     wx_label(c, "wx_write");
-    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152)); wx(c, arm64.str_x(0, 31, 168));
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx(c, arm64.ldr_x(2, 31, 152)); wx_cbnz(c, 2, "wx_write_nonzero"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_write_nonzero");
+    wx(c, arm64.ldr_x(9, 31, 168)); wx_cmpi(c, 9, 64); wx_bcc(c, 3, "wx_write_file");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx_li(c, 3, 0);
+    wx_call(c, patches, "send"); wx_bool(c); wx_li(c, 9, 4294967295); wx(c, arm64.cmp_x(0, 9)); wx_bcc(c, 0, "wx_net_failed"); wx_b(c, "wx_ok");
+    wx_label(c, "wx_write_file");
     wx(c, arm64.ldr_x(1, 31, 144)); wx(c, arm64.ldr_x(2, 31, 152)); wx(c, arm64.add_imm_x(3, 31, 160, iie)); wx_li(c, 4, 0);
     wx_call(c, patches, "WriteFile"); wx_bool(c); wx_cbz(c, 0, "wx_io_error");
     wx(c, arm64.ldr_w(0, 31, 160)); wx_b(c, "wx_ok");
