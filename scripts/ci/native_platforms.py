@@ -230,6 +230,8 @@ def cli_checks(report, cli, target, work):
                 problems.append("unexpected %r" % value)
         return report.check("cli-i18n-" + name, "PASS" if not problems else "FAIL", "native",
                             "" if not problems else brief(", ".join(problems)), detail=brief(text))
+    check("bunko-help", ["--lang", "en-US", "bunko", "--help"], contains=("mio bunko add", "exact versions"))
+    check("bunko-native-blocked", ["--lang", "ja-JP", "bunko", "install"], code=1, contains=("BUNKO_E_NATIVE_CAPABILITY", "未対応"))
     check("japanese", ["--lang", "ja-JP", "help"], contains=("使用方法", "コマンド"), absent=(ansi,), env={"NO_COLOR": None, "CI": None})
     check("region-fallback", ["--lang", "fr-CA", "help", "build"], contains=("Construire", "mio build <source>"), absent=(ansi,))
     check("explicit-color", ["--color=always", "--theme=dark", "help"], contains=(ansi,), env={"NO_COLOR": "1", "TERM": "xterm-256color"})

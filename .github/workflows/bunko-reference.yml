@@ -1,0 +1,55 @@
+name: Bunko reference
+on:
+  pull_request:
+    branches: ['Mio-[0-9]*']
+    paths:
+      - 'internal/bunkopm/**'
+      - 'internal/bunko/**'
+      - 'cmd/mio/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/bunko-reference.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bunko-reference-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  reference:
+    # These are Go reference tests on real hosts, not native Mio installation evidence.
+    name: Reference / ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: linux-x86_64, runner: ubuntu-24.04, os: linux, arch: amd64}
+          - {target: linux-arm64, runner: ubuntu-24.04-arm, os: linux, arch: arm64}
+          - {target: macos-x86_64, runner: macos-15-intel, os: darwin, arch: amd64}
+          - {target: macos-arm64, runner: macos-15, os: darwin, arch: arm64}
+          - {target: windows-x86_64, runner: windows-2025, os: windows, arch: amd64}
+          - {target: windows-arm64, runner: windows-11-arm, os: windows, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Assert actual Go host
+        env:
+          EXPECT_OS: ${{ matrix.os }}
+          EXPECT_ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(go env GOOS)" = "$EXPECT_OS"
+          test "$(go env GOARCH)" = "$EXPECT_ARCH"
+      - name: Reference graph, security, cache and loader tests
+        run: go test ./internal/bunkopm ./internal/bunko -count=1 -timeout 5m
+      - name: Reference CLI and installed import execution
+        run: go test ./cmd/mio -run TestBunko -count=1 -timeout 5m

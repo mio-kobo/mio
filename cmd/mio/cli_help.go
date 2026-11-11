@@ -40,6 +40,7 @@ const (
 
 func helpCommands() []helpEntry {
 	return []helpEntry{
+		{name: "bunko", group: helpGroupTools, description: i18n.KeyCmdBunko, usage: "mio bunko <init|add|remove|install|list|info|search> [arguments]", options: []string{"lang", "color", "theme"}},
 		{name: "help", group: helpGroupGeneral, description: i18n.KeyCmdHelp, usage: "mio help [command]", options: []string{"lang", "color", "theme"}},
 		{name: "version", group: helpGroupGeneral, description: i18n.KeyCmdVersion, usage: "mio version", options: []string{"lang", "color", "theme"}},
 		{name: "build", group: helpGroupCompilation, description: i18n.KeyCmdBuild, usage: "mio build <source> [options]", options: []string{"output", "target", "emit", "symbols", "gc_stress", "observe", "bunko", "format", "color", "theme", "lang", "verbose"}},
