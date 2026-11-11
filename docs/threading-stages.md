@@ -90,9 +90,23 @@ races**: they raise the chance of finding them. The safety argument is the publi
   * **Honest estimate:** this is a re-implementation of the Stage One runtime on a different collector, in assembly that can only be exercised through CI
     iterations of about 10-15 minutes each; it should be done as its own series of small PRs (polls + park protocol behind a gate; thread/handle/futex natives;
     allocation lock and barrier; channel natives; tests), not as one change. No owner decision blocks it; the effort does.
-* **Stage Three, macOS.** pthread based (`pthread_create`, `pthread_key`, `pthread_cond`); the existing M19ef Darwin infrastructure (`runtime/os/darwin`,
-  `lower/worker_roots.mio`) is experimental and seed-gated and must be audited before reuse. Each architecture is verified on its own runner
-  (`macos-15` ARM64, `macos-15-intel`).
+* **Stage Three, macOS (darwin-arm64 first; audit result, implementation NOT started).** What exists on Mio-2.2.0:
+  * The M19ef **worker bridge** for Darwin/AArch64 (`lower/worker_roots.mio`, `lower/attached_roots.mio`, `lower/stw_bridge.mio`, `runtime/os/darwin/thread.mio`
+    and `worker.mio`, `runtime/gc/{threads,mutators,safepoints}.mio`) already implements `start(callback: () -> unit)`, `join(handle)`, a safepoint-aware
+    `wait(ns)` and `collect`, with closure captures, per-worker native contexts and a cooperative registry. Its witnesses are `tests/m19ef/user-workers/*`,
+    built through `lower.compile_with_worker_bridge` plus `darwin.executable_appended(..., darwin.worker_symbols(), ...)` (pthread symbols imported through
+    dyld, ad-hoc signed in Mio). It is **internal, opt-in and seed-gated**: the capability flags are false and the acceptance runs are not part of hosted CI.
+  * Limits to lift before it can back the public thread natives: **exactly two worker slots** (the public API needs the 4096-handle table semantics of
+    Stage One, or an explicitly documented smaller limit with a `-11` error), a callback that returns `unit` (the public entry returns `int64`), no
+    generation-checked handles, and a `wait(ns)` that polls (acceptable for `word_wait`, where spurious wake-ups are allowed).
+  * **Slice plan, each a small PR validated on `macos-15` (ARM64) natively:** (1) route programs that reference the thread natives through the worker-bridge
+    build in the Darwin pipeline (and keep every other program byte-identical); (2) map `start`/`join`/`join_status` onto the bridge with the Stage One error
+    contract (negative errno for a missing slot, -22 for an invalid or already joined handle); (3) implement the word natives (`words_new` slab, `word_get/set/cas/add`
+    with `ldaxr/stlxr` or LSE, `word_wait` as the safepoint-aware wait, `word_wake` as a no-op or ulock wake) so `kiso/thread` channels work unchanged; (4) generalise
+    `tests/threads/run.py` and the CI check to darwin-arm64 and flip `thread-natives-fail-closed` to the real check for that target only when it passes.
+  * Risks recorded: the generational remembered-set barrier and the young list must be safe against concurrent mutators (the bridge serialises through the
+    stopped-heap adapter; the claim needs a hosted-CI witness, not the seed-gated one); minimum macOS version must be preserved (pthread symbols only);
+    darwin-amd64 (Stage D) reuses the Linux x86-64 lowering through `darwin_syscall` and needs `bsdthread_create`/`__ulock` equivalents instead of `clone`/futex.
 * **Stage Four, Windows.** `CreateThread`, `WaitForSingleObject`, `TlsAlloc`/TEB, `WaitOnAddress`/`WakeByAddress*`; x18 is the TEB on ARM64 and must
   never be written; Windows AMD64 and ARM64 are separate validations (`windows-2025`, `windows-11-arm`).
 
