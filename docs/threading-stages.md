@@ -69,10 +69,27 @@ races**: they raise the chance of finding them. The safety argument is the publi
 
 ## 4. Stages Two to Four: plan and what each needs (none started in this PR)
 
-* **Stage Two, linux-arm64.** The AArch64 lowering reuses the Darwin generational collector with shadow frames and a dedicated shadow-stack register;
-  the Linux x86-64 design does not transfer directly. Needs: `clone` with `CLONE_SETTLS` (TPIDR_EL0), AAPCS64 stack alignment (16 bytes), a per-thread
-  shadow frame chain published at park, the same handshake in AArch64 assembly (`ldaxr`/`stlxr` or LSE atomics), futex, and native tests on the
-  `ubuntu-24.04-arm` runner (cross-compilation alone is not evidence).
+* **Stage Two, linux-arm64 (audit result; implementation NOT started).** What the AArch64 backend actually looks like, from reading it:
+  * It shares `lower/lower.mio` with Darwin and Windows ARM64 (Linux and Windows reach the OS through the `linux_abi` / `windows_abi` syscall shims).
+    The collector is the **allocation-triggered generational** one (`generational.mio`, young list, remembered set, large-object space): a collection
+    can only start inside `runtime_alloc`, and the exact roots are the **shadow frames** pushed around each allocation site (`emit_shadow_push`).
+  * **There are no polls.** The only polls (`attached_roots_poll`) belong to the experimental M19ef worker mode and call Darwin pthread/libSystem
+    routines (`runtime/os/darwin`, `worker_roots.mio`, `attached_roots.mio`, `stw_bridge.mio`) that do not exist on Linux. A thread in a loop that does not
+    allocate would never reach a safepoint, so a stop-the-world request could wait forever. Stage Two therefore needs **new polls** (function entry and
+    loop back-edges, emitted only for programs that use the thread natives, as on x86-64) and an AArch64 park/resume protocol.
+  * **Per-thread state lives in registers** (`x20`/`x21` Mochi operand stack, `x23` collector metadata, `x24` shadow-stack top, `x25`, x18 reserved on
+    Darwin). Each thread needs its own operand stack, its own shadow stack, and its register set saved/restored at park; `x23` metadata is shared and
+    every mutation of the young list, remembered set and counters must happen under the heap lock.
+  * **New pieces required:** `clone` with `CLONE_SETTLS` (TPIDR_EL0) through `linux_abi` (AAPCS64, 16-byte stack alignment, a guard page); a thread record
+    and registry; the handle table, slab and futex natives of Stage One re-written in AArch64 (the native op IDs 41-51 already exist in `nativefs.mio`;
+    `emit_native_body` currently rejects them on purpose); the Dekker-style publish/re-check handshake with `ldaxr/stlxr` or LSE atomics and `dmb`;
+    a heap lock around `runtime_alloc`; scanning every parked thread's shadow chain and entry closure; and a write-barrier review (the remembered-set
+    barrier must be safe against concurrent mutators, which it is not today).
+  * **Verification:** only on the real `ubuntu-24.04-arm` runner (no ARM64 hardware is available locally; cross-compilation is not evidence). A local
+    AArch64 user-mode emulator exists as a development aid only and cannot run multi-threaded programs.
+  * **Honest estimate:** this is a re-implementation of the Stage One runtime on a different collector, in assembly that can only be exercised through CI
+    iterations of about 10-15 minutes each; it should be done as its own series of small PRs (polls + park protocol behind a gate; thread/handle/futex natives;
+    allocation lock and barrier; channel natives; tests), not as one change. No owner decision blocks it; the effort does.
 * **Stage Three, macOS.** pthread based (`pthread_create`, `pthread_key`, `pthread_cond`); the existing M19ef Darwin infrastructure (`runtime/os/darwin`,
   `lower/worker_roots.mio`) is experimental and seed-gated and must be audited before reuse. Each architecture is verified on its own runner
   (`macos-15` ARM64, `macos-15-intel`).
