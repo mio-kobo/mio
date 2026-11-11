@@ -602,6 +602,43 @@ def thread_checks(report, cli, target, work):
                  note="rejected at run time (exit %s)" % code)
 
 
+def darwin_worker_baseline(report, cli, work):
+    """Experimental baseline (not a parity claim): the Darwin/AArch64 M19ef worker bridge, built from source by the native CLI on this host.
+
+    tests/m19ef/user-workers/builder.mio is compiled by the native CLI, then used to lower, link and ad-hoc sign real Mach-O images of the
+    existing worker cases; each image is run repeatedly and its output must match exactly. This records what the internal bridge really does on
+    hosted macOS ARM64 hardware. It is NOT the public thread API and never counts toward the parity matrix.
+    """
+    cases = [("ordinary", b"12000\n24000\n0\n"), ("capture", b"101\n102\n0\n"), ("deep", b"91\n0\n"), ("shapes", b"84\n84\n0\n"),
+             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n")]
+    Path(work).mkdir(parents=True, exist_ok=True)
+    builder = Path(work) / "worker-builder"
+    ok, reason, _ = cli_build(report, "darwin-worker-builder", cli, "tests/m19ef/user-workers/builder.mio", "darwin-arm64", builder)
+    if not ok:
+        return report.check("darwin-worker-baseline", "FAIL", "native", "builder build failed: " + reason, required=False)
+    failures, passed = [], []
+    for case, expected in cases:
+        image = Path(work) / (case + "-image")
+        code, out, err, _ = run(report, "darwin-worker-build-" + case, [builder, ROOT, "tests/m19ef/user-workers/%s/main.mio" % case, ROOT / "bunko", image], timeout=600)
+        if code != 0 or not image.is_file():
+            failures.append("%s: image build exit %s: %s" % (case, code, brief(err or out)))
+            continue
+        os.chmod(image, 0o755)
+        code, _, err, _ = run(report, "darwin-worker-sign-" + case, ["codesign", "--verify", "--strict", image])
+        if code != 0:
+            failures.append("%s: signature check exit %s: %s" % (case, code, brief(err)))
+            continue
+        for repeat in range(8):
+            code, out, err, _ = run(report, "darwin-worker-run-%s-%d" % (case, repeat), [image], timeout=60)
+            if code != 0 or out.encode() != expected:
+                failures.append("%s run %d: exit %s stdout %r stderr %s" % (case, repeat, code, out[:120], brief(err, 120)))
+                break
+        else:
+            passed.append(case)
+    report.check("darwin-worker-baseline", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:600], required=False,
+                 passed=passed, note="experimental internal worker bridge only (2 slots): evidence for the audit, not parity")
+
+
 def contract(report, cli, target, reference="", suite="contract"):
     """tests/runtime-abi/run.py --suite contract (RA-1 cases) or differential (former pureLowerPrograms corpus)."""
     output = report.output / ("runtime-abi" if suite == "contract" else "native-differential")
@@ -798,6 +835,7 @@ def follower(args, target):
         smoke(report, cli, target, work)
         if target == "darwin-arm64":
             darwin_profile(report, cli, work)
+            darwin_worker_baseline(report, cli, work / "worker-baseline")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
