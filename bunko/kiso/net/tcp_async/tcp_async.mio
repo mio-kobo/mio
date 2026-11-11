@@ -1,0 +1,210 @@
+yobu "kiso/array";
+yobu "kiso/net/tcp";
+yobu "mio/sys/socket";
+
+// Nonblocking IPv4 TCP: the additive counterpart of kiso/net/tcp (which stays blocking and unchanged).
+//
+// Every operation returns immediately and never waits for the network. An operation that cannot make progress yet
+// reports pending = hai with no other effect (nothing consumed, nothing lost) and may simply be called again; a future
+// reactor decides *when* to call it again, this module only provides the readiness-free primitives.
+//
+// Contracts shared by all operations:
+//  * Partial progress is exact: read/write report the bytes actually transferred (count), never more.
+//  * pending, eof and error are mutually exclusive outcomes of one call; count is 0 unless the call transferred bytes.
+//  * EINTR is retried inside the primitive; EAGAIN/EWOULDBLOCK become pending; EINPROGRESS (connect) becomes pending.
+//  * A handle that is returned inside a result is owned by the caller and must be closed with close/close_listener.
+//    A handle that is not returned has already been closed by this module, on every error path.
+//  * Closing is idempotent-safe: closing twice (or using a closed handle) reports Closed and never touches another
+//    socket, even when the operating system has reused the descriptor (the handle table is generation checked).
+koukai sentaku AsyncError {
+    InvalidArgument;
+    Closed;
+    TimedOut;
+    ConnectionRefused;
+    ConnectionReset;
+    AddressInUse;
+    PermissionDenied;
+    Other(string);
+}
+
+koukai kata AsyncConnection { handle: resource; }
+koukai kata AsyncListener { handle: resource; }
+koukai kata ListenResult { listener: AsyncListener?; error: AsyncError?; }
+// connection is set when the socket exists: pending = hai means the connect is still in progress (finish_connect
+// completes it); pending = iie and error = mu means connected.
+koukai kata ConnectResult { connection: AsyncConnection?; pending: bool; error: AsyncError?; }
+koukai kata AcceptResult { connection: AsyncConnection?; pending: bool; error: AsyncError?; }
+koukai kata ReadResult { count: int64; eof: bool; pending: bool; error: AsyncError?; }
+koukai kata WriteResult { count: int64; pending: bool; error: AsyncError?; }
+koukai kata UnitResult { pending: bool; error: AsyncError?; }
+
+waza valid_address(address: tcp.IPv4Address) -> bool {
+    kaesu len(address.octets) == 4 && address.port >= 0 && address.port <= 65535;
+}
+
+waza valid_range(values: []uint8, offset: int64, length: int64) -> bool {
+    kaesu offset >= 0 && length >= 0 && offset <= len(values) && length <= len(values) - offset;
+}
+
+// Status codes shared with the socket primitives: 0 ok, 1 invalid argument, 2 closed, 3 timed out, 4 refused, 5 reset,
+// 6 address in use, 7 permission denied, 8 would block, 9 other, 10 in progress.
+waza error_from(code: uint8, message: string) -> AsyncError? {
+    moshi (code == uint8(0)) { kaesu mu; }
+    moshi (code == uint8(1)) { kaesu AsyncError.InvalidArgument(); }
+    moshi (code == uint8(2)) { kaesu AsyncError.Closed(); }
+    moshi (code == uint8(3)) { kaesu AsyncError.TimedOut(); }
+    moshi (code == uint8(4)) { kaesu AsyncError.ConnectionRefused(); }
+    moshi (code == uint8(5)) { kaesu AsyncError.ConnectionReset(); }
+    moshi (code == uint8(6)) { kaesu AsyncError.AddressInUse(); }
+    moshi (code == uint8(7)) { kaesu AsyncError.PermissionDenied(); }
+    kaesu AsyncError.Other(message);
+}
+
+waza is_pending(code: uint8) -> bool {
+    kaesu code == uint8(8) || code == uint8(10);
+}
+
+waza decode_count(status: []uint8) -> int64 {
+    kaku result = 0;
+    kaku factor = 1;
+    kaku index = 0;
+    aida (index < 8) {
+        result = result + int64(status[index]) * factor;
+        index = index + 1;
+        moshi (index < 8) { factor = factor * 256; }
+    }
+    kaesu result;
+}
+
+waza release(handle: resource) -> unit {
+    kaku status: []uint8 = [0];
+    socket.close(handle, status);
+}
+
+// listen binds and listens; the socket is nonblocking, so accept never waits.
+koukai waza listen(address: tcp.IPv4Address, backlog: int64) -> ListenResult {
+    moshi (!valid_address(address) || backlog < 0 || backlog > 65535) {
+        kaesu ListenResult { listener: mu, error: AsyncError.InvalidArgument() };
+    }
+    kaku handle = socket.open();
+    kaku status: []uint8 = [0];
+    kaku message = socket.status(handle, status);
+    kaku failure = error_from(status[0], message);
+    moshi (failure == mu) {
+        message = socket.set_nonblocking(handle, 1, status);
+        failure = error_from(status[0], message);
+    }
+    moshi (failure == mu) {
+        message = socket.bind_ipv4(handle, address.octets, address.port, status);
+        failure = error_from(status[0], message);
+    }
+    moshi (failure == mu) {
+        message = socket.listen(handle, backlog, status);
+        failure = error_from(status[0], message);
+    }
+    moshi (failure != mu) {
+        release(handle);
+        kaesu ListenResult { listener: mu, error: failure };
+    }
+    kaesu ListenResult { listener: AsyncListener { handle: handle }, error: mu };
+}
+
+// accept returns pending = hai when no connection is waiting. The accepted socket is switched to nonblocking mode
+// before it is returned; if that fails it is closed and the error is reported.
+koukai waza accept(listener: AsyncListener) -> AcceptResult {
+    kaku handle = socket.accept(listener.handle);
+    kaku status: []uint8 = [0];
+    kaku message = socket.status(handle, status);
+    kaku code = status[0];
+    moshi (code != uint8(0)) {
+        release(handle);
+        moshi (is_pending(code)) { kaesu AcceptResult { connection: mu, pending: hai, error: mu }; }
+        kaesu AcceptResult { connection: mu, pending: iie, error: error_from(code, message) };
+    }
+    message = socket.set_nonblocking(handle, 1, status);
+    kaku failure = error_from(status[0], message);
+    moshi (failure != mu) {
+        release(handle);
+        kaesu AcceptResult { connection: mu, pending: iie, error: failure };
+    }
+    kaesu AcceptResult { connection: AsyncConnection { handle: handle }, pending: iie, error: mu };
+}
+
+// connect starts a connection to a literal IPv4 address. Loopback connects usually complete at once; otherwise the
+// result carries pending = hai and the caller must call finish_connect until it stops reporting pending.
+koukai waza connect(address: tcp.IPv4Address) -> ConnectResult {
+    moshi (!valid_address(address)) {
+        kaesu ConnectResult { connection: mu, pending: iie, error: AsyncError.InvalidArgument() };
+    }
+    kaku handle = socket.open();
+    kaku status: []uint8 = [0];
+    kaku message = socket.status(handle, status);
+    kaku failure = error_from(status[0], message);
+    moshi (failure == mu) {
+        message = socket.set_nonblocking(handle, 1, status);
+        failure = error_from(status[0], message);
+    }
+    kaku pending = iie;
+    moshi (failure == mu) {
+        message = socket.connect_ipv4(handle, address.octets, address.port, status);
+        pending = status[0] == uint8(10);
+        moshi (!pending) { failure = error_from(status[0], message); }
+    }
+    moshi (failure != mu) {
+        release(handle);
+        kaesu ConnectResult { connection: mu, pending: iie, error: failure };
+    }
+    kaesu ConnectResult { connection: AsyncConnection { handle: handle }, pending: pending, error: mu };
+}
+
+// finish_connect completes a connect that reported pending. It only ever reports pending while the connection is
+// genuinely still being established; once it fails the socket is closed (a later close reports Closed). It must only be
+// called on a connection returned by connect() with pending = hai.
+koukai waza finish_connect(connection: AsyncConnection) -> UnitResult {
+    kaku status: []uint8 = [0];
+    kaku message = socket.finish_connect(connection.handle, status);
+    kaku code = status[0];
+    moshi (code == uint8(10)) { kaesu UnitResult { pending: hai, error: mu }; }
+    kaku failure = error_from(code, message);
+    moshi (failure != mu) {
+        release(connection.handle);
+        kaesu UnitResult { pending: iie, error: failure };
+    }
+    kaesu UnitResult { pending: iie, error: mu };
+}
+
+koukai waza read(connection: AsyncConnection, destination: []uint8, offset: int64, length: int64) -> ReadResult {
+    moshi (!valid_range(destination, offset, length)) {
+        kaesu ReadResult { count: 0, eof: iie, pending: iie, error: AsyncError.InvalidArgument() };
+    }
+    kaku status = array.make[uint8](10, uint8(0));
+    kaku message = socket.read(connection.handle, destination, offset, length, status);
+    kaku code = status[9];
+    moshi (is_pending(code)) { kaesu ReadResult { count: 0, eof: iie, pending: hai, error: mu }; }
+    kaesu ReadResult { count: decode_count(status), eof: status[8] != uint8(0), pending: iie, error: error_from(code, message) };
+}
+
+// write transfers as many bytes as the kernel accepts right now (possibly fewer than length, possibly zero with
+// pending = hai). The caller keeps its own progress: resume at offset + count.
+koukai waza write(connection: AsyncConnection, source: []uint8, offset: int64, length: int64) -> WriteResult {
+    moshi (!valid_range(source, offset, length)) {
+        kaesu WriteResult { count: 0, pending: iie, error: AsyncError.InvalidArgument() };
+    }
+    kaku status = array.make[uint8](10, uint8(0));
+    kaku message = socket.write(connection.handle, source, offset, length, status);
+    kaku code = status[9];
+    moshi (is_pending(code)) { kaesu WriteResult { count: 0, pending: hai, error: mu }; }
+    kaesu WriteResult { count: decode_count(status), pending: iie, error: error_from(code, message) };
+}
+
+koukai waza close(connection: AsyncConnection) -> UnitResult {
+    kaku status: []uint8 = [0];
+    kaku message = socket.close(connection.handle, status);
+    kaesu UnitResult { pending: iie, error: error_from(status[0], message) };
+}
+
+koukai waza close_listener(listener: AsyncListener) -> UnitResult {
+    kaku status: []uint8 = [0];
+    kaku message = socket.close(listener.handle, status);
+    kaesu UnitResult { pending: iie, error: error_from(status[0], message) };
+}

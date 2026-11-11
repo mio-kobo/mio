@@ -29,6 +29,8 @@ Server-side functions: `listen`, `listen_with_backlog`, `accept`, and
 exact byte count, or `tcp.write_all` to retry short writes. Resources should
 be explicitly closed; the runtime also closes remaining handles at shutdown.
 
+For nonblocking sockets see [`kiso/net/tcp_async`](../tcp_async/README.md); this module stays blocking.
+
 The API supports blocking connections with IPv4 literals. DNS, IPv6,
 timeouts and TLS are outside its current scope.
 
