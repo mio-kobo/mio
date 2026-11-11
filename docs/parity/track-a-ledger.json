@@ -160,6 +160,17 @@
       "result": "PASS on hosted macOS ARM64: builder compiled natively (11.9 s); 7 worker cases linked, signed and run 8 times each with exact output",
       "evidence": "Native run 42979096384, job 130388376944, check darwin-worker-baseline (PR #79)",
       "conclusion": "the internal bridge works on hosted hardware with 2 worker slots; it is not the public API and not parity"
+    },
+    {
+      "step": 2,
+      "what": "generalise the Darwin ARM64 worker bridge from 2 to 16 slots (PR #79 commit 074adc5), new 12-worker case under GC stress",
+      "status": "MEASURED",
+      "result": "hosted macos-15 ARM64, run 42981455254: all 7 original cases still PASS x8; the 12 concurrent workers computed the correct total 3914700; the only mismatch was the test's own expectation of the collect return value (live bytes, 240, not 0)",
+      "evidence": "artifact native-report-darwin-arm64-42981455254-1 (check darwin-worker-baseline)",
+      "findings": [
+        "the bridge writes a 360-byte binary evidence record to stderr at shutdown: the public mode must not do this",
+        "bridge assembler/Mach-O bounds (4096/8192/10244 words) had to be raised together to link more than 3 contexts"
+      ]
     }
   ]
 }

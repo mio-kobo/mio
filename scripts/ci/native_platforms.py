@@ -610,7 +610,7 @@ def darwin_worker_baseline(report, cli, work):
     hosted macOS ARM64 hardware. It is NOT the public thread API and never counts toward the parity matrix.
     """
     cases = [("ordinary", b"12000\n24000\n0\n"), ("capture", b"101\n102\n0\n"), ("deep", b"91\n0\n"), ("shapes", b"84\n84\n0\n"),
-             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n"), ("many", b"3914700\n0\n")]
+             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n"), ("many", b"3914700\nhai\n")]
     Path(work).mkdir(parents=True, exist_ok=True)
     builder = Path(work) / "worker-builder"
     ok, reason, _ = cli_build(report, "darwin-worker-builder", cli, "tests/m19ef/user-workers/builder.mio", "darwin-arm64", builder)
