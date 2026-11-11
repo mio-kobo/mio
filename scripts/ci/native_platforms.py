@@ -590,15 +590,20 @@ def thread_checks(report, cli, target, work):
                      "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                      note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
         return
+    # darwin-arm64 implements start and join (check darwin-thread-core); what must still fail closed there is everything that needs the word natives,
+    # i.e. channel programs. Every other target must reject any thread program.
+    partial = target == "darwin-arm64"
+    program = "channel_basic.mio" if partial else "basic.mio"
+    label = "thread-channels-fail-closed" if partial else "thread-natives-fail-closed"
     image = Path(work) / ("thread-program" + EXE.get(target, ""))
     Path(work).mkdir(parents=True, exist_ok=True)
-    built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads/basic.mio"), target, image)
+    built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads" / program), target, image)
     if not built:
-        return report.check("thread-natives-fail-closed", "PASS", "native", "", note="rejected at compile time: " + brief(reason, 120))
+        return report.check(label, "PASS", "native", "", note="rejected at compile time: " + brief(reason, 120))
     code, out, err, _ = run(report, "thread-natives-run", [image], cwd=work, timeout=120)
-    silently_ran = code == 0 and out.startswith("hai\n7\n")
-    report.check("thread-natives-fail-closed", "FAIL" if silently_ran else "PASS", "native",
-                 "a program that starts OS threads ran on a target without them" if silently_ran else "",
+    silently_ran = code == 0 and (out.startswith("hai\n7\n") or out.startswith("50\n2600\n"))
+    report.check(label, "FAIL" if silently_ran else "PASS", "native",
+                 "a program that needs threads/channels ran on a target without them" if silently_ran else "",
                  note="rejected at run time (exit %s)" % code)
 
 

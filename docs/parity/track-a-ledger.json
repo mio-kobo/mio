@@ -171,6 +171,15 @@
         "the bridge writes a 360-byte binary evidence record to stderr at shutdown: the public mode must not do this",
         "bridge assembler/Mach-O bounds (4096/8192/10244 words) had to be raised together to link more than 3 contexts"
       ]
+    },
+    {
+      "step": 3,
+      "what": "public start/join on darwin-arm64: build pipeline routes thread programs through the cooperative worker bridge (PR #79 commit da3d54c)",
+      "status": "MEASURED",
+      "result": "hosted macos-15 ARM64, run 42996933167: check darwin-thread-core PASS (tests/threads/core_runtime.mio built by the native CLI, run 10x normal and 10x --gc-stress, exact output); darwin-worker-baseline PASS for all 8 cases incl. 12 concurrent workers under GC stress",
+      "evidence": "artifact native-report-darwin-arm64-42996933167-1",
+      "limits": "start and join only: no word natives, no kiso/thread, no channels, join of an invalid handle traps, at most 16 live threads (a 17th start is a runtime error); cells I/J/K stay UNSUPPORTED",
+      "follow_up": "the stale thread-natives-fail-closed check failed on darwin-arm64 because threads now run there: it is replaced on that target by thread-channels-fail-closed (channel programs must still be rejected)"
     }
   ]
 }
