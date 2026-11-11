@@ -19,12 +19,12 @@ Only **VALIDATED_BY_CI** counts toward parity (native execution on that platform
 | I native multithreading | VALIDATED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED |
 | J thread synchronisation | VALIDATED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED |
 | K channels | VALIDATED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED |
-| L nonblocking TCP | VALIDATED | VALIDATED | VALIDATED | VALIDATED | UNSUPPORTED | UNSUPPORTED |
+| L nonblocking TCP | VALIDATED | VALIDATED | VALIDATED | VALIDATED | VALIDATED | UNSUPPORTED |
 | M Reactor / event loop | VALIDATED | VALIDATED | VALIDATED | VALIDATED | UNSUPPORTED | UNSUPPORTED |
 | N error handling and resource lifecycle | VALIDATED | VALIDATED | VALIDATED | VALIDATED | VALIDATED | VALIDATED |
 | O standard library behaviour | VALIDATED | VALIDATED | VALIDATED | VALIDATED | VALIDATED | VALIDATED |
 
-## Parity backlog (19 entries)
+## Parity backlog (18 entries)
 
 * **linux-arm64 / I native multithreading** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 2: polls, park protocol and thread natives in AArch64 (Stage B)
 * **linux-arm64 / J thread synchronisation** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 2: polls, park protocol and thread natives in AArch64 (Stage B)
@@ -38,7 +38,6 @@ Only **VALIDATED_BY_CI** counts toward parity (native execution on that platform
 * **windows-amd64 / I native multithreading** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 4: CreateThread/WaitOnAddress runtime
 * **windows-amd64 / J thread synchronisation** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 4: CreateThread/WaitOnAddress runtime
 * **windows-amd64 / K channels** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 4: CreateThread/WaitOnAddress runtime
-* **windows-amd64 / L nonblocking TCP** (UNSUPPORTED): Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here. Next: after the async session's backend PR for this target
 * **windows-amd64 / M Reactor / event loop** (UNSUPPORTED): Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here. Next: after the async session's backend PR for this target
 * **windows-arm64 / I native multithreading** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 5: after windows-amd64
 * **windows-arm64 / J thread synchronisation** (UNSUPPORTED): Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback. Next: Priority 5: after windows-amd64
