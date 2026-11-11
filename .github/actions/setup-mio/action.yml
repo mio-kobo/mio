@@ -1,0 +1,39 @@
+name: Setup Mio
+description: Install an exact, checksum-verified Mio release from GitHub Releases and add it to PATH.
+inputs:
+  version:
+    description: Exact release version without the leading v, for example 2.1.2. Ranges and "latest" are rejected.
+    required: true
+  distribution:
+    description: full (embeds Bunko) or core (needs MIO_BUNKO or --bunko-root).
+    required: false
+    default: full
+  repository:
+    description: Repository hosting the release assets.
+    required: false
+    default: mio-kobo/mio
+  token:
+    description: Token used only to read public release assets.
+    required: false
+    default: ${{ github.token }}
+outputs:
+  version:
+    description: Installed version as reported by the release.
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: Directory containing the mio executable.
+    value: ${{ steps.install.outputs.path }}
+  cache-hit:
+    description: true when the toolchain was already present in the runner tool cache.
+    value: ${{ steps.install.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        MIO_SETUP_VERSION: ${{ inputs.version }}
+        MIO_SETUP_DISTRIBUTION: ${{ inputs.distribution }}
+        MIO_SETUP_REPOSITORY: ${{ inputs.repository }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: bash "${{ github.action_path }}/setup.sh"
