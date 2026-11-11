@@ -105,9 +105,9 @@ koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
     kaku at = 0;
     aida (at < len(direct)) { lx_direct(c, direct[at], direct[at + 1], at); at = at + 2; }
     // ---- translated calls
-    kaku calls = [73, 5, 197, 338, 344, 136, 137, 10, 15, 2, 90, 92, 105, 104, 98, 230, 336, 202, 274, 194];
+    kaku calls = [73, 5, 197, 338, 344, 136, 137, 10, 15, 2, 90, 92, 105, 104, 98, 230, 336, 202, 274, 194, 54, 118];
     kaku names = ["lx_munmap", "lx_open", "lx_mmap", "lx_stat", "lx_dirents", "lx_mkdir", "lx_rmdir", "lx_unlink", "lx_chmod", "lx_fork", "lx_dup2",
-        "lx_fcntl", "lx_setsockopt", "lx_bind", "lx_connect", "lx_poll", "lx_procinfo", "lx_sysctl", "lx_sysctlbyname", "lx_getrlimit"];
+        "lx_fcntl", "lx_setsockopt", "lx_bind", "lx_connect", "lx_poll", "lx_procinfo", "lx_sysctl", "lx_sysctlbyname", "lx_getrlimit", "lx_ioctl", "lx_getsockopt"];
     at = 0;
     aida (at < len(calls)) { lx_dispatch(c, calls[at], names[at], at); at = at + 1; }
     lx_li(c, 0, -38); lx_b(c, "lx_norm");
@@ -278,6 +278,21 @@ koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
         at = at + 2;
     }
     lx_label(c, "lx_setsockopt_go"); lx_li(c, 8, 208); lx_b(c, "lx_svc");
+
+    // ---- ioctl(fd, request, argp): only FIONBIO (Darwin 0x8004667e) is translated, to the Linux request 0x5421; anything else is ENOSYS
+    lx_label(c, "lx_ioctl");
+    lx_li(c, 9, 2147772030); lx(c, arm64.cmp_x(1, 9)); lx_bcc(c, 1, "lx_unsupported");
+    lx_li(c, 1, 21537); lx_li(c, 8, 29); lx_b(c, "lx_svc");
+
+    // ---- getsockopt(fd, level, name, value, length): only SOL_SOCKET (0xffff -> 1) / SO_ERROR (0x1007 -> 4) is translated; the
+    // pending error the kernel stores in *value is a Linux errno and is translated to the Darwin number like a failed call's errno.
+    lx_label(c, "lx_getsockopt");
+    lx_li(c, 9, 65535); lx(c, arm64.cmp_x(1, 9)); lx_bcc(c, 1, "lx_unsupported");
+    lx_li(c, 9, 4103); lx(c, arm64.cmp_x(2, 9)); lx_bcc(c, 1, "lx_unsupported");
+    lx_li(c, 1, 1); lx_li(c, 2, 4); lx_li(c, 8, 209); lx(c, arm64.svc(0));
+    lx(c, arm64.cmp_imm_x(0, 0, iie)); lx_bcc(c, 11, "lx_norm");
+    lx(c, arm64.ldr_x(9, 31, 8)); lx(c, arm64.ldr_w(0, 9, 0)); lx_bl(c, "lx_errno"); lx(c, arm64.str_w(0, 9, 0));
+    lx_li(c, 0, 0); lx_b(c, "lx_norm");
 
     // ---- bind/connect: Darwin sockaddr_in (sin_len, sin_family) -> Linux (u16 family)
     lx_label(c, "lx_bind"); lx_li(c, 8, 200); lx_b(c, "lx_sockaddr");
