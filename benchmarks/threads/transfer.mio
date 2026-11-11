@@ -14,12 +14,9 @@ waza build(count: int64) -> Node {
     kaesu Node { id: -7, payload: [], links: links };
 }
 
-// The graph to copy lives in a top-level variable. A call result is conservatively treated as aliasing the call's arguments (precise effect
-// summaries are future work), so the copier takes no graph argument and the sender can transfer its result.
-kaku template = build(0);
-
-waza deep_copy() -> Node {
-    kaku source = template;
+// The effect summary of this function proves its result is a fresh graph (it reads `source` but returns only new objects), so the copy is
+// not an alias of `source` and the sender can both keep `source` and transfer the copy.
+waza deep_copy(source: Node) -> Node {
     kaku links: []Node = [];
     kaku i = 0;
     aida (i < len(source.links)) {
@@ -47,7 +44,7 @@ waza measure(count: int64, rounds: int64, mode: int64) -> int64 {
         kaesu checksum;
     };
     kaku handle = thread.start(consumer);
-    template = build(count);
+    kaku source = build(count);
     kaku sink = 0;
     kaku started = os.monotonic_ms();
     kaku round = 0;
@@ -61,7 +58,7 @@ waza measure(count: int64, rounds: int64, mode: int64) -> int64 {
             kaku outcome = thread.send[Node](channel, yuzuru fresh);
         }
         moshi (mode == 2) {
-            kaku copy = deep_copy();
+            kaku copy = deep_copy(source);
             kaku outcome = thread.send[Node](channel, yuzuru copy);
         }
         round = round + 1;
