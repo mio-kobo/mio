@@ -1,22 +1,37 @@
 yobu "kiso/array";
 yobu "mio/sys/socket";
 
-// Readiness reactor (level-triggered epoll on linux-amd64). The OS part is five primitives of mio/sys/socket; everything else
-// -- registration slots, generations, stale-event filtering, wake handling -- is Mio.
+// Portable readiness reactor. The OS-independent contract is five operations:
 //
-// Contract (docs/async-networking.md, phase B):
-//  * register(...) returns a Registration {slot, generation}. The kernel only ever sees the opaque token
-//    generation * 1048576 + slot + 1 (token 0 is the internal wake-up descriptor).
-//  * wait(...) is the ONLY blocking call. Events whose generation no longer matches a live registration are dropped and
-//    counted in WaitResult.stale: a closed-and-reused descriptor, a deregistered slot or a duplicated event can never wake
-//    the wrong owner.
-//  * deregister(...) always releases the slot (generation + 1) even if the socket was already closed; using a stale
-//    Registration afterwards reports Closed.
-//  * wake(...) makes a pending or future wait return promptly with woken = hai; any number of wakes before a wait are
-//    coalesced into one.
-//  * Level-triggered: a descriptor stays ready until the owner reads/writes it down to EAGAIN, so no readiness is lost
-//    between wait calls. There is no busy polling: wait with timeout_ms = -1 sleeps in the kernel until an event or a wake.
-//  * close(...) releases the kernel objects and invalidates every Registration; closing twice reports Closed.
+//   submit(reactor, handle, interest) -> SubmitResult   watch a nonblocking socket handle; returns an Operation
+//   update(reactor, operation, handle, interest)        change the interest of a live operation
+//   poll(reactor, timeout_ms, max)    -> PollResult     the ONLY blocking call; returns ready Events
+//   cancel(reactor, operation, handle)                  stop watching; later events of the operation are never delivered
+//   wake(reactor)                                       make a pending or future poll return (thread-safe by construction: it only
+//                                                       adds to an eventfd counter)
+//   close(reactor)                                      release every native resource
+//
+// Backend: Linux AMD64 level-triggered epoll plus an eventfd (docs/async-networking.md). Other targets fail closed
+// (an explicit error from open). A kqueue backend (readiness, same contract) and an IOCP backend (completion: the adapter
+// owns the OVERLAPPED and the buffer until the completion packet is dequeued, including after cancellation) are planned, not
+// implemented.
+//
+// Contract:
+//  * Every Operation has a unique id (never reused within a reactor) and a generation: `slot` is recycled, `generation` is not.
+//    The kernel only ever sees generation * 1048576 + slot + 1 (token 0 is the internal wake-up descriptor).
+//  * poll drops events whose generation no longer matches a live operation (cancelled operation, reused descriptor, in-flight
+//    kernel event) and counts them in PollResult.stale: a cancelled or stale operation never reaches a new owner.
+//  * An Event delivered by one poll can be cancelled by the caller before it is handled; check `current(reactor, event)` first.
+//  * cancel always releases the slot, even if the socket was already closed (the kernel dropped the registration when the
+//    descriptor closed). Cancel BEFORE closing the resource where possible; either order is memory-safe.
+//  * While an operation is pending the reactor keeps its socket handle reachable (a managed reference in `handles`).
+//  * Raw file descriptors are never exposed: sockets and the reactor itself are opaque, generation-checked handles.
+//  * Level-triggered: a descriptor stays ready until its owner drains it to EAGAIN, so no readiness is lost between polls.
+//    No busy polling: poll(-1) sleeps in the kernel until an event or a wake; poll(n) waits at most n ms; EINTR (signal) returns
+//    zero events early and is never an error, callers simply poll again.
+//  * wakes coalesce: any number of wakes before a poll produce one `woken`.
+//  * close invalidates every Operation; closing twice reports Closed.
+
 koukai teisu readable = 1;
 koukai teisu writable = 2;
 koukai teisu max_events = 64;
@@ -26,16 +41,21 @@ koukai sentaku ReactorError {
     InvalidArgument;
     Closed;
     Exhausted;
+    Unsupported;
     Other(string);
 }
 
-koukai kata Reactor { poll: resource; wake_handle: resource; generations: []int64; active: []bool; free: []int64; }
-koukai kata Registration { slot: int64; generation: int64; }
+// ids: the id of the live operation in each slot; counter[0]: the last id handed out; handles: the watched handle per slot
+// (a managed reference that keeps the socket reachable while the operation is pending; a free slot holds the reactor's own poll
+// handle as a placeholder).
+koukai kata Watched { handle: resource; }
+koukai kata Reactor { poll_handle: resource; wake_handle: resource; generations: []int64; active: []bool; free: []int64; ids: []int64; counter: []int64; handles: []Watched; }
+koukai kata Operation { id: int64; slot: int64; generation: int64; }
 // interest events: readable/writable report readiness; error and hangup are reported whatever the interest was.
-koukai kata Event { slot: int64; generation: int64; readable: bool; writable: bool; error: bool; hangup: bool; }
+koukai kata Event { operation: int64; slot: int64; generation: int64; readable: bool; writable: bool; error: bool; hangup: bool; }
 koukai kata OpenResult { reactor: Reactor?; error: ReactorError?; }
-koukai kata RegisterResult { registration: Registration?; error: ReactorError?; }
-koukai kata WaitResult { events: []Event; woken: bool; stale: int64; error: ReactorError?; }
+koukai kata SubmitResult { operation: Operation?; error: ReactorError?; }
+koukai kata PollResult { events: []Event; woken: bool; stale: int64; error: ReactorError?; }
 koukai kata UnitResult { error: ReactorError?; }
 
 waza error_from(code: uint8, message: string) -> ReactorError? {
@@ -66,112 +86,146 @@ waza release(handle: resource) -> unit {
     socket.close(handle, status);
 }
 
+// A target has a reactor backend iff it rejects an invalid kind as an invalid argument; the fail-closed stubs of the other
+// targets report a generic error for every call.
+waza has_backend() -> bool {
+    kaku status: []uint8 = [0];
+    kaku probe = socket.reactor_open(7);
+    socket.status(probe, status);
+    kaku code = status[0];
+    release(probe);
+    kaesu code == uint8(1);
+}
+
+// open creates the epoll instance and the wake-up eventfd. On targets without a backend it fails with Unsupported.
 koukai waza open() -> OpenResult {
     kaku status: []uint8 = [0];
-    kaku poll = socket.reactor_open(0);
-    kaku message = socket.status(poll, status);
+    kaku poll_handle = socket.reactor_open(0);
+    kaku message = socket.status(poll_handle, status);
     kaku failure = error_from(status[0], message);
-    moshi (failure != mu) { release(poll); kaesu OpenResult { reactor: mu, error: failure }; }
+    moshi (failure != mu) {
+        release(poll_handle);
+        moshi (!has_backend()) { kaesu OpenResult { reactor: mu, error: ReactorError.Unsupported() }; }
+        kaesu OpenResult { reactor: mu, error: failure };
+    }
     kaku wake_handle = socket.reactor_open(1);
     message = socket.status(wake_handle, status);
     failure = error_from(status[0], message);
-    moshi (failure != mu) { release(poll); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
-    message = socket.reactor_ctl(poll, wake_handle, pack(1, readable, 0), status);
+    moshi (failure != mu) { release(poll_handle); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
+    message = socket.reactor_ctl(poll_handle, wake_handle, pack(1, readable, 0), status);
     failure = error_from(status[0], message);
-    moshi (failure != mu) { release(poll); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
+    moshi (failure != mu) { release(poll_handle); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
     kaku generations: []int64 = [];
     kaku active: []bool = [];
     kaku free: []int64 = [];
-    kaesu OpenResult { reactor: Reactor { poll: poll, wake_handle: wake_handle, generations: generations, active: active, free: free }, error: mu };
+    kaku ids: []int64 = [];
+    kaku counter: []int64 = [0];
+    kaku handles: []Watched = [];
+    kaesu OpenResult { reactor: Reactor { poll_handle: poll_handle, wake_handle: wake_handle, generations: generations, active: active, free: free, ids: ids, counter: counter, handles: handles }, error: mu };
 }
 
-// A registration is live while its slot is active and the generation matches.
-koukai waza live(reactor: Reactor, registration: Registration) -> bool {
-    kaesu registration.slot >= 0 && registration.slot < len(reactor.generations)
-        && reactor.active[registration.slot] && reactor.generations[registration.slot] == registration.generation;
+// An operation is live while its slot is active and both generation and id match.
+koukai waza live(reactor: Reactor, operation: Operation) -> bool {
+    kaesu operation.slot >= 0 && operation.slot < len(reactor.generations)
+        && reactor.active[operation.slot] && reactor.generations[operation.slot] == operation.generation
+        && reactor.ids[operation.slot] == operation.id;
 }
 
-waza take_slot(reactor: Reactor) -> int64 {
+// current reports whether an Event returned by poll still belongs to a live operation (it may have been cancelled since).
+koukai waza current(reactor: Reactor, event: Event) -> bool {
+    kaesu live(reactor, Operation { id: event.operation, slot: event.slot, generation: event.generation });
+}
+
+waza take_slot(reactor: Reactor, handle: resource) -> int64 {
     kaku count = len(reactor.free);
     moshi (count > 0) {
         kaku slot = reactor.free[count - 1];
         array.truncate(reactor.free, count - 1);
         reactor.active[slot] = hai;
+        reactor.handles[slot] = Watched { handle: handle };
         kaesu slot;
     }
     kaku slot = len(reactor.generations);
     moshi (slot >= slot_limit) { kaesu -1; }
     array.push(reactor.generations, 1);
     array.push(reactor.active, hai);
+    array.push(reactor.ids, 0);
+    array.push(reactor.handles, Watched { handle: handle });
     kaesu slot;
 }
 
-// Frees the slot for reuse and invalidates every Registration and in-flight kernel event of the old generation.
+// Frees the slot for reuse and invalidates every Operation and in-flight kernel event of the old generation.
 waza release_slot(reactor: Reactor, slot: int64) -> unit {
     reactor.active[slot] = iie;
     reactor.generations[slot] = reactor.generations[slot] + 1;
+    reactor.ids[slot] = 0;
+    reactor.handles[slot] = Watched { handle: reactor.poll_handle };
     array.push(reactor.free, slot);
 }
 
-waza token_of(registration: Registration) -> int64 {
-    kaesu registration.generation * slot_limit + registration.slot + 1;
+waza token_of(operation: Operation) -> int64 {
+    kaesu operation.generation * slot_limit + operation.slot + 1;
 }
 
 waza control(reactor: Reactor, handle: resource, op: int64, interest: int64, token: int64) -> ReactorError? {
     kaku status: []uint8 = [0];
-    kaku message = socket.reactor_ctl(reactor.poll, handle, pack(op, interest, token), status);
+    kaku message = socket.reactor_ctl(reactor.poll_handle, handle, pack(op, interest, token), status);
     kaesu error_from(status[0], message);
 }
 
-// register watches handle (any socket handle: a connection, a listener) for interest (readable = 1, writable = 2, or 3).
-koukai waza register(reactor: Reactor, handle: resource, interest: int64) -> RegisterResult {
+// submit watches a socket handle (a connection, a listener) for interest: readable = 1, writable = 2, or 3.
+koukai waza submit(reactor: Reactor, handle: resource, interest: int64) -> SubmitResult {
     moshi (interest < 1 || interest > 3) {
-        kaesu RegisterResult { registration: mu, error: ReactorError.InvalidArgument() };
+        kaesu SubmitResult { operation: mu, error: ReactorError.InvalidArgument() };
     }
-    kaku slot = take_slot(reactor);
-    moshi (slot < 0) { kaesu RegisterResult { registration: mu, error: ReactorError.Exhausted() }; }
-    kaku registration = Registration { slot: slot, generation: reactor.generations[slot] };
-    kaku failure = control(reactor, handle, 1, interest, token_of(registration));
+    kaku slot = take_slot(reactor, handle);
+    moshi (slot < 0) { kaesu SubmitResult { operation: mu, error: ReactorError.Exhausted() }; }
+    reactor.counter[0] = reactor.counter[0] + 1;
+    reactor.ids[slot] = reactor.counter[0];
+    kaku operation = Operation { id: reactor.counter[0], slot: slot, generation: reactor.generations[slot] };
+    kaku failure = control(reactor, handle, 1, interest, token_of(operation));
     moshi (failure != mu) {
         release_slot(reactor, slot);
-        kaesu RegisterResult { registration: mu, error: failure };
+        kaesu SubmitResult { operation: mu, error: failure };
     }
-    kaesu RegisterResult { registration: registration, error: mu };
+    kaesu SubmitResult { operation: operation, error: mu };
 }
 
-koukai waza modify(reactor: Reactor, registration: Registration, handle: resource, interest: int64) -> UnitResult {
+koukai waza update(reactor: Reactor, operation: Operation, handle: resource, interest: int64) -> UnitResult {
     moshi (interest < 1 || interest > 3) { kaesu UnitResult { error: ReactorError.InvalidArgument() }; }
-    moshi (!live(reactor, registration)) { kaesu UnitResult { error: ReactorError.Closed() }; }
-    kaesu UnitResult { error: control(reactor, handle, 3, interest, token_of(registration)) };
+    moshi (!live(reactor, operation)) { kaesu UnitResult { error: ReactorError.Closed() }; }
+    kaesu UnitResult { error: control(reactor, handle, 3, interest, token_of(operation)) };
 }
 
-// deregister releases the slot whatever happens to the kernel registration; a socket that was already closed is not an error.
-koukai waza deregister(reactor: Reactor, registration: Registration, handle: resource) -> UnitResult {
-    moshi (!live(reactor, registration)) { kaesu UnitResult { error: ReactorError.Closed() }; }
+// cancel releases the slot whatever happens to the kernel registration; a socket that was already closed is not an error.
+// A cancelled or stale Operation reports Closed and never affects the slot's new owner.
+koukai waza cancel(reactor: Reactor, operation: Operation, handle: resource) -> UnitResult {
+    moshi (!live(reactor, operation)) { kaesu UnitResult { error: ReactorError.Closed() }; }
     kaku failure = control(reactor, handle, 2, 0, 0);
-    release_slot(reactor, registration.slot);
+    release_slot(reactor, operation.slot);
     moshi (failure != mu) {
         awase (failure) {
             baai Closed { kaesu UnitResult { error: mu }; }
             baai InvalidArgument { kaesu UnitResult { error: failure }; }
             baai Exhausted { kaesu UnitResult { error: failure }; }
+            baai Unsupported { kaesu UnitResult { error: failure }; }
             baai Other(message) { kaesu UnitResult { error: failure }; }
         }
     }
     kaesu UnitResult { error: mu };
 }
 
-// wait blocks for at most timeout_ms (-1: until an event or a wake, 0: poll) and returns up to max ready events.
-koukai waza wait(reactor: Reactor, timeout_ms: int64, max: int64) -> WaitResult {
+// poll blocks for at most timeout_ms (-1: until an event or a wake, 0: no wait) and returns up to max ready events.
+koukai waza poll(reactor: Reactor, timeout_ms: int64, max: int64) -> PollResult {
     kaku none: []Event = [];
     moshi (max < 1 || max > max_events || timeout_ms < -1) {
-        kaesu WaitResult { events: none, woken: iie, stale: 0, error: ReactorError.InvalidArgument() };
+        kaesu PollResult { events: none, woken: iie, stale: 0, error: ReactorError.InvalidArgument() };
     }
     kaku buffer = array.make[uint8](16 * max, uint8(0));
     kaku status = array.make[uint8](10, uint8(0));
-    kaku message = socket.reactor_wait(reactor.poll, buffer, max, timeout_ms, status);
+    kaku message = socket.reactor_wait(reactor.poll_handle, buffer, max, timeout_ms, status);
     kaku failure = error_from(status[9], message);
-    moshi (failure != mu) { kaesu WaitResult { events: none, woken: iie, stale: 0, error: failure }; }
+    moshi (failure != mu) { kaesu PollResult { events: none, woken: iie, stale: 0, error: failure }; }
     kaku count = decode(status, 0);
     kaku events: []Event = [];
     kaku woken = iie;
@@ -187,11 +241,14 @@ koukai waza wait(reactor: Reactor, timeout_ms: int64, max: int64) -> WaitResult 
             kaku value = token - 1;
             kaku generation = value / slot_limit;
             kaku slot = value - generation * slot_limit;
-            kaku registration = Registration { slot: slot, generation: generation };
-            moshi (!live(reactor, registration)) { stale = stale + 1; }
-            moshi (live(reactor, registration)) {
-                array.push(events, Event { slot: slot, generation: generation, readable: mask - (mask / 2) * 2 == 1,
-                    writable: (mask / 2) - (mask / 4) * 2 == 1, error: (mask / 4) - (mask / 8) * 2 == 1, hangup: (mask / 8) - (mask / 16) * 2 == 1 });
+            moshi (slot >= len(reactor.generations)) { stale = stale + 1; }
+            moshi (slot < len(reactor.generations)) {
+                kaku operation = Operation { id: reactor.ids[slot], slot: slot, generation: generation };
+                moshi (!live(reactor, operation)) { stale = stale + 1; }
+                moshi (live(reactor, operation)) {
+                    array.push(events, Event { operation: operation.id, slot: slot, generation: generation, readable: mask - (mask / 2) * 2 == 1,
+                        writable: (mask / 2) - (mask / 4) * 2 == 1, error: (mask / 4) - (mask / 8) * 2 == 1, hangup: (mask / 8) - (mask / 16) * 2 == 1 });
+                }
             }
         }
         index = index + 1;
@@ -200,10 +257,10 @@ koukai waza wait(reactor: Reactor, timeout_ms: int64, max: int64) -> WaitResult 
         kaku ack: []uint8 = [0];
         socket.reactor_ack(reactor.wake_handle, ack);
     }
-    kaesu WaitResult { events: events, woken: woken, stale: stale, error: mu };
+    kaesu PollResult { events: events, woken: woken, stale: stale, error: mu };
 }
 
-// wake interrupts a wait (now or the next one). Safe to call repeatedly; wakes coalesce.
+// wake interrupts a poll (now or the next one). Safe to call repeatedly and from another thread; wakes coalesce.
 koukai waza wake(reactor: Reactor) -> UnitResult {
     kaku status: []uint8 = [0];
     kaku message = socket.reactor_signal(reactor.wake_handle, status);
@@ -212,12 +269,12 @@ koukai waza wake(reactor: Reactor) -> UnitResult {
 
 koukai waza close(reactor: Reactor) -> UnitResult {
     kaku status: []uint8 = [0];
-    kaku message = socket.close(reactor.poll, status);
+    kaku message = socket.close(reactor.poll_handle, status);
     kaku failure = error_from(status[0], message);
     release(reactor.wake_handle);
     kaku slot = 0;
     aida (slot < len(reactor.generations)) {
-        moshi (reactor.active[slot]) { reactor.active[slot] = iie; reactor.generations[slot] = reactor.generations[slot] + 1; }
+        moshi (reactor.active[slot]) { reactor.active[slot] = iie; reactor.generations[slot] = reactor.generations[slot] + 1; reactor.ids[slot] = 0; reactor.handles[slot] = Watched { handle: reactor.poll_handle }; }
         slot = slot + 1;
     }
     kaesu UnitResult { error: failure };
