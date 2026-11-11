@@ -266,26 +266,26 @@ waza emit_pointer_helpers(code: arm64.Assembler) -> unit {
 waza emit_table_helpers(code: arm64.Assembler) -> unit {
     arm64.assembler_label(code, "nativefs_table_ensure");
     mov(code, 9, 27); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 1, "nativefs_table_have");
-    emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.movz_x(1, 4096, 0)); emit(code, arm64.movz_x(2, 3, 0)); emit(code, arm64.movz_x(3, 4098, 0)); emit(code, arm64.movn_x(4, 0, 0)); emit(code, arm64.movz_x(5, 0, 0)); emit(code, arm64.movz_x(16, 197, 0)); emit(code, arm64.svc(128));
+    emit(code, arm64.movz_x(0, 0, 0)); bits(code, 1, 524288); emit(code, arm64.movz_x(2, 3, 0)); emit(code, arm64.movz_x(3, 4098, 0)); emit(code, arm64.movn_x(4, 0, 0)); emit(code, arm64.movz_x(5, 0, 0)); emit(code, arm64.movz_x(16, 197, 0)); emit(code, arm64.svc(128));
     arm64.assembler_b_cond(code, 2, "nativefs_table_fail"); mov(code, 27, 0); emit(code, arm64.ret());
     arm64.assembler_label(code, "nativefs_table_have"); mov(code, 0, 9); emit(code, arm64.ret());
     arm64.assembler_label(code, "nativefs_table_fail"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.ret());
 
-    // alloc(kind,fd,errno): 32 x 128-byte entries; +0 fd,+8 generation,
+    // alloc(kind,fd,errno): 4096 x 128-byte entries (a 512 KiB lazily mapped table; it was 32 entries); +0 fd,+8 generation,
     // +16 kind,+24 errno. Mio only receives a generation-checked token.
     arm64.assembler_label(code, "nativefs_handle_alloc"); enter(code); emit(code, arm64.sub_imm_x(31, 31, 32, iie));
     emit(code, arm64.str_x(0, 31, 0)); emit(code, arm64.str_x(1, 31, 8)); emit(code, arm64.str_x(2, 31, 16)); arm64.assembler_bl(code, "nativefs_table_ensure");
-    arm64.assembler_cbz_x(code, 0, "nativefs_handle_alloc_fail"); mov(code, 9, 0); emit(code, arm64.movz_x(10, 0, 0));
+    arm64.assembler_cbz_x(code, 0, "nativefs_handle_alloc_fail"); mov(code, 9, 0); emit(code, arm64.movz_x(10, 0, 0)); bits(code, 13, 4096);
     arm64.assembler_label(code, "nativefs_handle_alloc_scan"); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 9, 11)); emit(code, arm64.ldr_x(12, 11, 16)); emit(code, arm64.cmp_imm_x(12, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_handle_alloc_found");
-    emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_imm_x(10, 32, iie)); arm64.assembler_b_cond(code, 3, "nativefs_handle_alloc_scan");
+    emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_x(10, 13)); arm64.assembler_b_cond(code, 3, "nativefs_handle_alloc_scan");
     arm64.assembler_label(code, "nativefs_handle_alloc_fail"); emit(code, arm64.add_imm_x(31, 31, 32, iie)); emit(code, arm64.movz_x(0, 0, 0)); leave(code);
     arm64.assembler_label(code, "nativefs_handle_alloc_found"); emit(code, arm64.ldr_x(12, 11, 8)); emit(code, arm64.add_imm_x(12, 12, 1, iie)); emit(code, arm64.cmp_imm_x(12, 0, iie)); arm64.assembler_b_cond(code, 1, "nativefs_handle_alloc_gen"); emit(code, arm64.movz_x(12, 1, 0));
     arm64.assembler_label(code, "nativefs_handle_alloc_gen"); emit(code, arm64.ldr_x(13, 31, 0)); emit(code, arm64.ldr_x(14, 31, 8)); emit(code, arm64.ldr_x(15, 31, 16)); emit(code, arm64.str_x(14, 11, 0)); emit(code, arm64.str_x(12, 11, 8)); emit(code, arm64.str_x(13, 11, 16)); emit(code, arm64.str_x(15, 11, 24));
-    emit(code, arm64.lsl_x(0, 12, 8)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.orr_x(0, 0, 10)); emit(code, arm64.add_imm_x(31, 31, 32, iie)); leave(code);
+    emit(code, arm64.lsl_x(0, 12, 16)); emit(code, arm64.add_imm_x(10, 10, 1, iie)); emit(code, arm64.orr_x(0, 0, 10)); emit(code, arm64.add_imm_x(31, 31, 32, iie)); leave(code);
 
     arm64.assembler_label(code, "nativefs_handle_lookup"); mov(code, 12, 1); mov(code, 13, 0); mov(code, 9, 27); emit(code, arm64.cmp_imm_x(9, 0, iie)); arm64.assembler_b_cond(code, 0, "nativefs_handle_lookup_fail");
-    bits(code, 15, 255); emit(code, arm64.and_x(10, 13, 15)); emit(code, arm64.sub_imm_x(10, 10, 1, iie)); emit(code, arm64.cmp_imm_x(10, 32, iie)); arm64.assembler_b_cond(code, 2, "nativefs_handle_lookup_fail");
-    emit(code, arm64.lsr_x(14, 13, 8)); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 9, 11)); emit(code, arm64.ldr_x(15, 11, 8)); emit(code, arm64.cmp_x(14, 15)); arm64.assembler_b_cond(code, 1, "nativefs_handle_lookup_fail");
+    bits(code, 15, 65535); emit(code, arm64.and_x(10, 13, 15)); emit(code, arm64.sub_imm_x(10, 10, 1, iie)); bits(code, 15, 4096); emit(code, arm64.cmp_x(10, 15)); arm64.assembler_b_cond(code, 2, "nativefs_handle_lookup_fail");
+    emit(code, arm64.lsr_x(14, 13, 16)); emit(code, arm64.lsl_x(11, 10, 7)); emit(code, arm64.add_x(11, 9, 11)); emit(code, arm64.ldr_x(15, 11, 8)); emit(code, arm64.cmp_x(14, 15)); arm64.assembler_b_cond(code, 1, "nativefs_handle_lookup_fail");
     emit(code, arm64.ldr_x(15, 11, 16)); emit(code, arm64.cmp_x(12, 15)); arm64.assembler_b_cond(code, 1, "nativefs_handle_lookup_fail"); mov(code, 0, 11); emit(code, arm64.ret());
     arm64.assembler_label(code, "nativefs_handle_lookup_fail"); emit(code, arm64.movz_x(0, 0, 0)); emit(code, arm64.ret());
 }
