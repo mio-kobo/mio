@@ -91,3 +91,30 @@ func TestProjectTemplates(t *testing.T) {
 		})
 	}
 }
+
+// Every official template must already be formatted by `mio fmt`, so a project created
+// from one starts clean and later formatter changes cannot silently desynchronize them.
+func TestProjectTemplatesAreFormatted(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join("..", "..", "templates"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		checked++
+		name := entry.Name()
+		t.Run(name, func(t *testing.T) {
+			dir := copyTemplate(t, name)
+			var stdout, stderr bytes.Buffer
+			if code := runCLI([]string{"fmt", "--check", dir}, &stdout, &stderr); code != 0 {
+				t.Fatalf("template %s is not formatted (exit %d)\nstdout: %s\nstderr: %s", name, code, stdout.String(), stderr.String())
+			}
+		})
+	}
+	if checked == 0 {
+		t.Fatal("no templates found")
+	}
+}
