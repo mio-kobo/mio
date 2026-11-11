@@ -13,6 +13,8 @@ Programs (expected output):
   nested       threads starting and joining threads, three levels deep
   many         32 thread lifetimes (8 at a time x 4 rounds), more than the cores
   reclaim      ~19 GiB of garbage through an 8 GiB heap from 5 threads: only finishes if concurrent collections reclaim memory
+  channel_*    zero-copy channels (kiso/thread): producer/consumer, close and failed-send hand-back, shared sub-objects / cycles / deep and
+               large graphs, 3 producers x 3 consumers; reject_*: compile-time rejection of use after send, live alias, double send
 """
 import argparse
 import os
@@ -31,7 +33,13 @@ PROGRAMS = {
     "nested": b"776050\nhai\n",
     "many": b"4024056\n" * 4,
     "reclaim": b"300000\n",
+    "channel_basic": b"50\n2600\n50\n",
+    "channel_close": b"hai\n24\nhai\n33\niie\n11\nhai\n",
+    "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
+    "channel_mpmc": b"600\n1379100\n",
 }
+# Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
+NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703"}
 STRESS_SKIPPED = {"reclaim"}   # stress collects on every allocation: 19 GiB of garbage would take far too long
 
 
@@ -71,6 +79,14 @@ def main():
                         break
                 else:
                     print("%s%s: PASS (%d runs)" % (name, " " + mode if mode else "", runs))
+    for name, code in NEGATIVE.items():
+        built = subprocess.run([args.mio, "build", str(HERE / (name + ".mio")), "--target=linux-amd64", "--bunko-root", args.bunko_root,
+                                "-o", str(Path(work) / name)], capture_output=True, text=True, timeout=900)
+        text = built.stdout + built.stderr
+        if built.returncode == 0 or code not in text:
+            failures.append("%s: expected a compile error %s, got exit %s: %s" % (name, code, built.returncode, text[-300:]))
+        else:
+            print("%s: PASS (rejected with %s)" % (name, code))
     if failures:
         for line in failures:
             print("FAIL " + line, file=sys.stderr)

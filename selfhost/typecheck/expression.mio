@@ -233,6 +233,17 @@ waza check_native_call(env: TypeEnvironment, file_id: int64, node_id: int64, pac
         kaku no_parameters: []int64 = [];
         moshi (name == "start" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], function_type(env.result, no_parameters, integer)); kaesu integer; }
         moshi (name == "join" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], integer); kaesu integer; }
+        kaku word_calls = ["words_new", "words_free", "word_get", "word_set", "word_cas", "word_add", "word_wait", "word_wake"];
+        kaku word_arity = [1, 2, 2, 3, 4, 3, 3, 3];
+        kaku word_at = 0;
+        aida (word_at < len(word_calls)) {
+            moshi (name == word_calls[word_at] && len(arguments) == word_arity[word_at]) {
+                kaku word_arg = 0;
+                aida (word_arg < len(arguments)) { check_native_argument(env, file_id, arguments[word_arg], integer); word_arg = word_arg + 1; }
+                kaesu integer;
+            }
+            word_at = word_at + 1;
+        }
     }
     moshi (package_path == "mio/os/runtime") {
         kaku integer = builtin_type(env, "int64");

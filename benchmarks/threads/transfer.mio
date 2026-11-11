@@ -1,0 +1,87 @@
+// Zero-copy ownership transfer versus deep-copy message passing between two OS threads (Linux x86-64).
+// Three costs per graph size are reported as wall-clock milliseconds on the sender's thread (see measure): construction only, construction plus
+// zero-copy transfer, and deep copy plus transfer. Output per size: nodes, rounds, ms(construct), ms(construct+transfer), ms(copy+transfer).
+yobu "kiso/thread";
+yobu "kiso/array";
+yobu "kiso/os";
+
+kata Node { id: int64; payload: []int64; links: []Node; }
+
+waza build(count: int64) -> Node {
+    kaku links: []Node = [];
+    kaku i = 0;
+    aida (i < count) { array.push(links, Node { id: i, payload: [i, i + 1], links: [] }); i = i + 1; }
+    kaesu Node { id: -7, payload: [], links: links };
+}
+
+// The graph to copy lives in a top-level variable. A call result is conservatively treated as aliasing the call's arguments (precise effect
+// summaries are future work), so the copier takes no graph argument and the sender can transfer its result.
+kaku template = build(0);
+
+waza deep_copy() -> Node {
+    kaku source = template;
+    kaku links: []Node = [];
+    kaku i = 0;
+    aida (i < len(source.links)) {
+        kaku child = source.links[i];
+        array.push(links, Node { id: child.id, payload: [child.payload[0], child.payload[1]], links: [] });
+        i = i + 1;
+    }
+    kaesu Node { id: source.id, payload: [], links: links };
+}
+
+// Milliseconds for `rounds` messages of a `count`-node graph on the sender's thread.
+//   mode 0: construction only (no channel traffic): the baseline cost of making the graph
+//   mode 1: construct a fresh graph and hand it over with yuzuru (construction + zero-copy transfer)
+//   mode 2: deep-copy a prebuilt graph and send the copy (copy + transfer): what a copying message-passing design pays
+waza measure(count: int64, rounds: int64, mode: int64) -> int64 {
+    kaku filler = Node { id: -1, payload: [], links: [] };
+    kaku channel = thread.channel_new[Node](1, filler);
+    kaku consumer = waza () -> int64 {
+        kaku checksum = 0;
+        aida (hai) {
+            kaku got = thread.receive[Node](channel);
+            moshi (got.closed) { nukeru; }
+            checksum = checksum + len(got.item.links);
+        }
+        kaesu checksum;
+    };
+    kaku handle = thread.start(consumer);
+    template = build(count);
+    kaku sink = 0;
+    kaku started = os.monotonic_ms();
+    kaku round = 0;
+    aida (round < rounds) {
+        moshi (mode == 0) {
+            kaku fresh = build(count);
+            sink = sink + len(fresh.links);
+        }
+        moshi (mode == 1) {
+            kaku fresh = build(count);
+            kaku outcome = thread.send[Node](channel, yuzuru fresh);
+        }
+        moshi (mode == 2) {
+            kaku copy = deep_copy();
+            kaku outcome = thread.send[Node](channel, yuzuru copy);
+        }
+        round = round + 1;
+    }
+    kaku elapsed = os.monotonic_ms() - started;
+    thread.close[Node](channel);
+    kaku checksum = thread.join(handle);
+    thread.destroy[Node](channel);
+    moshi (mode != 0 && checksum != rounds * count) { kaesu -1; }
+    kaesu elapsed;
+}
+
+kaku sizes = [10, 1000, 100000];
+kaku rounds = [20000, 2000, 40];
+kaku index = 0;
+aida (index < len(sizes)) {
+    chant(sizes[index]);
+    chant(rounds[index]);
+    chant(measure(sizes[index], rounds[index], 0));
+    chant(measure(sizes[index], rounds[index], 1));
+    chant(measure(sizes[index], rounds[index], 2));
+    index = index + 1;
+}
