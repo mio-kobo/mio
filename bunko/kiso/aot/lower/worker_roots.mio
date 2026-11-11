@@ -59,7 +59,9 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     // word_wait(h, i, expected): returns once the word differs from expected (or after a short timeout: callers re-check). A safepoint every round.
     arm64.assembler_label(c,"native_word_wait");word_address(c,p,first,"native_word_bad");
     emit(c,arm64.sub_imm_x(31,31,48,iie));emit(c,arm64.str_x(30,31,0));emit(c,arm64.str_x(0,31,8));emit(c,arm64.str_x(1,31,16));emit(c,arm64.str_x(2,31,24));
-    emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
+    // Short holds are the common case: spin a bounded number of reads (no safepoint needed, it ends in microseconds) before sleeping.
+    wr_num(c,15,4000);arm64.assembler_label(c,"native_word_wait_spin");emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
+    emit(c,arm64.sub_imm_x(15,15,1,iie));arm64.assembler_cbnz_x(c,15,"native_word_wait_spin");
     wr_num(c,0,50000);arm64.assembler_bl(c,"attached_worker_wait");
     arm64.assembler_label(c,"native_word_wait_done");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,48,iie));emit(c,arm64.ret());
 }
