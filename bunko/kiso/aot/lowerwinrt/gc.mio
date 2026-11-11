@@ -21,11 +21,12 @@ koukai teisu object_size_granule = 8;
 // from its return address alone. No collection happens inside runtime routines, so their temporaries need no roots.
 //
 // Data segment layout (offsets from data_base()):
-//   0 heap_next, 8 heap_end, 16.. NativeFS handle table (64 x 24), 1552.. directory table (64 x 32),
-//   3600.. collector and Win32 state (3704 Winsock started flag), 8192.. directory buffers (64 x 32 KiB), then the Mochi globals.
+//   0 heap_next, 8 heap_end, 16..1552 unused, 1552.. directory table (64 x 32),
+//   3600.. collector and Win32 state (3704 Winsock started flag), 8192.. directory buffers (64 x 32 KiB), the scratch zone (131072),
+//   the NativeFS handle table (4096 x 24 = 98304), then the Mochi globals.
 waza gc_state() -> int64 { kaesu data_base() + 3600; }
 koukai waza directory_buffers() -> int64 { kaesu data_base() + 8192; }
-koukai waza globals_base() -> int64 { kaesu data_base() + 8192 + 2097152 + 131072; }
+koukai waza globals_base() -> int64 { kaesu data_base() + 8192 + 2097152 + 131072 + 98304; }
 // collector state words: +0 free list head, +8 bytes allocated since the last collection, +16 threshold,
 // +24 heap base, +32 mark stack top, +40 mark stack limit, +48 mark stack base, +56 collections, +64 minimum threshold
 waza gc_base_register() -> int64 { kaesu x86_64.rcx; }
