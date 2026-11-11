@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--idle-ms", type=int, default=3000)
     args = parser.parse_args()
     host = (platform.system(), platform.machine())
-    if host not in (("Linux", "x86_64"), ("Linux", "AMD64"), ("Linux", "aarch64"), ("Linux", "arm64"), ("Darwin", "arm64")):
+    if host not in (("Linux", "x86_64"), ("Linux", "AMD64"), ("Linux", "aarch64"), ("Linux", "arm64"), ("Darwin", "arm64"), ("Darwin", "x86_64")):
         print("execution: NOT_RUN (the reactor backend exists on Linux x86-64, Linux arm64 and Darwin arm64; host is %s %s)" % host)
         return 0
     darwin = host[0] == "Darwin"
