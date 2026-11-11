@@ -24,8 +24,8 @@ binary you configure; it does not run anything from the opened workspace.
 
 ## Verification
 
-`python3 editors/verify.py [path/to/mio]` checks that the TOML/JSON-like files
-parse, that keyword lists match the lexer keywords, and that a real `mio lsp`
+`python3 editors/verify.py [path/to/mio]` checks that the TOML parses,
+that keyword lists contain every lexer keyword, and that a real `mio lsp`
 process answers `initialize` with every capability these configurations
 rely on. The editors themselves are not installed in the build environment, so
 interactive behaviour is untested and should be confirmed by a user of each
@@ -45,5 +45,5 @@ the language server command `mio lsp --stdio`.
 
 Keywords follow `internal/token` (language version 0.5). If the lexer gains
 keywords, update `vim/syntax/mio.vim`, `emacs/mio-mode.el`,
-`sublime/Mio.sublime-syntax` and the tree-sitter grammar; `verify.py` fails
-when they drift.
+`sublime/Mio.sublime-syntax` and the tree-sitter grammar; `go test ./editors` (part of the quick CI suite) fails
+when any of them differs from `token.Keywords(token.CurrentVersion)`, the compiler's own list.
