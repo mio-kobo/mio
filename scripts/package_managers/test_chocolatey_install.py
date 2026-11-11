@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 
-from chocolatey import build
+from chocolatey import FEED, build
 from release import digest, extract, inventory
 from smoke import smoke
 from test_install import run
@@ -110,6 +110,20 @@ def install(assets, stable_packages=None):
                             rebuilt = build(v, flavor, stable_record, Path(temp) / 'rebuild')
                             assert digest(rebuilt) == digest(package), 'stable nupkg differs between Windows and Linux'
                             result.setdefault('nupkg_sha256', {})[package.name] = digest(package)
+                            if tuple(map(int, v.split('.'))) > (2, 1, 0):
+                                # Exercise the actual approved CCR wrapper and old
+                                # release bytes, not just synthetic version metadata.
+                                run('choco', 'uninstall', name, '--yes', '--no-progress')
+                                assert not payload.exists() and not shim.exists()
+                                run('choco', 'install', name, '--version=2.1.0',
+                                    '--source=' + FEED, '--yes', '--no-progress', '--limit-output')
+                                baseline = json.loads((payload / 'manifest.json').read_text())
+                                assert baseline['version'] == '2.1.0'
+                                assert '2.1.0' in subprocess.check_output([str(shim), 'version'], text=True)
+                                with offline():
+                                    smoke(payload, 'windows-amd64', flavor, command=shim, manager_files=(ignore,))
+                                result.setdefault('upgrade_from', {})[name] = '2.1.0'
+                                passed(flavor + ' approved CCR 2.1.0 install, inventory, version and offline execution')
                         assert package.stat().st_size < 20000, 'metadata-only package expected'
                         run('choco', 'install' if v == '0.0.1' else 'upgrade', name, '--version=' + v, '--source=' + str(packages), '--yes', '--no-progress', '--limit-output')
                         assert json.loads((payload / 'manifest.json').read_text()) == expected_manifest
@@ -133,6 +147,8 @@ def install(assets, stable_packages=None):
                         assert paths() == previous, 'Chocolatey bin owns PATH; no per-user mutation'
                         assert project.read_text() == 'chant("keep");'
                         passed(flavor + ' ' + v + ' install/upgrade, real shim/PATH, hashes, offline native/Bunko/tools')
+                        if result.get('upgrade_from', {}).get(name) == '2.1.0':
+                            passed(flavor + ' approved CCR 2.1.0 to ' + v + ' upgrade, user project preserved')
                         if v == '0.0.1':
                             (payload / 'obsolete-release-file.txt').write_text('must disappear on upgrade')
                     # Same-version install is a no-op; explicit force reinstalls safely.

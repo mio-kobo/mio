@@ -183,6 +183,10 @@ Bunko imports, integrated tools and uninstall. Firewall rules block outbound
 compiler traffic during offline checks and are removed afterwards. Stable jobs
 also upgrade to the exact generated stable nupkg using its official HTTPS URL
 and compare a Windows rebuild's SHA-256 to the Linux-generated package.
+For stable versions newer than 2.1.0, each flavor also installs the actual
+approved CCR 2.1.0 package, checks its inventory and offline execution, and
+upgrades it to the exact generated stable package. Synthetic upgrades remain
+separate checks; user projects must survive both paths.
 The Windows gate reads the packages through the pinned official NuGet 2 library,
 validates the standard nuspec fields against its XSD and checks the Chocolatey
 metadata extensions separately. It checks rejection without the manifest
