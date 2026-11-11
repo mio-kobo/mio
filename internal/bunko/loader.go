@@ -28,9 +28,12 @@ type Package struct {
 
 // Loader 按公开导入路径读取 Bunko 包
 type Loader struct {
-	sourceFS fs.FS
-	root     string
-	overlay  Overlay
+	sourceFS            fs.FS
+	root                string
+	overlay             Overlay
+	external            map[string]string
+	direct              map[string]string
+	packageDependencies map[string]map[string]string
 }
 
 // New 创建 Bunko 包加载器
@@ -49,16 +52,50 @@ func (l *Loader) Load(importPath string) (*Package, error) {
 		return nil, err
 	}
 
+	if dir, ok := l.external[externalName(importPath)]; ok && !strings.HasPrefix(importPath, "kiso/") {
+		n := externalName(importPath)
+		suffix := strings.TrimPrefix(importPath, n)
+		directory := filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(suffix, "/")))
+		if err := requireWithinRoot(dir, directory); err != nil {
+			return nil, err
+		}
+		// The whole cached source tree was verified before configuring this loader.
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return nil, err
+		}
+		pkg := &Package{ImportPath: importPath, Directory: directory}
+		for _, ent := range entries {
+			if ent.Type().IsRegular() && isRegularSource(ent.Name()) {
+				p := filepath.Join(directory, ent.Name())
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return nil, err
+				}
+				pkg.Sources = append(pkg.Sources, Source{Name: ent.Name(), Path: p, Content: data})
+			}
+		}
+		if len(pkg.Sources) == 0 {
+			return nil, fmt.Errorf("BUNKO_E_SOURCE: %q has no Mio source files", importPath)
+		}
+		return pkg, nil
+	}
 	if l.sourceFS != nil {
 		return l.loadFS(importPath)
 	}
 
 	root, err := filepath.EvalSymlinks(l.root)
 	if err != nil {
+		if l.external != nil && !strings.HasPrefix(importPath, "kiso/") {
+			return nil, fmt.Errorf("BUNKO_E_UNDECLARED: %q; run mio bunko add namespace/package@version", importPath)
+		}
 		return nil, fmt.Errorf("resolve Bunko root %q: %w", l.root, err)
 	}
 	directory, packageRoot, err := resolvePackageDirectory(root, importPath)
 	if err != nil {
+		if l.external != nil && !strings.HasPrefix(importPath, "kiso/") {
+			return nil, fmt.Errorf("BUNKO_E_UNDECLARED: %q is undeclared; add an exact dependency with mio bunko add", importPath)
+		}
 		return nil, err
 	}
 	if err := requireWithinRoot(packageRoot, directory); err != nil {

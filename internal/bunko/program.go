@@ -113,7 +113,13 @@ func loadRootProgram(root *ast.Program, tests []TestFunction, rootPath, bunkoRoo
 }
 
 func loadRootProgramWithOverlay(root *ast.Program, rootFiles []string, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry, overlay Overlay) (*Program, error) {
-	return loadRootWithLoader(root, rootFiles, tests, rootPath, registry, NewWithOverlay(bunkoRoot, overlay))
+	loader := NewWithOverlay(bunkoRoot, overlay)
+	if len(rootFiles) > 0 {
+		if err := loader.configureProject(rootFiles[0]); err != nil {
+			return nil, err
+		}
+	}
+	return loadRootWithLoader(root, rootFiles, tests, rootPath, registry, loader)
 }
 
 // LoadSourceFS compiles an in-memory entry and dependencies from a closed read-only FS.
@@ -249,6 +255,9 @@ func (e *DependencyError) Error() string {
 func (e *DependencyError) Unwrap() error { return e.Cause }
 
 func (s *programLoader) loadDependency(importPath string, chain []string) error {
+	if err := s.loader.checkExternal(importPath, chain); err != nil {
+		return &DependencyError{ImportPath: importPath, Cause: err}
+	}
 	if functions, ok := s.registry.Module(importPath); ok {
 		if !s.nativeLoaded[importPath] {
 			s.nativeLoaded[importPath] = true
