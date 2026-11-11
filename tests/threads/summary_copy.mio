@@ -1,0 +1,43 @@
+// Effect summaries: deep_copy returns only new objects, so the copy is not an alias of its argument. The sender keeps and keeps using
+// `source` while handing the copy to another thread. (Before summaries every call result was treated as aliasing its arguments and this
+// program was rejected.)
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Item { id: int64; tags: []int64; }
+
+waza deep_copy(source: []Item) -> []Item {
+    kaku out: []Item = [];
+    kaku i = 0;
+    aida (i < len(source)) { array.push(out, Item { id: source[i].id, tags: [source[i].tags[0]] }); i = i + 1; }
+    kaesu out;
+}
+
+waza run() -> int64 {
+    kaku filler: []Item = [];
+    kaku channel = thread.channel_new[[]Item](1, filler);
+    kaku source = [Item { id: 1, tags: [10] }, Item { id: 2, tags: [20] }, Item { id: 3, tags: [30] }];
+    kaku consumer = waza () -> int64 {
+        kaku total = 0;
+        aida (hai) {
+            kaku got = thread.receive[[]Item](channel);
+            moshi (got.closed) { nukeru; }
+            kaku i = 0;
+            aida (i < len(got.item)) { total = total + got.item[i].id + got.item[i].tags[0]; i = i + 1; }
+        }
+        kaesu total;
+    };
+    kaku handle = thread.start(consumer);
+    kaku round = 0;
+    aida (round < 3) {
+        kaku copy = deep_copy(source);
+        kaku outcome = thread.send[[]Item](channel, yuzuru copy);
+        round = round + 1;
+    }
+    thread.close[[]Item](channel);
+    chant(thread.join(handle));
+    chant(len(source) + source[1].id);
+    thread.destroy[[]Item](channel);
+    kaesu 0;
+}
+run();
