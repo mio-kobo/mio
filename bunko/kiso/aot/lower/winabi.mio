@@ -26,7 +26,7 @@ koukai waza windows_imports() -> []string {
         "GetExitCodeProcess", "TerminateProcess", "SetHandleInformation", "GetStartupInfoW", "GetFileType", "PeekNamedPipe", "Sleep"];
     kaku pairs: []string = []; kaku at = 0;
     aida (at < len(names)) { array.push(pairs, "kernel32.dll"); array.push(pairs, names[at]); at = at + 1; }
-    kaku sockets = ["WSAStartup", "WSASocketW", "bind", "connect", "listen", "accept", "setsockopt", "closesocket", "WSAGetLastError"];
+    kaku sockets = ["WSAStartup", "WSASocketW", "bind", "connect", "listen", "accept", "setsockopt", "closesocket", "WSAGetLastError", "ioctlsocket", "getsockopt"];
     at = 0;
     aida (at < len(sockets)) { array.push(pairs, "ws2_32.dll"); array.push(pairs, sockets[at]); at = at + 1; }
     array.push(pairs, "shell32.dll"); array.push(pairs, "CommandLineToArgvW");
@@ -38,7 +38,9 @@ koukai waza windows_imports() -> []string {
 // Process emulation state (see the fork/execve blocks): word 128 mode (1 while the emulated child runs), 129 timeout seconds,
 // 130 last child exit code, 131 child pid, 132 saved sp, 133 saved return address, 134 saved caller lr, 136..149 saved x2-x15,
 // 150 saved x17, 151..160 saved x19-x28, 161 saved x29, 162 Winsock started, 192..255 snapshot of the descriptor table taken at fork.
-koukai waza windows_adapter_words() -> int64 { kaesu 256; }
+// Sockets live in a second table of 4032 SOCKET entries at word 256 (descriptors 64..4095, 0 = free): the 64-entry table above is for
+// files, pipes and the standard handles, so a program can hold thousands of sockets while process emulation keeps its layout.
+koukai waza windows_adapter_words() -> int64 { kaesu 256 + 4032; }
 
 waza wx(c: arm64.Assembler, i: arm64.Instruction) -> unit { arm64.assembler_emit(c, i); }
 waza wx_label(c: arm64.Assembler, name: string) -> unit { arm64.assembler_label(c, name); }
@@ -132,8 +134,12 @@ waza wx_fail_last(c: arm64.Assembler, patches: []macho.AddressPatch, cleanup: in
 // x0 = descriptor -> x0 = HANDLE, or 0 when the descriptor is not open. Clobbers x9, x10.
 waza wx_handle_routine(c: arm64.Assembler, patches: []macho.AddressPatch, base: int64) -> unit {
     wx_label(c, "wx_handle");
-    wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_handle_none");
+    wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_handle_socket");
     wx_data(c, patches, base, 10, 0);
+    wx(c, arm64.ldr_x_register_scaled(0, 10, 0)); wx(c, arm64.ret());
+    wx_label(c, "wx_handle_socket");
+    wx(c, arm64.sub_imm_x(0, 0, 64, iie)); wx_cmpi(c, 0, 4032); wx_bcc(c, 2, "wx_handle_none");
+    wx_data(c, patches, base, 10, 256);
     wx(c, arm64.ldr_x_register_scaled(0, 10, 0)); wx(c, arm64.ret());
     wx_label(c, "wx_handle_none"); wx_li(c, 0, 0); wx(c, arm64.ret());
 }
@@ -173,9 +179,9 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_save(c, 2, 3, 0); wx_save(c, 4, 5, 16); wx_save(c, 6, 7, 32); wx_save(c, 8, 9, 48);
     wx_save(c, 10, 11, 64); wx_save(c, 12, 13, 80); wx_save(c, 14, 15, 96); wx_save(c, 17, 30, 112);
     wx(c, arm64.str_x(1, 31, 128));
-    kaku calls = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 30, 59, 73, 74, 83, 90, 92, 97, 98, 104, 105, 106, 136, 137, 194, 195, 197, 202, 230, 274, 336, 338, 344];
-    kaku names = ["wx_exit", "wx_fork", "wx_read", "wx_write", "wx_open", "wx_close", "wx_wait4", "wx_unlink", "wx_chmod", "wx_getpid", "wx_accept", "wx_execve", "wx_munmap",
-        "wx_mprotect", "wx_setitimer", "wx_dup2", "wx_fcntl", "wx_socket", "wx_connect", "wx_bind", "wx_setsockopt", "wx_listen", "wx_mkdir", "wx_rmdir", "wx_getrlimit",
+    kaku calls = [1, 2, 3, 4, 5, 6, 7, 10, 15, 20, 30, 54, 59, 73, 74, 83, 90, 92, 97, 98, 104, 105, 106, 118, 136, 137, 194, 195, 197, 202, 230, 274, 336, 338, 344];
+    kaku names = ["wx_exit", "wx_fork", "wx_read", "wx_write", "wx_open", "wx_close", "wx_wait4", "wx_unlink", "wx_chmod", "wx_getpid", "wx_accept", "wx_ioctl", "wx_execve", "wx_munmap",
+        "wx_mprotect", "wx_setitimer", "wx_dup2", "wx_fcntl", "wx_socket", "wx_connect", "wx_bind", "wx_setsockopt", "wx_listen", "wx_getsockopt", "wx_mkdir", "wx_rmdir", "wx_getrlimit",
         "wx_setrlimit", "wx_mmap", "wx_sysctl", "wx_poll", "wx_sysctlbyname", "wx_procinfo", "wx_stat", "wx_dirents"];
     kaku at = 0;
     aida (at < len(calls)) {
@@ -234,6 +240,7 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_close");
     wx_cmpi(c, 0, 2); wx_bcc(c, 8, "wx_close_real"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_close_real");
+    wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_close_socket_entry");
     wx(c, arm64.str_x(0, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx(c, arm64.str_x(0, 31, 152));
     wx_data(c, patches, base, 10, 0); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(31, 10, 0));
@@ -248,6 +255,12 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx(c, arm64.str_x(31, 10, 0)); wx(c, arm64.ldr_x(0, 31, 152)); wx_cmpi(c, 12, 2); wx_bcc(c, 0, "wx_close_socket");
     wx_call(c, patches, "CloseHandle"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_close_socket"); wx_call(c, patches, "closesocket"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
+    // a socket descriptor (>= 64): clear its entry of the socket table and closesocket the SOCKET
+    wx_label(c, "wx_close_socket_entry");
+    wx(c, arm64.str_x(0, 31, 144)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.str_x(0, 31, 152));
+    wx_data(c, patches, base, 10, 256); wx(c, arm64.ldr_x(11, 31, 144)); wx(c, arm64.sub_imm_x(11, 11, 64, iie)); wx(c, arm64.lsl_x(11, 11, 3)); wx(c, arm64.add_x(10, 10, 11)); wx(c, arm64.str_x(31, 10, 0));
+    wx(c, arm64.ldr_x(0, 31, 152)); wx_call(c, patches, "closesocket"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ---- open(path, flags, mode): "/dev/stdin|stdout|stderr" are descriptors 0..2, "/dev/null" is NUL; files via CreateFileW
     wx_label(c, "wx_open");
@@ -594,6 +607,7 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     // file (broken pipe), a console when its handle is signalled; the timeout is honoured in 10 ms steps
     wx_label(c, "wx_poll");
     wx(c, arm64.str_x(0, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.ldr_w(0, 9, 0)); wx_cmpi(c, 0, 64); wx_bcc(c, 2, "wx_poll_socket");
     wx_label(c, "wx_poll_again");
     wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.ldr_w(0, 9, 0)); wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_poll_invalid"); wx(c, arm64.str_x(0, 31, 160));
     wx_call(c, patches, "GetFileType"); wx_bool(c);
@@ -612,6 +626,41 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_poll_timeout"); wx(c, arm64.ldr_x(9, 31, 144)); wx(c, arm64.strh_w(31, 9, 6)); wx_li(c, 0, 0); wx_b(c, "wx_ok");
     wx_label(c, "wx_poll_ready"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 1); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
     wx_label(c, "wx_poll_invalid"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 32); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+    // A socket descriptor (>= 64) is polled for connect completion only (POLLOUT, no waiting): a pending SO_ERROR is POLLERR (8), a socket
+    // whose SO_CONNECT_TIME is not 0xFFFFFFFF is connected and writable (POLLOUT, 4), anything else is not ready (0 descriptors).
+    wx_label(c, "wx_poll_socket");
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_poll_invalid"); wx(c, arm64.str_x(0, 31, 160));
+    wx_li(c, 9, 0); wx(c, arm64.str_x(9, 31, 168)); wx_li(c, 9, 4); wx(c, arm64.str_x(9, 31, 176));
+    wx(c, arm64.ldr_x(0, 31, 160)); wx_li(c, 1, 65535); wx_li(c, 2, 4103); wx(c, arm64.add_imm_x(3, 31, 168, iie)); wx(c, arm64.add_imm_x(4, 31, 176, iie));
+    wx_call(c, patches, "getsockopt"); wx_bool(c); wx_cbnz(c, 0, "wx_poll_socket_error");
+    wx(c, arm64.ldr_w(9, 31, 168)); wx_cbnz(c, 9, "wx_poll_socket_error");
+    wx_li(c, 9, 0); wx(c, arm64.str_x(9, 31, 168)); wx_li(c, 9, 4); wx(c, arm64.str_x(9, 31, 176));
+    wx(c, arm64.ldr_x(0, 31, 160)); wx_li(c, 1, 65535); wx_li(c, 2, 28684); wx(c, arm64.add_imm_x(3, 31, 168, iie)); wx(c, arm64.add_imm_x(4, 31, 176, iie));
+    wx_call(c, patches, "getsockopt"); wx_bool(c); wx_cbnz(c, 0, "wx_poll_socket_error");
+    wx(c, arm64.ldr_w(9, 31, 168)); wx_li(c, 10, 4294967295); wx(c, arm64.cmp_x(9, 10)); wx_bcc(c, 0, "wx_poll_timeout");
+    wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 4); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+    wx_label(c, "wx_poll_socket_error"); wx(c, arm64.ldr_x(9, 31, 144)); wx_li(c, 10, 8); wx(c, arm64.strh_w(10, 9, 6)); wx_li(c, 0, 1); wx_b(c, "wx_ok");
+
+    // ioctl(fd, request, argp): only FIONBIO (0x8004667e, the same number on Darwin and Windows) is translated, to ioctlsocket
+    wx_label(c, "wx_ioctl");
+    wx(c, arm64.str_x(1, 31, 144)); wx(c, arm64.str_x(2, 31, 152));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldr_x(1, 31, 144)); wx_li(c, 9, 2147772030); wx(c, arm64.cmp_x(1, 9)); wx_bcc(c, 1, "wx_unsupported");
+    wx(c, arm64.ldr_x(2, 31, 152));
+    wx_call(c, patches, "ioctlsocket"); wx_bool(c); wx_cbnz(c, 0, "wx_net_failed");
+    wx_li(c, 0, 0); wx_b(c, "wx_ok");
+
+    // getsockopt(fd, level, name, value, length): SOL_SOCKET (0xffff) and SO_ERROR (0x1007) have the same numbers on both systems; the pending
+    // error the system stores in *value is a Win32 code and becomes the Darwin errno the shared classifier expects.
+    wx_label(c, "wx_getsockopt");
+    wx(c, arm64.stp_x(1, 2, 31, 144)); wx(c, arm64.stp_x(3, 4, 31, 160));
+    wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
+    wx(c, arm64.ldp_x(1, 2, 31, 144)); wx(c, arm64.ldp_x(3, 4, 31, 160));
+    wx_call(c, patches, "getsockopt"); wx_bool(c); wx_cbnz(c, 0, "wx_net_failed");
+    wx(c, arm64.ldr_x(2, 31, 152)); wx_li(c, 9, 4103); wx(c, arm64.cmp_x(2, 9)); wx_bcc(c, 1, "wx_getsockopt_done");
+    wx(c, arm64.ldr_x(3, 31, 160)); wx(c, arm64.ldr_w(0, 3, 0)); wx_cbz(c, 0, "wx_getsockopt_done");
+    wx_bl(c, "wx_map_error"); wx(c, arm64.ldr_x(3, 31, 160)); wx(c, arm64.str_w(0, 3, 0));
+    wx_label(c, "wx_getsockopt_done"); wx_li(c, 0, 0); wx_b(c, "wx_ok");
 
     // ================= sockets (Winsock) =================
     // A socket is a SOCKET handle kept in the descriptor table (flag word = 2), so read/write go through ReadFile/WriteFile
@@ -625,16 +674,14 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_ldr(c, 0, 2048); wx_ldr(c, 1, 2056); wx_ldr(c, 2, 2064); wx_li(c, 3, 0); wx_li(c, 4, 0); wx_li(c, 5, 0);
     wx_call(c, patches, "WSASocketW"); wx(c, arm64.cmn_imm_x(0, 1, iie)); wx_bcc(c, 0, "wx_socket_failed");
     wx_str(c, 0, 2072);
-    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 3);
+    wx_data(c, patches, base, 10, 256); wx_li(c, 11, 0);
     wx_label(c, "wx_socket_scan");
-    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_socket_full");
+    wx_cmpi(c, 11, 4032); wx_bcc(c, 2, "wx_socket_full");
     wx(c, arm64.ldr_x_register_scaled(12, 10, 11)); wx_cbz(c, 12, "wx_socket_found");
     wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_socket_scan");
     wx_label(c, "wx_socket_found");
     wx_ldr(c, 0, 2072); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(0, 12, 0));
-    wx(c, arm64.str_x(11, 31, 2080));
-    wx_data(c, patches, base, 10, 64); wx_ldr(c, 11, 2080); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx_li(c, 13, 2); wx(c, arm64.str_x(13, 12, 0));
-    wx_ldr(c, 0, 2080); wx_free(c, 2304); wx_b(c, "wx_ok");
+    wx(c, arm64.add_imm_x(0, 11, 64, iie)); wx_free(c, 2304); wx_b(c, "wx_ok");
     wx_label(c, "wx_socket_full"); wx_ldr(c, 0, 2072); wx_call(c, patches, "closesocket"); wx_free(c, 2304); wx_li(c, 0, 24); wx_b(c, "wx_error");
     wx_label(c, "wx_socket_wsa_failed"); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
     wx_label(c, "wx_socket_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
@@ -653,7 +700,10 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_label(c, "wx_sockaddr_result");
     wx_bool(c); wx_cbnz(c, 0, "wx_sockaddr_failed");
     wx_free(c, 2304); wx_li(c, 0, 0); wx_b(c, "wx_ok");
-    wx_label(c, "wx_sockaddr_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error"); wx_free(c, 2304); wx_b(c, "wx_error");
+    // A nonblocking connect reports WSAEWOULDBLOCK (mapped to EAGAIN, 35) while it is in progress: that is EINPROGRESS (36) on Darwin.
+    wx_label(c, "wx_sockaddr_failed"); wx_call(c, patches, "WSAGetLastError"); wx_bool(c); wx_bl(c, "wx_map_error");
+    wx_ldr(c, 9, 2048); wx_cbz(c, 9, "wx_sockaddr_failed_done"); wx_cmpi(c, 0, 35); wx_bcc(c, 1, "wx_sockaddr_failed_done"); wx_li(c, 0, 36);
+    wx_label(c, "wx_sockaddr_failed_done"); wx_free(c, 2304); wx_b(c, "wx_error");
     wx_label(c, "wx_sockaddr_badfd"); wx_free(c, 2304); wx_b(c, "wx_badfd");
 
     // listen(fd, backlog)
@@ -668,16 +718,14 @@ koukai waza emit_windows_abi_runtime(c: arm64.Assembler, patches: []macho.Addres
     wx_bl(c, "wx_handle"); wx_cbz(c, 0, "wx_badfd");
     wx_li(c, 1, 0); wx_li(c, 2, 0); wx_call(c, patches, "accept"); wx(c, arm64.cmn_imm_x(0, 1, iie)); wx_bcc(c, 0, "wx_net_failed");
     wx(c, arm64.str_x(0, 31, 144));
-    wx_data(c, patches, base, 10, 0); wx_li(c, 11, 3);
+    wx_data(c, patches, base, 10, 256); wx_li(c, 11, 0);
     wx_label(c, "wx_accept_scan");
-    wx_cmpi(c, 11, 64); wx_bcc(c, 2, "wx_accept_full");
+    wx_cmpi(c, 11, 4032); wx_bcc(c, 2, "wx_accept_full");
     wx(c, arm64.ldr_x_register_scaled(12, 10, 11)); wx_cbz(c, 12, "wx_accept_found");
     wx(c, arm64.add_imm_x(11, 11, 1, iie)); wx_b(c, "wx_accept_scan");
     wx_label(c, "wx_accept_found");
     wx(c, arm64.ldr_x(0, 31, 144)); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx(c, arm64.str_x(0, 12, 0));
-    wx(c, arm64.str_x(11, 31, 152));
-    wx_data(c, patches, base, 10, 64); wx(c, arm64.ldr_x(11, 31, 152)); wx(c, arm64.lsl_x(12, 11, 3)); wx(c, arm64.add_x(12, 10, 12)); wx_li(c, 13, 2); wx(c, arm64.str_x(13, 12, 0));
-    wx(c, arm64.ldr_x(0, 31, 152)); wx_b(c, "wx_ok");
+    wx(c, arm64.add_imm_x(0, 11, 64, iie)); wx_b(c, "wx_ok");
     wx_label(c, "wx_accept_full"); wx(c, arm64.ldr_x(0, 31, 144)); wx_call(c, patches, "closesocket"); wx_li(c, 0, 24); wx_b(c, "wx_error");
 
     // setsockopt(fd, level, name, value, length): SO_NOSIGPIPE (0x1022) has no Windows counterpart and is ignored
