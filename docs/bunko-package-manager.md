@@ -37,7 +37,8 @@ package; conflicting paths and cycles fail instead of choosing a version.
 after the entire graph has resolved and installed successfully. A failed operation
 may leave successfully installed dependencies in the shared cache, but it does
 not change the manifest or replace existing cache entries. `remove` retains the
-cache. Comments and formatting are normalized when a manifest is edited.
+cache. Comments and formatting are normalized when a manifest is edited. Manifests
+are bounded to 64 KiB; a size failure preserves the previous declarations.
 
 The Go reference version banner and `VERSION` remain the base branch's
 `2.1.2-dev` / `2.1.2`. Offline loader compatibility currently uses
@@ -56,7 +57,7 @@ The cache defaults to the OS user cache directory plus `mio/bunko/v1`:
 
 Set `MIO_BUNKO_CACHE` to override this location. It is entirely separate from
 `MIO_BUNKO`, which still selects the standard library. Cache entries retain the
-exact metadata, checksummed archive and source tree. Compilation checks both the
+original index record bytes, checksummed archive and source tree. Compilation checks both the
 archive and the extracted files; it never downloads or repairs packages. Missing
 entries direct the user to `mio bunko install`.
 

@@ -96,6 +96,9 @@ func writeManifest(dir string, m Manifest, replace bool) error {
 	if b.Len() == 0 {
 		b.WriteString("[dependencies]\n")
 	}
+	if b.Len() > MaxRecord {
+		return fail("BUNKO_E_MANIFEST", "formatted manifest exceeds 64 KiB; existing declarations were preserved")
+	}
 	f, e := os.CreateTemp(dir, ".bunko-manifest-*")
 	if e != nil {
 		return e

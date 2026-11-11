@@ -521,3 +521,64 @@ func TestDuplicatePlatformArrayKey(t *testing.T) {
 		t.Fatal("duplicate platform declaration accepted")
 	}
 }
+
+func TestCacheRetainsOriginalIndexBytes(t *testing.T) {
+	archive := goodArchive(t)
+	r := fixture("alice/json", "1.0.0")
+	r.SHA256 = archiveDigest(archive)
+	var canonical []byte
+	for j := 0; j < 1000; j++ {
+		r.Dependencies[fmt.Sprintf("pub%035d/pkg%035d", j, j)] = "1.0.0"
+		canonical = recordBytes(r)
+		if len(canonical) > MaxRecord {
+			break
+		}
+	}
+	if len(canonical) <= MaxRecord {
+		t.Fatal("fixture must exceed bound after formatting")
+	}
+	original := bytes.ReplaceAll(canonical, []byte(" = "), []byte("="))
+	parsed, err := ParseRecord(original, r.Name, r.Version)
+	if err != nil {
+		t.Fatal("compact index record must be valid", len(original), err)
+	}
+	c := Client{Cache: t.TempDir(), Fetch: testFetcher(t, r, archive, false)}
+	if err = c.install(parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = VerifyCached(c.Cache, parsed); err != nil {
+		t.Fatal("freshly installed record must remain readable", err)
+	}
+	dir, _ := entryPath(c.Cache, r.Name, r.Version)
+	stored, err := os.ReadFile(filepath.Join(dir, "record.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored, original) {
+		t.Fatal("cache reformatted immutable index record")
+	}
+}
+func TestManifestSizeFailurePreservesDeclarations(t *testing.T) {
+	dir := t.TempDir()
+	if err := Init(dir); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Manifest{Dependencies: map[string]string{}}
+	for j := 0; j < 1000; j++ {
+		m.Dependencies[fmt.Sprintf("pub%035d/pkg%035d", j, j)] = "1.0.0"
+	}
+	if err = writeManifest(dir, m, true); err == nil {
+		t.Fatal("oversized manifest was published")
+	}
+	after, err := os.ReadFile(filepath.Join(dir, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("size failure changed existing manifest")
+	}
+}

@@ -30,6 +30,29 @@ func readRegular(p string, limit int64) ([]byte, error) {
 	return os.ReadFile(p)
 }
 func archiveDigest(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
+func sameRecord(a, b Record) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return bytes.Equal(x, y)
+}
+func cacheMetadata(r Record) ([]byte, error) {
+	data := r.raw
+	if len(data) == 0 {
+		var encoded bytes.Buffer
+		if err := toml.NewEncoder(&encoded).Encode(r); err != nil {
+			return nil, err
+		}
+		data = encoded.Bytes()
+	}
+	parsed, err := ParseRecord(data, r.Name, r.Version)
+	if err != nil {
+		return nil, err
+	}
+	if !sameRecord(parsed, r) {
+		return nil, fail("BUNKO_E_CACHE", "record fields differ from immutable index bytes")
+	}
+	return data, nil
+}
 func VerifyCached(cache string, r Record) (string, error) {
 	dir, e := entryPath(cache, r.Name, r.Version)
 	if e != nil {
@@ -43,9 +66,7 @@ func VerifyCached(cache string, r Record) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	a, _ := json.Marshal(stored)
-	b, _ := json.Marshal(r)
-	if !bytes.Equal(a, b) {
+	if !sameRecord(stored, r) {
 		return "", fail("BUNKO_E_CACHE", "cached immutable metadata differs for %s@%s", r.Name, r.Version)
 	}
 	archive, e := readRegular(filepath.Join(dir, "archive.tar.gz"), MaxArchive)
@@ -108,6 +129,10 @@ func (c *Client) install(r Record) error {
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
+	metadata, e := cacheMetadata(r)
+	if e != nil {
+		return e
+	}
 	parent := filepath.Dir(dir)
 	if e = os.MkdirAll(parent, 0700); e != nil {
 		return e
@@ -146,11 +171,7 @@ func (c *Client) install(r Record) error {
 			return e
 		}
 	}
-	var metadata bytes.Buffer
-	if e = toml.NewEncoder(&metadata).Encode(r); e != nil {
-		return e
-	}
-	if e = os.WriteFile(filepath.Join(stage, "record.toml"), metadata.Bytes(), 0600); e != nil {
+	if e = os.WriteFile(filepath.Join(stage, "record.toml"), metadata, 0600); e != nil {
 		return e
 	}
 	if e = os.WriteFile(filepath.Join(stage, "archive.tar.gz"), archive, 0600); e != nil {

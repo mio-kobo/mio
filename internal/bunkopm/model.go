@@ -75,6 +75,9 @@ func validateDependencies(deps map[string]string) error {
 }
 
 type Record struct {
+	// Keep the accepted record bytes: TOML formatting can expand a valid 64 KiB
+	// record beyond the index bound, and published records are immutable.
+	raw          []byte
 	Name         string `toml:"name"`
 	Version      string `toml:"version"`
 	Publisher    string `toml:"publisher"`
@@ -161,7 +164,11 @@ func ParseRecord(data []byte, name, version string) (Record, error) {
 			seen[a] = true
 		}
 	}
-	return r, validateDependencies(r.Dependencies)
+	if err := validateDependencies(r.Dependencies); err != nil {
+		return r, err
+	}
+	r.raw = append([]byte(nil), data...)
+	return r, nil
 }
 func Target(os, arch string) string {
 	if os == "darwin" {
