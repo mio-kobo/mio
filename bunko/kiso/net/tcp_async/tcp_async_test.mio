@@ -66,6 +66,19 @@ waza make_pair(listener: AsyncListener, port: int64) -> Pair {
     kaesu Pair { client: client, server: server };
 }
 
+// A nonblocking read may legitimately report pending for a moment after the peer wrote: on Linux loopback delivery completes
+// inside the sender's write, on macOS it follows asynchronously. Tests that expect data retry (bounded, no sleeping) while the
+// result is pending; the assertions about the result itself are unchanged. A test that expects NO data must call read directly.
+waza read_wait(connection: AsyncConnection, destination: []uint8, offset: int64, length: int64) -> ReadResult {
+    kaku result = read(connection, destination, offset, length);
+    kaku tries = 0;
+    aida (result.pending && tries < 5000000) {
+        result = read(connection, destination, offset, length);
+        tries = tries + 1;
+    }
+    kaesu result;
+}
+
 waza test_accept_and_read_report_pending_instead_of_blocking() -> unit {
     kaku port = listen_free(42000);
     testing.expect(port > 0, "a loopback port is available");
@@ -107,19 +120,19 @@ waza test_echo_roundtrip_and_eof() -> unit {
     kaku sent = write(client, payload, 0, 5);
     testing.expect(sent.error == mu && sent.count == 5 && !sent.pending, "five bytes are written");
     kaku buffer = array.make[uint8](16, uint8(0));
-    kaku got = read(server, buffer, 3, 13);
+    kaku got = read_wait(server, buffer, 3, 13);
     testing.expect(got.error == mu && got.count == 5 && !got.eof && buffer[3] == uint8(104) && buffer[7] == uint8(111) && buffer[2] == uint8(0), "bytes arrive at the destination offset");
     kaku echoed = write(server, buffer, 3, got.count);
     testing.expect(echoed.count == 5 && echoed.error == mu, "the server echoes");
     kaku back = array.make[uint8](5, uint8(0));
-    kaku again = read(client, back, 0, 5);
+    kaku again = read_wait(client, back, 0, 5);
     testing.expect(again.count == 5 && back[0] == uint8(104) && back[4] == uint8(111), "the client reads the echo");
     kaku zero = read(client, back, 0, 0);
     testing.expect(zero.count == 0 && !zero.eof && !zero.pending && zero.error == mu, "a zero-length read is neither EOF nor pending");
     testing.expect(error_code(read(client, back, 0, 9).error) == 1, "a range outside the buffer is rejected");
     testing.expect(error_code(write(client, payload, -1, 1).error) == 1, "a negative offset is rejected");
     testing.expect(close(client).error == mu, "the client closes");
-    kaku eof = read(server, buffer, 0, 8);
+    kaku eof = read_wait(server, buffer, 0, 8);
     testing.expect(eof.eof && eof.count == 0 && !eof.pending && eof.error == mu, "peer close is EOF");
     testing.expect(error_code(close(client).error) == 2, "closing twice reports Closed");
     testing.expect(error_code(read(client, back, 0, 1).error) == 2, "reading a closed connection reports Closed");
