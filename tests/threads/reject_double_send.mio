@@ -1,0 +1,13 @@
+// Must NOT compile (E0703): a graph can only be handed over once.
+yobu "kiso/thread";
+
+kata Packet { id: int64; payload: []int64; }
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[Packet](2, Packet { id: -1, payload: [] });
+    kaku packet = Packet { id: 1, payload: [1, 2] };
+    thread.send[Packet](channel, yuzuru packet);
+    thread.send[Packet](channel, yuzuru packet);
+    kaesu 0;
+}
+chant(run());

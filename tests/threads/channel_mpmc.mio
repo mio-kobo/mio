@@ -1,0 +1,48 @@
+// Three producers and three consumers share a 4-slot channel while collections run: every message is delivered exactly once.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Message { id: int64; shared: []int64; items: []Message; }
+
+waza make_producer(producer: int64, channel: thread.Channel<Message>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku n = 0;
+        aida (n < 200) {
+            kaku id = producer * 1000 + n;
+            kaku message = Message { id: id, shared: [id], items: [Message { id: n, shared: [], items: [] }] };
+            kaku outcome = thread.send[Message](channel, yuzuru message);
+            moshi (!outcome.sent) { kaesu -1; }
+            n = n + 1;
+        }
+        kaesu 200;
+    };
+}
+
+waza make_consumer(channel: thread.Channel<Message>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku sum = 0;
+        aida (hai) {
+            kaku got = thread.receive[Message](channel);
+            moshi (got.closed) { nukeru; }
+            sum = sum + got.item.id + got.item.shared[0] + got.item.items[0].id;
+        }
+        kaesu sum;
+    };
+}
+
+waza run() -> int64 {
+    kaku filler = Message { id: -1, shared: [], items: [] };
+    kaku channel = thread.channel_new[Message](4, filler);
+    kaku p0 = thread.start(make_producer(0, channel));
+    kaku p1 = thread.start(make_producer(1, channel));
+    kaku p2 = thread.start(make_producer(2, channel));
+    kaku c0 = thread.start(make_consumer(channel));
+    kaku c1 = thread.start(make_consumer(channel));
+    kaku c2 = thread.start(make_consumer(channel));
+    chant(thread.join(p0) + thread.join(p1) + thread.join(p2));
+    thread.close[Message](channel);
+    chant(thread.join(c0) + thread.join(c1) + thread.join(c2));
+    thread.destroy[Message](channel);
+    kaesu 0;
+}
+run();
