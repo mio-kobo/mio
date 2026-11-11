@@ -570,6 +570,19 @@ def native_mio_test(report, cli, skips_allowed, target=""):
     return not failures
 
 
+def reactor_checks(report, cli, target, work):
+    """The epoll reactor exists on linux-amd64 only. There: stress (normal and --gc-stress, repeated), a 1000-connection load test
+    with an idle-CPU check, and an EINTR test, all natively. Every other target reports NOT_RUN (never PASS), not a required check."""
+    if target != "linux-amd64":
+        return report.check("linux-reactor", "NOT_RUN", "native", "the reactor backend is linux-amd64 only (the primitives fail closed here)", required=False)
+    output = Path(work) / "reactor-evidence"
+    code, out, err, seconds = run(report, "linux-reactor", [sys.executable, ROOT / "tests/reactor/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
+    executed = "execution: NOT_RUN" not in out + err
+    report.check("linux-reactor", "PASS" if code == 0 and executed else "FAIL", "native",
+                 "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
+                 note="real epoll over loopback sockets: repeated stress, --gc-stress, 1000-connection idle-efficiency load, EINTR")
+
+
 def thread_checks(report, cli, target, work):
     """OS threads registered with the collector exist on linux-amd64 only; every other target must reject them (never run them single-threaded)."""
     if target == "linux-amd64":
@@ -694,8 +707,10 @@ def linux(args, target="linux-amd64"):
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")
+        reactor_checks(report, cli, target, work)
         return finish(report, cli)
     thread_checks(report, cli, target, work / "threads")
+    reactor_checks(report, cli, target, work)
     chain = work / "runtime-chain"
     chain.mkdir(exist_ok=True)
     code, out, err, seconds = run(report, "linux-runtime-chain", [sys.executable, ROOT / "bunko/kiso/runtime/os/linux/check_chain.py"],
@@ -792,6 +807,7 @@ def follower(args, target):
         # (Mach-O images that need a macOS host); skips are reported separately and never count as passes.
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64", target=target)
         thread_checks(report, cli, target, work / "threads")
+        reactor_checks(report, cli, target, work)
         if target == "windows-amd64":
             windows_tcp_wildcard(report, cli, work)
         contract(report, cli, target)

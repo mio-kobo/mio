@@ -4,7 +4,7 @@ source "$(dirname "$0")/../scripts/ci/common.sh"
 ci_module() {
   local result=0
   case "$2" in
-    quick|unit) ci_check go core-unit go test -json -p 2 ./internal/lexer ./internal/parser ./internal/resolver ./internal/typecheck ./internal/compiler ./internal/code ./internal/vm ./internal/mochi ./internal/tester ./internal/bunko ./internal/bunkopm ./internal/playground ./cmd/mio -count=1 -timeout 10m || result=$? ;;
+    quick|unit) ci_check go core-unit go test -json -p 2 ./internal/lexer ./internal/parser ./internal/resolver ./internal/typecheck ./internal/compiler ./internal/code ./internal/vm ./internal/mochi ./internal/tester ./internal/bunko ./internal/bunkopm ./internal/playground ./cmd/mio ./editors -count=1 -timeout 10m || result=$? ;;
     full)
       # Existing Go bootstrap tests temporarily write this source-side fixture.
       # Restore it even when the check runner times out or cancels the child.

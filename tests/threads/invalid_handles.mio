@@ -1,0 +1,32 @@
+// A handle that is not a live thread handle must be detected, never dereferenced: made-up numbers, an already joined handle, a stale handle
+// whose slot was reused, and a second join. thread.join_checked tells those apart from an entry that returns a negative number.
+yobu "kiso/thread";
+
+waza seven() -> int64 { kaesu 7; }
+waza minus_five() -> int64 { kaesu -5; }
+
+waza run() -> int64 {
+    chant(thread.join(0));
+    chant(thread.join(-5));
+    chant(thread.join(123456789012));
+    chant(thread.join_checked(65535).ok);
+    kaku h = thread.start(seven);
+    kaku first = thread.join_checked(h);
+    chant(first.ok);
+    chant(first.value);
+    kaku again = thread.join_checked(h);
+    chant(again.ok);
+    // the slot is reused by the next thread, whose handle has another generation: the old handle must still be refused
+    kaku fresh = thread.start(seven);
+    chant(fresh != h);
+    kaku stale = thread.join_checked(h);
+    chant(stale.ok);
+    chant(thread.join_checked(fresh).value);
+    // an entry that returns a negative number is a real result, not an error
+    kaku n = thread.start(minus_five);
+    kaku result = thread.join_checked(n);
+    chant(result.ok);
+    chant(result.value);
+    kaesu 0;
+}
+run();

@@ -1,0 +1,90 @@
+// Randomised races between senders, receivers, close and destroy (a deterministic generator drives the scheduling jitter, 40 seeds). The
+// invariants: no hang, no crash, every attempted send either was accepted or came back rejected, and with close (not destroy) every accepted
+// message was delivered exactly once.
+yobu "kiso/thread";
+
+waza next(seed: int64) -> int64 {
+    kaku v = seed * 1103515245 + 12345;
+    kaesu v - (v / 2147483648) * 2147483648;
+}
+waza jitter(seed: int64) -> int64 {
+    kaku n = (next(seed) / 65536) - ((next(seed) / 65536) / 200) * 200;
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < n) { kaku cell = [i]; t = t + cell[0]; i = i + 1; }
+    kaesu t;
+}
+
+waza sender(channel: thread.Channel<int64>, base: int64, seed: int64) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku accepted = 0;
+        kaku rejected = 0;
+        kaku n = 0;
+        kaku s = seed;
+        aida (n < 60) {
+            s = next(s);
+            jitter(s);
+            kaku r = thread.send[int64](channel, base + n);
+            moshi (r.sent) { accepted = accepted + 1; }
+            moshi (!r.sent) { rejected = rejected + 1; }
+            n = n + 1;
+        }
+        kaesu accepted * 1000 + rejected;
+    };
+}
+waza receiver(channel: thread.Channel<int64>, seed: int64) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = 0;
+        kaku s = seed;
+        aida (hai) {
+            s = next(s);
+            jitter(s);
+            kaku r = thread.receive[int64](channel);
+            moshi (r.closed) { nukeru; }
+            got = got + 1;
+        }
+        kaesu got;
+    };
+}
+waza closer(channel: thread.Channel<int64>, seed: int64, destroy: bool) -> () -> int64 {
+    kaesu waza () -> int64 {
+        jitter(seed);
+        jitter(seed + 1);
+        thread.close[int64](channel);
+        moshi (destroy) { thread.destroy[int64](channel); thread.destroy[int64](channel); }
+        kaesu 0;
+    };
+}
+
+waza round(seed: int64, destroy: bool) -> bool {
+    kaku channel = thread.channel_new[int64](3, 0);
+    kaku s0 = thread.start(sender(channel, 0, seed));
+    kaku s1 = thread.start(sender(channel, 1000, seed + 7));
+    kaku s2 = thread.start(sender(channel, 2000, seed + 13));
+    kaku r0 = thread.start(receiver(channel, seed + 21));
+    kaku r1 = thread.start(receiver(channel, seed + 29));
+    kaku c = thread.start(closer(channel, seed + 3, destroy));
+    kaku a0 = thread.join(s0); kaku a1 = thread.join(s1); kaku a2 = thread.join(s2);
+    thread.close[int64](channel);
+    kaku g0 = thread.join(r0); kaku g1 = thread.join(r1);
+    thread.join(c);
+    kaku accepted = a0 / 1000 + a1 / 1000 + a2 / 1000;
+    kaku rejected = (a0 - (a0 / 1000) * 1000) + (a1 - (a1 / 1000) * 1000) + (a2 - (a2 / 1000) * 1000);
+    thread.destroy[int64](channel);
+    moshi (accepted + rejected != 180) { kaesu iie; }
+    moshi (destroy) { kaesu g0 + g1 <= accepted; }
+    kaesu g0 + g1 == accepted;
+}
+
+waza run() -> int64 {
+    kaku ok = 0;
+    kaku seed = 1;
+    aida (seed <= 40) {
+        moshi (round(seed, iie)) { ok = ok + 1; }
+        moshi (round(seed + 100, hai)) { ok = ok + 1; }
+        seed = seed + 1;
+    }
+    chant(ok);
+    kaesu 0;
+}
+run();

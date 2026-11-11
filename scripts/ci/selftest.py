@@ -751,5 +751,17 @@ exit "$result"
                     self.assertEqual(native.summary(args), 1)  # still missing one
             self.assertEqual(native.summary(args), 0)
 
+    def test_native_operation_ids_are_unique(self):
+        """Socket, thread and (future) async native operations share one id space: a duplicate would silently dispatch to the wrong routine."""
+        import re
+        text = (HERE.parents[1] / "bunko/kiso/aot/lower/nativefs/nativefs.mio").read_text(encoding="utf-8")
+        body = text.split("koukai waza operation", 1)[1].split("koukai waza parameter_count", 1)[0]
+        named = re.findall(r'name == "(\$mma::[^"]+)"\) \{ kaesu (\d+); \}', body)
+        keys = [key for key, _ in named]
+        ids = [int(number) for _, number in named]
+        self.assertEqual(len(keys), len(set(keys)), "a binding key is mapped twice")
+        self.assertEqual(len(ids), len(set(ids)), "two native operations share an id")
+        self.assertTrue({41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51} <= set(ids), "the thread operations 41-51 must all be present")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

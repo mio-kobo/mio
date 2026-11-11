@@ -9,11 +9,23 @@ yobu "kiso/array";
 // the receiver becomes its only owner. A failed send (closed channel) hands the graph back inside the result: the sender never loses a
 // graph merely because a transfer was attempted.
 
-// Starts a thread running entry. Returns a handle, or a negative errno when the thread could not be created or registered.
+// Starts a thread running entry. Returns a positive handle, or a negative errno when the thread could not be created or registered: -11 when
+// 4096 threads are already live (unjoined), -12 when the runtime has no memory for it, otherwise the system error. Nothing is left behind on failure.
 koukai waza start(entry: () -> int64) -> int64 { kaesu runtime.start(entry); }
 
-// Waits for the thread and returns entry's result. A handle must be joined exactly once.
+// Waits for the thread and returns entry's result. A handle that is not a live thread handle (never issued, already joined, stale, or made up)
+// is detected and yields -22 instead of touching memory; an entry that itself returns a negative number cannot be told apart from that error
+// by this function, so use join_checked when that matters.
 koukai waza join(handle: int64) -> int64 { kaesu runtime.join(handle); }
+
+// ok == iie: the handle was not a live thread handle (value is 0). Otherwise value is entry's result.
+koukai kata JoinResult { ok: bool; value: int64; }
+
+koukai waza join_checked(handle: int64) -> JoinResult {
+    kaku value = runtime.join(handle);
+    moshi (runtime.join_status() != 0) { kaesu JoinResult { ok: iie, value: 0 }; }
+    kaesu JoinResult { ok: hai, value: value };
+}
 
 // A bounded multi-producer multi-consumer queue of T. `words` is an off-heap block of control words (lock, head, tail, count, closed,
 // receive sequence, send sequence); `ring` holds the payload references, so in-flight graphs are ordinary heap references that the
@@ -32,11 +44,26 @@ koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
     kaesu Channel[T] { words: runtime.words_new(8), ring: array.make[T](slots, filler), filler: filler, capacity: slots };
 }
 
+// Mutex on word 0: 0 free, 1 locked, 2 locked with waiters. A waiter sleeps in word_wait (a safepoint) instead of spinning.
 waza lock<T>(channel: Channel<T>) -> int64 {
-    aida (runtime.word_cas(channel.words, 0, 0, 1) != 0) { }
+    kaku c = runtime.word_cas(channel.words, 0, 0, 1);
+    moshi (c == 0) { kaesu 0; }
+    aida (hai) {
+        moshi (c != 2) { c = runtime.word_cas(channel.words, 0, 1, 2); }
+        moshi (c != 0) { runtime.word_wait(channel.words, 0, 2); }
+        c = runtime.word_cas(channel.words, 0, 0, 2);
+        moshi (c == 0) { kaesu 0; }
+    }
     kaesu 0;
 }
-waza unlock<T>(channel: Channel<T>) -> int64 { kaesu runtime.word_set(channel.words, 0, 0); }
+waza unlock<T>(channel: Channel<T>) -> int64 {
+    kaku before = runtime.word_add(channel.words, 0, -1);
+    moshi (before != 1) {
+        runtime.word_set(channel.words, 0, 0);
+        runtime.word_wake(channel.words, 0, 1);
+    }
+    kaesu 0;
+}
 waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((index + 1) / capacity) * capacity; }
 
 // Blocks while the channel is full. Pass the graph with yuzuru: `thread.send[Graph](channel, yuzuru graph)`.
@@ -98,5 +125,23 @@ koukai waza close<T>(channel: Channel<T>) -> int64 {
     kaesu 0;
 }
 
-// Releases the control words. Call after every thread that uses the channel has been joined.
-koukai waza destroy<T>(channel: Channel<T>) -> int64 { kaesu runtime.words_free(channel.words, 8); }
+// Closes the channel for good and drops whatever is still queued (use close and drain with receive to keep it). Safe to call more than once
+// and from any thread; operations on a destroyed channel behave exactly like operations on a closed one (a send is rejected and returns its
+// value, a receive reports closed). The 64-byte control block stays mapped for the life of the process on purpose, so a thread still inside
+// send/receive can never see freed memory.
+koukai waza destroy<T>(channel: Channel<T>) -> int64 {
+    lock[T](channel);
+    runtime.word_set(channel.words, 4, 1);
+    runtime.word_set(channel.words, 7, 1);
+    runtime.word_set(channel.words, 3, 0);
+    runtime.word_set(channel.words, 1, 0);
+    runtime.word_set(channel.words, 2, 0);
+    kaku i = 0;
+    aida (i < channel.capacity) { channel.ring[i] = channel.filler; i = i + 1; }
+    unlock[T](channel);
+    runtime.word_add(channel.words, 5, 1);
+    runtime.word_add(channel.words, 6, 1);
+    runtime.word_wake(channel.words, 5, 1000000);
+    runtime.word_wake(channel.words, 6, 1000000);
+    kaesu 0;
+}
