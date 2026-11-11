@@ -763,5 +763,18 @@ exit "$result"
         self.assertEqual(len(ids), len(set(ids)), "two native operations share an id")
         self.assertTrue({41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51} <= set(ids), "the thread operations 41-51 must all be present")
 
+    def test_parity_matrix_is_complete_and_honest(self):
+        """docs/parity/matrix.json has one entry per platform and feature, and VALIDATED_BY_CI always cites passing checks."""
+        import parity_matrix
+        document = parity_matrix.load()
+        self.assertEqual(parity_matrix.problems(document), [])
+        # honesty rules reject a validated entry without evidence and an unsupported one without a reason
+        broken = json.loads(json.dumps(document))
+        broken["entries"][0]["ci_evidence"] = {}
+        broken["entries"][-1].update(status="UNSUPPORTED", limitations="", next_action="")
+        self.assertGreaterEqual(len(parity_matrix.problems(broken)), 2)
+        # the rendered table is the committed one
+        self.assertEqual(parity_matrix.render(document), (HERE.parents[1] / "docs/parity/README.md").read_text(encoding="utf-8"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

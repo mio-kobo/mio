@@ -1,0 +1,1922 @@
+{
+  "schema_version": 1,
+  "description": "Six-platform parity matrix for Mio 2.2.0. Statuses: IMPLEMENTED, VALIDATED_BY_CI, UNSUPPORTED, IN_PROGRESS, BLOCKED, NOT_RUN. VALIDATED_BY_CI means the named checks PASSED natively on that platform in the cited run; UNSUPPORTED/NOT_RUN never count as success.",
+  "evidence": {
+    "workflow": "Native (native.yml, six-platform summary)",
+    "run": 42969371443,
+    "url": "https://github.com/mio-kobo/mio/actions/runs/42969371443",
+    "head_sha": "d265bb0",
+    "note": "PR #72 head after merging Mio-2.2.0; Mio-2.2.0 at 94316df additionally contains the async session's reactor (#75): its CI evidence is its own PR run"
+  },
+  "platforms": [
+    "linux-amd64",
+    "linux-arm64",
+    "darwin-amd64",
+    "darwin-arm64",
+    "windows-amd64",
+    "windows-arm64"
+  ],
+  "features": [
+    {
+      "id": "A",
+      "name": "native compiler build"
+    },
+    {
+      "id": "B",
+      "name": "native CLI"
+    },
+    {
+      "id": "C",
+      "name": "self-hosting fixed point"
+    },
+    {
+      "id": "D",
+      "name": "Full and Core distributions"
+    },
+    {
+      "id": "E",
+      "name": "runtime ABI"
+    },
+    {
+      "id": "F",
+      "name": "GC correctness"
+    },
+    {
+      "id": "G",
+      "name": "memory management and root tracking"
+    },
+    {
+      "id": "H",
+      "name": "blocking TCP"
+    },
+    {
+      "id": "I",
+      "name": "native multithreading"
+    },
+    {
+      "id": "J",
+      "name": "thread synchronisation"
+    },
+    {
+      "id": "K",
+      "name": "channels"
+    },
+    {
+      "id": "L",
+      "name": "nonblocking TCP"
+    },
+    {
+      "id": "M",
+      "name": "Reactor / event loop"
+    },
+    {
+      "id": "N",
+      "name": "error handling and resource lifecycle"
+    },
+    {
+      "id": "O",
+      "name": "standard library behaviour"
+    }
+  ],
+  "priority": [
+    "darwin-arm64",
+    "linux-arm64",
+    "darwin-amd64",
+    "windows-amd64",
+    "windows-arm64"
+  ],
+  "reference": "linux-amd64",
+  "entries": [
+    {
+      "platform": "linux-amd64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "compiler-fixed-point",
+          "compiler-stage-B",
+          "compiler-stage-C",
+          "compiler-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Stage One limits: 4096 live threads, 1 MiB stacks, process ends with the main thread, blocking OS calls other than join/word_wait are not safepoint-aware; stress does not prove race freedom",
+      "next_action": "none (reference)",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "linux-thread-gc",
+          "linux-thread-witness"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Stage One limits: 4096 live threads, 1 MiB stacks, process ends with the main thread, blocking OS calls other than join/word_wait are not safepoint-aware; stress does not prove race freedom",
+      "next_action": "none (reference)",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "linux-thread-gc",
+          "linux-thread-witness"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Stage One limits: 4096 live threads, 1 MiB stacks, process ends with the main thread, blocking OS calls other than join/word_wait are not safepoint-aware; stress does not prove race freedom",
+      "next_action": "none (reference)",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "linux-thread-gc",
+          "linux-thread-witness"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "linux-amd64 only; 10000-connection stress needs a raised ulimit -n",
+      "next_action": "owner: async session (reactor phases C-E)",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "linux-amd64 only; 10000-connection stress needs a raised ulimit -n",
+      "next_action": "owner: async session (reactor phases C-E)",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "linux-amd64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "selfhost/pipeline has one test that skips on this target (recorded SKIP, not counted as PASS)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "compiler-fixed-point",
+          "compiler-stage-B",
+          "compiler-stage-C",
+          "compiler-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 2: polls, park protocol and thread natives in AArch64 (Stage B)",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 2: polls, park protocol and thread natives in AArch64 (Stage B)",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 2: polls, park protocol and thread natives in AArch64 (Stage B)",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "linux-arm64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "compiler-fixed-point",
+          "compiler-stage-B",
+          "compiler-stage-C",
+          "compiler-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 3: after darwin-arm64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 3: after darwin-arm64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 3: after darwin-arm64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-amd64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "selfhost/pipeline has one test that skips on this target (recorded SKIP, not counted as PASS)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "darwin-arm64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 4: CreateThread/WaitOnAddress runtime",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 4: CreateThread/WaitOnAddress runtime",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 4: CreateThread/WaitOnAddress runtime",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "windows-amd64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "selfhost/pipeline has one test that skips on this target (recorded SKIP, not counted as PASS)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "A",
+      "feature_name": "native compiler build",
+      "implementation": "selfhost compiler and the per-target lowering (kiso/aot/*)",
+      "verification": "python scripts/ci/native_platforms.py <platform command> (compiler stages B-D build and compare)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "compiler-fixed-point",
+          "compiler-stage-B",
+          "compiler-stage-C",
+          "compiler-stage-D"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "B",
+      "feature_name": "native CLI",
+      "implementation": "selfhost/cli",
+      "verification": "same chain: cli-stage-B..D, cli-hello, cli-version",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-stage-B",
+          "cli-stage-C",
+          "cli-stage-D",
+          "cli-version",
+          "cli-hello"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "C",
+      "feature_name": "self-hosting fixed point",
+      "implementation": "staged chain A->D must reach a byte-identical fixed point",
+      "verification": "same chain: cli-fixed-point, core-cli-fixed-point",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "cli-fixed-point",
+          "core-cli-fixed-point"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "D",
+      "feature_name": "Full and Core distributions",
+      "implementation": "embedded Bunko bundle (Full) and external root (Core)",
+      "verification": "same chain: full-embedded-*, core-*",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "full-embedded-runtime",
+          "full-embedded-transitive",
+          "core-no-embedded",
+          "core-external-root",
+          "core-adjacent"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "E",
+      "feature_name": "runtime ABI",
+      "implementation": "docs/runtime-abi.md, bunko/kiso/runtime/abi, tests/runtime-abi",
+      "verification": "python tests/runtime-abi/run.py on the target",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "F",
+      "feature_name": "GC correctness",
+      "implementation": "per-target collector (x64 mark-sweep, AArch64 generational)",
+      "verification": "python tests/runtime-abi/run.py --suite differential (default and --gc-stress)",
+      "pr": [],
+      "limitations": "gc_garbage and gc_keeps_live_data are excluded from the gc-stress differential (quadratic under per-allocation collection): recorded NOT_APPLICABLE",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "native-differential",
+          "runtime-abi-contract"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "G",
+      "feature_name": "memory management and root tracking",
+      "implementation": "exact roots: inline frame descriptors (x86-64), shadow frames (AArch64)",
+      "verification": "runtime ABI contract and differential (exact roots exercised under --gc-stress)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "runtime-abi-contract",
+          "native-differential"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "H",
+      "feature_name": "blocking TCP",
+      "implementation": "mio/sys/socket natives, bunko/kiso/net/tcp",
+      "verification": "mio test bunko/kiso/net/tcp (real loopback sockets)",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "I",
+      "feature_name": "native multithreading",
+      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
+      "verification": "python tests/threads/run.py --mio <native cli>",
+      "pr": [
+        "#63",
+        "#64",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 5: after windows-amd64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "J",
+      "feature_name": "thread synchronisation",
+      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
+      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 5: after windows-amd64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "K",
+      "feature_name": "channels",
+      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
+      "verification": "python tests/threads/run.py (channel_* programs)",
+      "pr": [
+        "#66",
+        "#72"
+      ],
+      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
+      "next_action": "Priority 5: after windows-amd64",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "thread-natives-fail-closed"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "L",
+      "feature_name": "nonblocking TCP",
+      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "verification": "mio test bunko/kiso/net/tcp_async",
+      "pr": [
+        "#65"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "M",
+      "feature_name": "Reactor / event loop",
+      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "pr": [
+        "#75"
+      ],
+      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
+      "next_action": "after the async session's backend PR for this target",
+      "status": "UNSUPPORTED",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "N",
+      "feature_name": "error handling and resource lifecycle",
+      "implementation": "NativeFS handle tables, process/exec natives",
+      "verification": "os-process-protocol, mio-run-protocol, mio-test-protocol, mio test bunko/kiso/fs",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "os-process-protocol",
+          "mio-run-protocol",
+          "mio-test-protocol",
+          "mio-test bunko/kiso/fs"
+        ]
+      }
+    },
+    {
+      "platform": "windows-arm64",
+      "feature": "O",
+      "feature_name": "standard library behaviour",
+      "implementation": "bunko/kiso/*",
+      "verification": "mio test of every Bunko package with tests",
+      "pr": [],
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
+      "ci_evidence": {
+        "run": 42969371443,
+        "head": "d265bb0",
+        "checks": [
+          "mio-test bunko/kiso/array",
+          "mio-test bunko/kiso/string",
+          "mio-test bunko/kiso/encoding/json",
+          "mio-test bunko/kiso/regexp",
+          "mio-test bunko/kiso/os"
+        ]
+      }
+    }
+  ]
+}
