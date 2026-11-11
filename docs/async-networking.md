@@ -144,37 +144,92 @@ fairness, long-duration stability, GC-under-suspension.
 
 ## 3. Phase B — portable reactor (implemented on linux-amd64)
 
-Status: **Implemented and tested locally on linux-amd64** (native epoll over real loopback sockets); darwin/windows/ARM64 are **NOT_RUN** (primitives fail closed).
+Status legend used here: **Implemented** (in the tree), **Tested** (native execution on the stated target), **Unsupported** (fails closed with an explicit error), **Planned**.
 
-OS contract (five primitives of `mio/sys/socket`; the reactor handle and the wake eventfd are ordinary handle-table entries, so `close` and stale-handle
-behaviour are the ones of sockets):
+### 3.1 Preconditions (checked when this phase started)
+
+PR #65 (`801bb02`, nonblocking TCP) and PR #66 (`8348adb`, OS threads and channels) are merged in `Mio-2.2.0`. Their native-function IDs coexist in `NativeFS`: blocking sockets 32..40, threads and channels
+41..50, nonblocking and reactor socket primitives 60..66 (the socket module owns 60 and up; `is_socket_operation` in `nativefs.mio` is the only place that lists the ranges).
+
+### 3.2 Public contract: `kiso/reactor` (pure Mio)
+
+```
+open()                                  -> OpenResult{reactor, error}      error Unsupported where there is no backend
+submit(reactor, handle, interest)       -> SubmitResult{operation, error}  interest: readable 1, writable 2, both 3
+update(reactor, operation, handle, i)   -> UnitResult
+poll(reactor, timeout_ms, max)          -> PollResult{events, woken, stale, error}   the only blocking call
+cancel(reactor, operation, handle)      -> UnitResult
+current(reactor, event)                 -> bool    is the event's operation still live?
+wake(reactor)                           -> UnitResult
+close(reactor)                          -> UnitResult
+```
+
+`Operation{id, slot, generation}` and `Event{operation, slot, generation, readable, writable, error, hangup}`. The portable operation set is submit / poll / cancel / wake / close; `update` exists because epoll can modify
+interest in place (an IOCP adapter would cancel and resubmit behind the same call).
+
+**Operation identity.** `id` is unique within a reactor and never reused. `slot` is recycled, `generation` is not: a slot's generation increases every time it is released. The kernel is only given the opaque token
+`generation * 1048576 + slot + 1`; token 0 is the internal wake-up descriptor. **Stale rejection.** `poll` drops (and counts in `stale`) every event whose token no longer matches a live operation: a cancelled operation, a
+slot that was released and reused, a kernel event still in flight. **Cancellation.** After `cancel` the operation is never delivered; an event already returned by an earlier `poll` can be re-validated with `current`.
+A cancelled or stale `Operation` cannot update or cancel the slot's new owner (it reports `Closed`). **Closing resources.** Cancel before closing the socket. The other order is memory-safe too: the kernel drops the registration when the
+descriptor closes, a later `cancel` releases the slot and ignores the already-closed handle, and it cannot touch whoever received the descriptor next.
+
+**Resource ownership.** Raw file descriptors are never exposed: the epoll instance, the wake-up eventfd and every socket are generation-checked handles of the runtime's handle table. While an operation is pending the reactor stores the
+socket handle in `handles` (a managed reference), so the collector keeps it reachable; a freed slot holds the reactor's own poll handle as a placeholder. `close` frees both descriptors and invalidates all operations; double close reports `Closed`.
+**Waiting.** Level-triggered: readiness persists until the owner drains the socket to EAGAIN, so nothing is lost between polls. `poll(-1)` sleeps in the kernel until an event or a wake, `poll(n)` for at most n ms, `poll(0)` does not wait.
+EINTR makes `poll` return zero events early (never an error). Wakes coalesce into one `woken`; `wake` only adds to an eventfd counter and may be called from another OS thread.
+
+### 3.3 OS primitives (`mio/sys/socket`, Linux AMD64 assembler runtime; Go VM implements the same contract)
 
 | primitive | meaning |
 |---|---|
-| `reactor_open(kind) -> resource` | kind 0: `epoll_create1`; kind 1: `eventfd2` (nonblocking) used as the wake-up descriptor |
-| `reactor_ctl(reactor, target, op/interest/token packed, status)` | `epoll_ctl` add (1) / delete (2) / modify (3); interest bit 0 readable, bit 1 writable; the 64-bit token travels in the kernel's data word |
-| `reactor_wait(reactor, events, max, timeout_ms, status)` | `epoll_wait` (the only blocking call): 1..64 events as 16-byte `(token, mask)` records; mask 1 readable, 2 writable, 4 error, 8 hangup; EINTR reports zero events |
+| `reactor_open(kind) -> resource` | kind 0: `epoll_create1(EPOLL_CLOEXEC)`; kind 1: `eventfd2(EFD_NONBLOCK\|EFD_CLOEXEC)`; any other kind is "invalid argument" (this is also how `open` detects that a target has no backend) |
+| `reactor_ctl(reactor, target, packed, status)` | `epoll_ctl` add 1 / delete 2 / modify 3; `packed = op \| interest << 8 \| token << 16`; the 64-bit token travels in the kernel's data word (12-byte packed `epoll_event`) |
+| `reactor_wait(reactor, events, max, timeout_ms, status)` | `epoll_wait`, 1..64 events as 16-byte `(token, mask)` records, mask 1 readable, 2 writable, 4 error, 8 hangup; EINTR reports zero events |
 | `reactor_signal` / `reactor_ack` | add to / reset the eventfd counter; EAGAIN is success (already signalled / nothing pending) |
 
-The portable layer is `kiso/reactor` (pure Mio): `open register modify deregister wait wake close`, documented in `bunko/kiso/reactor/README.md`.
+### 3.4 Platform matrix
 
-Rules implemented and tested: events carry the opaque token `generation * 1048576 + slot + 1`, token 0 is the wake descriptor; an event whose generation no longer
-matches a live registration is dropped and counted (`stale`); `deregister` releases the slot even when the socket was already closed and a stale `Registration` cannot
-touch the slot's new owner; level-triggered epoll, so readiness persists until drained and cannot be lost between `wait` calls; `wait(timeout)` sleeps in the kernel
-(tested: a 60 ms wait takes >= 50 ms) and a wake ends a 5 s wait at once; several wakes coalesce into one; close releases both descriptors and invalidates all registrations.
+| target | reactor | evidence |
+|---|---|---|
+| linux-amd64 | **Implemented, Tested** | native `mio test bunko/kiso/reactor` (13 tests) and `tests/reactor/run.py` in CI (`linux-reactor` check) |
+| darwin-arm64, darwin-amd64 | Unsupported (fail closed: `open` returns `Unsupported`); kqueue **Planned** | NOT_RUN |
+| windows-amd64, windows-arm64 | Unsupported (fail closed); IOCP **Planned** | NOT_RUN |
+| linux-arm64 | Unsupported (the AArch64 lowering has fail-closed stubs); epoll on ARM64 **Planned** (same syscalls, different numbers) | NOT_RUN |
 
-Platform design for phase D (not implemented): Darwin kqueue (same readiness shape, `EVFILT_READ/WRITE` + `EVFILT_USER` for wake); Windows IOCP is *completion* based and gets
-its own adapter behind the same `submit/poll/cancel/wake` contract: the operation object owns the `OVERLAPPED` and the buffer until the completion packet has been dequeued,
-including after `CancelIoEx`.
+Planned backends (not part of this phase): **kqueue** has the same readiness shape (`EVFILT_READ`/`EVFILT_WRITE`, `EVFILT_USER` for the wake-up) and maps onto submit/poll/cancel/wake directly. **IOCP** is completion based and must not be forced into
+the epoll shape: `submit` would start an overlapped operation whose `OVERLAPPED` and buffer are owned by the adapter until the completion packet has been dequeued, including after `CancelIoEx`; `poll` is `GetQueuedCompletionStatusEx`; `wake` is `PostQueuedCompletionStatus`.
 
-### 3.1 Runtime change needed for scale: Linux handle table 64 -> 4096
+### 3.5 Tests and measured evidence (linux-amd64)
 
-The Linux runtime's NativeFS handle table (shared by files, directories and sockets) had 64 slots and an 8-bit slot field in the resource token, so a program could hold
-at most 64 open sockets. A 200-connection reactor test failed against it (handle exhaustion), and the stated goal is >= 1000 concurrent connections. Changed (Linux x86-64 only, internal
-layout, no language-visible change): the token is now `generation << 16 | (slot + 1)`; the table has 4096 x 24 bytes, placed after the directory buffers; the Mochi globals and the
-image's `bss` shift by 98304 bytes; directory handles are allocated only in slots 0..63 (the directory table and buffers keep their 64 entries) and `rt.fs_dir_slot` reports "not a
-directory" for any handle in a higher slot, so a socket token handed to a directory function cannot index outside the directory table. Tested by the full reactor package
-(200 simultaneous connections = 400 handles), the existing `kiso/fs`, `kiso/os`, `kiso/io`, TCP packages, the runtime-ABI contract suite (16 PASS) and the thread/channel witness.
+`bunko/kiso/reactor/reactor_test.mio`, 13 native tests over real loopback sockets: lifecycle and argument validation; wake is prompt and coalesced; timeout really sleeps (>= 50 ms for a 60 ms timeout); read readiness, level-triggered
+persistence, writable interest, peer close as readable then EOF; **pending connect** completing as a writable event followed by `finish_connect`; **refused connect** reported through the reactor; **cancel before readiness**
+(later data is not delivered; double cancel reports `Closed`; `current` rejects the event of a cancelled operation); **closing a socket with a pending registration** and descriptor/slot reuse (cancelling the old operation does not disturb the new owner); unique ids and
+new generations; **backpressure** (a full send buffer produces no writable event until the reader drains, then writing resumes); generation rejection of an in-flight kernel event; 200 simultaneous connections each reported exactly once;
+**a wake from another OS thread ends `poll(-1)`**, and 20 consecutive wakes are all observed.
+
+`tests/reactor/run.py` (real epoll, measured, not estimated): repeated stress rounds with garbage allocation while operations are pending, normal and `--gc-stress`; a load test with 1000 loopback connections registered with one reactor
+whose timed idle phase must cost almost no CPU (extra CPU for the idle period < 10% of its length, at most 3 polls, zero idle events) followed by one readiness per connection that must be reported exactly once; an EINTR test using SIGSTOP/SIGCONT.
+The numbers printed by the run (connections, wall and CPU seconds, poll counts) are recorded in the PR; see "Limitations".
+
+### 3.6 Limitations of this phase
+
+* linux-amd64 only; nothing is claimed for other targets. The Go VM runs the primitives (probe-equivalent output) but not the reactor test package (no `kiso/os`, no threads there).
+* Level-triggered only (edge-triggered and `EPOLLEXCLUSIVE` are not used). `poll` returns at most 64 events per call.
+* The largest measured load is 1000 simultaneous connections (2000 handles, one process); the 10000-connection stress test needs more handles than the 4096-slot Linux table and a raised `ulimit -n` and is not claimed.
+* The reactor is not thread-safe except `wake`; a reactor is meant to be owned by one OS thread (the future per-worker reactor of phase E).
+* Long-duration (hours) stability is not claimed: the repetition tests run seconds to minutes.
+
+### 3.7 Future integration points for Phase C (single-threaded coroutine scheduler)
+
+A task waiting on I/O is a heap object holding its `Operation`; the scheduler calls `submit` when the task suspends and `cancel` when it resumes or is cancelled; its main loop is `run ready tasks -> poll(timeout until the next timer, or -1) -> mark tasks ready for each current event -> repeat`.
+`wake` is the cross-thread entry for phase E. Timers need no new primitive: the timer queue's next deadline is the `poll` timeout. A task's registrations must be cancelled when the task completes or is cancelled (structured scopes own that), and an event for a
+cancelled task is filtered with `current`. None of this is implemented in this phase.
+
+### 3.8 Runtime change needed for scale: Linux handle table 64 -> 4096
+
+The Linux runtime's NativeFS handle table (shared by files, directories and sockets) had 64 slots and an 8-bit slot field in the resource token, so a program could hold at most 64 open sockets. A 200-connection reactor test failed against it
+and the goal is >= 1000 concurrent connections. Changed (Linux x86-64 only, internal layout, no language-visible change): the token is `generation << 16 | (slot + 1)`; the table has 4096 x 24 bytes, placed after the directory buffers; the
+Mochi globals and the image's `bss` shift by 98304 bytes; directory handles are allocated only in slots 0..63 (the directory table and buffers keep their 64 entries) and `rt.fs_dir_slot` reports "not a directory" for any handle in a higher slot.
 Darwin and Windows keep their own tables; their limits are unchanged and will be measured in phase D.
 
 ## 4. Phase C — single-threaded tasks (planned; no new keyword)
