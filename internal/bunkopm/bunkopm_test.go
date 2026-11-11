@@ -222,7 +222,7 @@ func TestArchiveSecurity(t *testing.T) {
 			t.Fatal("accepted unsafe content", tc.name)
 		}
 	}
-	for _, names := range [][]string{{"A.mio", "a.mio"}, {"a.mio", "a.mio/x.mio"}} {
+	for _, names := range [][]string{{"A.mio", "a.mio"}, {"a.mio", "a.mio/x.mio"}, {"A/x.mio", "a/y.mio"}} {
 		var hs []*tar.Header
 		for _, n := range names {
 			hs = append(hs, &tar.Header{Name: n, Mode: 0644, Typeflag: tar.TypeReg})

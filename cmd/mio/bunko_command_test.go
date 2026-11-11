@@ -106,6 +106,10 @@ func TestBunkoInstalledImportExecution(t *testing.T) {
 	}
 }
 func TestBunkoHelpAndLocalCommands(t *testing.T) {
+	var themed, themeErr bytes.Buffer
+	if status := runCLI([]string{"--color=always", "--theme=dark", "bunko", "--help"}, &themed, &themeErr); status != 0 || !strings.Contains(themed.String(), "\x1b[") {
+		t.Fatal("Bunko help did not use the selected theme", status, &themed, &themeErr)
+	}
 	for _, args := range [][]string{{"bunko", "--help"}, {"bunko", "add", "--help"}, {"--lang=ja-JP", "bunko", "--help"}, {"help", "bunko"}} {
 		var out, err bytes.Buffer
 		if status := runCLI(args, &out, &err); status != 0 || !strings.Contains(out.String(), "mio bunko") {

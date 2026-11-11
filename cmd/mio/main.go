@@ -93,7 +93,7 @@ func runCLI(
 
 	switch args[0] {
 	case "bunko":
-		return runBunko(args[1:], stdout, stderr, language)
+		return runBunko(args[1:], stdout, stderr, language, theme)
 	case "lsp":
 		return runLSP(args[1:], os.Stdin, stdout, stderr, language)
 

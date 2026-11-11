@@ -26,7 +26,16 @@ func bunkoCommands() []bunkoCommand {
 		{"search", "search <query>", i18n.KeyBunkoSearchHelp},
 	}
 }
-func runBunko(args []string, out, stderr io.Writer, lang i18n.Language) int {
+func runBunko(args []string, out, stderr io.Writer, lang i18n.Language, theme helpTheme) int {
+	help := len(args) == 0
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			help = true
+		}
+	}
+	if help {
+		printCommandHelp(out, lang, theme, "bunko")
+	}
 	return runBunkoWithFetcher(args, out, stderr, lang, bunkopm.NewFetcher())
 }
 func runBunkoWithFetcher(args []string, out, stderr io.Writer, lang i18n.Language, fetch *bunkopm.Fetcher) int {

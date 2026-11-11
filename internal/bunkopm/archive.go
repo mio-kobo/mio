@@ -69,6 +69,7 @@ func ReadArchive(data []byte) (map[string][]byte, error) {
 	tr := tar.NewReader(bounded)
 	files := map[string][]byte{}
 	seen := map[string]bool{}
+	spellings := map[string]string{}
 	var total int64
 	entries := 0
 	for {
@@ -86,6 +87,20 @@ func ReadArchive(data []byte) (map[string][]byte, error) {
 		n, e := archivePath(h.Name)
 		if e != nil {
 			return nil, e
+		}
+		// Check implicit parent directories too, not just complete entry names.
+		// Otherwise A/x.mio and a/y.mio alias on a case-insensitive filesystem.
+		prefix := ""
+		for _, part := range strings.Split(n, "/") {
+			if prefix != "" {
+				prefix += "/"
+			}
+			prefix += part
+			folded := strings.ToLower(prefix)
+			if previous, ok := spellings[folded]; ok && previous != prefix {
+				return nil, fail("BUNKO_E_ARCHIVE", "case-colliding path prefix: %q and %q", previous, prefix)
+			}
+			spellings[folded] = prefix
 		}
 		fold := strings.ToLower(n)
 		if seen[fold] {
