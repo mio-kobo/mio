@@ -70,9 +70,11 @@ def main():
     parser.add_argument("--pairs", type=int, default=1000)
     parser.add_argument("--idle-ms", type=int, default=3000)
     args = parser.parse_args()
-    if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
-        print("execution: NOT_RUN (the reactor backend is Linux x86-64 only; host is %s %s)" % (platform.system(), platform.machine()))
+    host = (platform.system(), platform.machine())
+    if host not in (("Linux", "x86_64"), ("Linux", "AMD64"), ("Darwin", "x86_64")):
+        print("execution: NOT_RUN (the reactor backend exists on Linux x86-64 and Darwin x86-64 here; host is %s %s)" % host)
         return 0
+    darwin = host[0] == "Darwin"
     args.output.mkdir(parents=True, exist_ok=True)
     results = dict(host=dict(system=platform.system(), machine=platform.machine(), kernel=platform.release(), cpus=os.cpu_count()), checks=[])
     failures = []
@@ -126,10 +128,11 @@ def main():
                extra_cpu_seconds_for_idle=round(extra_cpu, 3), wall_seconds_with_idle=round(idle["wall"], 3),
                rule="extra CPU for the idle period < 10% of its length, at most 3 polls, zero idle events")
 
-    # EINTR: stop/continue makes epoll_wait return EINTR; it must come back as an early, error-free return
+    # EINTR: stop/continue makes epoll_wait return EINTR on Linux; it must come back as an early, error-free return. macOS may restart
+    # kevent after SIGCONT, so there an early return is reported but not required (no error is still required).
     r = run([normal, "eintr", 2000], timeout=120, stop_cont=(0.4, 0.3))
     n = numbers(r["out"])
-    record("eintr", r["code"] == 0 and "OK" in r["out"] and n.get("errors") == 0 and n.get("early_returns", 0) >= 1,
+    record("eintr", r["code"] == 0 and "OK" in r["out"] and n.get("errors") == 0 and (darwin or n.get("early_returns", 0) >= 1),
            polls=n.get("polls"), early_returns=n.get("early_returns"), errors=n.get("errors"), wall_seconds=round(r["wall"], 3))
 
     (args.output / "results.json").write_text(json.dumps(results, indent=1) + "\n")
