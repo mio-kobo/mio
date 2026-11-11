@@ -3,37 +3,106 @@
   "track": "B (nonblocking TCP and Reactor; groups L and M)",
   "directive": "PARITY_25_CELLS_TASK.md",
   "note": "Independent ledger: PR #78 (docs/parity/matrix.json) was not merged on the baseline, so this file does not touch it. Statuses are derived from code and native execution evidence, never from labels. SKIPPED, UNSUPPORTED, NOT_RUN, mock-only and build-only are never PASS.",
-  "baseline": {"branch": "Mio-2.2.0", "commit": "94316df", "audited": "2026-11-11"},
-  "status_vocabulary": ["VALIDATED_BY_CI", "IMPLEMENTED_NOT_VALIDATED", "IN_PROGRESS", "UNSUPPORTED_FAIL_CLOSED"],
-  "order": ["darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"],
+  "baseline": {
+    "branch": "Mio-2.2.0",
+    "commit": "94316df",
+    "audited": "2026-11-11"
+  },
+  "status_vocabulary": [
+    "VALIDATED_BY_CI",
+    "IMPLEMENTED_NOT_VALIDATED",
+    "IN_PROGRESS",
+    "UNSUPPORTED_FAIL_CLOSED"
+  ],
+  "order": [
+    "darwin-arm64",
+    "linux-arm64",
+    "darwin-amd64",
+    "windows-amd64",
+    "windows-arm64"
+  ],
   "groups": {
     "L": "nonblocking TCP: kiso/net/tcp_async over the set_nonblocking and finish_connect primitives",
     "M": "Reactor: kiso/reactor over the reactor_open, reactor_ctl, reactor_wait, reactor_signal and reactor_ack primitives"
   },
   "cells": {
     "linux-amd64": {
-      "L": {"status": "VALIDATED_BY_CI", "evidence": "native mio test bunko/kiso/net/tcp_async (6 tests) in the Native / linux-amd64 job", "pr": ["#65", "#74"], "ci_runs": ["https://github.com/mio-kobo/mio/actions/runs/42961754280", "https://github.com/mio-kobo/mio/actions/runs/42965821135"]},
-      "M": {"status": "VALIDATED_BY_CI", "evidence": "native mio test bunko/kiso/reactor (13 tests) and tests/reactor/run.py (stress, gc-stress, 1000-connection idle load, EINTR) as the linux-reactor check", "pr": ["#75"], "ci_runs": ["https://github.com/mio-kobo/mio/actions/runs/42969354792"]}
+      "L": {
+        "status": "VALIDATED_BY_CI",
+        "evidence": "native mio test bunko/kiso/net/tcp_async (6 tests) in the Native / linux-amd64 job",
+        "pr": [
+          "#65",
+          "#74"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/42961754280",
+          "https://github.com/mio-kobo/mio/actions/runs/42965821135"
+        ]
+      },
+      "M": {
+        "status": "VALIDATED_BY_CI",
+        "evidence": "native mio test bunko/kiso/reactor (13 tests) and tests/reactor/run.py (stress, gc-stress, 1000-connection idle load, EINTR) as the linux-reactor check",
+        "pr": [
+          "#75"
+        ],
+        "ci_runs": [
+          "https://github.com/mio-kobo/mio/actions/runs/42969354792"
+        ]
+      }
     },
     "darwin-arm64": {
-      "L": {"status": "IN_PROGRESS", "work": "AArch64 routines for set_nonblocking (ioctl FIONBIO) and finish_connect (poll + getsockopt SO_ERROR), EINPROGRESS classified as in-progress, NativeFS handle table 32 -> 4096 slots", "blocker": "needs a green Native / darwin-arm64 run of the tcp_async package"},
-      "M": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "kqueue backend (kqueue/kevent, EVFILT_READ/WRITE, EVFILT_USER wake-up)"}
+      "L": {
+        "status": "IN_PROGRESS",
+        "work": "AArch64 routines for set_nonblocking (ioctl FIONBIO) and finish_connect (poll + getsockopt SO_ERROR), EINPROGRESS classified as in-progress, NativeFS handle table 32 -> 4096 slots",
+        "blocker": "needs a green Native / darwin-arm64 run of the tcp_async package"
+      },
+      "M": {
+        "status": "IN_PROGRESS",
+        "work": "kqueue backend (kqueue/kevent syscalls 362/363): level-triggered EVFILT_READ/WRITE, wake-up through a second kqueue carrying an EVFILT_USER event, EINTR as zero events; status 11 (unsupported) where kqueue is unavailable (ENOSYS through the linux-arm64 / windows-arm64 adapters)",
+        "blocker": "needs a green Native / darwin-arm64 run of kiso/reactor and the darwin-reactor check (tests/reactor/run.py)",
+        "dev_aid": "a unicorn model of the Darwin syscalls ran the stress and 100-connection load programs locally; it is a development aid built from my own understanding of kqueue and is not evidence"
+      }
     },
     "linux-arm64": {
-      "L": {"status": "IN_PROGRESS", "work": "same AArch64 routines through the Linux adapter (ioctl, getsockopt and errno-value translation added to linuxabi.mio)", "blocker": "needs a green linux-arm64 run (ubuntu-24.04-arm)"},
-      "M": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "epoll through the AArch64 Linux syscall numbers"}
+      "L": {
+        "status": "IN_PROGRESS",
+        "work": "same AArch64 routines through the Linux adapter (ioctl, getsockopt and errno-value translation added to linuxabi.mio)",
+        "blocker": "needs a green linux-arm64 run (ubuntu-24.04-arm)"
+      },
+      "M": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "epoll through the AArch64 Linux syscall numbers"
+      }
     },
     "darwin-amd64": {
-      "L": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "Linux x86-64 routines through the darwin_syscall adapter (ioctl, getsockopt, poll)"},
-      "M": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "kqueue through the adapter"}
+      "L": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "Linux x86-64 routines through the darwin_syscall adapter (ioctl, getsockopt, poll)"
+      },
+      "M": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "kqueue through the adapter"
+      }
     },
     "windows-amd64": {
-      "L": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "Winsock ioctlsocket(FIONBIO), WSAPoll/select, getsockopt(SO_ERROR)"},
-      "M": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "IOCP adapter (completion based; the adapter owns OVERLAPPED and buffers until the completion packet is dequeued, including after cancellation)"}
+      "L": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "Winsock ioctlsocket(FIONBIO), WSAPoll/select, getsockopt(SO_ERROR)"
+      },
+      "M": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "IOCP adapter (completion based; the adapter owns OVERLAPPED and buffers until the completion packet is dequeued, including after cancellation)"
+      }
     },
     "windows-arm64": {
-      "L": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "AArch64 lowering with the Windows adapter"},
-      "M": {"status": "UNSUPPORTED_FAIL_CLOSED", "next": "IOCP through the Windows ARM64 adapter"}
+      "L": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "AArch64 lowering with the Windows adapter"
+      },
+      "M": {
+        "status": "UNSUPPORTED_FAIL_CLOSED",
+        "next": "IOCP through the Windows ARM64 adapter"
+      }
     }
   },
   "findings": [
