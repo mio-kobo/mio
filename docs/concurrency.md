@@ -398,6 +398,49 @@ ends when the main thread ends; results are `int64` only (graphs travel through 
 no thread-local allocation buffers (the heap lock is the only allocation synchronisation); the `target.TargetInfo` capability flags
 describe the neutral-IR runtime (M19ef path), which is unchanged, so they still report no threads for Linux.
 
+### Channels and ownership transfer (second slice)
+
+`bunko/kiso/thread` (Linux x86-64 only; **names provisional, decision D-2 open**) adds `start`, `join` and a bounded multi-producer
+multi-consumer `Channel<T>` with `channel_new`, `send`, `receive`, `close`, `destroy`. The control words (lock, head, tail, count, closed,
+two futex sequence words) live in an off-heap block reached through internal `int64` natives (`words_new/free`, `word_get/set/cas/add`,
+`word_wait/wake`); the payload ring is an ordinary Mio array, so a graph in flight is an ordinary heap reference that the collector
+traces: no pinning table, nothing copied. `word_wait` is a safepoint-aware native wait like `join`.
+
+* `thread.send[T](channel, yuzuru graph)` stores the reference in a ring slot. With D-1/D-3 the compiler rejects every later use of `graph`
+  (E0702), a second send (E0703) and a live alias (E0704), so the receiver is the only owner. A failed send (closed channel) returns
+  `SendResult{ sent: iie, back: value }`: the graph comes back to the sender, which therefore never loses it merely because a transfer was
+  attempted (decision D-4 recommendation, now implemented).
+* `receive` blocks while empty and open; after `close` receivers drain what was queued and then get `closed`. `close` releases blocked
+  senders (their graphs come back) and blocked receivers.
+* Generic enums cannot yet be constructed inside generic functions by the checker, so the results are generic structs with a flag.
+* The Bunko matrix records the package as covered by the `linux-thread-gc` check on linux-amd64 and unsupported (with the reason) on the
+  other five targets; the package has no `_test.mio` because package tests run on every target.
+
+Evidence (native, Linux x86-64): 7 new programs in `tests/threads` (basic producer/consumer; close and failed-send hand-back; shared
+sub-objects, cycles, a 2000-deep chain and a 20000-node tree arriving intact with mutation visible through the other path; 3 producers x 3
+consumers; three programs that must be rejected at compile time), each normally and with `--gc-stress`; 450 additional stress runs
+of the three most concurrent programs had no mismatch.
+
+### Measurements (benchmarks/threads/transfer.mio)
+
+Linux x86-64 (8 hardware threads, kernel 6.12), two OS threads, a 1-slot channel, wall-clock milliseconds on the sender's thread, three
+consecutive runs shown as min-max. "construct" builds a fresh graph per message with no channel traffic; "construct + transfer" builds it and
+hands it over with `yuzuru`; "copy + transfer" deep-copies a prebuilt graph and sends the copy (what a copying design pays when the sender
+keeps its graph).
+
+| nodes per graph | messages | construct | construct + transfer | copy + transfer |
+|---|---|---|---|---|
+| 10 | 20000 | 59-68 | 152-161 | 129-154 |
+| 1000 | 2000 | 441-505 | 445-545 | 459-486 |
+| 100000 | 40 | 1249-1620 | 1250-1421 | 1254-1325 |
+
+Reading: the transfer step itself (construct + transfer minus construct) is about 4.5 us per message for tiny graphs (the lock and futex
+handoff between two threads dominates) and is within run-to-run noise at 1000 and 100000 nodes, i.e. it does not grow with the graph, while a deep copy costs about
+as much as constructing the graph again (about 31 ms per 100000-node message). That is what "zero-copy" means here: no object is copied and the
+cost of the handoff is independent of the payload size in the measured range. The numbers are time only: there is no allocation or memory counter
+in the runtime yet, the variance between runs is large for the big graphs (the collector runs concurrently), and the figures are one machine's, not a
+cross-platform result. No claim is made for other targets.
+
 ## 11. PR plan
 
 1. **PR-0 (this document)**: audit + specification, no behaviour change.

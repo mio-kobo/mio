@@ -447,6 +447,110 @@ waza emit_thread_join(code: x86_64.Assembler) -> unit {
     x86_64.ret(code);
 }
 
+// Off-heap word blocks for the thread library (channels). A handle is the address of a zeroed anonymous mapping of 64-bit words that the
+// collector never scans: it holds counters, locks and futex words, never references (payloads live in ordinary Mio arrays, which the
+// collector traces like any other object). All arguments and results are int64; the natives are internal to the thread package.
+waza word_address(code: x86_64.Assembler) -> unit {
+    // rdi = handle, rsi = index -> rdi = address of the word
+    x86_64.shl_ri(code, x86_64.rsi, 3);
+    x86_64.add_rr(code, x86_64.rdi, x86_64.rsi);
+}
+waza word_bytes(code: x86_64.Assembler, count: int64, length: int64) -> unit {
+    // length = (count * 8 + 4095) rounded down to a page multiple
+    x86_64.mov_rr(code, length, count);
+    x86_64.shl_ri(code, length, 3);
+    x86_64.add_ri(code, length, 4095);
+    x86_64.mov_ri(code, x86_64.rax, -4096);
+    x86_64.and_rr(code, length, x86_64.rax);
+}
+waza emit_word_natives(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.words_new");
+    word_bytes(code, x86_64.rdi, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 3);
+    x86_64.mov_ri(code, x86_64.r10, 34);                 // MAP_PRIVATE | MAP_ANONYMOUS
+    x86_64.mov_ri(code, x86_64.r8, -1);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    x86_64.mov_eax_imm(code, 9);
+    x86_64.syscall(code);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.words_free");
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rsi);
+    word_bytes(code, x86_64.rdx, x86_64.rsi);
+    x86_64.mov_eax_imm(code, 11);
+    x86_64.syscall(code);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.word_get");
+    word_address(code);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rdi, 0);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.word_set");
+    word_address(code);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);     // sequentially consistent store
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.word_cas");
+    word_address(code);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.lock_cmpxchg(code, x86_64.rdi, x86_64.rcx);   // rax = the value found (== expected on success)
+    x86_64.ret(code);
+    x86_64.label(code, "rt.word_add");
+    word_address(code);
+    x86_64.lock_xadd(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.word_wake");
+    word_address(code);
+    x86_64.mov_ri(code, x86_64.rsi, 129);                // FUTEX_WAKE_PRIVATE; rdx = how many waiters
+    x86_64.mov_eax_imm(code, 202);
+    x86_64.syscall(code);
+    x86_64.ret(code);
+    // word_wait(handle, index, expected): safepoint-aware wait while the low 32 bits of the word equal `expected`. Returns 0 on any wake-up
+    // (spurious wake-ups are allowed: callers re-check). Like thread_join it runs in the native state with the caller's chain published.
+    x86_64.label(code, "rt.word_wait");
+    x86_64.push_r(code, x86_64.r12);
+    x86_64.push_r(code, x86_64.r13);
+    word_address(code);
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rdi);
+    x86_64.mov_rr(code, x86_64.r13, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967295);
+    x86_64.and_rr(code, x86_64.r13, x86_64.rcx);
+    fs_self(code, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 0);
+    x86_64.mov_store(code, x86_64.rax, rec_rbp, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 8);
+    x86_64.mov_store(code, x86_64.rax, rec_ret, x86_64.rcx);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 2);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_load32(code, x86_64.rax, x86_64.r12, 0);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.r13);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.word_wait.done");
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r12);
+    x86_64.mov_ri(code, x86_64.rsi, 128);                // FUTEX_WAIT_PRIVATE
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.r13);
+    x86_64.mov_ri(code, x86_64.r10, 0);
+    x86_64.mov_eax_imm(code, 202);
+    x86_64.syscall(code);
+    x86_64.label(code, "rt.word_wait.done");
+    fs_self(code, x86_64.rax);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, rec_state);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stop);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.word_wait.ready");
+    x86_64.mov_load(code, x86_64.r10, x86_64.rax, rec_rbp);
+    x86_64.mov_load(code, x86_64.r11, x86_64.rax, rec_ret);
+    x86_64.call(code, "rt.gc.park");
+    x86_64.label(code, "rt.word_wait.ready");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.pop_r(code, x86_64.r13);
+    x86_64.pop_r(code, x86_64.r12);
+    x86_64.ret(code);
+}
+
 koukai waza emit_mutator_support(code: x86_64.Assembler) -> unit {
     emit_lock_routines(code);
     emit_alloc_wrapper(code);
@@ -456,4 +560,5 @@ koukai waza emit_mutator_support(code: x86_64.Assembler) -> unit {
     emit_unlink(code);
     emit_thread_start(code);
     emit_thread_join(code);
+    emit_word_natives(code);
 }
