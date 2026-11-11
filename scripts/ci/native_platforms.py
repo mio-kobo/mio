@@ -593,16 +593,114 @@ def thread_checks(report, cli, target, work):
                      "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                      note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
         return
+    # darwin-arm64 implements start, join, the word natives and so kiso/thread channels (checks darwin-thread-core, darwin-thread-programs); what
+    # must still fail closed there is join_status (join_checked), which invalid_handles.mio needs. Every other target must reject any thread program.
+    partial = target == "darwin-arm64"
+    program = "invalid_handles.mio" if partial else "basic.mio"
+    label = "thread-invalid-handles-fail-closed" if partial else "thread-natives-fail-closed"
     image = Path(work) / ("thread-program" + EXE.get(target, ""))
     Path(work).mkdir(parents=True, exist_ok=True)
-    built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads/basic.mio"), target, image)
+    built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads" / program), target, image)
     if not built:
-        return report.check("thread-natives-fail-closed", "PASS", "native", "", note="rejected at compile time: " + brief(reason, 120))
+        return report.check(label, "PASS", "native", "", note="rejected at compile time: " + brief(reason, 120))
     code, out, err, _ = run(report, "thread-natives-run", [image], cwd=work, timeout=120)
-    silently_ran = code == 0 and out.startswith("hai\n7\n")
-    report.check("thread-natives-fail-closed", "FAIL" if silently_ran else "PASS", "native",
-                 "a program that starts OS threads ran on a target without them" if silently_ran else "",
+    silently_ran = code == 0 and (partial or out.startswith("hai\n7\n"))
+    report.check(label, "FAIL" if silently_ran else "PASS", "native",
+                 "a program that needs threads/channels ran on a target without them" if silently_ran else "",
                  note="rejected at run time (exit %s)" % code)
+
+
+def darwin_worker_baseline(report, cli, work):
+    """Experimental baseline (not a parity claim): the Darwin/AArch64 M19ef worker bridge, built from source by the native CLI on this host.
+
+    tests/m19ef/user-workers/builder.mio is compiled by the native CLI, then used to lower, link and ad-hoc sign real Mach-O images of the
+    existing worker cases; each image is run repeatedly and its output must match exactly. This records what the internal bridge really does on
+    hosted macOS ARM64 hardware. It is NOT the public thread API and never counts toward the parity matrix.
+    """
+    cases = [("ordinary", b"12000\n24000\n0\n"), ("capture", b"101\n102\n0\n"), ("deep", b"91\n0\n"), ("shapes", b"84\n84\n0\n"),
+             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n"), ("many", b"3914700\nhai\n")]
+    Path(work).mkdir(parents=True, exist_ok=True)
+    builder = Path(work) / "worker-builder"
+    ok, reason, _ = cli_build(report, "darwin-worker-builder", cli, "tests/m19ef/user-workers/builder.mio", "darwin-arm64", builder)
+    if not ok:
+        return report.check("darwin-worker-baseline", "FAIL", "native", "builder build failed: " + reason, required=False)
+    failures, passed = [], []
+    for case, expected in cases:
+        image = Path(work) / (case + "-image")
+        code, out, err, _ = run(report, "darwin-worker-build-" + case, [builder, ROOT, "tests/m19ef/user-workers/%s/main.mio" % case, ROOT / "bunko", image], timeout=600)
+        if code != 0 or not image.is_file():
+            failures.append("%s: image build exit %s: %s" % (case, code, brief(err or out)))
+            continue
+        os.chmod(image, 0o755)
+        code, _, err, _ = run(report, "darwin-worker-sign-" + case, ["codesign", "--verify", "--strict", image])
+        if code != 0:
+            failures.append("%s: signature check exit %s: %s" % (case, code, brief(err)))
+            continue
+        for repeat in range(8):
+            code, out, err, _ = run(report, "darwin-worker-run-%s-%d" % (case, repeat), [image], timeout=60)
+            if code != 0 or out.encode() != expected:
+                failures.append("%s run %d: exit %s stdout %r stderr %s" % (case, repeat, code, out[:120], brief(err, 120)))
+                break
+        else:
+            passed.append(case)
+    report.check("darwin-worker-baseline", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:600], required=False,
+                 passed=passed, note="experimental internal worker bridge only (16 slots): evidence for the audit, not parity")
+
+
+def darwin_thread_core(report, cli, work):
+    """Public thread natives on darwin-arm64, first slice: `start` and `join` through the cooperative worker bridge (tests/threads/core_runtime.mio).
+
+    Built by the native CLI like any program (`mio build`, host target darwin-arm64), run on this host normally and with --gc-stress, repeated. Not yet a
+    parity claim: the word natives, kiso/thread and channels are still missing on this target (matrix cells I/J/K stay UNSUPPORTED).
+    """
+    expected = b"hai\n7\n500500\n2001000\n4501500\n1400\n"
+    Path(work).mkdir(parents=True, exist_ok=True)
+    failures, passed = [], []
+    for label, extra in (("normal", ()), ("gc-stress", ("--gc-stress",))):
+        image = Path(work) / ("core-" + label)
+        ok, reason, _ = cli_build(report, "darwin-thread-core-build-" + label, cli, "tests/threads/core_runtime.mio", "darwin-arm64", image, extra=extra)
+        if not ok:
+            failures.append("%s: build failed: %s" % (label, reason))
+            continue
+        for repeat in range(10):
+            code, out, err, _ = run(report, "darwin-thread-core-run-%s-%d" % (label, repeat), [image], timeout=60)
+            if code != 0 or out.encode() != expected:
+                failures.append("%s run %d: exit %s stdout %r stderr %s" % (label, repeat, code, out[:160], brief(err, 160)))
+                break
+        else:
+            passed.append(label)
+    report.check("darwin-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], required=False, passed=passed,
+                 note="start/join only; word natives, kiso/thread and channels are not available on darwin-arm64 yet")
+
+
+def darwin_thread_programs(report, cli, work):
+    """The Linux thread/channel programs of tests/threads, built by the native CLI for darwin-arm64 and run on this host (expected output shared with run.py)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("threads_run", ROOT / "tests/threads/run.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy"]
+    stress = ["basic", "channel_basic", "channel_close"]
+    Path(work).mkdir(parents=True, exist_ok=True)
+    failures, passed = [], []
+    for name in names:
+        for label, extra in (("normal", ()), ("gc-stress", ("--gc-stress",))):
+            if label == "gc-stress" and name not in stress:
+                continue
+            image = Path(work) / ("%s-%s" % (name, label))
+            ok, reason, _ = cli_build(report, "darwin-thread-programs-build-%s-%s" % (name, label), cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", image, extra=extra)
+            if not ok:
+                failures.append("%s/%s: build failed: %s" % (name, label, brief(reason, 160)))
+                continue
+            repeats = 3 if label == "normal" else 1
+            for repeat in range(repeats):
+                code, out, err, _ = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
+                if code != 0 or out.encode() != module.PROGRAMS[name]:
+                    failures.append("%s/%s run %d: exit %s stdout %r stderr %s" % (name, label, repeat, code, out[:120], brief(err, 120)))
+                    break
+            else:
+                passed.append("%s/%s" % (name, label))
+    report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
 
 
 def contract(report, cli, target, reference="", suite="contract"):
@@ -801,6 +899,9 @@ def follower(args, target):
         smoke(report, cli, target, work)
         if target == "darwin-arm64":
             darwin_profile(report, cli, work)
+            darwin_worker_baseline(report, cli, work / "worker-baseline")
+            darwin_thread_core(report, cli, work / "thread-core")
+            darwin_thread_programs(report, cli, work / "thread-programs")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
