@@ -150,11 +150,11 @@ koukai waza executable(spec: ImageSpec) -> ImageResult { kaesu executable_bounde
 // Keep the source-language/private ABI global envelope intact. A target runtime
 // may append separately owned words; it may not consume existing user slots.
 koukai waza executable_with_runtime_data(spec: ImageSpec, runtime_words: int64) -> ImageResult {
-    moshi(spec.globals<0 || spec.globals>2052 || runtime_words<0 || runtime_words>8192){
+    moshi(spec.globals<0 || spec.globals>2052 || runtime_words<0 || runtime_words>65536){
         kaesu ImageResult {bytes:[],layout:plan(0,0,0),error:MachOError.TooManyGlobals()};
     }
     kaesu executable_bounded(ImageSpec {words:spec.words,constants:spec.constants,
-        globals:spec.globals+runtime_words,patches:spec.patches},10244);
+        globals:spec.globals+runtime_words,patches:spec.patches},2052+65536);
 }
 waza executable_bounded(spec: ImageSpec, maximum_globals:int64) -> ImageResult {
     kaku empty_layout = plan(0, 0, 0);

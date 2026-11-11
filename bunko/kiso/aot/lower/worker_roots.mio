@@ -1,7 +1,10 @@
 // Darwin/AArch64 implementation of the portable managed-mutator protocol.
 // The internal bridge has two joinable worker slots and a shared process key.
 // Each slot owns native context/opaque locks/bootstrap root/snapshot storage.
-koukai teisu worker_root_words=3304;
+// The bridge owns one context per concurrently live worker (plus the main thread's): `worker_slots` of them, 8800 bytes each. A start with
+// every slot in use is a runtime error (never a silent wait); the public thread API will turn that into an explicit error value.
+koukai teisu worker_slots=16;
+koukai teisu worker_root_words=(worker_slots+1)*1100+4;
 teisu wr_stride=8800;
 teisu wr_snapshot=576;
 teisu wr_snapshot_capacity=1000;
@@ -68,7 +71,9 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     // Start only borrows the main key; it never deletes it. Parent roots remain
     // pinned in blocked mode until the child has published registration/roots.
     attached_save(c,"attached_worker_start");wr_current(c,p,first);wr_ctx(c,p,first,9,0);emit(c,arm64.cmp_x(0,9));arm64.assembler_b_cond(c,1,"runtime_error");
-    wr_ctx(c,p,first,10,1);emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbz_x(c,11,"worker_slot_ready");wr_ctx(c,p,first,10,2);emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbnz_x(c,11,"runtime_error");
+    wr_ctx(c,p,first,10,1);wr_num(c,12,worker_slots);wr_num(c,13,wr_stride);
+    arm64.assembler_label(c,"worker_slot_scan");emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbz_x(c,11,"worker_slot_ready");
+    emit(c,arm64.add_x(10,10,13));emit(c,arm64.sub_imm_x(12,12,1,iie));arm64.assembler_cbnz_x(c,12,"worker_slot_scan");arm64.assembler_b(c,"runtime_error");
     arm64.assembler_label(c,"worker_slot_ready");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(10,31,0));
     wr_imports(c,p,first);emit(c,arm64.str_x(7,10,gc.thread_imports));wr_num(c,11,3);emit(c,arm64.str_x(11,10,gc.thread_version));
     wr_ctx(c,p,first,9,0);emit(c,arm64.ldr_x(11,9,gc.thread_key));emit(c,arm64.str_x(11,10,gc.thread_key));emit(c,arm64.add_imm_x(9,9,400,iie));emit(c,arm64.str_x(9,10,gc.thread_registry));
@@ -79,8 +84,8 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     emit(c,arm64.str_x(23,10,568));emit(c,arm64.str_x(28,10,8640));
     kaku worker_address=len(c.words);emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,10,gc.thread_entry));
     wr_poll(c,p,first,"gc_block_enter");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_open_shared");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_wait_started");
-    wr_current(c,p,first);wr_call(c,"gc_block_leave");emit(c,arm64.ldr_x(10,31,0));wr_ctx(c,p,first,9,1);emit(c,arm64.cmp_x(9,10));emit(c,arm64.cset_w(11,1));emit(c,arm64.add_imm_x(11,11,1,iie));emit(c,arm64.str_x(11,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
-    attached_save(c,"attached_worker_join");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.ldr_x(9,31,176));emit(c,arm64.cmp_imm_x(9,1,iie));arm64.assembler_b_cond(c,0,"worker_join_one");emit(c,arm64.cmp_imm_x(9,2,iie));arm64.assembler_b_cond(c,1,"runtime_error");wr_ctx(c,p,first,10,2);arm64.assembler_b(c,"worker_join_ready");arm64.assembler_label(c,"worker_join_one");wr_ctx(c,p,first,10,1);
+    wr_current(c,p,first);wr_call(c,"gc_block_leave");emit(c,arm64.ldr_x(10,31,0));wr_ctx(c,p,first,9,1);emit(c,arm64.sub_x(9,10,9));wr_num(c,13,wr_stride);emit(c,arm64.udiv_x(9,9,13));emit(c,arm64.add_imm_x(11,9,1,iie));emit(c,arm64.str_x(11,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
+    attached_save(c,"attached_worker_join");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.ldr_x(9,31,176));emit(c,arm64.sub_imm_x(9,9,1,iie));emit(c,arm64.cmp_imm_x(9,worker_slots,iie));arm64.assembler_b_cond(c,2,"runtime_error");wr_num(c,13,wr_stride);emit(c,arm64.mul_x(9,9,13));wr_ctx(c,p,first,10,1);emit(c,arm64.add_x(10,10,9));
     arm64.assembler_label(c,"worker_join_ready");emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbz_x(c,11,"runtime_error");emit(c,arm64.str_x(10,31,0));wr_current(c,p,first);wr_ctx(c,p,first,9,0);emit(c,arm64.cmp_x(0,9));arm64.assembler_b_cond(c,1,"runtime_error");wr_poll(c,p,first,"gc_block_enter");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_wait_completion");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_close");wr_current(c,p,first);wr_call(c,"gc_block_leave");emit(c,arm64.str_x(31,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
     attached_save(c,"attached_worker_wait");wr_poll(c,p,first,"gc_mutator_poll");wr_current(c,p,first);emit(c,arm64.ldr_x(1,31,144));arm64.assembler_bl(c,"attached_thread_wait");emit(c,arm64.str_x(0,31,144));attached_restore(c);
     attached_save(c,"attached_worker_collect");
@@ -100,7 +105,7 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
         emit(c,arm64.ldr_x(9,31,0));emit(c,arm64.write_nzcv(9));emit(c,arm64.add_imm_x(31,31,16,iie));attached_restore(c);i=i+1;
     }
     // Main shutdown joins every outstanding child before deleting the key.
-    attached_save(c,"attached_workers_join_all");i=1;aida(i<=2){wr_ctx(c,p,first,9,i);emit(c,arm64.ldr_x(10,9,gc.thread_owns_handle));kaku done=string.concat("worker_shutdown_",convert.format_int(i));arm64.assembler_cbz_x(c,10,done);wr_num(c,0,i);arm64.assembler_bl(c,"attached_worker_join");arm64.assembler_label(c,done);i=i+1;}
+    attached_save(c,"attached_workers_join_all");i=1;aida(i<=worker_slots){wr_ctx(c,p,first,9,i);emit(c,arm64.ldr_x(10,9,gc.thread_owns_handle));kaku done=string.concat("worker_shutdown_",convert.format_int(i));arm64.assembler_cbz_x(c,10,done);wr_num(c,0,i);arm64.assembler_bl(c,"attached_worker_join");arm64.assembler_label(c,done);i=i+1;}
     attached_restore(c);
     attached_save(c,"attached_roots_close");arm64.assembler_bl(c,"attached_workers_join_all");
     moshi(old_mark_proto_enabled(c)){arm64.assembler_bl(c,"old_control_close");}

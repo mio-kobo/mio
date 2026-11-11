@@ -610,7 +610,7 @@ def darwin_worker_baseline(report, cli, work):
     hosted macOS ARM64 hardware. It is NOT the public thread API and never counts toward the parity matrix.
     """
     cases = [("ordinary", b"12000\n24000\n0\n"), ("capture", b"101\n102\n0\n"), ("deep", b"91\n0\n"), ("shapes", b"84\n84\n0\n"),
-             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n")]
+             ("remembered", b"0\n0\n"), ("join-long", b"3\n0\n0\n"), ("numeric", b"1.5\n3.25\nhai\niie\n7\n0\n"), ("many", b"3914700\n0\n")]
     Path(work).mkdir(parents=True, exist_ok=True)
     builder = Path(work) / "worker-builder"
     ok, reason, _ = cli_build(report, "darwin-worker-builder", cli, "tests/m19ef/user-workers/builder.mio", "darwin-arm64", builder)
@@ -636,7 +636,7 @@ def darwin_worker_baseline(report, cli, work):
         else:
             passed.append(case)
     report.check("darwin-worker-baseline", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:600], required=False,
-                 passed=passed, note="experimental internal worker bridge only (2 slots): evidence for the audit, not parity")
+                 passed=passed, note="experimental internal worker bridge only (16 slots): evidence for the audit, not parity")
 
 
 def contract(report, cli, target, reference="", suite="contract"):

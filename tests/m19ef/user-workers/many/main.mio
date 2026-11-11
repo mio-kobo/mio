@@ -1,0 +1,24 @@
+yobu "kiso/array";
+// Twelve workers alive at the same time (the bridge has sixteen slots), each allocating under the builder's GC-stress mode, joined in reverse
+// order. The same four internal stubs as the other cases; the builder replaces them with the native runtime bridge.
+waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
+waza rt_join(handle:int64) -> int64 {kaesu 0;}
+waza rt_wait(ns:int64) -> int64 {kaesu 0;}
+waza rt_collect(major:int64) -> int64 {kaesu 0;}
+kata Node {value:int64;next:[]int64;}
+kaku results=array.make[int64](16,0);
+waza make_worker(id:int64) -> () -> unit {
+    kaesu waza() -> unit {
+        kaku sum=0;kaku i=0;
+        aida(i<50){kaku node=Node {value:id*1000+i,next:[i,id]};sum=sum+node.value;i=i+1;}
+        results[id]=sum;
+    };
+}
+kaku h1=rt_start(make_worker(1));kaku h2=rt_start(make_worker(2));kaku h3=rt_start(make_worker(3));kaku h4=rt_start(make_worker(4));
+kaku h5=rt_start(make_worker(5));kaku h6=rt_start(make_worker(6));kaku h7=rt_start(make_worker(7));kaku h8=rt_start(make_worker(8));
+kaku h9=rt_start(make_worker(9));kaku h10=rt_start(make_worker(10));kaku h11=rt_start(make_worker(11));kaku h12=rt_start(make_worker(12));
+kaku bad=rt_join(h12)+rt_join(h11)+rt_join(h10)+rt_join(h9)+rt_join(h8)+rt_join(h7)+rt_join(h6)+rt_join(h5)+rt_join(h4)+rt_join(h3)+rt_join(h2)+rt_join(h1);
+kaku total=0;kaku k=1;aida(k<=12){total=total+results[k];k=k+1;}
+moshi(bad!=0){chant(-1);}
+chant(total);
+chant(rt_collect(1));
