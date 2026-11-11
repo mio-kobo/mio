@@ -4,6 +4,7 @@ package bunkoscaffold
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -209,6 +210,18 @@ func Workflow(targets []string) string {
 // files and symlinks are always rejected; there is no overwrite mode.
 func Generate(root string, s Spec) (string, error) { return generate(root, s, os.WriteFile) }
 func generate(root string, s Spec, write func(string, []byte, os.FileMode) error) (string, error) {
+	ctx, stop := interruptContext()
+	defer stop()
+	return generateContext(ctx, root, s, write)
+}
+
+// Keep real CLI signal registration separate from portable cancellation and
+// filesystem ownership. Tests can cancel the core without signalling a process.
+func interruptContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt)
+}
+
+func generateContext(ctx context.Context, root string, s Spec, write func(string, []byte, os.FileMode) error) (string, error) {
 	if e := s.Validate(); e != nil {
 		return "", e
 	}
@@ -225,9 +238,9 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 		return "", e
 	}
 	dst := filepath.Join(physical, s.Directory)
-	interrupts := make(chan os.Signal, 1)
-	signal.Notify(interrupts, os.Interrupt)
-	defer signal.Stop(interrupts)
+	if ctx.Err() != nil {
+		return "", invalid("cancelled", "")
+	}
 	if e = os.Mkdir(dst, 0700); e != nil {
 		return "", invalid("exists", dst)
 	}
@@ -249,7 +262,7 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 	sort.Strings(names)
 	for _, name := range names {
 		select {
-		case <-interrupts:
+		case <-ctx.Done():
 			return "", invalid("cancelled", "")
 		default:
 		}
@@ -262,7 +275,7 @@ func generate(root string, s Spec, write func(string, []byte, os.FileMode) error
 		}
 	}
 	select {
-	case <-interrupts:
+	case <-ctx.Done():
 		return "", invalid("cancelled", "")
 	default:
 	}

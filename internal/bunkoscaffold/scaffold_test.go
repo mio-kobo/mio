@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -631,27 +632,123 @@ func TestWizardValidatesBeforeLaterQuestions(t *testing.T) {
 }
 
 func TestInterruptDuringGenerationRollsBackOwnedFiles(t *testing.T) {
-	root := t.TempDir()
-	writes := 0
-	_, err := generate(root, fixture(), func(name string, data []byte, mode os.FileMode) error {
-		writes++
-		if writes == 1 {
-			process, e := os.FindProcess(os.Getpid())
-			if e != nil {
-				return e
-			}
-			if e = process.Signal(os.Interrupt); e != nil {
-				return e
-			}
-			time.Sleep(30 * time.Millisecond) // Let the OS signal reach the registered channel.
+	for _, workflow := range []bool{false, true} {
+		s := fixture()
+		s.Workflow = workflow
+		files, err := Files(s)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return os.WriteFile(name, data, mode)
+		for _, cancelAfter := range []int{0, 1, len(files)} {
+			t.Run(fmt.Sprintf("workflow=%t/after=%d", workflow, cancelAfter), func(t *testing.T) {
+				root := t.TempDir()
+				keep := filepath.Join(root, "keep")
+				if err := os.WriteFile(keep, []byte("existing parent file"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelAfter == 0 {
+					cancel()
+				}
+				writes := 0
+				dir, err := generateContext(ctx, root, s, func(name string, data []byte, mode os.FileMode) error {
+					if err := os.WriteFile(name, data, mode); err != nil {
+						return err
+					}
+					writes++
+					if writes == cancelAfter {
+						cancel()
+					}
+					return nil
+				})
+				var own *Error
+				if !errors.As(err, &own) || own.Kind != "cancelled" || dir != "" {
+					t.Fatalf("dir=%q error=%v", dir, err)
+				}
+				if writes != cancelAfter {
+					t.Fatalf("wrote %d files; want %d", writes, cancelAfter)
+				}
+				if _, err := os.Lstat(filepath.Join(root, "json")); !os.IsNotExist(err) {
+					t.Fatal("interrupted project remains", err)
+				}
+				data, err := os.ReadFile(keep)
+				if err != nil || string(data) != "existing parent file" {
+					t.Fatal("changed existing parent file", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCancellationPreservesExistingDestination(t *testing.T) {
+	for _, directory := range []bool{false, true} {
+		for _, cancelled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("directory=%t/cancelled=%t", directory, cancelled), func(t *testing.T) {
+				root := t.TempDir()
+				destination := filepath.Join(root, "json")
+				keep := destination
+				if directory {
+					if err := os.Mkdir(destination, 0700); err != nil {
+						t.Fatal(err)
+					}
+					// Use a generated filename too: rollback must not run without ownership.
+					keep = filepath.Join(destination, "package.mio")
+				}
+				if err := os.WriteFile(keep, []byte("existing user content"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if cancelled {
+					cancel()
+				}
+				_, err := generateContext(ctx, root, fixture(), func(string, []byte, os.FileMode) error {
+					t.Fatal("writer reached an existing destination")
+					return nil
+				})
+				var own *Error
+				expected := "exists"
+				if cancelled {
+					expected = "cancelled"
+				}
+				if !errors.As(err, &own) || own.Kind != expected {
+					t.Fatalf("want %s; got %v", expected, err)
+				}
+				data, err := os.ReadFile(keep)
+				if err != nil || string(data) != "existing user content" {
+					t.Fatal("changed existing destination", err)
+				}
+			})
+		}
+	}
+}
+
+func TestCancellationPreservesUnownedFiles(t *testing.T) {
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	keep := filepath.Join(root, "json", "user-note.txt")
+	_, err := generateContext(ctx, root, fixture(), func(name string, data []byte, mode os.FileMode) error {
+		if err := os.WriteFile(name, data, mode); err != nil {
+			return err
+		}
+		if err := os.WriteFile(keep, []byte("keep unrelated content"), 0600); err != nil {
+			return err
+		}
+		cancel()
+		return nil
 	})
 	var own *Error
 	if !errors.As(err, &own) || own.Kind != "cancelled" {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(filepath.Join(root, "json")); !os.IsNotExist(err) {
-		t.Fatal("interrupted project remains", err)
+	data, err := os.ReadFile(keep)
+	if err != nil || string(data) != "keep unrelated content" {
+		t.Fatal("removed unowned file", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(keep))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "user-note.txt" {
+		t.Fatal("generated files were not rolled back", entries, err)
 	}
 }
