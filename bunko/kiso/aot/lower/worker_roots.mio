@@ -66,7 +66,13 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     // Short holds are the common case: spin a bounded number of reads (no safepoint needed, it ends in microseconds) before sleeping.
     wr_num(c,15,4000);arm64.assembler_label(c,"native_word_wait_spin");emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
     emit(c,arm64.sub_imm_x(15,15,1,iie));arm64.assembler_cbnz_x(c,15,"native_word_wait_spin");
-    wr_num(c,0,50000);arm64.assembler_bl(c,"attached_worker_wait");
+    // Then sleep with exponential backoff (50us doubling to 2ms, 64 rounds at most) taking a safepoint every round: a long waiter costs almost
+    // no CPU, so a hundred blocked threads cannot starve the ones that make progress or the collector's handshake.
+    wr_num(c,9,50000);emit(c,arm64.str_x(9,31,32));wr_num(c,9,64);emit(c,arm64.str_x(9,31,40));
+    arm64.assembler_label(c,"native_word_wait_sleep");emit(c,arm64.ldr_x(0,31,32));arm64.assembler_bl(c,"attached_worker_wait");
+    emit(c,arm64.ldr_x(0,31,8));emit(c,arm64.ldr_x(1,31,16));word_address(c,p,first,"native_word_wait_done");emit(c,arm64.ldar_x(14,13));emit(c,arm64.ldr_x(2,31,24));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
+    emit(c,arm64.ldr_x(9,31,32));emit(c,arm64.lsl_x(9,9,1));wr_num(c,10,2000000);emit(c,arm64.cmp_x(9,10));arm64.assembler_b_cond(c,9,"native_word_wait_cap");move_x(c,9,10);
+    arm64.assembler_label(c,"native_word_wait_cap");emit(c,arm64.str_x(9,31,32));emit(c,arm64.ldr_x(9,31,40));emit(c,arm64.sub_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,31,40));arm64.assembler_cbnz_x(c,9,"native_word_wait_sleep");
     arm64.assembler_label(c,"native_word_wait_done");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,48,iie));emit(c,arm64.ret());
 }
 waza wr_imports(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {attached_data_address(c,p,first,7);}
