@@ -10,7 +10,9 @@ draft [PR #77](https://github.com/mio-kobo/mio/pull/77) head
 after #77 merges, preserving only scaffold commits. Do not modify another active
 branch, merge either PR, create release tags, or publish a release.
 
-Scaffold PR and CI links will be recorded below after remote verification.
+Scaffold PR: <https://github.com/mio-kobo/mio/pull/83> (draft). The development
+branch advanced independently to `a4cf2d6` during verification (parity-matrix
+documentation); this stacked PR retains the unchanged #77 head as its base.
 
 ## Implemented functionality and files
 
@@ -122,6 +124,42 @@ with an explicit statically auditable key map. The final local native module run
 passed all six cases (71.818 seconds). All 65 CI harness self-tests passed
 (9.292 seconds), including Python 3.9 driver inspection; native CI uses 3.12.
 `go vet`, shared asset/catalog checks, shell syntax and `git diff --check` passed.
+After the callback-shape correction, all six module cases passed again in 5.458
+seconds using the parent PR's native macOS ARM64 candidate from
+[run 42976190384](https://github.com/mio-kobo/mio/actions/runs/42976190384), with
+SHA-256 `9b6320d5d33f686643182dd3c6434a16ec8385823e0634bbd6a761370c0f815c`
+verified against its cross-build manifest. This CI candidate is not called a
+trusted GF4 seed. Command: the same native module test above, replacing the
+executable with `build/bunko-review/parent-native/mio-darwin-arm64`.
+
+The corrected full current-source CLI was also built by that native candidate:
+
+```sh
+build/bunko-review/parent-native/mio-darwin-arm64 build selfhost/cli \
+  -o build/bunko-review/mio-scaffold-native --bunko-root "$PWD/bunko" --lang=en-US
+```
+
+All **10 local native end-to-end checks passed** on macOS ARM64: noninteractive
+creation, existing destination refusal, invalid name/version/platform/path,
+interactive creation, generated package compilation, its one unit test and
+symlink escape refusal. PATH was an empty directory for the product processes.
+The independent test oracle used Python 3.12 only to launch/inspect those native
+processes, not as a product dependency. Evidence is in
+`build/bunko-review/native-scaffold-e2e/report.json` and `logs/`. Reproduce with
+the generated CLI and the `check_scaffolding` oracle used by native CI:
+
+```python
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path("scripts/ci").resolve()))
+import native_platforms as n
+r = n.Report("darwin-arm64", "build/bunko-review/native-scaffold-e2e-repeat")
+w = r.output / "work"
+w.mkdir(exist_ok=True)
+n.bunko_scaffold_checks.check_scaffolding(
+    r, Path("build/bunko-review/mio-scaffold-native").resolve(), w, n.run)
+assert all(c["status"] == "PASS" or not c["required"] for c in r.checks)
+```
 
 Coverage includes interactive approve/reject, noninteractive creation, exact names
 and versions, explicit targets, file/directory collisions, traversal/symlinks,
@@ -133,11 +171,52 @@ skips/NOT_RUN separately if the host cannot create them.
 
 ## Remote verification
 
-Pending the focused PR. Record current code SHA, run URLs, actual per-platform
-results, and skips here before declaring the implementation phase finished.
-The six native checks create with an empty PATH and then run native `check` and
-`test` on the generated package. Separate six-host Go reference jobs must never
-be presented as native execution.
+Verified code commit: `b107bac5c529a2d1acfaef09d8d86239b4f7d5c1`.
+
+- [Six-host reference run](https://github.com/mio-kobo/mio/actions/runs/42992607959): **PASS**, all six jobs completed successfully; no skipped scaffold reference cases were reported.
+- [Scaffold regressions and six-platform native run](https://github.com/mio-kobo/mio/actions/runs/42992608246): **PASS**, including catalogs, race/regression tests and `Native / required`.
+
+| Actual host | Go reference scaffold fixtures | Native Full/Core create, compile and test | Native scaffold module |
+| --- | --- | --- | --- |
+| linux/x86_64 | PASS | PASS | PASS |
+| linux/arm64 | PASS | PASS | PASS |
+| macos/x86_64 | PASS | PASS | PASS |
+| macos/arm64 | PASS | PASS | PASS |
+| windows/x86_64 | PASS | PASS | PASS |
+| windows/arm64 | PASS | PASS | PASS |
+
+Both real Full and Core CLIs ran the ten scaffold checks independently on every
+native host, with an empty PATH, including generated-package `check` and its one
+unit test. Symlink escape cases executed and passed on all six hosts; none were
+counted as skipped passes. Native compiler/CLI fixed points and the existing
+required regressions also passed. The workflow's trusted seed verification stays
+**NOT_RUN**, and existing platform-specific library exclusions keep their own
+statuses; neither is counted as successful native scaffold execution. Native
+Git/gh connection, installation and external imports remain unimplemented on all
+six targets regardless of this local-create test success.
+
+The final documentation-only commit records these completed runs and uses
+`[skip ci]` to avoid repeating unchanged native builds. Its skipped CI is not
+counted as PASS; the evidence above applies to the named code commit. Its diff
+against that code commit contains only this handoff document.
+
+The initial `f5c1c43` reference run passed all six hosts, and scaffold catalog/race/
+regression checks passed. Its native build failed before CLI execution because
+legacy self-bootstrap lowering could not infer an indirect callback result
+immediately followed by negation. `0fc7c92` stores that result in a local before
+the conditional. No compiler/runtime change was needed. Reproduction used a
+temporary diagnostic driver with the CI Linux frontend and verified the corrected
+Mochi type graph locally; those development artifacts are not product dependencies.
+The superseded native run is not counted as passing evidence.
+
+The second native run passed Full CLI creation/check/test and module tests, but
+its repeated Core CLI check reused the Full fixture directory, correctly hitting
+the product's no-overwrite rule. The test harness now separates fixture roots,
+check names and logs by CLI variant. A local regression ran the same native image
+under Full/Core fixture names in one report: all 20 checks passed with distinct
+names/logs. This is fixture isolation evidence, not two distribution builds.
+All 65 CI harness self-tests passed again (9.834 seconds). The final successful
+native run verified the real Full and Core distributions independently.
 
 ## Known limitations and exact native requirements
 
@@ -184,6 +263,8 @@ Claude, continue the Mio Bunko work in https://github.com/mio-kobo/mio for the
 Mio-2.2.0 development line. Read docs/bunko-scaffold-handoff.md and
 docs/bunko-scaffold.md first, then inspect the current repository, scaffold PR,
 PR #77, their latest CI and the official mio-kobo/bunko-index specification.
+Scaffold PR: https://github.com/mio-kobo/mio/pull/83 (EXP/bunko-scaffold).
+Parent package manager PR: https://github.com/mio-kobo/mio/pull/77.
 Fetch current state; do not assume either PR remains open. Use an independent
 branch based on the appropriate latest head and document dependencies. Do not
 modify another active development branch without the owner's authorization.
