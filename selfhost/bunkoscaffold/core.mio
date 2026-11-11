@@ -130,7 +130,9 @@ waza generate_with_writer(root: string,o: Options,write: (string,string) -> bool
     kaku created=fs.create_dir(dir);moshi(created.error!=mu){kaesu "exists";}
     moshi(os.chmod(dir,448)!=0){os.remove_dir(dir);kaesu "io";}
     moshi(o.flags[1]){moshi(fs.create_dir(path.join(dir,".github")).error!=mu || fs.create_dir(path.join(dir,".github/workflows")).error!=mu){cleanup(dir,o);kaesu "io";}}
-    kaku list=files(o);kaku at=0;aida(at<len(list)){moshi(!write(path.join(dir,list[at].name),list[at].content)){cleanup(dir,o);kaesu "io";}at=at+1;}kaesu "";
+    // Keep the indirect result in a local: legacy self-bootstrap lowerers infer
+    // callback return shape from the store before the conditional consumes it.
+    kaku list=files(o);kaku at=0;aida(at<len(list)){kaku written=write(path.join(dir,list[at].name),list[at].content);moshi(!written){cleanup(dir,o);kaesu "io";}at=at+1;}kaesu "";
 }
 waza output(ui: Terminal,text: string) -> unit {kaku b=string.to_bytes(text);kaku r=io.write_all(ui.output,b,0,len(b));moshi(r.error!=mu){ui.failed[0]=hai;}}
 waza message(ui: Terminal,key: string,args: []string) -> unit {output(ui,string.concat(i18n.format(ui.language,key,args),"\n"));}
