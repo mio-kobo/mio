@@ -31,6 +31,10 @@ koukai teisu mut_lock = 88;
 koukai teisu mut_stop = 96;
 koukai teisu mut_count = 104;
 koukai teisu mut_registry = 112;
+koukai teisu mut_table = 120;           // address of the thread handle table (mmap, 4096 slots of 16 bytes), set by rt.mut_init
+koukai teisu mut_slab_next = 128;        // channel word blocks are carved from 64 KiB chunks that are never unmapped
+koukai teisu mut_slab_end = 136;
+koukai teisu thread_slots = 4096;
 koukai teisu mut_main_record = 256;      // offset from gc_state(): the main thread's record
 
 koukai teisu rec_self = 0;
@@ -43,6 +47,7 @@ koukai teisu rec_tid = 48;
 koukai teisu rec_result = 56;
 koukai teisu rec_base = 64;
 koukai teisu rec_size = 72;
+koukai teisu rec_joinerr = 80;           // status of this thread's last join: 0 ok, 22 (EINVAL) = not a live thread handle
 
 koukai teisu thread_stack_bytes = 1048576;
 koukai teisu thread_guard_bytes = 4096;
@@ -61,18 +66,36 @@ waza fs_self(code: x86_64.Assembler, dst: int64) -> unit {
     x86_64.byte(code, 37); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
 }
 
-// rt.mut_lock_acquire / release: clobber rcx, rdx only.
+// rt.mut_lock_acquire / release: clobber rcx, rdx only. A short spin, then sched_yield between attempts: with more runnable threads than cores
+// the holder can be descheduled, and spinners that never yield would burn their whole quantum (measured: 8 cores busy for minutes with 4000 threads).
 waza emit_lock_routines(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.mut_lock_acquire");
+    x86_64.push_r(code, x86_64.r8);
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.r8, 0);
     x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
     x86_64.label(code, "rt.mut_lock_acquire.try");
     x86_64.mov_ri(code, x86_64.rdx, 1);
     x86_64.xchg_store(code, x86_64.rcx, x86_64.rdx);
     x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
     x86_64.jcc(code, x86_64.cc_e, "rt.mut_lock_acquire.done");
+    x86_64.add_ri(code, x86_64.r8, 1);
+    x86_64.cmp_ri(code, x86_64.r8, 64);
+    x86_64.jcc(code, x86_64.cc_b, "rt.mut_lock_acquire.pause");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.mov_eax_imm(code, 24);                        // sched_yield
+    x86_64.syscall(code);
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.pop_r(code, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.label(code, "rt.mut_lock_acquire.pause");
     x86_64.byte(code, 243); x86_64.byte(code, 144);     // pause
     x86_64.jmp(code, "rt.mut_lock_acquire.try");
     x86_64.label(code, "rt.mut_lock_acquire.done");
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.pop_r(code, x86_64.r8);
     x86_64.ret(code);
     x86_64.label(code, "rt.mut_lock_release");
     x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
@@ -84,12 +107,27 @@ waza emit_lock_routines(code: x86_64.Assembler) -> unit {
 // rt.alloc (mutator mode): take the heap lock around the unchanged single-mutator allocator, which is emitted as rt.alloc.locked.
 waza emit_alloc_wrapper(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.alloc");
+    x86_64.mov_ri(code, x86_64.r8, 0);
     x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
     x86_64.label(code, "rt.alloc.acquire");
     x86_64.mov_ri(code, x86_64.rdx, 1);
     x86_64.xchg_store(code, x86_64.rcx, x86_64.rdx);
     x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
     x86_64.jcc(code, x86_64.cc_e, "rt.alloc.held");
+    x86_64.add_ri(code, x86_64.r8, 1);
+    x86_64.cmp_ri(code, x86_64.r8, 64);
+    x86_64.jcc(code, x86_64.cc_b, "rt.alloc.pause");
+    x86_64.push_r(code, x86_64.rax);                      // the request size must survive the system call
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.mov_eax_imm(code, 24);                         // sched_yield
+    x86_64.syscall(code);
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.pop_r(code, x86_64.rsi);
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
+    x86_64.mov_ri(code, x86_64.r8, 0);
+    x86_64.label(code, "rt.alloc.pause");
     x86_64.byte(code, 243); x86_64.byte(code, 144);
     x86_64.jmp(code, "rt.alloc.acquire");
     x86_64.label(code, "rt.alloc.held");
@@ -113,6 +151,21 @@ waza emit_mut_init(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rdi, 4098);               // ARCH_SET_FS
     x86_64.mov_eax_imm(code, 158);                       // arch_prctl
     x86_64.syscall(code);
+    // the handle table: a failed mapping leaves it null and every thread_start then reports ENOMEM
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_ri(code, x86_64.rsi, thread_slots * 16);
+    x86_64.mov_ri(code, x86_64.rdx, 3);
+    x86_64.mov_ri(code, x86_64.r10, 34);
+    x86_64.mov_ri(code, x86_64.r8, -1);
+    x86_64.mov_ri(code, x86_64.r9, 0);
+    x86_64.mov_eax_imm(code, 9);
+    x86_64.syscall(code);
+    x86_64.mov_ri(code, x86_64.rcx, -4096);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.mut_init.done");
+    x86_64.mov_ri(code, x86_64.rdx, mut_state_address());
+    x86_64.mov_store(code, x86_64.rdx, mut_table, x86_64.rax);
+    x86_64.label(code, "rt.mut_init.done");
     x86_64.ret(code);
 }
 
@@ -278,12 +331,160 @@ koukai waza emit_collect_mutators(code: x86_64.Assembler) -> unit {
     x86_64.ret(code);
 }
 
-// rt.thread_start: rdi = closure (0 parameters, returns int64). Returns a handle (the new thread's record) or a negative errno.
+// ---- thread handle table -------------------------------------------------------------------------------------------------------------
+// A handle is (generation << 16) | (slot + 1). A slot is free, active (a live thread that has not been joined) or joining; the generation
+// grows every time a slot is released, so a handle that was already joined, a handle that was never issued, or a number made up by the
+// program is detected instead of being dereferenced. Slot words: [0] record pointer (0 free, 1 reserved), [8] generation << 8 | status
+// (0 free, 1 active, 2 joining). All three routines hold the heap lock; they clobber rax, rcx, rdx, rsi, rdi only.
+waza emit_slot_routines(code: x86_64.Assembler) -> unit {
+    // rt.mut_slot_alloc -> rax = handle, or -11 (EAGAIN: all slots in use) / -12 (ENOMEM: no table)
+    x86_64.label(code, "rt.mut_slot_alloc");
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rcx, mut_table);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_alloc.nomem");
+    x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.label(code, "rt.mut_slot_alloc.scan");
+    x86_64.cmp_ri(code, x86_64.rdi, thread_slots);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.mut_slot_alloc.full");
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdi);
+    x86_64.shl_ri(code, x86_64.rax, 4);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rsi);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rax, 8);
+    x86_64.mov_ri(code, x86_64.rcx, 255);
+    x86_64.and_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.mut_slot_alloc.next");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.mut_slot_alloc.next");
+    x86_64.or_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.or_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rdi);
+    x86_64.shl_ri(code, x86_64.rcx, 4);
+    x86_64.add_rr(code, x86_64.rcx, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rcx, 8, x86_64.rax);
+    x86_64.shr_ri(code, x86_64.rdx, 8);
+    x86_64.shl_ri(code, x86_64.rdx, 16);
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.or_rr(code, x86_64.rdx, x86_64.rdi);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.jmp(code, "rt.mut_slot_alloc.done");
+    x86_64.label(code, "rt.mut_slot_alloc.next");
+    x86_64.add_ri(code, x86_64.rdi, 1);
+    x86_64.jmp(code, "rt.mut_slot_alloc.scan");
+    x86_64.label(code, "rt.mut_slot_alloc.full");
+    x86_64.mov_ri(code, x86_64.rax, -11);
+    x86_64.jmp(code, "rt.mut_slot_alloc.done");
+    x86_64.label(code, "rt.mut_slot_alloc.nomem");
+    x86_64.mov_ri(code, x86_64.rax, -12);
+    x86_64.label(code, "rt.mut_slot_alloc.done");
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.ret(code);
+    // slot address: rdi = handle -> rsi = slot address, or 0 when the handle cannot name a slot (clobbers rax, rcx)
+    x86_64.label(code, "rt.mut_slot_address");
+    x86_64.mov_ri(code, x86_64.rcx, 65535);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdi);
+    x86_64.and_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_address.out");
+    x86_64.sub_ri(code, x86_64.rax, 1);
+    x86_64.cmp_ri(code, x86_64.rax, thread_slots);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.mut_slot_address.out");
+    x86_64.shl_ri(code, x86_64.rax, 4);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rcx, mut_table);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_address.out");
+    x86_64.add_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.mut_slot_address.out");
+    x86_64.ret(code);
+    // rt.mut_slot_set: rdi = handle, rsi = record (the slot was reserved by slot_alloc, so no lock is needed)
+    x86_64.label(code, "rt.mut_slot_set");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.call(code, "rt.mut_slot_address");
+    x86_64.pop_r(code, x86_64.rdx);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_set.out");
+    x86_64.mov_store(code, x86_64.rsi, 0, x86_64.rdx);
+    x86_64.label(code, "rt.mut_slot_set.out");
+    x86_64.ret(code);
+    // rt.mut_slot_release: rdi = handle. Frees the slot and bumps its generation.
+    x86_64.label(code, "rt.mut_slot_release");
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_slot_address");
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_release.out");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 8);
+    x86_64.shr_ri(code, x86_64.rdx, 8);
+    x86_64.add_ri(code, x86_64.rdx, 1);
+    x86_64.shl_ri(code, x86_64.rdx, 8);
+    x86_64.mov_store(code, x86_64.rsi, 8, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.rsi, 0, x86_64.rdx);
+    x86_64.label(code, "rt.mut_slot_release.out");
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.ret(code);
+    // rt.mut_slot_claim: rdi = handle -> rax = the record of a live, not yet joined thread (now marked joining), or 0
+    x86_64.label(code, "rt.mut_slot_claim");
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_slot_address");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mut_slot_claim.out");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 8);
+    x86_64.mov_ri(code, x86_64.rcx, 255);
+    x86_64.and_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.cmp_ri(code, x86_64.rcx, 1);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.mut_slot_claim.out");
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rdx);
+    x86_64.shr_ri(code, x86_64.rcx, 8);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rdi);
+    x86_64.shr_ri(code, x86_64.rax, 16);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.mut_slot_claim.out");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsi, 0);
+    x86_64.cmp_ri(code, x86_64.rax, 1);
+    x86_64.jcc(code, x86_64.cc_a, "rt.mut_slot_claim.take");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jmp(code, "rt.mut_slot_claim.out");
+    x86_64.label(code, "rt.mut_slot_claim.take");
+    x86_64.mov_ri(code, x86_64.rcx, -256);
+    x86_64.and_rr(code, x86_64.rdx, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rcx, 2);
+    x86_64.or_rr(code, x86_64.rdx, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rsi, 8, x86_64.rdx);
+    x86_64.label(code, "rt.mut_slot_claim.out");
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.ret(code);
+}
+
+// rt.thread_start: rdi = closure (0 parameters, returns int64). Returns a handle (positive), or a negative errno: -11 no free slot,
+// -12 out of memory, or the error of mmap / clone. Nothing is left registered or mapped when it fails.
 waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.thread_start");
     x86_64.push_r(code, x86_64.r12);
     x86_64.push_r(code, x86_64.r13);
+    x86_64.push_r(code, x86_64.r14);
     x86_64.mov_rr(code, x86_64.r12, x86_64.rdi);
+    x86_64.call(code, "rt.mut_slot_alloc");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.thread_start.return");
+    x86_64.mov_rr(code, x86_64.r14, x86_64.rax);
     x86_64.mov_ri(code, x86_64.rdi, 0);
     x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
     x86_64.mov_ri(code, x86_64.rdx, 3);
@@ -294,14 +495,13 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.syscall(code);
     x86_64.mov_ri(code, x86_64.rcx, -4096);
     x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
-    x86_64.jcc(code, x86_64.cc_ae, "rt.thread_start.return");
+    x86_64.jcc(code, x86_64.cc_ae, "rt.thread_start.map_failed");
     x86_64.mov_rr(code, x86_64.r13, x86_64.rax);
     x86_64.mov_rr(code, x86_64.rdi, x86_64.r13);
     x86_64.mov_ri(code, x86_64.rsi, thread_guard_bytes);
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.mov_eax_imm(code, 10);                        // mprotect(PROT_NONE) on the lowest page: the stack guard
     x86_64.syscall(code);
-    // the record at the top of the mapping, 16-byte aligned
     x86_64.lea(code, x86_64.r8, x86_64.r13, thread_stack_bytes - 256);
     x86_64.mov_ri(code, x86_64.rcx, -16);
     x86_64.and_rr(code, x86_64.r8, x86_64.rcx);
@@ -312,8 +512,16 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.mov_store(code, x86_64.r8, rec_size, x86_64.rcx);
     x86_64.lea(code, x86_64.rsi, x86_64.r8, -16);
     x86_64.mov_store(code, x86_64.rsi, 0, x86_64.r8);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r14);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.r8);
+    x86_64.push_r(code, x86_64.r8);
+    x86_64.call(code, "rt.mut_slot_set");
+    x86_64.pop_r(code, x86_64.r8);
+    x86_64.lea(code, x86_64.rsi, x86_64.r8, -16);
     // register under the lock (a running creator keeps any collection from starting its scan before the record is visible)
+    x86_64.push_r(code, x86_64.rsi);
     x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rsi);
     x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
     x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_registry);
     x86_64.mov_store(code, x86_64.r8, rec_next, x86_64.rdx);
@@ -321,7 +529,9 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_count);
     x86_64.add_ri(code, x86_64.rdx, 1);
     x86_64.mov_store(code, x86_64.rcx, mut_count, x86_64.rdx);
+    x86_64.push_r(code, x86_64.rsi);
     x86_64.call(code, "rt.mut_lock_release");
+    x86_64.pop_r(code, x86_64.rsi);
     x86_64.mov_ri(code, x86_64.rdi, clone_flags);
     x86_64.lea(code, x86_64.rdx, x86_64.r8, rec_tid);
     x86_64.mov_rr(code, x86_64.r10, x86_64.rdx);
@@ -330,7 +540,7 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_e, "rt.thread_child");
     x86_64.jcc(code, x86_64.cc_l, "rt.thread_start.failed");
-    x86_64.mov_rr(code, x86_64.rax, x86_64.r8);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r14);
     x86_64.jmp(code, "rt.thread_start.return");
     x86_64.label(code, "rt.thread_start.failed");
     x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
@@ -340,8 +550,17 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
     x86_64.mov_eax_imm(code, 11);                        // munmap
     x86_64.syscall(code);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r14);
+    x86_64.call(code, "rt.mut_slot_release");
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r12);
+    x86_64.jmp(code, "rt.thread_start.return");
+    x86_64.label(code, "rt.thread_start.map_failed");
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r14);
+    x86_64.call(code, "rt.mut_slot_release");
     x86_64.mov_rr(code, x86_64.rax, x86_64.r12);
     x86_64.label(code, "rt.thread_start.return");
+    x86_64.pop_r(code, x86_64.r14);
     x86_64.pop_r(code, x86_64.r13);
     x86_64.pop_r(code, x86_64.r12);
     x86_64.ret(code);
@@ -397,12 +616,25 @@ waza emit_unlink(code: x86_64.Assembler) -> unit {
     x86_64.ret(code);
 }
 
-// rt.thread_join: rdi = handle. Called from the native wrapper frame, so the managed chain to publish starts at [rbp] / [rbp+8].
+// rt.thread_join: rdi = handle. Returns the thread's result, or -22 (EINVAL) when the handle is not a live thread handle (never issued,
+// already joined, stale) and sets this thread's join status (rt.join_status). Called from the native wrapper frame, so the managed chain
+// to publish starts at [rbp] / [rbp+8].
 waza emit_thread_join(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.thread_join");
     x86_64.push_r(code, x86_64.r12);
     x86_64.push_r(code, x86_64.r13);
-    x86_64.mov_rr(code, x86_64.r12, x86_64.rdi);
+    x86_64.push_r(code, x86_64.r14);
+    x86_64.mov_rr(code, x86_64.r14, x86_64.rdi);
+    x86_64.call(code, "rt.mut_slot_claim");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.thread_join.claimed");
+    fs_self(code, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 22);
+    x86_64.mov_store(code, x86_64.rax, rec_joinerr, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rax, -22);
+    x86_64.jmp(code, "rt.thread_join.return");
+    x86_64.label(code, "rt.thread_join.claimed");
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
     fs_self(code, x86_64.rax);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 0);
     x86_64.mov_store(code, x86_64.rax, rec_rbp, x86_64.rcx);
@@ -441,9 +673,21 @@ waza emit_thread_join(code: x86_64.Assembler) -> unit {
     x86_64.mov_load(code, x86_64.rsi, x86_64.r12, rec_size);
     x86_64.mov_eax_imm(code, 11);                        // munmap the stack (the record lives in it)
     x86_64.syscall(code);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r14);
+    x86_64.call(code, "rt.mut_slot_release");            // the handle is dead from here on: a second join is detected
+    fs_self(code, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    x86_64.mov_store(code, x86_64.rax, rec_joinerr, x86_64.rcx);
     x86_64.mov_rr(code, x86_64.rax, x86_64.r13);
+    x86_64.label(code, "rt.thread_join.return");
+    x86_64.pop_r(code, x86_64.r14);
     x86_64.pop_r(code, x86_64.r13);
     x86_64.pop_r(code, x86_64.r12);
+    x86_64.ret(code);
+    // rt.join_status: the status of this thread's last join (0 ok, 22 invalid handle)
+    x86_64.label(code, "rt.join_status");
+    fs_self(code, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rax, rec_joinerr);
     x86_64.ret(code);
 }
 
@@ -464,21 +708,63 @@ waza word_bytes(code: x86_64.Assembler, count: int64, length: int64) -> unit {
     x86_64.and_rr(code, length, x86_64.rax);
 }
 waza emit_word_natives(code: x86_64.Assembler) -> unit {
+    // words_new(count): a zeroed block of count 64-bit words carved from 64 KiB chunks. Blocks are never returned to the OS: a channel's
+    // control words stay mapped for the life of the process, so a thread that is still inside a send or receive on a destroyed channel can
+    // only see the destroyed flag, never unmapped memory. Cost: 64 bytes per channel.
     x86_64.label(code, "rt.words_new");
-    word_bytes(code, x86_64.rdi, x86_64.rsi);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rdi);
+    x86_64.shl_ri(code, x86_64.rsi, 3);
+    x86_64.add_ri(code, x86_64.rsi, 63);
+    x86_64.mov_ri(code, x86_64.rax, -64);
+    x86_64.and_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.cmp_ri(code, x86_64.rsi, 65536);
+    x86_64.jcc(code, x86_64.cc_a, "rt.words_new.toobig");
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.words_new.toobig");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_slab_next);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.words_new.chunk");
+    x86_64.lea(code, x86_64.rdx, x86_64.rax, 0);
+    x86_64.add_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rcx, mut_slab_end);
+    x86_64.cmp_rr(code, x86_64.rdx, x86_64.rdi);
+    x86_64.jcc(code, x86_64.cc_a, "rt.words_new.chunk");
+    x86_64.mov_store(code, x86_64.rcx, mut_slab_next, x86_64.rdx);
+    x86_64.jmp(code, "rt.words_new.done");
+    x86_64.label(code, "rt.words_new.chunk");
+    x86_64.push_r(code, x86_64.rsi);
     x86_64.mov_ri(code, x86_64.rdi, 0);
+    x86_64.mov_ri(code, x86_64.rsi, 65536);
     x86_64.mov_ri(code, x86_64.rdx, 3);
     x86_64.mov_ri(code, x86_64.r10, 34);                 // MAP_PRIVATE | MAP_ANONYMOUS
     x86_64.mov_ri(code, x86_64.r8, -1);
     x86_64.mov_ri(code, x86_64.r9, 0);
     x86_64.mov_eax_imm(code, 9);
     x86_64.syscall(code);
+    x86_64.pop_r(code, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rcx, -4096);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.words_new.done");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.lea(code, x86_64.rdx, x86_64.rax, 0);
+    x86_64.add_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rcx, mut_slab_next, x86_64.rdx);
+    x86_64.lea(code, x86_64.rdi, x86_64.rax, 65536);
+    x86_64.mov_store(code, x86_64.rcx, mut_slab_end, x86_64.rdi);
+    x86_64.label(code, "rt.words_new.done");
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.words_new.toobig");
+    x86_64.mov_ri(code, x86_64.rax, -22);
     x86_64.ret(code);
     x86_64.label(code, "rt.words_free");
-    x86_64.mov_rr(code, x86_64.rdx, x86_64.rsi);
-    word_bytes(code, x86_64.rdx, x86_64.rsi);
-    x86_64.mov_eax_imm(code, 11);
-    x86_64.syscall(code);
+    x86_64.mov_ri(code, x86_64.rax, 0);                  // intentionally a no-op (see words_new)
     x86_64.ret(code);
     x86_64.label(code, "rt.word_get");
     word_address(code);
@@ -558,6 +844,7 @@ koukai waza emit_mutator_support(code: x86_64.Assembler) -> unit {
     emit_park(code);
     emit_chain_scan(code);
     emit_unlink(code);
+    emit_slot_routines(code);
     emit_thread_start(code);
     emit_thread_join(code);
     emit_word_natives(code);

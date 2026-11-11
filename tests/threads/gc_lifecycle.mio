@@ -1,0 +1,31 @@
+// Collections during thread startup, shutdown and joins: 200 rounds of eight threads that allocate heavily while the creator also allocates
+// and joins; under --gc-stress every allocation is a safepoint, so collections hit every phase of a thread's life.
+yobu "kiso/thread";
+
+kata Cell { value: int64; next: []Cell; }
+
+waza build(n: int64) -> int64 {
+    kaku head: []Cell = [];
+    kaku i = 0;
+    aida (i < n) { head = [Cell { value: i, next: head }]; i = i + 1; }
+    kaku sum = 0;
+    aida (len(head) > 0) { sum = sum + head[0].value; head = head[0].next; }
+    kaesu sum;
+}
+waza w1() -> int64 { kaesu build(30); } waza w2() -> int64 { kaesu build(31); } waza w3() -> int64 { kaesu build(32); } waza w4() -> int64 { kaesu build(33); }
+waza w5() -> int64 { kaesu build(34); } waza w6() -> int64 { kaesu build(35); } waza w7() -> int64 { kaesu build(36); } waza w8() -> int64 { kaesu build(37); }
+
+waza run() -> int64 {
+    kaku total = 0;
+    kaku r = 0;
+    aida (r < 200) {
+        kaku a = thread.start(w1); kaku b = thread.start(w2); kaku c = thread.start(w3); kaku d = thread.start(w4);
+        kaku e = thread.start(w5); kaku f = thread.start(w6); kaku g = thread.start(w7); kaku h = thread.start(w8);
+        total = total + build(20);
+        total = total + thread.join(a) + thread.join(b) + thread.join(c) + thread.join(d) + thread.join(e) + thread.join(f) + thread.join(g) + thread.join(h);
+        r = r + 1;
+    }
+    chant(total);
+    kaesu 0;
+}
+run();

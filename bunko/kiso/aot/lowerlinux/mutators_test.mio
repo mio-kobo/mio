@@ -34,3 +34,11 @@ waza test_mutator_record_layout_is_consistent() -> unit {
     testing.expect(mut_main_record + 128 <= 4096 - 3600, "the main record fits between the collector state and the free-list bins");
     testing.expect(clone_flags == 4001536, "CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID");
 }
+
+waza test_handle_table_and_slab_words_do_not_alias_other_state() -> unit {
+    testing.expect(mut_table == 120 && mut_slab_next == 128 && mut_slab_end == 136, "table and slab words");
+    testing.expect(mut_table != 72 && mut_table != 80 && mut_slab_next != 72 && mut_slab_next != 80, "not the saved stack pointer / testing counter");
+    testing.expect(mut_main_record > mut_slab_end, "the main record starts after the last state word");
+    testing.expect(thread_slots == 4096 && thread_slots * 16 == 65536, "4096 slots of 16 bytes");
+    testing.expect(rec_joinerr == 80 && rec_joinerr + 8 <= 128, "the join status word is inside the 128-byte record");
+}

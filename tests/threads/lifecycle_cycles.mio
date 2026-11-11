@@ -1,0 +1,32 @@
+// Thousands of thread lifetimes: every handle is joined exactly once, results arrive intact, and the handle table, stacks and records are
+// recycled (the table has only 4096 slots, so 6000 sequential and 3000 batched lifetimes prove slots are released).
+yobu "kiso/thread";
+
+waza double_it() -> int64 { kaesu 42; }
+
+waza run() -> int64 {
+    kaku i = 0;
+    kaku total = 0;
+    kaku bad = 0;
+    aida (i < 6000) {
+        kaku h = thread.start(double_it);
+        moshi (h <= 0) { bad = bad + 1; }
+        moshi (h > 0) { total = total + thread.join(h); }
+        i = i + 1;
+    }
+    chant(total);
+    chant(bad);
+    kaku batches = 0;
+    kaku batch_total = 0;
+    aida (batches < 300) {
+        kaku h0 = thread.start(double_it); kaku h1 = thread.start(double_it); kaku h2 = thread.start(double_it); kaku h3 = thread.start(double_it);
+        kaku h4 = thread.start(double_it); kaku h5 = thread.start(double_it); kaku h6 = thread.start(double_it); kaku h7 = thread.start(double_it);
+        kaku h8 = thread.start(double_it); kaku h9 = thread.start(double_it);
+        batch_total = batch_total + thread.join(h9) + thread.join(h8) + thread.join(h7) + thread.join(h6) + thread.join(h5)
+            + thread.join(h4) + thread.join(h3) + thread.join(h2) + thread.join(h1) + thread.join(h0);
+        batches = batches + 1;
+    }
+    chant(batch_total);
+    kaesu 0;
+}
+run();
