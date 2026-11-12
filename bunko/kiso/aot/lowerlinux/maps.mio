@@ -2,22 +2,57 @@ yobu "kiso/aot/lower/types";
 yobu "kiso/aot/x86_64";
 
 // Map[K, V] with integer, bool or string keys (the key kinds the language allows and the reference backend supports).
-// Map object (kind 12): [16] head entry. Entry (kind 13, 48 bytes): [16] next, [24] key, [32] value, [40] flags
-// (bit 0: the key is a reference (string), bit 1: the value is a reference, bit 2: the value is nil). Lookup is a
-// linear walk, a new key is pushed at the front and an existing key is updated in place, exactly like the reference
-// lowering. Values are stored raw: a nullable scalar is unboxed on the way in and boxed again on the way out. A nil
-// nullable scalar is stored as raw 0 with bit 2 set, so a stored nil is distinguishable from a stored zero and the
-// entry (key presence) never depends on the payload. The collector reads only bits 0 and 1 of the flags word.
+// Map object (kind 12, 32 bytes): [16] bucket table (0 until the first insert), [24] entry count. Bucket table (kind 14, 24 + 8n bytes):
+// [16] n (a power of two, at least 8), then n bucket heads. Entry (kind 13, 48 bytes): [16] next in its bucket, [24] key, [32] value,
+// [40] flags (bit 0: the key is a reference (string), bit 1: the value is a reference, bit 2: the value is nil) with the 56-bit key hash
+// in bits 8..63. A new key is pushed at the front of its bucket and an existing key is updated in place; the table doubles when the
+// count reaches n, relinking the entries by their stored hash (no key is rehashed, nothing is copied). The collector marks the table
+// from the map and every bucket head from the table; it reads only bits 0 and 1 of the flags word. Runtime routines never collect, so a
+// resize is never observed half done. Map has no iteration, deletion or length operation, so bucket order is not observable.
+// Values are stored raw: a nullable scalar is unboxed on the way in and boxed again on the way out. A nil nullable scalar is stored as
+// raw 0 with bit 2 set, so a stored nil is distinguishable from a stored zero and the entry (key presence) never depends on the payload.
 //
 // rt.map_new -> rax = map
+// rt.map_hash: rsi = key, rdx = 1 for string keys -> rax = 56-bit hash (clobbers rcx, rdx, r8, r9)
 // rt.map_find: rdi = map, rsi = key, rdx = 1 for string keys -> rax = entry or 0
-// rt.map_set: rdi = map, rsi = key, rdx = value, rcx = flags (bit 0 string key, bit 1 reference value)
+// rt.map_set: rdi = map, rsi = key, rdx = value, rcx = flags (bit 0 string key, bit 1 reference value, bit 2 nil value)
 waza emit_map_runtime(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.map_new");
-    x86_64.mov_ri(code, x86_64.rax, 24);
+    x86_64.mov_ri(code, x86_64.rax, 32);
     x86_64.call(code, "rt.alloc");
-    x86_64.mov_ri(code, x86_64.rcx, 24 * 256 + 12);
+    x86_64.mov_ri(code, x86_64.rcx, 32 * 256 + 12);
     x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.ret(code);
+
+    // integers and bools: multiply by an odd 64-bit constant; strings: FNV-1a over the bytes (a nil key hashes like the empty string);
+    // both finish with a xor-shift so the low bits that select the bucket depend on every input bit.
+    x86_64.label(code, "rt.map_hash");
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.map_hash.scalar");
+    x86_64.mov_ri(code, x86_64.rax, -3750763034362895579);
+    x86_64.test_rr(code, x86_64.rsi, x86_64.rsi);
+    x86_64.jcc(code, x86_64.cc_e, "rt.map_hash.finish");
+    x86_64.mov_load(code, x86_64.r9, x86_64.rsi, 16);
+    x86_64.lea(code, x86_64.r8, x86_64.rsi, 24);
+    x86_64.mov_ri(code, x86_64.rcx, 1099511628211);
+    x86_64.label(code, "rt.map_hash.byte");
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, "rt.map_hash.finish");
+    x86_64.mov_load8(code, x86_64.rdx, x86_64.r8, 0);
+    x86_64.xor_rr(code, x86_64.rax, x86_64.rdx);
+    x86_64.imul_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.add_ri(code, x86_64.r8, 1);
+    x86_64.sub_ri(code, x86_64.r9, 1);
+    x86_64.jmp(code, "rt.map_hash.byte");
+    x86_64.label(code, "rt.map_hash.scalar");
+    x86_64.mov_rr(code, x86_64.rax, x86_64.rsi);
+    x86_64.mov_ri(code, x86_64.rcx, -7046029254386353131);
+    x86_64.imul_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.label(code, "rt.map_hash.finish");
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.shr_ri(code, x86_64.rcx, 29);
+    x86_64.xor_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.shr_ri(code, x86_64.rax, 8);
     x86_64.ret(code);
 
     x86_64.label(code, "rt.map_find");
@@ -26,12 +61,27 @@ waza emit_map_runtime(code: x86_64.Assembler) -> unit {
     x86_64.push_r(code, x86_64.rbx);
     x86_64.push_r(code, x86_64.r12);
     x86_64.push_r(code, x86_64.r13);
-    x86_64.mov_load(code, x86_64.rbx, x86_64.rdi, 16);
+    x86_64.push_r(code, x86_64.r14);
     x86_64.mov_rr(code, x86_64.r12, x86_64.rsi);
     x86_64.mov_rr(code, x86_64.r13, x86_64.rdx);
+    x86_64.call(code, "rt.map_hash");
+    x86_64.mov_rr(code, x86_64.r14, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdi, 16);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.map_find.none");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 16);
+    x86_64.sub_ri(code, x86_64.rax, 1);
+    x86_64.and_rr(code, x86_64.rax, x86_64.r14);
+    x86_64.shl_ri(code, x86_64.rax, 3);
+    x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rbx, x86_64.rax, 24);
     x86_64.label(code, "rt.map_find.loop");
     x86_64.test_rr(code, x86_64.rbx, x86_64.rbx);
     x86_64.jcc(code, x86_64.cc_e, "rt.map_find.none");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbx, 40);
+    x86_64.shr_ri(code, x86_64.rax, 8);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.r14);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.map_find.next");
     x86_64.mov_load(code, x86_64.rax, x86_64.rbx, 24);
     x86_64.test_rr(code, x86_64.r13, x86_64.r13);
     x86_64.jcc(code, x86_64.cc_e, "rt.map_find.scalar");
@@ -59,15 +109,17 @@ waza emit_map_runtime(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.map_find.none");
     x86_64.mov_ri(code, x86_64.rax, 0);
     x86_64.label(code, "rt.map_find.done");
+    x86_64.pop_r(code, x86_64.r14);
     x86_64.pop_r(code, x86_64.r13);
     x86_64.pop_r(code, x86_64.r12);
     x86_64.pop_r(code, x86_64.rbx);
     x86_64.ret(code);
 
+    // frame: -8 map, -16 key, -24 value, -32 flags, -40 hash, -48 table, -56 new bucket count, -64 next entry
     x86_64.label(code, "rt.map_set");
     x86_64.push_r(code, x86_64.rbp);
     x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
-    x86_64.sub_ri(code, x86_64.rsp, 48);
+    x86_64.sub_ri(code, x86_64.rsp, 64);
     x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rdi);
     x86_64.mov_store(code, x86_64.rbp, -16, x86_64.rsi);
     x86_64.mov_store(code, x86_64.rbp, -24, x86_64.rdx);
@@ -77,26 +129,117 @@ waza emit_map_runtime(code: x86_64.Assembler) -> unit {
     x86_64.call(code, "rt.map_find");
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_e, "rt.map_set.insert");
+    // existing key: replace the value and the low flag bits, keep the stored hash
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -24);
     x86_64.mov_store(code, x86_64.rax, 32, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rax, 40);
+    x86_64.and_ri(code, x86_64.rdx, -256);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -32);
-    x86_64.mov_store(code, x86_64.rax, 40, x86_64.rcx);
+    x86_64.or_rr(code, x86_64.rdx, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rax, 40, x86_64.rdx);
     x86_64.jmp(code, "rt.map_set.done");
     x86_64.label(code, "rt.map_set.insert");
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -16);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -32);
+    x86_64.and_ri(code, x86_64.rdx, 1);
+    x86_64.call(code, "rt.map_hash");
+    x86_64.mov_store(code, x86_64.rbp, -40, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdi, 16);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.map_set.have_table");
+    x86_64.mov_ri(code, x86_64.rax, 88);
+    x86_64.call(code, "rt.alloc");
+    x86_64.mov_ri(code, x86_64.rcx, 88 * 256 + 14);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.mov_ri(code, x86_64.rcx, 8);
+    x86_64.mov_store(code, x86_64.rax, 16, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.mov_store(code, x86_64.rdi, 16, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.label(code, "rt.map_set.have_table");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdi, 24);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 16);
+    x86_64.cmp_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_b, "rt.map_set.link");
+    // grow to twice the buckets and relink every entry by its stored hash
+    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rcx);
+    x86_64.shl_ri(code, x86_64.rax, 1);
+    x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rax);
+    x86_64.shl_ri(code, x86_64.rax, 3);
+    x86_64.add_ri(code, x86_64.rax, 24);
+    x86_64.call(code, "rt.alloc");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -56);
+    x86_64.shl_ri(code, x86_64.rcx, 3);
+    x86_64.add_ri(code, x86_64.rcx, 24);
+    x86_64.shl_ri(code, x86_64.rcx, 8);
+    x86_64.add_ri(code, x86_64.rcx, 14);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -56);
+    x86_64.mov_store(code, x86_64.rax, 16, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.r8, x86_64.rbp, -48);
+    x86_64.mov_load(code, x86_64.r9, x86_64.r8, 16);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.label(code, "rt.map_set.rehash_bucket");
+    x86_64.cmp_rr(code, x86_64.rsi, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.map_set.rehash_done");
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rsi);
+    x86_64.shl_ri(code, x86_64.rdi, 3);
+    x86_64.add_rr(code, x86_64.rdi, x86_64.r8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdi, 24);
+    x86_64.label(code, "rt.map_set.rehash_entry");
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.map_set.rehash_next");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdx, 16);
+    x86_64.mov_store(code, x86_64.rbp, -64, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdx, 40);
+    x86_64.shr_ri(code, x86_64.rcx, 8);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -56);
+    x86_64.sub_ri(code, x86_64.rdi, 1);
+    x86_64.and_rr(code, x86_64.rcx, x86_64.rdi);
+    x86_64.shl_ri(code, x86_64.rcx, 3);
+    x86_64.add_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rcx, 24);
+    x86_64.mov_store(code, x86_64.rdx, 16, x86_64.rdi);
+    x86_64.mov_store(code, x86_64.rcx, 24, x86_64.rdx);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -64);
+    x86_64.jmp(code, "rt.map_set.rehash_entry");
+    x86_64.label(code, "rt.map_set.rehash_next");
+    x86_64.add_ri(code, x86_64.rsi, 1);
+    x86_64.jmp(code, "rt.map_set.rehash_bucket");
+    x86_64.label(code, "rt.map_set.rehash_done");
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.mov_store(code, x86_64.rdi, 16, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.label(code, "rt.map_set.link");
+    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rcx);
     x86_64.mov_ri(code, x86_64.rax, 48);
     x86_64.call(code, "rt.alloc");
     x86_64.mov_ri(code, x86_64.rcx, 48 * 256 + 13);
     x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
-    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
-    x86_64.mov_load(code, x86_64.rcx, x86_64.rdi, 16);
-    x86_64.mov_store(code, x86_64.rax, 16, x86_64.rcx);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -16);
     x86_64.mov_store(code, x86_64.rax, 24, x86_64.rcx);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -24);
     x86_64.mov_store(code, x86_64.rax, 32, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -40);
+    x86_64.shl_ri(code, x86_64.rdx, 8);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -32);
-    x86_64.mov_store(code, x86_64.rax, 40, x86_64.rcx);
-    x86_64.mov_store(code, x86_64.rdi, 16, x86_64.rax);
+    x86_64.or_rr(code, x86_64.rdx, x86_64.rcx);
+    x86_64.mov_store(code, x86_64.rax, 40, x86_64.rdx);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -48);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 16);
+    x86_64.sub_ri(code, x86_64.rdx, 1);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -40);
+    x86_64.and_rr(code, x86_64.rdx, x86_64.rsi);
+    x86_64.shl_ri(code, x86_64.rdx, 3);
+    x86_64.add_rr(code, x86_64.rdx, x86_64.rcx);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rdx, 24);
+    x86_64.mov_store(code, x86_64.rax, 16, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rdx, 24, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -8);
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rdi, 24);
+    x86_64.add_ri(code, x86_64.rcx, 1);
+    x86_64.mov_store(code, x86_64.rdi, 24, x86_64.rcx);
     x86_64.label(code, "rt.map_set.done");
     x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
     x86_64.pop_r(code, x86_64.rbp);
