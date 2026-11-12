@@ -20,28 +20,43 @@
       "platform": "darwin-arm64",
       "group": "I",
       "name": "native multithreading",
-      "status": "UNSUPPORTED",
-      "evidence": "thread-natives-fail-closed PASS (fails closed); no native thread execution",
-      "pr": [],
-      "next_action": "priority order: darwin-arm64, linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
+      "status": "VALIDATED_BY_CI",
+      "evidence": "run 43166577034 (head c5b3b54) on macos-15: darwin-thread-core, darwin-thread-programs (21 programs, creation limit 5 of 5 runs, gc-stress for basic, nested, channel_basic, channel_close), darwin-thread-faults (reclaim, stack_overflow exit 1, E0701-E0704 rejections); threads start/join incl. nested, handles, limits, lifecycle and shutdown programs",
+      "pr": [
+        "#79",
+        "#89",
+        "#91",
+        "#92"
+      ],
+      "next_action": "none (validated); the three checks are required; remaining targets: linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
     },
     {
       "platform": "darwin-arm64",
       "group": "J",
       "name": "synchronisation, memory ordering, GC safety",
-      "status": "UNSUPPORTED",
-      "evidence": "thread-natives-fail-closed PASS (fails closed); no native thread execution",
-      "pr": [],
-      "next_action": "priority order: darwin-arm64, linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
+      "status": "VALIDATED_BY_CI",
+      "evidence": "run 43166577034 (head c5b3b54) on macos-15: darwin-thread-core, darwin-thread-programs (21 programs, creation limit 5 of 5 runs, gc-stress for basic, nested, channel_basic, channel_close), darwin-thread-faults (reclaim, stack_overflow exit 1, E0701-E0704 rejections); word natives (cas, add, wait, wake), stop-the-world with up to 128 live threads, gc_stress, gc_lifecycle, reclaim, channel_races",
+      "pr": [
+        "#79",
+        "#89",
+        "#91",
+        "#92"
+      ],
+      "next_action": "none (validated); the three checks are required; remaining targets: linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
     },
     {
       "platform": "darwin-arm64",
       "group": "K",
       "name": "channels",
-      "status": "UNSUPPORTED",
-      "evidence": "thread-natives-fail-closed PASS (fails closed); no native thread execution",
-      "pr": [],
-      "next_action": "priority order: darwin-arm64, linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
+      "status": "VALIDATED_BY_CI",
+      "evidence": "run 43166577034 (head c5b3b54) on macos-15: darwin-thread-core, darwin-thread-programs (21 programs, creation limit 5 of 5 runs, gc-stress for basic, nested, channel_basic, channel_close), darwin-thread-faults (reclaim, stack_overflow exit 1, E0701-E0704 rejections); channel programs: basic, close, graphs, mpmc, summary_copy, races, lifecycle, creation limit",
+      "pr": [
+        "#79",
+        "#89",
+        "#91",
+        "#92"
+      ],
+      "next_action": "none (validated); the three checks are required; remaining targets: linux-arm64, darwin-amd64, windows-amd64, windows-arm64"
     },
     {
       "platform": "linux-arm64",
@@ -189,6 +204,14 @@
       "evidence": "artifact native-report-darwin-arm64-43002395379-1",
       "limits": "start/join only from the main thread; no join_status/join_checked; no generation-checked handles; word_wait polls with a 50us timed sleep; 16 live threads; 16384 channels per process; not yet run: gc_stress, reclaim, lifecycle, creation_limit, shutdown, races, faults, negatives; cells I/J/K stay UNSUPPORTED until these pass",
       "next": "allow nested start/join (slot allocation lock), then join_status and generation handles, then the remaining tests/threads programs"
+    },
+    {
+      "step": 5,
+      "what": "darwin-arm64 cells I, J and K validated (PRs #79, #89, #91, #92 merged)",
+      "status": "VALIDATED",
+      "result": "run 43166577034 head c5b3b54: all thread, channel, fault and ownership programs pass natively; 128 live threads; the failures found on the way (channel wait starvation, 1000-entry root snapshot overflow, main-thread-only start/join, shutdown join) are fixed and recorded in the PRs",
+      "limits": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next": "linux-arm64 threads (futex-free park protocol, polls, thread natives in the AArch64 lowering), then darwin-amd64, windows-amd64, windows-arm64"
     }
   ]
 }

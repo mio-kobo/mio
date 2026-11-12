@@ -652,8 +652,8 @@ def darwin_worker_baseline(report, cli, work):
 def darwin_thread_core(report, cli, work):
     """Public thread natives on darwin-arm64, first slice: `start` and `join` through the cooperative worker bridge (tests/threads/core_runtime.mio).
 
-    Built by the native CLI like any program (`mio build`, host target darwin-arm64), run on this host normally and with --gc-stress, repeated. Not yet a
-    parity claim: the word natives, kiso/thread and channels are still missing on this target (matrix cells I/J/K stay UNSUPPORTED).
+    Built by the native CLI like any program (`mio build`, host target darwin-arm64), run on this host normally and with --gc-stress, repeated. Required
+    since darwin-arm64 cells I/J/K of the parity matrix are validated by it together with darwin-thread-programs and darwin-thread-faults.
     """
     expected = b"hai\n7\n500500\n2001000\n4501500\n1400\n"
     Path(work).mkdir(parents=True, exist_ok=True)
@@ -671,8 +671,8 @@ def darwin_thread_core(report, cli, work):
                 break
         else:
             passed.append(label)
-    report.check("darwin-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], required=False, passed=passed,
-                 note="start/join only; word natives, kiso/thread and channels are not available on darwin-arm64 yet")
+    report.check("darwin-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], passed=passed,
+                 note="start and join of the thread build on darwin-arm64, normal and gc-stress (the larger suites are darwin-thread-programs and darwin-thread-faults)")
 
 
 def darwin_thread_programs(report, cli, work):
@@ -710,7 +710,7 @@ def darwin_thread_programs(report, cli, work):
                 failures.append("%s/%s: %d of %d runs failed (%s)" % (name, label, len(bad), repeats, "; ".join(bad)[:400]))
             else:
                 passed.append("%s/%s" % (name, label))
-    report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
+    report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], passed=passed)
 
 
 def darwin_thread_probe(report, cli, work):
@@ -771,7 +771,7 @@ def darwin_thread_faults(report, cli, work):
             failures.append("%s: expected compile error %s, got exit %s: %s" % (name, code_text, code, brief(err or out, 160)))
         else:
             passed.append("%s rejected with %s" % (name, code_text))
-    report.check("darwin-thread-faults", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
+    report.check("darwin-thread-faults", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], passed=passed)
 
 
 def contract(report, cli, target, reference="", suite="contract"):
