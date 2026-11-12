@@ -727,8 +727,9 @@ def darwin_thread_probe(report, cli, work):
 def darwin_thread_faults(report, cli, work):
     """reclaim (heavy allocation across threads), the thread-stack overflow fault and the compile-time ownership rejections, for darwin-arm64.
 
-    The fault must end the process by a signal after the expected output (the guard page of a thread stack): macOS reports a stack overflow as
-    SIGSEGV or SIGBUS, either is accepted and the one seen is recorded. Ownership errors are frontend diagnostics and must be identical here.
+    The fault must stop the process right after the expected output. Linux dies by SIGSEGV at the guard page; on darwin-arm64 the compiled stack
+    check ends the process with the runtime's controlled error (exit 1) before the guard page is reached. Exit 1, SIGSEGV or SIGBUS are accepted
+    (a documented platform difference, no memory is corrupted either way) and the one seen is recorded. Ownership errors are frontend diagnostics and must be identical here.
     """
     import importlib.util
     spec = importlib.util.spec_from_file_location("threads_run", ROOT / "tests/threads/run.py")
@@ -758,8 +759,8 @@ def darwin_thread_faults(report, cli, work):
         for repeat in range(3):
             code, out, err, seconds = run(report, "darwin-thread-faults-run-%s-%d" % (name, repeat), [image], timeout=120)
             seen.append(code)
-            if code not in (-11, -10) or out.encode() != before:
-                failures.append("%s run %d: exit %s stdout %r, want death by SIGSEGV or SIGBUS after %r" % (name, repeat, code, out[:80], before))
+            if code not in (1, -11, -10) or out.encode() != before:
+                failures.append("%s run %d: exit %s stdout %r, want a controlled runtime error (exit 1) or death by SIGSEGV or SIGBUS after %r" % (name, repeat, code, out[:80], before))
                 break
         else:
             passed.append("%s (exit %s)" % (name, ",".join(str(c) for c in seen)))
