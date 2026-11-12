@@ -724,6 +724,22 @@ def darwin_thread_probe(report, cli, work):
     report.check("darwin-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
 
 
+def darwin_thread_bench(report, cli, work):
+    """Evidence only (non-required): benchmarks/threads/efficiency.mio built for darwin-arm64 and run on this host; the lines it prints
+    (name,milliseconds,operations) and the exit status are recorded and never compared. A run that does not finish within the timeout is recorded with
+    the lines printed so far."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "efficiency"
+    ok, reason, _ = cli_build(report, "darwin-thread-bench-build", cli, str(ROOT / "benchmarks/threads/efficiency.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-thread-bench", "FAIL", "native", brief(reason, 300), required=False)
+    lines = []
+    for repeat in range(2):
+        code, out, err, seconds = run(report, "darwin-thread-bench-run-%d" % repeat, [image], timeout=240)
+        lines.append("run %d: exit %s after %.1fs %s" % (repeat, code, seconds or 0, out.strip().replace("\n", " ")[:400]))
+    report.check("darwin-thread-bench", "PASS", "native", " | ".join(lines)[:1500], required=False)
+
+
 def darwin_thread_faults(report, cli, work):
     """reclaim (heavy allocation across threads), the thread-stack overflow fault and the compile-time ownership rejections, for darwin-arm64.
 
@@ -975,6 +991,7 @@ def follower(args, target):
             darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
             darwin_thread_faults(report, cli, work / "thread-faults")
+            darwin_thread_bench(report, cli, work / "thread-bench")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
