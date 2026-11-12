@@ -38,7 +38,13 @@ waza emit_linux_threads(c: arm64.Assembler, p: []macho.AddressPatch, first: int6
     emit(c, arm64.cmp_imm_x(0, 8, iie)); arm64.assembler_b_cond(c, 0, "lxt_clock_monotonic");
     arm64.assembler_b(c, "lxt_clock_go");
     arm64.assembler_label(c, "lxt_clock_monotonic"); emit(c, arm64.movz_x(0, 1, 0));
-    arm64.assembler_label(c, "lxt_clock_go"); lxt_sys(c, 113); emit(c, arm64.ret());
+    // Every spin loop of the collector (registry lock, stop-the-world wait) reads the clock once per round: yielding the CPU there keeps a
+    // lock holder that was preempted from waiting behind a convoy of spinners (128 threads on a few cores).
+    arm64.assembler_label(c, "lxt_clock_go");
+    emit(c, arm64.sub_imm_x(31, 31, 32, iie)); emit(c, arm64.str_x(0, 31, 0)); emit(c, arm64.str_x(1, 31, 8)); emit(c, arm64.str_x(30, 31, 16));
+    lxt_sys(c, 124);
+    emit(c, arm64.ldr_x(0, 31, 0)); emit(c, arm64.ldr_x(1, 31, 8)); emit(c, arm64.ldr_x(30, 31, 16)); emit(c, arm64.add_imm_x(31, 31, 32, iie));
+    lxt_sys(c, 113); emit(c, arm64.ret());
     arm64.assembler_label(c, "lxt_getpagesize"); wr_num(c, 0, 4096); emit(c, arm64.ret());
     arm64.assembler_label(c, "lxt_spawn"); wr_num(c, 0, 78); emit(c, arm64.ret());
     arm64.assembler_label(c, "lxt_attr_init"); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 0, 8)); lxt_zero_return(c);

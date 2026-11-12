@@ -599,6 +599,7 @@ def thread_checks(report, cli, target, work):
         # The same native suites as darwin-arm64, run by the linux-arm64 job: start/join, every thread and channel program, the faults and the
         # ownership rejections. They are required (a failure here fails the job).
         linux_arm64_thread_core(report, cli, work / "core")
+        darwin_thread_probe(report, cli, work / "probe", target="linux-arm64", prefix="linux-arm64")
         darwin_thread_programs(report, cli, work / "programs", target="linux-arm64", prefix="linux-arm64")
         darwin_thread_faults(report, cli, work / "faults", target="linux-arm64", prefix="linux-arm64")
     if target in ("darwin-arm64", "linux-arm64"):
@@ -746,15 +747,15 @@ def linux_arm64_thread_core(report, cli, work):
                  note="start and join (clone, futex, TPIDR_EL0 keys), normal and gc-stress, repeated")
 
 
-def darwin_thread_probe(report, cli, work):
+def darwin_thread_probe(report, cli, work, target="darwin-arm64", prefix="darwin"):
     """Diagnostic (non-required): tests/threads/limit_probe.mio output, exit status and time are recorded as evidence, never compared."""
     Path(work).mkdir(parents=True, exist_ok=True)
     image = Path(work) / "limit-probe"
-    ok, reason, _ = cli_build(report, "darwin-thread-probe-build", cli, str(ROOT / "tests/threads/limit_probe.mio"), "darwin-arm64", image)
+    ok, reason, _ = cli_build(report, prefix + "-thread-probe-build", cli, str(ROOT / "tests/threads/limit_probe.mio"), target, image)
     if not ok:
-        return report.check("darwin-thread-probe", "FAIL", "native", brief(reason, 300), required=False)
-    code, out, err, seconds = run(report, "darwin-thread-probe-run", [image], timeout=120)
-    report.check("darwin-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
+        return report.check(prefix + "-thread-probe", "FAIL", "native", brief(reason, 300), required=False)
+    code, out, err, seconds = run(report, prefix + "-thread-probe-run", [image], timeout=120)
+    report.check(prefix + "-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
 
 
 def darwin_thread_faults(report, cli, work, target="darwin-arm64", prefix="darwin"):
