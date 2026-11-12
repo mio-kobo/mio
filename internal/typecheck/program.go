@@ -368,6 +368,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 			return typeDiagnostic("E0301", "aida 条件必须是 bool", n.Condition.Span(), KindBool.String(), conditionType.String(), cause)
 		}
 		symbol, nonNilWhenTrue, canNarrow := c.conditionNarrowing(n.Condition)
+		c.invalidateLoopFacts(n.Condition, n.Body)
 		c.loopDepth++
 		defer func() { c.loopDepth-- }()
 		return c.checkBlockWithNarrowing(n.Body, symbol, canNarrow && nonNilWhenTrue)

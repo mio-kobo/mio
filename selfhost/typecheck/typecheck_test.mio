@@ -134,6 +134,17 @@ waza test_cross_file_and_package_constants() -> unit {
     testing.expect(len(app.errors) == 0 && has_integer_constant(app, 42), "cross-package constant evaluates");
 }
 
+waza test_nullable_loop_narrowing() -> unit {
+    kaku body=check_source("waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; x = mu; } }");
+    testing.expect(len(body.errors)==0,"aida condition proves a nullable non-nil inside the body");
+    kaku killed=check_source("waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; kaku y: int64 = x; } }");
+    testing.expect(len(killed.errors)>0,"assignment of mu inside the body invalidates the loop fact");
+    kaku backedge=check_source("waza main() -> unit { kaku x: int64? = mu; x = 1; kaku n: int64 = 0; aida (n < 3) { kaku y: int64 = x; x = mu; n = n + 1; } }");
+    testing.expect(len(backedge.errors)>0,"a fact proven before the loop does not survive a later mutation on the backedge");
+    kaku after=check_source("waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; } kaku y: int64 = x; }");
+    testing.expect(len(after.errors)>0,"the loop fact does not hold after the loop");
+}
+
 waza test_nullable_recheck_and_function_fact_isolation() -> unit {
     kaku repeated=check_source("waza main(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} moshi(value==mu){kaesu 0;} kaesu value; }");
     testing.expect(len(repeated.errors)==0,"nullable declaration remains comparable to mu after narrowing");

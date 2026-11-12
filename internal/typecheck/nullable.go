@@ -318,3 +318,120 @@ func (c *Checker) invalidateAllFacts() {
 		c.factVersions[symbol]++
 	}
 }
+
+// invalidateLoopFacts drops every narrowing fact that may not hold on the loop
+// backedge. A fact proven before the loop is only valid on later iterations if
+// nothing in the condition or body can mutate the symbol, so symbols assigned
+// anywhere in the loop (including nested branches and function bodies) lose
+// their fact, as do globals when the loop calls a function and all facts when
+// it calls a function value.
+func (c *Checker) invalidateLoopFacts(condition ast.Expression, body *ast.BlockStatement) {
+	assigned := make(map[resolver.Symbol]struct{})
+	callsFunction, callsValue := false, false
+	var expr func(e ast.Expression)
+	var block func(b *ast.BlockStatement)
+	var stmt func(s ast.Statement)
+	expr = func(e ast.Expression) {
+		if e == nil {
+			return
+		}
+		switch n := e.(type) {
+		case *ast.CallExpression:
+			function := n.Function
+			if apply, ok := function.(*ast.TypeApplyExpression); ok {
+				function = apply.Function
+			}
+			if identifier, ok := function.(*ast.Identifier); ok {
+				symbol, resolved := c.resolver.BindingOf(identifier)
+				switch {
+				case resolved && symbol.Kind == resolver.SymbolBuiltin:
+					// Builtins cannot mutate user variables.
+				case !resolved || symbol.Kind == resolver.SymbolFunction || symbol.Kind == resolver.SymbolType:
+					callsFunction = true
+				default:
+					callsValue = true
+				}
+			} else if c.isEnumConstructorCallee(function) {
+				// Enum constructors build values and cannot mutate variables.
+			} else {
+				callsValue = true
+			}
+		case *ast.FunctionLiteral:
+			block(n.Body)
+			return
+		}
+		forEachChild(e, expr)
+	}
+	block = func(b *ast.BlockStatement) {
+		if b == nil {
+			return
+		}
+		for _, s := range b.Statements {
+			stmt(s)
+		}
+	}
+	stmt = func(s ast.Statement) {
+		switch n := s.(type) {
+		case *ast.LetStatement:
+			expr(n.Value)
+		case *ast.AssignStatement:
+			if symbol, ok := c.resolver.BindingOf(n.Name); ok {
+				assigned[symbol] = struct{}{}
+			}
+			expr(n.Value)
+		case *ast.IndexAssignStatement:
+			expr(n.Target)
+			expr(n.Value)
+		case *ast.ExpressionStatement:
+			expr(n.Expr)
+		case *ast.ReturnStatement:
+			expr(n.Value)
+		case *ast.ConstStatement:
+			expr(n.Value)
+		case *ast.BlockStatement:
+			block(n)
+		case *ast.IfStatement:
+			expr(n.Condition)
+			block(n.Consequence)
+			block(n.Alternative)
+		case *ast.WhileStatement:
+			expr(n.Condition)
+			block(n.Body)
+		case *ast.MatchStatement:
+			expr(n.Value)
+			for _, arm := range n.Arms {
+				block(arm.Body)
+			}
+		case *ast.FunctionStatement:
+			block(n.Body)
+		}
+	}
+	expr(condition)
+	block(body)
+	for symbol := range c.narrowings {
+		_, isAssigned := assigned[symbol]
+		_, isGlobal := c.globals[symbol]
+		if isAssigned || callsValue || (callsFunction && isGlobal) {
+			delete(c.narrowings, symbol)
+		}
+	}
+}
+
+// isEnumConstructorCallee reports whether callee has the form Type.Variant with
+// Type resolving to a type symbol.
+func (c *Checker) isEnumConstructorCallee(callee ast.Expression) bool {
+	field, ok := callee.(*ast.FieldExpression)
+	if !ok {
+		return false
+	}
+	left := field.Left
+	if apply, ok := left.(*ast.TypeApplyExpression); ok {
+		left = apply.Function
+	}
+	identifier, ok := left.(*ast.Identifier)
+	if !ok {
+		return false
+	}
+	symbol, resolved := c.resolver.BindingOf(identifier)
+	return resolved && symbol.Kind == resolver.SymbolType
+}

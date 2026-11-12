@@ -1,4 +1,6 @@
+yobu "kiso/array";
 yobu "selfhost/parser";
+yobu "selfhost/resolver";
 
 kata NarrowingCondition {
     symbol_id: int64;
@@ -47,6 +49,61 @@ waza check_block_with_fact(env: TypeEnvironment, file_id: int64, block_id: int64
     }
     check_block(env, file_id, block_id);
     array.truncate(env.facts, saved);
+}
+
+// LoopEffects summarizes what a loop condition and body may do to flow facts on the backedge.
+kata LoopEffects {
+    assigned: []int64;
+    calls: []bool;
+}
+
+waza scan_loop_effects(env: TypeEnvironment, file_id: int64, node_id: int64, effects: LoopEffects) -> unit {
+    kaku node = node_at(env, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 15) {
+        kaku symbol_id = binding_of(env, file_id, node_id);
+        moshi (symbol_id >= 0) { array.push(effects.assigned, symbol_id); }
+    }
+    moshi (kind == 22) {
+        kaku callee_id = unwrap_group(env, file_id, node.children[0]);
+        kaku callee = node_at(env, file_id, callee_id);
+        moshi (parser.node_kind_code(callee.kind) == 23) { callee_id = callee.children[0]; callee = node_at(env, file_id, callee_id); }
+        kaku callee_kind = parser.node_kind_code(callee.kind);
+        kaku target_id = callee_id;
+        moshi (callee_kind == 27) { target_id = callee.children[0]; }
+        kaku symbol_id = -1;
+        moshi (parser.node_kind_code(node_at(env, file_id, target_id).kind) == 4) { symbol_id = binding_of(env, file_id, target_id); }
+        moshi (symbol_id < 0) {
+            // Builtins and unresolved names cannot mutate user variables; an arbitrary callee expression can.
+            moshi (callee_kind != 4) { effects.calls[1] = hai; }
+        }
+        sore {
+            kaku symbol_kind = resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind);
+            moshi (symbol_kind == 4 || symbol_kind == 5 || symbol_kind == 10) { effects.calls[0] = hai; }
+            sore { moshi (symbol_kind != 6 && symbol_kind != 7 && symbol_kind != 8 && symbol_kind != 11 && symbol_kind != 12) { effects.calls[1] = hai; } }
+        }
+    }
+    kaku index = 0;
+    aida (index < len(node.children)) { scan_loop_effects(env, file_id, node.children[index], effects); index = index + 1; }
+}
+
+// invalidate_loop_facts drops every fact that may not hold on the loop backedge: symbols assigned anywhere in the
+// condition or body, globals when the loop calls a function, and every fact when it calls a function value.
+waza invalidate_loop_facts(env: TypeEnvironment, file_id: int64, condition_id: int64, body_id: int64) -> unit {
+    kaku effects = LoopEffects { assigned: array.with_capacity[int64](4), calls: [iie, iie] };
+    scan_loop_effects(env, file_id, condition_id, effects);
+    scan_loop_effects(env, file_id, body_id, effects);
+    kaku count = len(env.facts);
+    kaku index = 0;
+    aida (index < count) {
+        kaku symbol_id = env.facts[index].symbol_id;
+        kaku drop = effects.calls[1];
+        moshi (!drop && effects.calls[0] && resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 2) { drop = hai; }
+        kaku assigned_index = 0;
+        aida (!drop && assigned_index < len(effects.assigned)) { moshi (effects.assigned[assigned_index] == symbol_id) { drop = hai; } assigned_index = assigned_index + 1; }
+        moshi (drop) { invalidate_fact(env, symbol_id); }
+        index = index + 1;
+    }
 }
 
 waza block_always_returns(env: TypeEnvironment, file_id: int64, block_id: int64) -> bool {
