@@ -1,0 +1,158 @@
+// Linux AArch64 thread layer for the cooperative worker bridge (worker_roots.mio): the 25 pthread-style routines the bridge reaches through
+// its import table (darwin.worker_symbols order), written against raw Linux system calls so no libc is needed.
+//
+//   pthread_create  clone(CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID) on an mmap'd stack with a guard page;
+//                   the thread control block (TCB) sits at the top of the mapping and is the handle, its first word is the kernel thread id
+//   pthread_join    futex wait on the TCB's id word (the kernel clears it and wakes at thread exit), then munmap the stack
+//   keys            TPIDR_EL0 points at the TCB; key k (1..4) lives in TCB word 3+k; the main thread's TCB is a static block
+//   mutex / cond    futex words: mutex 0 free, 1 locked, 2 locked with waiters; condition = a sequence word
+//
+// Every routine follows AAPCS64 for a leaf call (x0-x17 are scratch, x19-x28 and x30 are preserved). Error values are the ones the Darwin bridge
+// expects (ETIMEDOUT = 60, EBUSY = 16, EAGAIN = 35, ENOMEM = 12, ENOSYS = 78).
+// TCB layout (bytes): 0 thread id word, 8 start routine, 16 argument, 24..55 key values 1..4, 56 mapping base, 64 mapping size, 72 key counter (main TCB).
+koukai teisu lxt_stack_default = 8388608;
+koukai teisu lxt_tcb_words = 16;
+teisu lxt_clone_flags = 4001536;   // 0x3D0F00
+
+waza lxt_sys(c: arm64.Assembler, number: int64) -> unit { wr_num(c, 8, number); emit(c, arm64.svc(0)); }
+// MRS x<r>, TPIDR_EL0 and MSR TPIDR_EL0, x<r>
+waza lxt_mrs_tp(c: arm64.Assembler, r: int64) -> unit { emit(c, arm64.Instruction { word: uint32(3577466944 + r), error: mu }); }
+waza lxt_msr_tp(c: arm64.Assembler, r: int64) -> unit { emit(c, arm64.Instruction { word: uint32(3575369792 + r), error: mu }); }
+waza lxt_tcb(c: arm64.Assembler, p: []macho.AddressPatch, first: int64, r: int64) -> unit {
+    attached_data_address(c, p, first + worker_import_slots(c) + (worker_slots + 1) * wr_ctx_words + (word_blocks + 1) * 8, r);
+}
+waza lxt_symbols() -> []string {
+    kaesu ["lxt_create", "lxt_join", "lxt_self", "lxt_key_create", "lxt_setspecific", "lxt_getspecific", "lxt_key_delete", "lxt_exit", "lxt_write",
+        "lxt_mutex_init", "lxt_mutex_lock", "lxt_mutex_unlock", "lxt_cond_init", "lxt_cond_timedwait", "lxt_cond_signal", "lxt_cond_destroy",
+        "lxt_mutex_destroy", "lxt_clock_gettime", "lxt_getpagesize", "lxt_mutex_trylock", "lxt_cond_broadcast", "lxt_attr_init",
+        "lxt_attr_setstacksize", "lxt_attr_destroy", "lxt_spawn"];
+}
+waza lxt_zero_return(c: arm64.Assembler) -> unit { emit(c, arm64.movz_x(0, 0, 0)); emit(c, arm64.ret()); }
+
+waza emit_linux_threads(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> string {
+    // ---- process / clock / memory
+    arm64.assembler_label(c, "lxt_exit"); lxt_sys(c, 94);
+    arm64.assembler_label(c, "lxt_write"); lxt_sys(c, 64); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_clock_gettime");
+    emit(c, arm64.cmp_imm_x(0, 6, iie)); arm64.assembler_b_cond(c, 0, "lxt_clock_monotonic");
+    emit(c, arm64.cmp_imm_x(0, 8, iie)); arm64.assembler_b_cond(c, 0, "lxt_clock_monotonic");
+    arm64.assembler_b(c, "lxt_clock_go");
+    arm64.assembler_label(c, "lxt_clock_monotonic"); emit(c, arm64.movz_x(0, 1, 0));
+    arm64.assembler_label(c, "lxt_clock_go"); lxt_sys(c, 113); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_getpagesize"); wr_num(c, 0, 4096); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_spawn"); wr_num(c, 0, 78); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_attr_init"); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 0, 8)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_attr_setstacksize"); emit(c, arm64.str_x(1, 0, 8)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_attr_destroy"); lxt_zero_return(c);
+    // ---- thread-local keys (TPIDR_EL0 -> TCB)
+    arm64.assembler_label(c, "lxt_self"); lxt_mrs_tp(c, 0); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_key_create");
+    lxt_tcb(c, p, first, 9); emit(c, arm64.ldr_x(10, 9, 72)); emit(c, arm64.cmp_imm_x(10, 4, iie)); arm64.assembler_b_cond(c, 2, "lxt_key_full");
+    emit(c, arm64.add_imm_x(10, 10, 1, iie)); emit(c, arm64.str_x(10, 9, 72)); emit(c, arm64.str_x(10, 0, 0)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_key_full"); wr_num(c, 0, 35); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_key_delete"); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_setspecific");
+    emit(c, arm64.sub_imm_x(10, 0, 1, iie)); emit(c, arm64.cmp_imm_x(10, 4, iie)); arm64.assembler_b_cond(c, 2, "lxt_key_bad");
+    lxt_mrs_tp(c, 9); emit(c, arm64.lsl_x(10, 10, 3)); emit(c, arm64.add_x(9, 9, 10)); emit(c, arm64.str_x(1, 9, 24)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_key_bad"); wr_num(c, 0, 22); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_getspecific");
+    emit(c, arm64.sub_imm_x(10, 0, 1, iie)); emit(c, arm64.cmp_imm_x(10, 4, iie)); arm64.assembler_b_cond(c, 2, "lxt_get_none");
+    lxt_mrs_tp(c, 9); emit(c, arm64.lsl_x(10, 10, 3)); emit(c, arm64.add_x(9, 9, 10)); emit(c, arm64.ldr_x(0, 9, 24)); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_get_none"); lxt_zero_return(c);
+    // ---- mutex: word 0 = 0 free, 1 locked, 2 locked with waiters (private futex)
+    arm64.assembler_label(c, "lxt_mutex_init"); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 0, 0)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_mutex_destroy"); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_mutex_trylock");
+    arm64.assembler_label(c, "lxt_trylock_retry"); emit(c, arm64.ldxr_x(9, 0, hai)); arm64.assembler_cbnz_x(c, 9, "lxt_busy");
+    emit(c, arm64.movz_x(10, 1, 0)); emit(c, arm64.stxr_x(11, 10, 0, hai)); arm64.assembler_cbnz_x(c, 11, "lxt_trylock_retry"); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_busy"); wr_num(c, 0, 16); emit(c, arm64.ret());
+    arm64.assembler_label(c, "lxt_mutex_lock");
+    move_x(c, 15, 0); emit(c, arm64.movz_x(14, 1, 0));
+    arm64.assembler_label(c, "lxt_lock_top"); emit(c, arm64.ldxr_x(9, 15, hai)); arm64.assembler_cbnz_x(c, 9, "lxt_lock_busy");
+    emit(c, arm64.stxr_x(11, 14, 15, hai)); arm64.assembler_cbnz_x(c, 11, "lxt_lock_top"); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_lock_busy"); emit(c, arm64.cmp_imm_x(9, 2, iie)); arm64.assembler_b_cond(c, 0, "lxt_lock_wait");
+    emit(c, arm64.movz_x(10, 2, 0)); emit(c, arm64.stxr_x(11, 10, 15, hai)); arm64.assembler_cbnz_x(c, 11, "lxt_lock_top");
+    arm64.assembler_label(c, "lxt_lock_wait"); emit(c, arm64.movz_x(14, 2, 0));
+    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 128, 0)); emit(c, arm64.movz_x(2, 2, 0)); emit(c, arm64.movz_x(3, 0, 0)); lxt_sys(c, 98);
+    arm64.assembler_b(c, "lxt_lock_top");
+    arm64.assembler_label(c, "lxt_mutex_unlock");
+    move_x(c, 15, 0);
+    arm64.assembler_label(c, "lxt_unlock_retry"); emit(c, arm64.ldxr_x(9, 15, hai)); emit(c, arm64.movz_x(10, 0, 0)); emit(c, arm64.stxr_x(11, 10, 15, hai));
+    arm64.assembler_cbnz_x(c, 11, "lxt_unlock_retry"); emit(c, arm64.cmp_imm_x(9, 2, iie)); arm64.assembler_b_cond(c, 1, "lxt_unlock_done");
+    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 129, 0)); emit(c, arm64.movz_x(2, 1, 0)); lxt_sys(c, 98);
+    arm64.assembler_label(c, "lxt_unlock_done"); lxt_zero_return(c);
+    // ---- condition: word 0 = sequence number
+    arm64.assembler_label(c, "lxt_cond_init"); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 0, 0)); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_cond_destroy"); lxt_zero_return(c);
+    arm64.assembler_label(c, "lxt_cond_signal"); emit(c, arm64.movz_x(13, 1, 0)); arm64.assembler_b(c, "lxt_cond_wake");
+    arm64.assembler_label(c, "lxt_cond_broadcast"); wr_num(c, 13, 2147483647);
+    arm64.assembler_label(c, "lxt_cond_wake"); move_x(c, 15, 0);
+    arm64.assembler_label(c, "lxt_cond_bump"); emit(c, arm64.ldxr_x(9, 15, hai)); emit(c, arm64.add_imm_x(9, 9, 1, iie)); emit(c, arm64.stxr_x(11, 9, 15, hai));
+    arm64.assembler_cbnz_x(c, 11, "lxt_cond_bump");
+    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 129, 0)); move_x(c, 2, 13); lxt_sys(c, 98); lxt_zero_return(c);
+    // pthread_cond_timedwait_relative_np(cond, mutex, relative timespec*): unlock, futex wait on the sequence read before unlocking, lock again.
+    // Returns 0 (woken, or a changed sequence) or 60 (timed out).
+    arm64.assembler_label(c, "lxt_cond_timedwait");
+    emit(c, arm64.sub_imm_x(31, 31, 64, iie)); emit(c, arm64.str_x(30, 31, 0)); emit(c, arm64.str_x(0, 31, 8)); emit(c, arm64.str_x(1, 31, 16)); emit(c, arm64.str_x(2, 31, 32));
+    emit(c, arm64.ldar_x(9, 0)); emit(c, arm64.str_x(9, 31, 24));
+    move_x(c, 0, 1); arm64.assembler_bl(c, "lxt_mutex_unlock");
+    emit(c, arm64.ldr_x(0, 31, 8)); emit(c, arm64.movz_x(1, 128, 0)); emit(c, arm64.ldr_x(2, 31, 24)); emit(c, arm64.ldr_x(3, 31, 32)); lxt_sys(c, 98);
+    emit(c, arm64.str_x(0, 31, 40));
+    emit(c, arm64.ldr_x(0, 31, 16)); arm64.assembler_bl(c, "lxt_mutex_lock");
+    emit(c, arm64.ldr_x(9, 31, 40)); emit(c, arm64.add_imm_x(10, 9, 110, iie)); emit(c, arm64.movz_x(0, 0, 0)); arm64.assembler_cbnz_x(c, 10, "lxt_timedwait_ret");
+    wr_num(c, 0, 60);
+    arm64.assembler_label(c, "lxt_timedwait_ret"); emit(c, arm64.ldr_x(30, 31, 0)); emit(c, arm64.add_imm_x(31, 31, 64, iie)); emit(c, arm64.ret());
+    // ---- threads
+    // pthread_create(handle*, attr*, start, arg). Frame: 0 x30, 8 handle*, 16 start, 24 arg, 32 mapping base, 40 mapping size.
+    arm64.assembler_label(c, "lxt_create");
+    emit(c, arm64.sub_imm_x(31, 31, 80, iie)); emit(c, arm64.str_x(30, 31, 0)); emit(c, arm64.str_x(0, 31, 8)); emit(c, arm64.str_x(2, 31, 16)); emit(c, arm64.str_x(3, 31, 24));
+    wr_num(c, 9, lxt_stack_default); arm64.assembler_cbz_x(c, 1, "lxt_create_size");
+    emit(c, arm64.ldr_x(10, 1, 8)); arm64.assembler_cbz_x(c, 10, "lxt_create_size"); move_x(c, 9, 10);
+    arm64.assembler_label(c, "lxt_create_size");
+    wr_num(c, 10, 8192); emit(c, arm64.add_x(9, 9, 10)); emit(c, arm64.str_x(9, 31, 40));
+    emit(c, arm64.movz_x(0, 0, 0)); move_x(c, 1, 9); emit(c, arm64.movz_x(2, 3, 0)); emit(c, arm64.movz_x(3, 34, 0)); emit(c, arm64.movn_x(4, 0, 0)); emit(c, arm64.movz_x(5, 0, 0)); lxt_sys(c, 222);
+    emit(c, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(c, 11, "lxt_create_nomem");
+    emit(c, arm64.str_x(0, 31, 32));
+    wr_num(c, 1, 4096); emit(c, arm64.movz_x(2, 0, 0)); lxt_sys(c, 226);
+    emit(c, arm64.ldr_x(9, 31, 32)); emit(c, arm64.ldr_x(10, 31, 40)); emit(c, arm64.add_x(9, 9, 10)); emit(c, arm64.sub_imm_x(9, 9, 128, iie));
+    emit(c, arm64.ldr_x(10, 31, 16)); emit(c, arm64.str_x(10, 9, 8)); emit(c, arm64.ldr_x(10, 31, 24)); emit(c, arm64.str_x(10, 9, 16));
+    emit(c, arm64.ldr_x(10, 31, 32)); emit(c, arm64.str_x(10, 9, 56)); emit(c, arm64.ldr_x(10, 31, 40)); emit(c, arm64.str_x(10, 9, 64));
+    emit(c, arm64.ldr_x(10, 31, 8)); emit(c, arm64.str_x(9, 10, 0));
+    wr_num(c, 0, lxt_clone_flags); move_x(c, 1, 9); move_x(c, 2, 9); move_x(c, 3, 9); move_x(c, 4, 9); lxt_sys(c, 220);
+    arm64.assembler_cbz_x(c, 0, "lxt_child");
+    emit(c, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(c, 11, "lxt_create_clone_failed");
+    emit(c, arm64.movz_x(0, 0, 0)); arm64.assembler_b(c, "lxt_create_ret");
+    arm64.assembler_label(c, "lxt_create_clone_failed");
+    emit(c, arm64.ldr_x(0, 31, 32)); emit(c, arm64.ldr_x(1, 31, 40)); lxt_sys(c, 215); wr_num(c, 0, 35); arm64.assembler_b(c, "lxt_create_ret");
+    arm64.assembler_label(c, "lxt_create_nomem"); wr_num(c, 0, 12);
+    arm64.assembler_label(c, "lxt_create_ret"); emit(c, arm64.ldr_x(30, 31, 0)); emit(c, arm64.add_imm_x(31, 31, 80, iie)); emit(c, arm64.ret());
+    // The new thread: sp is its TCB (the kernel installed it as TPIDR_EL0 too); run start(arg), then end the thread (the kernel clears the id word and wakes the joiner).
+    arm64.assembler_label(c, "lxt_child");
+    emit(c, arm64.ldr_x(10, 31, 8)); emit(c, arm64.ldr_x(0, 31, 16)); emit(c, arm64.movz_x(29, 0, 0)); emit(c, arm64.blr_x(10)); emit(c, arm64.movz_x(0, 0, 0)); lxt_sys(c, 93);
+    // pthread_join(handle = TCB, retval*)
+    arm64.assembler_label(c, "lxt_join");
+    move_x(c, 15, 0); move_x(c, 14, 1);
+    arm64.assembler_label(c, "lxt_join_wait"); emit(c, arm64.ldar_x(9, 15)); arm64.assembler_cbz_x(c, 9, "lxt_join_done");
+    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 0, 0)); move_x(c, 2, 9); emit(c, arm64.movz_x(3, 0, 0)); lxt_sys(c, 98); arm64.assembler_b(c, "lxt_join_wait");
+    arm64.assembler_label(c, "lxt_join_done");
+    emit(c, arm64.ldr_x(0, 15, 56)); emit(c, arm64.ldr_x(1, 15, 64)); lxt_sys(c, 215);
+    arm64.assembler_cbz_x(c, 14, "lxt_join_ret"); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 14, 0));
+    arm64.assembler_label(c, "lxt_join_ret"); lxt_zero_return(c);
+    // ---- start-up: fill the bridge's import table with these routines and give the main thread its TCB
+    arm64.assembler_label(c, "lxt_init");
+    lxt_tcb(c, p, first, 9); lxt_msr_tp(c, 9); wr_imports(c, p, first);
+    kaku names = lxt_symbols(); kaku relocations: []int64 = [];
+    kaku i = 0;
+    aida (i < len(names)) { array.push(relocations, len(c.words)); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 7, i * 8)); i = i + 1; }
+    emit(c, arm64.ret());
+    i = 0;
+    aida (i < len(names)) {
+        kaku target = arm64.assembler_label_word(c, names[i]);
+        moshi (target < 0) { kaesu "LXT_LABEL"; }
+        kaku ins = arm64.adr(9, (target - relocations[i]) * 4);
+        moshi (ins.error != mu) { kaesu "LXT_RANGE"; }
+        c.words[relocations[i]] = ins.word;
+        i = i + 1;
+    }
+    kaesu "";
+}

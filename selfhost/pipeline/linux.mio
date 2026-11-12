@@ -150,6 +150,28 @@ koukai waza build_linux_arm64_mochi(data: []uint8, gc_stress: bool) -> NativeBui
 }
 
 waza build_linux_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
+    // A program that declares the OS thread natives takes the cooperative multi-mutator build (the worker bridge on the Linux thread layer);
+    // every other program takes the ordinary build below, byte for byte as before.
+    kaku thread_start = -1; kaku thread_join = -1; kaku scan = 0;
+    aida (scan < len(file.functions)) {
+        kaku name = file.functions[scan].name;
+        moshi (string.has_prefix(name, "$mma::mio/thread/runtime::start::")) { thread_start = scan; }
+        sore { moshi (string.has_prefix(name, "$mma::mio/thread/runtime::join::")) { thread_join = scan; } }
+        scan = scan + 1;
+    }
+    moshi (thread_start >= 0 || thread_join >= 0) {
+        moshi (thread_start < 0 || thread_join < 0) { kaesu NativeBuildResult { bytes: [], error: "E_THREAD thread programs must declare start and join together" }; }
+        kaku threaded = lower.compile_linux_arm64_threads(file, 1073741824, gc_stress, thread_start, thread_join);
+        kaku threaded_problem = threaded.error;
+        moshi (threaded_problem != mu) {
+            kaku detail = string.concat(convert.format_int(lower.error_code(threaded_problem)), string.concat(" / ", convert.format_int(lower.error_detail(threaded_problem))));
+            kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
+        }
+        // + 32: the import table (28 to 30 words) that the Darwin linker would add itself
+        kaku threaded_image = linuxarm64.image_with_runtime(macho.ImageSpec { words: threaded.words, constants: threaded.constants, globals: threaded.globals, patches: threaded.patches }, lower.worker_root_words + 32);
+        moshi (threaded_image.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_ELF ", threaded_image.error) }; }
+        kaesu NativeBuildResult { bytes: threaded_image.bytes, error: "" };
+    }
     kaku lowered = lower.compile_linux_arm64(file, 1073741824, gc_stress);
     kaku problem = lowered.error;
     moshi (problem != mu) {

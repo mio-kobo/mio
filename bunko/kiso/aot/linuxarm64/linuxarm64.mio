@@ -68,9 +68,18 @@ waza align(value: int64, boundary: int64) -> int64 {
 
 waza image_failed(message: string) -> elf.ImageResult { kaesu elf.ImageResult { bytes: [], error: message }; }
 
-koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult {
+koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult { kaesu image_bounded(spec, maximum_globals); }
+
+// A target runtime (the thread layer) may append separately owned words after the program's globals. They live in the zero-filled data segment
+// (bss): they cost no file size and may not consume existing global slots.
+koukai waza image_with_runtime(spec: macho.ImageSpec, runtime_words: int64) -> elf.ImageResult {
+    moshi (spec.globals < 0 || spec.globals > maximum_globals || runtime_words < 0 || runtime_words > 1048576) { kaesu image_failed("TOO_MANY_GLOBALS"); }
+    kaesu image_bounded(macho.ImageSpec { words: spec.words, constants: spec.constants, globals: spec.globals + runtime_words, patches: spec.patches }, maximum_globals + 1048576);
+}
+
+waza image_bounded(spec: macho.ImageSpec, limit: int64) -> elf.ImageResult {
     moshi (len(spec.words) == 0) { kaesu image_failed("EMPTY_TEXT"); }
-    moshi (spec.globals < 0 || spec.globals > maximum_globals) { kaesu image_failed("TOO_MANY_GLOBALS"); }
+    moshi (spec.globals < 0 || spec.globals > limit) { kaesu image_failed("TOO_MANY_GLOBALS"); }
     moshi (len(spec.words) > maximum_image_size / 4 || len(spec.constants) > maximum_image_size) { kaesu image_failed("IMAGE_TOO_LARGE"); }
     kaku code_base = elf.image_base + elf.code_offset;
     kaku const_offset = align(len(spec.words) * 4, 8);
