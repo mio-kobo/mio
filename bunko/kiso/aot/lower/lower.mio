@@ -2268,6 +2268,14 @@ koukai waza compile_with_public_threads(file:mochi.File,capacity:int64,gc_stress
     moshi(s.parameter_count!=1 || !s.returns_value || j.parameter_count!=1 || !j.returns_value){kaesu failed(LowerError.InvalidFunction());}
     kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3);
 }
+// Public thread natives on Linux AArch64 (start and join): the same cooperative bridge, on the Linux system-call adapter (abi 4), with the
+// pthread-style routines of linuxthreads.mio filled into its import table at start-up. The caller links with linuxarm64.image_with_runtime.
+koukai waza compile_linux_arm64_threads(file:mochi.File,capacity:int64,gc_stress:bool,start_id:int64,join_id:int64) -> LowerResult {
+    moshi(start_id<0 || start_id>=len(file.functions) || join_id<0 || join_id>=len(file.functions) || start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaku s=file.functions[start_id];kaku j=file.functions[join_id];
+    moshi(s.parameter_count!=1 || !s.returns_value || j.parameter_count!=1 || !j.returns_value){kaesu failed(LowerError.InvalidFunction());}
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,4);
+}
 // Experimental Old collector with typed SATB and coordinated allocation/Minor.
 // Unsupported writes still Abort/join. This is not full E4 capability acceptance.
 koukai waza compile_with_old_mark_proto(file:mochi.File,capacity:int64,bindings:[]int64) -> LowerResult {
@@ -2335,7 +2343,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     }
     kaku ids = string_ids(file.constants);
     kaku code = arm64.assembler();
-    moshi (abi == 1) { arm64.assembler_label(code, "linux_abi"); }
+    moshi (abi == 1 || abi == 4) { arm64.assembler_label(code, "linux_abi"); }
     moshi (abi == 2) { arm64.assembler_label(code, "windows_abi"); arm64.assembler_label(code, "windows_main"); }
     kaku patches: []macho.AddressPatch = [];
     array.reserve(patches, file.global_count * 2);
@@ -2344,7 +2352,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     kaku testing = uses_testing(file);
     moshi(attached){arm64.assembler_label(code,"attached_roots_enabled");}
     moshi(len(worker_bindings)>0){arm64.assembler_label(code,"worker_roots_enabled");}
-    moshi(abi!=3){arm64.assembler_label(code,"worker_evidence");}
+    moshi(abi!=3 && abi!=4){arm64.assembler_label(code,"worker_evidence");}
     moshi(old_proto){arm64.assembler_label(code,"old_mark_proto_enabled");}
     moshi(full_sweep){arm64.assembler_label(code,"old_sweep_enabled");}
     moshi(release_fault){arm64.assembler_label(code,"sweep_unmap_fault_enabled");}
@@ -2357,7 +2365,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
         emit(code, arm64.str_x(0, 9, 0)); emit(code, arm64.str_x(1, 9, 8)); emit(code, arm64.str_x(2, 9, 16));
     }
     moshi (native_fs) { emit(code, arm64.movz_x(27, 0, 0)); }
-    moshi(attached){emit(code,arm64.movz_x(23,0,0));emit(code,arm64.movz_x(24,0,0));arm64.assembler_bl(code,"attached_roots_init");}
+    moshi(attached){emit(code,arm64.movz_x(23,0,0));emit(code,arm64.movz_x(24,0,0));moshi(abi==4){arm64.assembler_bl(code,"lxt_init");}arm64.assembler_bl(code,"attached_roots_init");}
     kaku has_constants = iie;
     kaku constant_index = 0;
     aida (constant_index < len(file.constants)) {
@@ -2421,7 +2429,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     arm64.assembler_label(code, "runtime_gc_bad_count");
     moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_fatal_cleanup");}
     emit(code, arm64.movz_x(0, 5, 0)); emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
-    moshi (abi == 1) { emit_linux_abi_runtime(code); }
+    moshi (abi == 1 || abi == 4) { emit_linux_abi_runtime(code); }
     kaku adapter_base = file.global_count;
     moshi (testing) { adapter_base = adapter_base + 1; }
     moshi (os_state >= 0) { adapter_base = adapter_base + 3; }
@@ -2473,6 +2481,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (os_state >= 0) { data_words = data_words + 3; }
     moshi (abi == 2) { data_words = data_words + windows_adapter_words(); }
     moshi(attached){kaku error=emit_attached_root_runtime(code,patches,data_words,queue_slots);moshi(error!=""){kaesu failed(LowerError.EncodeFailure());}}
+    moshi(attached && abi==4){kaku error=emit_linux_threads(code,patches,data_words);moshi(error!=""){kaesu failed(LowerError.EncodeFailure());}}
     kaku pi = 0;
     aida (pi < len(patches)) {
         kaku patch = patches[pi];

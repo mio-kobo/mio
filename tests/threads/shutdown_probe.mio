@@ -1,0 +1,39 @@
+// Diagnostic for shutdown_active: the same two blocked and two allocating threads, but main prints its progress (iterations and elapsed
+// milliseconds) every 2000 iterations. Run by CI with its output recorded (no fixed expectation): a stall shows as prints that stop,
+// slow progress as prints that keep coming.
+yobu "kiso/thread";
+yobu "kiso/os";
+
+waza churn() -> int64 {
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 100000000) { kaku cell = [i, i + 1]; t = t + cell[1]; i = i + 1; }
+    kaesu t;
+}
+waza blocked(channel: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku got = thread.receive[int64](channel);
+        kaesu 1;
+    };
+}
+
+waza run() -> int64 {
+    kaku t0 = os.monotonic_ms();
+    kaku channel = thread.channel_new[int64](1, 0);
+    thread.start(blocked(channel));
+    thread.start(blocked(channel));
+    thread.start(churn);
+    thread.start(churn);
+    chant(-1);
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 20000) {
+        kaku cell = [i];
+        t = t + cell[0];
+        i = i + 1;
+        moshi (i - (i / 2000) * 2000 == 0) { chant(i); chant(-100000 - (os.monotonic_ms() - t0)); }
+    }
+    chant(t);
+    kaesu 0;
+}
+run();
