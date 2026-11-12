@@ -6,7 +6,7 @@
     "run": 42969371443,
     "url": "https://github.com/mio-kobo/mio/actions/runs/42969371443",
     "head_sha": "d265bb0",
-    "note": "PR #72 head after merging Mio-2.2.0; Mio-2.2.0 at 94316df additionally contains the async session's reactor (#75): its CI evidence is its own PR run"
+    "note": "PR #72 head after merging Mio-2.2.0; Mio-2.2.0 at 94316df additionally contains the async session's reactor (#75): its CI evidence is its own PR run; darwin-arm64 groups I, J and K cite their own run 43166577034 (PR #92 head c5b3b54, macos-15)"
   },
   "platforms": [
     "linux-amd64",
@@ -1170,21 +1170,24 @@
       "platform": "darwin-arm64",
       "feature": "I",
       "feature_name": "native multithreading",
-      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
-      "verification": "python tests/threads/run.py --mio <native cli>",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers threads start/join incl. nested, handles, limits, lifecycle and shutdown programs",
       "pr": [
-        "#63",
-        "#64",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
@@ -1192,20 +1195,24 @@
       "platform": "darwin-arm64",
       "feature": "J",
       "feature_name": "thread synchronisation",
-      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
-      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers word natives (cas, add, wait, wake), stop-the-world with up to 128 live threads, gc_stress, gc_lifecycle, reclaim, channel_races",
       "pr": [
-        "#66",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
@@ -1213,20 +1220,24 @@
       "platform": "darwin-arm64",
       "feature": "K",
       "feature_name": "channels",
-      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
-      "verification": "python tests/threads/run.py (channel_* programs)",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers channel programs: basic, close, graphs, mpmc, summary_copy, races, lifecycle, creation limit",
       "pr": [
-        "#66",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
