@@ -788,7 +788,7 @@ def darwin_thread_repro(report, cli, work):
         bad += 0 if good else 1
         lines.append("run %d: exit %s after %.1fs stdout %r" % (repeat, code, seconds or 0, out[:60]))
     # bisect: the same sequence with 20000 round trips, and after 26400 thread lifecycles (each run sampled after 25 seconds if it is still running)
-    for name, expected in (("pingpong_long", "20000\n20000\n"), ("pingpong_churn", "2000\n2000\n")):
+    for name, expected in (("pingpong_long", "20000\n20000\n"), ("pingpong_churn", "2000\n2000\n"), ("mpmc_long", "200000\n200000\n")):
         bisect_image = Path(work) / name
         built, why, _ = cli_build(report, "darwin-thread-repro-build-" + name, cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", bisect_image)
         if not built:

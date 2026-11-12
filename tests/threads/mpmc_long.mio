@@ -1,0 +1,45 @@
+// Isolates the mpmc part of benchmarks/threads/efficiency.mio (a macOS ARM64 hang is seen there): 4 producers send 50000 integers each through a
+// 16-slot channel to 4 consumers; the producers are joined, the channel is closed, the consumers are joined. Output: the number of messages the
+// consumers received (200000) and the sum of the producers' counts (200000).
+yobu "kiso/thread";
+yobu "kiso/array";
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[int64](16, 0);
+    kaku producers: []int64 = [];
+    kaku consumers: []int64 = [];
+    kaku p = 0;
+    aida (p < 4) {
+        kaku base = p * 50000;
+        array.push(producers, thread.start(waza () -> int64 {
+            kaku n = 0;
+            aida (n < 50000) { thread.send[int64](channel, base + n); n = n + 1; }
+            kaesu n;
+        }));
+        p = p + 1;
+    }
+    kaku c = 0;
+    aida (c < 4) {
+        array.push(consumers, thread.start(waza () -> int64 {
+            kaku got = 0;
+            aida (hai) {
+                kaku r = thread.receive[int64](channel);
+                moshi (r.closed) { nukeru; }
+                got = got + 1;
+            }
+            kaesu got;
+        }));
+        c = c + 1;
+    }
+    kaku sent = 0;
+    p = 0;
+    aida (p < 4) { sent = sent + thread.join(producers[p]); p = p + 1; }
+    thread.close[int64](channel);
+    kaku received = 0;
+    c = 0;
+    aida (c < 4) { received = received + thread.join(consumers[c]); c = c + 1; }
+    chant(received);
+    chant(sent);
+    kaesu 0;
+}
+run();
