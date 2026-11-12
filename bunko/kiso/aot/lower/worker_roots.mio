@@ -123,12 +123,30 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     }
     // The legacy allocator may collect, so it sees a coordinator-owned complete
     // snapshot. Keep the epoch stopped until the next solved opcode poll.
-    attached_save(c,"runtime_alloc");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(24,31,0));
+    attached_save(c,"runtime_alloc");
+    // Fast path (normal thread builds): most allocations need no collection, and a stop-the-world epoch with a snapshot of every thread's roots per
+    // allocation was the dominant cost of a multithreaded macOS program (about 3 us per allocation, 80 us with four allocating threads). The allocator
+    // is first asked for a block that never collects, under a short heap lock, with no epoch and no snapshot. Only when it would have to collect does it
+    // give up (result 0, nothing changed) and the epoch path below runs as before. An epoch owner is alone in the heap because every other thread has
+    // acknowledged a safepoint, and a thread inside the locked allocation has not acknowledged yet, so the two never overlap.
+    kaku alloc_fast=arm64.assembler_label_word(c,"alloc_gc_stress")<0 && !old_mark_proto_enabled(c) && !old_sweep_enabled(c);
+    moshi(alloc_fast){
+        emit(c,arm64.ldr_x(0,31,144));emit(c,arm64.ldr_x(1,31,152));emit(c,arm64.movz_x(2,1,0));
+        wr_pool(c,p,first,9);emit(c,arm64.add_imm_x(9,9,8,iie));
+        arm64.assembler_label(c,"alloc_fast_lock");emit(c,arm64.ldxr_x(10,9,hai));arm64.assembler_cbnz_x(c,10,"alloc_fast_wait");
+        emit(c,arm64.movz_x(10,1,0));emit(c,arm64.stxr_x(11,10,9,hai));arm64.assembler_cbnz_x(c,11,"alloc_fast_lock");arm64.assembler_b(c,"alloc_fast_go");
+        arm64.assembler_label(c,"alloc_fast_wait");emit(c,arm64.ldar_x(10,9));arm64.assembler_cbnz_x(c,10,"alloc_fast_wait");arm64.assembler_b(c,"alloc_fast_lock");
+        arm64.assembler_label(c,"alloc_fast_go");arm64.assembler_bl(c,"runtime_alloc_legacy");move_x(c,15,0);
+        wr_pool(c,p,first,9);emit(c,arm64.add_imm_x(9,9,8,iie));emit(c,arm64.movz_x(10,0,0));emit(c,arm64.stlr_x(10,9));
+        arm64.assembler_cbz_x(c,15,"alloc_fast_slow");emit(c,arm64.str_x(15,31,144));attached_restore(c);
+        arm64.assembler_label(c,"alloc_fast_slow");
+    }
+    emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(24,31,0));
     wr_current(c,p,first);emit(c,arm64.str_x(0,31,16));move_x(c,1,24);wr_call(c,"gc_heap_enter");
     moshi(old_mark_proto_enabled(c)){arm64.assembler_bl(c,"old_pause_epoch");}
     emit(c,arm64.ldr_x(0,31,16));wr_addr(c,1,0,wr_snapshot);emit(c,arm64.str_x(31,1,0));emit(c,arm64.str_x(31,1,8));wr_imports(c,p,first);wr_call(c,"gc_scan_roots");
     emit(c,arm64.ldr_x(9,31,16));wr_snapshot_trace(c,9);
-    emit(c,arm64.ldr_x(9,31,16));wr_addr(c,24,9,wr_snapshot);emit(c,arm64.ldr_x(0,31,176));emit(c,arm64.ldr_x(1,31,184));arm64.assembler_bl(c,"runtime_alloc_legacy");
+    emit(c,arm64.ldr_x(9,31,16));wr_addr(c,24,9,wr_snapshot);emit(c,arm64.ldr_x(0,31,176));emit(c,arm64.ldr_x(1,31,184));emit(c,arm64.movz_x(2,0,0));arm64.assembler_bl(c,"runtime_alloc_legacy");
     emit(c,arm64.str_x(0,31,176));emit(c,arm64.ldr_x(24,31,0));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
     // A real pthread entry invokes the ordinary compiled closure. Its bootstrap
     // root is generated automatically before registration and lives until exit.

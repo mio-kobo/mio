@@ -715,7 +715,7 @@ def darwin_thread_programs(report, cli, work):
     spec = importlib.util.spec_from_file_location("threads_run", ROOT / "tests/threads/run.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
+    names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy", "alloc_cache",
              "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
              "shutdown_active"]
     stress = ["basic", "nested", "channel_basic", "channel_close"]

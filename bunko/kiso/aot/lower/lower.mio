@@ -1876,7 +1876,10 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     arm64.assembler_label(code, name);
     emit(code, arm64.stp_pre_x(29, 30, 31, -16)); emit(code, arm64.add_imm_x(29, 31, 0, iie));
     emit(code, arm64.stp_pre_x(19, 20, 31, -16)); emit(code, arm64.stp_pre_x(21, 22, 31, -16));
-    move_x(code, 19, 0); move_x(code, 20, 1); emit(code, arm64.movz_x(21, 0, 0));
+    move_x(code, 19, 0); move_x(code, 20, 1);
+    // Thread builds: x2 = 1 asks for an allocation that never collects (the caller holds the heap lock but has not stopped the world): the flag lives in
+    // bit 8 of the retry counter and makes the allocator give up, with nothing changed, at the point where it would collect (runtime_alloc_fast_bail).
+    moshi(worker_roots_enabled(code)){emit(code, arm64.lsl_x(21, 2, 8));}sore{emit(code, arm64.movz_x(21, 0, 0));}
     move_bits(code, 9, uint32(0), uint32(runtime_max_heap_bytes));
     emit(code, arm64.cmp_x(19, 9)); arm64.assembler_b_cond(code, 8, "runtime_alloc_fail");
     moshi (gc_stress) {
@@ -1932,6 +1935,7 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     emit(code, arm64.ldr_x(13, 23, 0)); emit(code, arm64.add_x(14, 13, 22)); emit(code, arm64.ldr_x(9, 23, 8)); emit(code, arm64.cmp_x(14, 9));
     arm64.assembler_b_cond(code, 9, "runtime_alloc_bump");
     arm64.assembler_label(code,"los_alloc_exhausted");
+    moshi(worker_roots_enabled(code)){emit(code, arm64.movz_x(9, 256, 0)); emit(code, arm64.and_x(9, 21, 9)); arm64.assembler_cbnz_x(code, 9, "runtime_alloc_fast_bail");}
     emit(code, arm64.cmp_imm_x(21, 2, iie)); arm64.assembler_b_cond(code, 2, "runtime_alloc_fail");
     emit(code, arm64.add_imm_x(21, 21, 1, iie)); emit(code, arm64.cmp_imm_x(21, 1, iie));
     arm64.assembler_b_cond(code, 1, "gen_alloc_major");
@@ -1951,6 +1955,11 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     emit_observation_alloc(code);
     arm64.assembler_bl(code,"memory_sample");
     emit(code, arm64.ldp_post_x(21, 22, 31, 16)); emit(code, arm64.ldp_post_x(19, 20, 31, 16)); emit(code, arm64.ldp_post_x(29, 30, 31, 16)); emit(code, arm64.ret());
+    moshi(worker_roots_enabled(code)){
+        // the non-collecting allocation needs a collection: nothing was changed, the caller takes the stop-the-world path and asks again
+        arm64.assembler_label(code, "runtime_alloc_fast_bail"); emit(code, arm64.movz_x(0, 0, 0));
+        emit(code, arm64.ldp_post_x(21, 22, 31, 16)); emit(code, arm64.ldp_post_x(19, 20, 31, 16)); emit(code, arm64.ldp_post_x(29, 30, 31, 16)); emit(code, arm64.ret());
+    }
 }
 
 // M16b type 101/102 runtime. Copy loops have no allocation/call safepoints.
@@ -2345,6 +2354,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi(attached){arm64.assembler_label(code,"attached_roots_enabled");}
     moshi(len(worker_bindings)>0){arm64.assembler_label(code,"worker_roots_enabled");}
     moshi(abi!=3){arm64.assembler_label(code,"worker_evidence");}
+    moshi(gc_stress){arm64.assembler_label(code,"alloc_gc_stress");}
     moshi(old_proto){arm64.assembler_label(code,"old_mark_proto_enabled");}
     moshi(full_sweep){arm64.assembler_label(code,"old_sweep_enabled");}
     moshi(release_fault){arm64.assembler_label(code,"sweep_unmap_fault_enabled");}
