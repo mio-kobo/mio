@@ -1,0 +1,27 @@
+// Reproducer for a hang seen on macOS ARM64: two threads exchange 2000 values over two 1-slot channels, then the channel is closed and the echo
+// thread is joined. The join must return promptly (the echo thread leaves its receive loop when the channel is closed). Output: the number of round
+// trips and the echo thread's result.
+yobu "kiso/thread";
+
+waza run() -> int64 {
+    kaku ping = thread.channel_new[int64](1, 0);
+    kaku pong = thread.channel_new[int64](1, 0);
+    kaku echo = waza () -> int64 {
+        kaku seen = 0;
+        aida (hai) {
+            kaku got = thread.receive[int64](ping);
+            moshi (got.closed) { nukeru; }
+            thread.send[int64](pong, got.item);
+            seen = seen + 1;
+        }
+        kaesu seen;
+    };
+    kaku handle = thread.start(echo);
+    kaku i = 0;
+    aida (i < 2000) { thread.send[int64](ping, i); thread.receive[int64](pong); i = i + 1; }
+    thread.close[int64](ping);
+    chant(i);
+    chant(thread.join(handle));
+    kaesu 0;
+}
+run();
