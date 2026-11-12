@@ -38,10 +38,37 @@ koukai kata SendResult<T> { sent: bool; back: T; }
 // closed == hai: the channel is closed and drained (item is the filler). Otherwise item is the received value.
 koukai kata Received<T> { item: T; closed: bool; }
 
-koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
+// error == 0: channel is usable. Otherwise the control block could not be allocated and error is the negative errno from the runtime
+// (-12: the control-word pool is exhausted or the system is out of memory, -22: invalid size); channel is then a dead channel.
+koukai kata ChannelResult<T> { channel: Channel<T>; error: int64; }
+
+// A handle is a live control block only when it is positive: the runtime reports allocation failure as a negative errno, and 0 is never issued.
+waza usable<T>(channel: Channel<T>) -> bool { kaesu channel.words > 0; }
+
+// Creates a channel and reports allocation failure instead of hiding it. The ring is allocated first, so a failed control block leaves
+// nothing behind but garbage the collector reclaims. capacity below 1 is raised to 1.
+koukai waza channel_try_new<T>(capacity: int64, filler: T) -> ChannelResult<T> {
     kaku slots = capacity;
     moshi (slots < 1) { slots = 1; }
-    kaesu Channel[T] { words: runtime.words_new(8), ring: array.make[T](slots, filler), filler: filler, capacity: slots };
+    kaku ring = array.make[T](slots, filler);
+    kaku words = runtime.words_new(8);
+    moshi (words <= 0) {
+        kaku error = words;
+        moshi (error == 0) { error = -12; }
+        kaesu ChannelResult[T] { channel: Channel[T] { words: 0, ring: ring, filler: filler, capacity: slots }, error: error };
+    }
+    kaesu ChannelResult[T] { channel: Channel[T] { words: words, ring: ring, filler: filler, capacity: slots }, error: 0 };
+}
+
+// Reports whether a channel has a live control block (iie for the dead channel channel_new returns when allocation failed).
+koukai waza channel_valid<T>(channel: Channel<T>) -> bool { kaesu usable[T](channel); }
+
+// Compatible with the original signature. If the control block cannot be allocated this returns a DEAD channel: it is permanently closed, a
+// send is rejected and hands its value back, a receive reports closed, close and destroy do nothing, and no operation ever reaches the
+// invalid handle. Use channel_try_new (or channel_valid) to learn about the failure.
+koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
+    kaku created = channel_try_new[T](capacity, filler);
+    kaesu created.channel;
 }
 
 // Mutex on word 0: 0 free, 1 locked, 2 locked with waiters. A waiter sleeps in word_wait (a safepoint) instead of spinning.
@@ -68,6 +95,7 @@ waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((i
 
 // Blocks while the channel is full. Pass the graph with yuzuru: `thread.send[Graph](channel, yuzuru graph)`.
 koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
+    moshi (!usable[T](channel)) { kaesu SendResult[T] { sent: iie, back: value }; }
     aida (hai) {
         lock[T](channel);
         moshi (runtime.word_get(channel.words, 4) != 0) { unlock[T](channel); kaesu SendResult[T] { sent: iie, back: value }; }
@@ -91,6 +119,7 @@ koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
 
 // Blocks while the channel is empty and open.
 koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
+    moshi (!usable[T](channel)) { kaesu Received[T] { item: channel.filler, closed: hai }; }
     aida (hai) {
         lock[T](channel);
         kaku count = runtime.word_get(channel.words, 3);
@@ -115,6 +144,7 @@ koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
 
 // Closes the channel: further sends are rejected (and return their value), receivers drain what is queued and then see closed.
 koukai waza close<T>(channel: Channel<T>) -> int64 {
+    moshi (!usable[T](channel)) { kaesu 0; }
     lock[T](channel);
     runtime.word_set(channel.words, 4, 1);
     unlock[T](channel);
@@ -130,6 +160,7 @@ koukai waza close<T>(channel: Channel<T>) -> int64 {
 // value, a receive reports closed). The 64-byte control block stays mapped for the life of the process on purpose, so a thread still inside
 // send/receive can never see freed memory.
 koukai waza destroy<T>(channel: Channel<T>) -> int64 {
+    moshi (!usable[T](channel)) { kaesu 0; }
     lock[T](channel);
     runtime.word_set(channel.words, 4, 1);
     runtime.word_set(channel.words, 7, 1);

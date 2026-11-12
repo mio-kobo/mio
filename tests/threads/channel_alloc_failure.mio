@@ -1,0 +1,74 @@
+// Channel control-block allocation failure and capacity arithmetic.
+//  * runtime.words_new rejects zero, negative, oversized and wrapping counts with -22 (a count near 2^61 used to wrap to a valid 64-byte block).
+//  * A channel whose control block is invalid (injected here with a size the runtime rejects) is dead: every operation behaves like a
+//    closed or destroyed channel and never reaches the handle (it used to fault on the first lock).
+//  * channel_try_new reports success and failure, channel_new raises capacity < 1 to 1, ring wrap-around works for several capacities.
+//  * 20000 create/destroy cycles run past any fixed control-word pool: each channel is either fully usable or cleanly dead with error -12.
+yobu "kiso/thread";
+yobu "mio/thread/runtime";
+yobu "kiso/array";
+
+waza injected() -> thread.Channel<int64> {
+    kaesu thread.Channel[int64] { words: runtime.words_new(2305843009213693953), ring: array.make[int64](1, 0), filler: 0, capacity: 1 };
+}
+
+waza wrap(capacity: int64) -> bool {
+    kaku channel = thread.channel_new[int64](capacity, 0);
+    kaku expected = 0; kaku got = 0; kaku round = 0;
+    aida (round < 10) {
+        kaku n = 0;
+        aida (n < channel.capacity) { thread.send[int64](channel, round * 10 + n + 1); expected = expected + round * 10 + n + 1; n = n + 1; }
+        kaku m = 0;
+        aida (m < channel.capacity) { kaku r = thread.receive[int64](channel); got = got + r.item; m = m + 1; }
+        round = round + 1;
+    }
+    thread.destroy[int64](channel);
+    kaesu expected == got;
+}
+
+waza run() -> int64 {
+    chant(runtime.words_new(0) == -22);
+    chant(runtime.words_new(-1) == -22);
+    chant(runtime.words_new(8193) == -22);
+    chant(runtime.words_new(2305843009213693953) == -22);
+
+    kaku dead = injected();
+    chant(thread.channel_valid[int64](dead) == iie);
+    kaku sent = thread.send[int64](dead, 41);
+    chant(sent.sent == iie && sent.back == 41);
+    kaku received = thread.receive[int64](dead);
+    chant(received.closed);
+    chant(thread.close[int64](dead) == 0 && thread.destroy[int64](dead) == 0 && thread.destroy[int64](dead) == 0);
+
+    kaku zero = thread.channel_try_new[int64](0, 0);
+    chant(zero.error == 0 && thread.channel_valid[int64](zero.channel) && zero.channel.capacity == 1);
+    kaku negative = thread.channel_new[int64](-5, 0);
+    chant(negative.capacity == 1);
+    chant(wrap(1) && wrap(2) && wrap(3) && wrap(7));
+
+    kaku usable = 0; kaku failed = 0; kaku bad_error = 0; kaku bad_dead = 0; kaku bad_live = 0;
+    kaku i = 0;
+    aida (i < 20000) {
+        kaku made = thread.channel_try_new[int64](1, 0);
+        moshi (made.error == 0) {
+            usable = usable + 1;
+            kaku s = thread.send[int64](made.channel, i);
+            kaku r = thread.receive[int64](made.channel);
+            moshi (!s.sent || r.closed || r.item != i) { bad_live = bad_live + 1; }
+            thread.destroy[int64](made.channel);
+        }
+        sore {
+            failed = failed + 1;
+            moshi (made.error != -12) { bad_error = bad_error + 1; }
+            kaku s = thread.send[int64](made.channel, 5);
+            kaku r = thread.receive[int64](made.channel);
+            moshi (s.sent || s.back != 5 || !r.closed) { bad_dead = bad_dead + 1; }
+        }
+        i = i + 1;
+    }
+    chant(usable + failed == 20000);
+    chant(usable > 1000);
+    chant(bad_error == 0 && bad_dead == 0 && bad_live == 0);
+    kaesu 0;
+}
+run();
