@@ -3,9 +3,11 @@ yobu "kiso/aot/x86_64";
 
 // Map[K, V] with integer, bool or string keys (the key kinds the language allows and the reference backend supports).
 // Map object (kind 12): [16] head entry. Entry (kind 13, 48 bytes): [16] next, [24] key, [32] value, [40] flags
-// (bit 0: the key is a reference (string), bit 1: the value is a reference). Lookup is a linear walk, a new key is
-// pushed at the front and an existing key is updated in place, exactly like the reference lowering. Values are stored
-// raw: a nullable scalar is unboxed on the way in and boxed again on the way out.
+// (bit 0: the key is a reference (string), bit 1: the value is a reference, bit 2: the value is nil). Lookup is a
+// linear walk, a new key is pushed at the front and an existing key is updated in place, exactly like the reference
+// lowering. Values are stored raw: a nullable scalar is unboxed on the way in and boxed again on the way out. A nil
+// nullable scalar is stored as raw 0 with bit 2 set, so a stored nil is distinguishable from a stored zero and the
+// entry (key presence) never depends on the payload. The collector reads only bits 0 and 1 of the flags word.
 //
 // rt.map_new -> rax = map
 // rt.map_find: rdi = map, rsi = key, rdx = 1 for string keys -> rax = entry or 0
@@ -126,8 +128,14 @@ waza emit_map_op(code: x86_64.Assembler, analysis: types.TypeAnalysis, function_
         x86_64.call(code, "rt.map_find");
         x86_64.test_rr(code, x86_64.rax, x86_64.rax);
         x86_64.jcc(code, x86_64.cc_e, missing);
-        x86_64.mov_load(code, x86_64.rax, x86_64.rax, 32);
-        moshi (result_node >= 0 && nullable_scalar(analysis, result_node)) { x86_64.call(code, "rt.box_scalar"); }
+        moshi (result_node >= 0 && nullable_scalar(analysis, result_node)) {
+            x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 40);
+            x86_64.mov_load(code, x86_64.rax, x86_64.rax, 32);
+            x86_64.and_ri(code, x86_64.rcx, 4);
+            x86_64.jcc(code, x86_64.cc_ne, finished);
+            x86_64.call(code, "rt.box_scalar");
+        }
+        sore { x86_64.mov_load(code, x86_64.rax, x86_64.rax, 32); }
         x86_64.jmp(code, finished);
         x86_64.label(code, missing);
         x86_64.mov_ri(code, x86_64.rax, 0);
@@ -139,10 +147,24 @@ waza emit_map_op(code: x86_64.Assembler, analysis: types.TypeAnalysis, function_
     moshi (value_node < 0) { kaesu "MISSING_TYPE_INFO"; }
     kaku flags = string_key;
     moshi (is_reference_node(analysis, value_node) && !nullable_scalar(analysis, value_node)) { flags = flags + 2; }
-    pop(code, x86_64.rdx); unbox_node(code, analysis, value_node, x86_64.rdx);
+    kaku nil_literal = types.type_kind(analysis, value_node) == types.type_nil;
+    moshi (nil_literal) { flags = flags + 4; }
+    pop(code, x86_64.rdx);
     pop(code, x86_64.rsi); unbox_node(code, analysis, key_node, x86_64.rsi);
     pop(code, x86_64.rdi);
     x86_64.mov_ri(code, x86_64.rcx, flags);
+    moshi (nullable_scalar(analysis, value_node)) {
+        // A nil box stores raw 0 with the nil bit; a boxed value stores its payload.
+        kaku present = block_label("map_value_present", len(code.bytes));
+        kaku stored = block_label("map_value_stored", len(code.bytes));
+        x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+        x86_64.jcc(code, x86_64.cc_ne, present);
+        x86_64.mov_ri(code, x86_64.rcx, flags + 4);
+        x86_64.jmp(code, stored);
+        x86_64.label(code, present);
+        x86_64.mov_load(code, x86_64.rdx, x86_64.rdx, 16);
+        x86_64.label(code, stored);
+    }
     x86_64.call(code, "rt.map_set");
     kaesu "";
 }
