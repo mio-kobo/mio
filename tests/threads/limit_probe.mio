@@ -2,6 +2,7 @@
 // them all. Run by CI with its output recorded (no fixed expectation); creation_limit.mio is the checked version.
 yobu "kiso/thread";
 yobu "kiso/array";
+yobu "kiso/os";
 
 waza idle(channel: thread.Channel<int64>) -> () -> int64 {
     kaesu waza () -> int64 {
@@ -11,6 +12,7 @@ waza idle(channel: thread.Channel<int64>) -> () -> int64 {
 }
 
 waza run() -> int64 {
+    kaku t0 = os.monotonic_ms();
     kaku channel = thread.channel_new[int64](1, 0);
     kaku handles: []int64 = [];
     kaku failure = 0;
@@ -21,8 +23,10 @@ waza run() -> int64 {
         moshi (len(handles) - (len(handles) / 8) * 8 == 0) { chant(len(handles)); }
     }
     chant(failure);
+    chant(-3000000 - (os.monotonic_ms() - t0));
     thread.close[int64](channel);
     chant(-1000);
+    chant(-4000000 - (os.monotonic_ms() - t0));
     kaku joined = 0;
     kaku i = 0;
     aida (i < len(handles)) {
@@ -31,6 +35,7 @@ waza run() -> int64 {
         moshi (i - (i / 16) * 16 == 0) { chant(-2000 - i); }
     }
     chant(joined);
+    chant(-5000000 - (os.monotonic_ms() - t0));
     kaesu 0;
 }
 run();
