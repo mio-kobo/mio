@@ -1,0 +1,177 @@
+// Garbage collection must make progress while other threads are blocked inside real blocking socket and reactor calls.
+// Each phase parks a worker in one blocking operation over loopback (read of an idle connection, write into a full send buffer, accept with no
+// pending connection, reactor poll with an infinite timeout). The worker announces itself on a channel immediately before the call; the main
+// thread then allocates enough garbage to force many collections and only afterwards releases the worker. If a blocked thread kept the
+// stop-the-world handshake from completing, the first collection would wait for it and the harness watchdog would report a hang.
+yobu "kiso/thread";
+yobu "kiso/net/tcp";
+yobu "kiso/reactor";
+yobu "kiso/array";
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+waza garbage(rounds: int64) -> int64 {
+    kaku total = 0; kaku round = 0;
+    aida (round < rounds) {
+        kaku junk = array.make[int64](4096, round);
+        total = total + junk[4095] - round + 1;
+        round = round + 1;
+    }
+    kaesu total;
+}
+
+waza listen_on(first: int64) -> int64 {
+    kaku port = first;
+    aida (port < first + 100) {
+        kaku attempt = tcp.listen(loopback(port));
+        moshi (attempt.error == mu) {
+            kaku listener = attempt.listener;
+            moshi (listener != mu) { tcp.close_listener(listener); kaesu port; }
+        }
+        port = port + 1;
+    }
+    kaesu -1;
+}
+
+waza listening(port: int64) -> tcp.Listener? {
+    kaku attempt = tcp.listen(loopback(port));
+    moshi (attempt.error == mu) { kaesu attempt.listener; }
+    kaesu mu;
+}
+
+// returns 100 * count + first byte, or -1
+waza read_worker(server: tcp.Connection, ready: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        thread.send[int64](ready, 1);
+        kaku buffer = array.make[uint8](16, uint8(0));
+        kaku result = tcp.read(server, buffer, 0, 16);
+        moshi (result.error != mu) { kaesu -1; }
+        kaesu result.count * 100 + int64(buffer[0]);
+    };
+}
+
+// writes until the kernel buffers are full: the call that does not return is the blocked one; returns bytes written once the peer drains
+waza write_worker(client: tcp.Connection, ready: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        kaku chunk = array.make[uint8](65536, uint8(1));
+        kaku total = 0; kaku round = 0;
+        thread.send[int64](ready, 1);
+        aida (round < 400) {
+            kaku result = tcp.write(client, chunk, 0, 65536);
+            moshi (result.error != mu) { kaesu -1; }
+            total = total + result.count;
+            round = round + 1;
+        }
+        kaesu total;
+    };
+}
+
+waza accept_worker(listener: tcp.Listener, ready: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        thread.send[int64](ready, 1);
+        kaku accepted = tcp.accept(listener);
+        moshi (accepted.error != mu) { kaesu -1; }
+        kaku connection = accepted.connection;
+        moshi (connection == mu) { kaesu -2; }
+        tcp.close(connection);
+        kaesu 1;
+    };
+}
+
+waza poll_worker(loop: reactor.Reactor, ready: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        thread.send[int64](ready, 1);
+        kaku polled = reactor.poll(loop, -1, 8);
+        moshi (polled.error != mu) { kaesu -1; }
+        moshi (polled.woken) { kaesu 1; }
+        kaesu 0;
+    };
+}
+
+waza pair(port: int64) -> bool {
+    kaku listener = listening(port);
+    moshi (listener == mu) { kaesu iie; }
+    kaku dialed = tcp.connect(loopback(port));
+    kaku accepted = tcp.accept(listener);
+    kaku client = dialed.connection; kaku server = accepted.connection;
+    moshi (client == mu) { kaesu iie; }
+    moshi (server == mu) { kaesu iie; }
+    kaku ready = thread.channel_new[int64](1, 0);
+    kaku worker = thread.start(read_worker(server, ready));
+    thread.receive[int64](ready);
+    chant(garbage(20000));
+    kaku payload = array.make[uint8](1, uint8(7));
+    tcp.write_all(client, payload, 0, 1);
+    chant(thread.join(worker));
+    tcp.close(client); tcp.close(server); tcp.close_listener(listener);
+    thread.destroy[int64](ready);
+    kaesu hai;
+}
+
+waza flood(port: int64) -> bool {
+    kaku listener = listening(port);
+    moshi (listener == mu) { kaesu iie; }
+    kaku dialed = tcp.connect(loopback(port));
+    kaku accepted = tcp.accept(listener);
+    kaku client = dialed.connection; kaku server = accepted.connection;
+    moshi (client == mu) { kaesu iie; }
+    moshi (server == mu) { kaesu iie; }
+    kaku ready = thread.channel_new[int64](1, 0);
+    kaku worker = thread.start(write_worker(client, ready));
+    thread.receive[int64](ready);
+    chant(garbage(20000));
+    kaku sink = array.make[uint8](65536, uint8(0));
+    kaku drained = 0;
+    aida (drained < 400 * 65536) {
+        kaku result = tcp.read(server, sink, 0, 65536);
+        moshi (result.error != mu) { kaesu iie; }
+        drained = drained + result.count;
+    }
+    chant(thread.join(worker) == 400 * 65536);
+    tcp.close(client); tcp.close(server); tcp.close_listener(listener);
+    thread.destroy[int64](ready);
+    kaesu hai;
+}
+
+waza idle_accept(port: int64) -> bool {
+    kaku listener = listening(port);
+    moshi (listener == mu) { kaesu iie; }
+    kaku ready = thread.channel_new[int64](1, 0);
+    kaku worker = thread.start(accept_worker(listener, ready));
+    thread.receive[int64](ready);
+    chant(garbage(20000));
+    kaku dialed = tcp.connect(loopback(port));
+    chant(thread.join(worker));
+    kaku client = dialed.connection;
+    moshi (client != mu) { tcp.close(client); }
+    tcp.close_listener(listener);
+    thread.destroy[int64](ready);
+    kaesu hai;
+}
+
+waza idle_poll() -> bool {
+    kaku opened = reactor.open();
+    kaku maybe = opened.reactor;
+    moshi (maybe == mu) { kaesu iie; }
+    kaku loop = maybe;
+    kaku ready = thread.channel_new[int64](1, 0);
+    kaku worker = thread.start(poll_worker(loop, ready));
+    thread.receive[int64](ready);
+    chant(garbage(20000));
+    reactor.wake(loop);
+    chant(thread.join(worker));
+    reactor.close(loop);
+    thread.destroy[int64](ready);
+    kaesu hai;
+}
+
+waza run() -> int64 {
+    kaku base = listen_on(41000);
+    moshi (base < 0) { chant("no port"); kaesu 1; }
+    chant(pair(base));
+    chant(flood(base + 1));
+    chant(idle_accept(base + 2));
+    chant(idle_poll());
+    kaesu 0;
+}
+run();

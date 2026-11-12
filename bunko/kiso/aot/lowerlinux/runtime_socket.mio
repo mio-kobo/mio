@@ -7,6 +7,25 @@ yobu "kiso/string";
 // generation-checked handle table. Status codes: 0 ok, 1 invalid argument, 2 closed, 3 timed out, 4 connection refused,
 // 5 connection reset, 6 address in use, 7 permission denied, 8 would block, 9 other, 10 operation in progress
 // (a nonblocking connect that has not completed yet; only produced for EINPROGRESS).
+// Blocking region around one syscall that can block for an unbounded time. Only multi-mutator programs (the `mutators` label exists) need
+// it: the thread then leaves the running state with its managed frame chain published and the heap references the native still needs
+// (the arrays at rbp-slot0 / rbp-slot1, 0 = none) pinned, so a stop-the-world collection does not wait for it (see rt.blk_enter in
+// mutators.mio). saved_frame: the native pushed rbp, so the wrapper frame is the saved one at [rbp]; otherwise rbp is the wrapper frame.
+// blocking_enter clobbers rax, rcx, rdx, rsi, rdi; blocking_leave clobbers everything but rax, r8 and r9. Nothing may touch the managed
+// heap between the two.
+waza blocking_enter(code: x86_64.Assembler, saved_frame: bool, slot0: int64, slot1: int64) -> unit {
+    moshi (!mutators_enabled(code)) { kaesu; }
+    moshi (saved_frame) { x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, 0); }
+    sore { x86_64.mov_rr(code, x86_64.rdi, x86_64.rbp); }
+    moshi (slot0 != 0) { x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, slot0); } sore { x86_64.mov_ri(code, x86_64.rsi, 0); }
+    moshi (slot1 != 0) { x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, slot1); } sore { x86_64.mov_ri(code, x86_64.rdx, 0); }
+    x86_64.call(code, "rt.blk_enter");
+}
+
+waza blocking_leave(code: x86_64.Assembler) -> unit {
+    moshi (mutators_enabled(code)) { x86_64.call(code, "rt.blk_leave"); }
+}
+
 waza socket_message_text(code: int64) -> string {
     moshi (code == 1) { kaesu "invalid argument"; }
     moshi (code == 2) { kaesu "socket closed"; }
@@ -236,11 +255,13 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rax, 0);
     x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rax);
     x86_64.label(code, "rt.sock_address.call");
+    blocking_enter(code, hai, -8, 0);
     x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -40);
     x86_64.lea(code, x86_64.rsi, x86_64.rbp, -64);
     x86_64.mov_ri(code, x86_64.rdx, 16);
     x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -16);
     x86_64.syscall(code);
+    blocking_leave(code);
     x86_64.cmp_ri(code, x86_64.rax, -4);
     x86_64.jcc(code, x86_64.cc_e, "rt.sock_address.call");
     x86_64.mov_ri(code, x86_64.rsi, 0);
@@ -423,11 +444,13 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.jcc(code, x86_64.cc_l, "rt.sock_accept.state");
     x86_64.mov_rr(code, x86_64.r9, x86_64.rax);
     x86_64.label(code, "rt.sock_accept.again");
+    blocking_enter(code, iie, 0, 0);
     x86_64.mov_rr(code, x86_64.rdi, x86_64.r9);
     x86_64.mov_ri(code, x86_64.rsi, 0);
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.mov_eax_imm(code, 43);
     x86_64.syscall(code);
+    blocking_leave(code);
     x86_64.cmp_ri(code, x86_64.rax, -4);
     x86_64.jcc(code, x86_64.cc_e, "rt.sock_accept.again");
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
@@ -614,12 +637,14 @@ waza emit_reactor_epoll(code: x86_64.Assembler) -> unit {
     x86_64.cmp_rr(code, x86_64.rcx, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_g, "rt.reactor_wait.invalid");
     // epoll_wait(epfd, buffer, max, timeout)
+    blocking_enter(code, hai, -8, -16);
     x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -40);
     x86_64.lea(code, x86_64.rsi, x86_64.rbp, -816);
     x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -24);
     x86_64.mov_load(code, x86_64.r10, x86_64.rbp, -32);
     x86_64.mov_eax_imm(code, 232);
     x86_64.syscall(code);
+    blocking_leave(code);
     x86_64.cmp_ri(code, x86_64.rax, -4);
     x86_64.jcc(code, x86_64.cc_e, "rt.reactor_wait.none");
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
@@ -776,6 +801,9 @@ waza emit_socket_transfer(code: x86_64.Assembler, name: string, reading: bool) -
     x86_64.mov_load(code, x86_64.rsi, x86_64.rsi, 40);
     x86_64.add_rr(code, x86_64.rsi, x86_64.rdx);
     x86_64.label(code, string.concat(name, ".again"));
+    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rsi);
+    blocking_enter(code, hai, -8, -32);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -48);
     x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -40);
     x86_64.mov_load(code, x86_64.rdx, x86_64.rbp, -24);
     moshi (reading) { x86_64.mov_eax_imm(code, 0); }
@@ -785,8 +813,8 @@ waza emit_socket_transfer(code: x86_64.Assembler, name: string, reading: bool) -
         x86_64.mov_ri(code, x86_64.r8, 0);
         x86_64.mov_ri(code, x86_64.r9, 0);
     }
-    x86_64.mov_store(code, x86_64.rbp, -48, x86_64.rsi);
     x86_64.syscall(code);
+    blocking_leave(code);
     x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -48);
     x86_64.cmp_ri(code, x86_64.rax, -4);
     x86_64.jcc(code, x86_64.cc_e, string.concat(name, ".again"));
