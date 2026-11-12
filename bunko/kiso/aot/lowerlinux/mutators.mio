@@ -712,6 +712,10 @@ waza emit_word_natives(code: x86_64.Assembler) -> unit {
     // control words stay mapped for the life of the process, so a thread that is still inside a send or receive on a destroyed channel can
     // only see the destroyed flag, never unmapped memory. Cost: 64 bytes per channel.
     x86_64.label(code, "rt.words_new");
+    // Bound the count before scaling it: count * 8 wraps for counts near 2^61, which would hand out a small block for a huge request.
+    // The unsigned compare also rejects every negative count.
+    x86_64.cmp_ri(code, x86_64.rdi, 8192);
+    x86_64.jcc(code, x86_64.cc_a, "rt.words_new.toobig");
     x86_64.mov_rr(code, x86_64.rsi, x86_64.rdi);
     x86_64.shl_ri(code, x86_64.rsi, 3);
     x86_64.add_ri(code, x86_64.rsi, 63);

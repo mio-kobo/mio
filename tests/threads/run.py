@@ -46,10 +46,11 @@ PROGRAMS = {
     "channel_races": b"80\n",
     "gc_lifecycle": b"913200\n",
     "channel_lifecycle": b"2000\nhai\n9\nhai\n1\n",
+    "channel_alloc_failure": b"hai\n" * 14,
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
-HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repetitions
+HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active", "channel_alloc_failure"}   # fewer repetitions
 
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
 NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",
