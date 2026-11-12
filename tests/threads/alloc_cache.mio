@@ -44,6 +44,12 @@ waza worker(seed: int64) -> int64 {
 }
 
 waza run() -> int64 {
+    // An invalid join stores a status word in this thread's record: it must not overlap the allocation cache of the smallest size class (an object of
+    // 24 bytes, one integer field, is allocated right afterwards).
+    thread.join(0);
+    kaku probe = A { a: 41 };
+    thread.join(123456789);
+    kaku probe2 = A { a: 42 };
     kaku handles: []int64 = [];
     kaku t = 1;
     aida (t <= 4) {
@@ -62,6 +68,7 @@ waza run() -> int64 {
         i = i + 1;
     }
     moshi (mine >= 1000000000000) { failures = failures + 1; }
+    chant(probe.a + probe2.a);
     chant(failures);
     chant(len(handles));
     chant(total > 0);

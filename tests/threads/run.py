@@ -38,7 +38,7 @@ PROGRAMS = {
     "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
     "channel_mpmc": b"600\n1379100\n",
     "summary_copy": b"198\n5\n",
-    "alloc_cache": b"0\n4\nhai\n",
+    "alloc_cache": b"83\n0\n4\nhai\n",
     # Stage one hardening (docs/threading-stages.md)
     "lifecycle_cycles": b"252000\n0\n126000\n",
     "invalid_handles": b"-22\n-22\n-22\niie\nhai\n7\niie\nhai\niie\n7\nhai\n-5\n",
