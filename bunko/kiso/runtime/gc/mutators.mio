@@ -27,7 +27,7 @@ waza gc_block_leave_program() -> ir.Function {
 }
 waza thread_wait_started_program() -> ir.Function {
     kaku f=ir.function("thread_wait_started");tprepare(f);tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");
-    ir.invoke_function(f,"platform_now",5,[]);tconstant(f,6,1000000000);ir.put(f,ir.add,5,5,6,0);
+    ir.invoke_function(f,"platform_now",5,[]);tconstant(f,6,60000000000);ir.put(f,ir.add,5,5,6,0);   // 60 s: a started thread registers eventually, even on an overloaded machine
     ir.branch(f,ir.label,0,"retry");ir.put(f,ir.acquire_load,3,0,0,thread_state);tcheck(f,3,thread_running,"ready");tcheck(f,3,thread_exited,"ready");tcheck(f,3,thread_failed,"failed");
     ir.invoke_function(f,"platform_now",6,[]);ir.put(f,ir.less_unsigned,7,6,5,0);ir.branch(f,ir.zero,7,"failed");
     tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",6,[3,2,4]);ir.branch(f,ir.zero,6,"retry");tcheck(f,6,1,"retry");
@@ -40,9 +40,9 @@ waza thread_wait_started_program() -> ir.Function {
 // bounded stop/cleanup protocol. Joining must not cancel ordinary user waits.
 waza thread_wait_completion_program() -> ir.Function {
     kaku f=ir.function("thread_wait_completion");tprepare(f);tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");
-    ir.invoke_function(f,"platform_now",5,[]);tconstant(f,6,30000000000);ir.put(f,ir.add,5,5,6,0);
+    // No deadline: a join waits for the thread's natural completion however long it runs (a 30 second ceiling here made a join of any thread that
+    // ran longer abort the whole process, and a heavily contended thread easily does). A wait that returns an error still fails.
     ir.branch(f,ir.label,0,"retry");ir.put(f,ir.acquire_load,3,0,0,thread_progress);tcheck(f,3,thread_finished,"ready");
-    ir.invoke_function(f,"platform_now",6,[]);ir.put(f,ir.less_unsigned,7,6,5,0);ir.branch(f,ir.zero,7,"failed");
     tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",6,[3,2,4]);ir.branch(f,ir.zero,6,"retry");tcheck(f,6,1,"retry");
     ir.branch(f,ir.label,0,"failed");tconstant(f,8,2);ir.branch(f,ir.jump,0,"unlock");
     ir.branch(f,ir.label,0,"ready");tload(f,8,thread_error);
