@@ -468,3 +468,37 @@ recursive builders), field/element operands.
 4. **PR-3**: Linux x86-64 thread/futex adapter, thread registry integration, multi-mutator safepoints on the x64 heap.
 5. **PR-4**: `kiso/thread` channel and end-to-end Linux x86-64 native tests, GC stress.
 6. **PR-5+**: remaining targets one at a time, benchmarks, documentation.
+
+### Efficiency: allocation scaling on Linux x86-64 (benchmarks/threads/efficiency.mio)
+
+The microbenchmarks time fixed amounts of work (wall-clock milliseconds, median of three runs, 8 hardware threads, kernel 6.12, one machine). The
+first measurement of the thread runtime showed that allocation did not scale at all: pinned to one core the times were exactly serial (213, 423 and
+841 ms for 1, 2 and 4 threads), but on several cores two threads took 4.4 times and four threads 15 times the single-thread time, i.e. worse than
+running the threads one after the other.
+
+Two causes, both cache-line contention rather than algorithm: (1) the heap lock shared a 64-byte line with the stop flag that every thread reads at
+every poll, and the poll also read the allocation volume word that every allocation writes, so each allocation invalidated the polls of all other
+cores; (2) every allocation, however small, took the one global lock and wrote the shared free lists and counters.
+
+Changes (`bunko/kiso/aot/lowerlinux/mutators.mio`, `gc.mio`): the heap lock waits with a read-only test before the atomic exchange and has a cache line
+of its own; the allocator raises a single `want` word when the volume reaches the threshold and polls read that word instead of the volume and
+threshold; small allocations (24 to 56 bytes) pop from a per-thread list of exactly sized free blocks with no lock and no shared write, an empty list
+being refilled with 64 blocks carved from one locked allocation. The blocks in a cache are ordinary free blocks (valid header, mark word 0), so a sweep
+reclaims them like any dead block, and the collector empties every thread's lists after the sweep before it resumes the world. Single-threaded
+programs are untouched (they compile to the same bytes).
+
+| benchmark | before | after |
+|---|---|---|
+| 1 thread, 2M small allocations | 207 | 85 |
+| 2 threads, 4M allocations | 900 | 148 |
+| 4 threads, 8M allocations | 3150 | 290 |
+| 4 producers + 4 consumers, 200000 messages through a 16-slot channel | 335 | 250 |
+| 20000 threads started and joined one after the other | 640 | 650 (unchanged) |
+| 200 rounds of 32 threads started together and joined | 135 | 135 (unchanged) |
+| 20000 round trips between two threads | 200 | 185 |
+
+Not claimed: the figures are one machine's; thread creation and join (about 32 microseconds each) and the channel handoff (about 5 microseconds per
+wake-up) are unchanged and remain the next candidates; allocations above 56 bytes still take the global lock. The regression test is
+`tests/threads/alloc_cache.mio` (five threads, every cached size class, rings of live objects verified after collections; a build that forgets to empty
+the caches after a sweep hangs or corrupts it, which was checked by mutation).
+
