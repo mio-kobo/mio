@@ -787,7 +787,18 @@ def darwin_thread_repro(report, cli, work):
         good = code == 0 and out == "2000\n2000\n"
         bad += 0 if good else 1
         lines.append("run %d: exit %s after %.1fs stdout %r" % (repeat, code, seconds or 0, out[:60]))
-    report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:900], required=False)
+    # bisect: the same sequence with 20000 round trips, and after 26400 thread lifecycles (each run sampled after 25 seconds if it is still running)
+    for name, expected in (("pingpong_long", "20000\n20000\n"), ("pingpong_churn", "2000\n2000\n")):
+        bisect_image = Path(work) / name
+        built, why, _ = cli_build(report, "darwin-thread-repro-build-" + name, cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", bisect_image)
+        if not built:
+            lines.append("%s: build failed: %s" % (name, brief(why, 120)))
+            bad += 1
+            continue
+        code, out, err, seconds = run_sampled(report, "darwin-thread-repro-run-" + name, [bisect_image], timeout=120, sample_after=25)
+        bad += 0 if (code == 0 and out == expected) else 1
+        lines.append("%s: exit %s after %.1fs stdout %r" % (name, code, seconds or 0, out[:40]))
+    report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:1200], required=False)
 
 
 def darwin_thread_faults(report, cli, work):
