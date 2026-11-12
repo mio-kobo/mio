@@ -8,8 +8,10 @@ koukai teisu word_blocks=16384;
 // Off-heap control words for channels: a pool of word_blocks blocks of 8 words after the thread contexts. Word 0 of the pool counts issued
 // blocks; block h (a handle, 1..word_blocks) starts at word 8*h. Blocks are never reused (a channel's control block stays valid for the life of
 // the process, so a thread still inside send/receive can never touch recycled memory); the 16385th words_new fails with -12.
-koukai teisu worker_root_words=(worker_slots+1)*1120+4+(word_blocks+1)*8;
-teisu wr_stride=8960;
+// Words per thread context: the fixed records, then (from wr_snapshot) the collector's root snapshot of wr_snapshot_capacity entries.
+teisu wr_ctx_words=5200;
+koukai teisu worker_root_words=(worker_slots+1)*wr_ctx_words+4+(word_blocks+1)*8;
+teisu wr_stride=41600;
 // Context word at +8800: the integer a worker entry returned (0 for an entry that returns nothing); join hands it to the caller.
 teisu wr_result=8800;
 // Context word at +8808: nonzero while the slot is claimed by a start and not yet joined.
@@ -17,8 +19,9 @@ teisu wr_claim=8808;
 // Context word at +8816: generation of the slot (counts joins; part of the handle). Word at +8824: status of this thread's last join (0 or 22).
 teisu wr_generation=8816;
 teisu wr_join_status=8824;
-teisu wr_snapshot=576;
-teisu wr_snapshot_capacity=1000;
+teisu wr_snapshot=9000;
+// 4000 roots: with 128 live threads the stopped-world snapshot needs several dozen per thread (1000 overflowed: gc_scan_roots failed).
+teisu wr_snapshot_capacity=4000;
 waza worker_roots_enabled(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_roots_enabled")>=0;}
 waza emit_print_boundary(c:arm64.Assembler) -> unit {
     moshi(worker_roots_enabled(c)){
@@ -27,8 +30,8 @@ waza emit_print_boundary(c:arm64.Assembler) -> unit {
     } sore {emit(c,arm64.svc(128));}
 }
 waza wr_emit(c:arm64.Assembler,w:arm64.Instruction) -> unit {emit(c,w);}
-waza wr_ctx(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,r:int64,slot:int64) -> unit {attached_data_address(c,p,first+worker_import_slots(c)+slot*1120,r);}
-waza wr_pool(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,r:int64) -> unit {attached_data_address(c,p,first+worker_import_slots(c)+(worker_slots+1)*1120,r);}
+waza wr_ctx(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,r:int64,slot:int64) -> unit {attached_data_address(c,p,first+worker_import_slots(c)+slot*wr_ctx_words,r);}
+waza wr_pool(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,r:int64) -> unit {attached_data_address(c,p,first+worker_import_slots(c)+(worker_slots+1)*wr_ctx_words,r);}
 waza wr_neg(c:arm64.Assembler,r:int64,n:int64) -> unit {wr_num(c,r,n);emit(c,arm64.sub_x(r,31,r));}
 // Leaves the address of word x1 of block x0 in x13 or branches to bad. Clobbers x9-x13.
 waza word_address(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,bad:string) -> unit {
@@ -90,7 +93,7 @@ waza wr_call(c:arm64.Assembler,name:string) -> unit {
     moshi(arm64.assembler_label_word(c,"worker_evidence")>=0){arm64.assembler_cbnz_x(c,0,"runtime_error");}
     sore {
         kaku names=["gc_block_enter","gc_block_leave","thread_open_shared","thread_wait_started","thread_wait_completion","thread_close","gc_mutator_poll","gc_heap_enter","thread_attach","thread_enter","thread_leave","gc_scan_roots"];
-        kaku id=11;kaku i=0;aida(i<len(names)){moshi(names[i]==name){id=i;}i=i+1;}
+        kaku id=12;kaku i=0;aida(i<len(names)){moshi(names[i]==name){id=i;}i=i+1;}
         kaku ok=block_label("wr_ok_",len(c.words));arm64.assembler_cbz_x(c,0,ok);
         emit(c,arm64.cmp_imm_x(0,3,iie));kaku keep=block_label("wr_rc_",len(c.words));arm64.assembler_b_cond(c,9,keep);emit(c,arm64.movz_x(0,3,0));arm64.assembler_label(c,keep);
         emit(c,arm64.add_imm_x(0,0,30+id*4,iie));emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));arm64.assembler_label(c,ok);
@@ -123,9 +126,9 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     attached_save(c,"runtime_alloc");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(24,31,0));
     wr_current(c,p,first);emit(c,arm64.str_x(0,31,16));move_x(c,1,24);wr_call(c,"gc_heap_enter");
     moshi(old_mark_proto_enabled(c)){arm64.assembler_bl(c,"old_pause_epoch");}
-    emit(c,arm64.ldr_x(0,31,16));emit(c,arm64.add_imm_x(1,0,wr_snapshot,iie));emit(c,arm64.str_x(31,1,0));emit(c,arm64.str_x(31,1,8));wr_imports(c,p,first);wr_call(c,"gc_scan_roots");
+    emit(c,arm64.ldr_x(0,31,16));wr_addr(c,1,0,wr_snapshot);emit(c,arm64.str_x(31,1,0));emit(c,arm64.str_x(31,1,8));wr_imports(c,p,first);wr_call(c,"gc_scan_roots");
     emit(c,arm64.ldr_x(9,31,16));wr_snapshot_trace(c,9);
-    emit(c,arm64.ldr_x(9,31,16));emit(c,arm64.add_imm_x(24,9,wr_snapshot,iie));emit(c,arm64.ldr_x(0,31,176));emit(c,arm64.ldr_x(1,31,184));arm64.assembler_bl(c,"runtime_alloc_legacy");
+    emit(c,arm64.ldr_x(9,31,16));wr_addr(c,24,9,wr_snapshot);emit(c,arm64.ldr_x(0,31,176));emit(c,arm64.ldr_x(1,31,184));arm64.assembler_bl(c,"runtime_alloc_legacy");
     emit(c,arm64.str_x(0,31,176));emit(c,arm64.ldr_x(24,31,0));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
     // A real pthread entry invokes the ordinary compiled closure. Its bootstrap
     // root is generated automatically before registration and lives until exit.
@@ -177,7 +180,7 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
         emit(c,arm64.ldr_x(9,31,144));emit(c,arm64.cmp_imm_x(9,1,iie));arm64.assembler_b_cond(c,1,"worker_collect_not_major_request");arm64.assembler_bl(c,"old_cancel_requested");arm64.assembler_label(c,"worker_collect_not_major_request");
     }
     wr_poll(c,p,first,"gc_heap_enter");
-    wr_current(c,p,first);move_x(c,1,23);emit(c,arm64.add_imm_x(2,0,wr_snapshot,iie));emit(c,arm64.ldr_x(3,31,144));wr_call(c,"gc_collect_stopped");
+    wr_current(c,p,first);move_x(c,1,23);wr_addr(c,2,0,wr_snapshot);emit(c,arm64.ldr_x(3,31,144));wr_call(c,"gc_collect_stopped");
     wr_current(c,p,first);move_x(c,9,0);wr_snapshot_trace(c,9);wr_call(c,"gc_end");emit(c,arm64.ldr_x(9,23,304));emit(c,arm64.str_x(9,31,144));attached_restore(c);
     kaku native_names=["attached_native_enter","attached_native_leave"];i=0;
     aida(i<2){
@@ -197,7 +200,7 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     // Runtime counters only, emitted after all owners/readers have exited.
     // Test builds (label worker_evidence) end with a 360-byte binary counter record on stderr; the public thread mode never does.
     moshi(arm64.assembler_label_word(c,"worker_evidence")>=0){
-    wr_ctx(c,p,first,14,0);emit(c,arm64.add_imm_x(15,14,wr_snapshot,iie));i=0;
+    wr_ctx(c,p,first,14,0);wr_addr(c,15,14,wr_snapshot);i=0;
     aida(i<3){wr_ctx(c,p,first,9,i);kaku offsets=[gc.thread_registrations,gc.thread_exits,gc.thread_starts,gc.thread_joins,gc.thread_acquisitions,gc.thread_releases,480];kaku j=0;aida(j<7){emit(c,arm64.ldr_x(10,9,offsets[j]));emit(c,arm64.str_x(10,15,(i*7+j)*8));j=j+1;}i=i+1;}
     emit(c,arm64.ldr_x(10,14,448));emit(c,arm64.str_x(10,15,168));emit(c,arm64.ldr_x(10,23,gc.minor_count));emit(c,arm64.str_x(10,15,176));emit(c,arm64.ldr_x(10,23,gc.major_count));emit(c,arm64.str_x(10,15,184));
     emit(c,arm64.ldr_x(10,23,gc.los_count));emit(c,arm64.str_x(10,15,192));emit(c,arm64.ldr_x(10,23,gc.los_reclaimed));emit(c,arm64.str_x(10,15,200));emit(c,arm64.ldr_x(10,23,304));emit(c,arm64.str_x(10,15,208));
