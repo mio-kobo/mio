@@ -62,20 +62,23 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     arm64.assembler_label(c,"native_word_add_retry");emit(c,arm64.ldxr_x(14,13,hai));emit(c,arm64.add_x(10,14,2));emit(c,arm64.stxr_x(15,10,13,hai));arm64.assembler_cbnz_x(c,15,"native_word_add_retry");
     move_x(c,0,14);emit(c,arm64.dmb_ish());emit(c,arm64.ret());
     // word_wake(h, i, n): waiters poll with a short timed sleep, so there is nothing to signal
-    arm64.assembler_label(c,"native_word_wake");word_address(c,p,first,"native_word_bad");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
-    // word_wait(h, i, expected): returns once the word differs from expected (or after a short timeout: callers re-check). A safepoint every round.
+    arm64.assembler_label(c,"native_word_wake");word_address(c,p,first,"native_word_bad");
+    // ulock wake: one waiter for a count of 1 (a mutex hand-off), every waiter otherwise (flag 0x100, wake all). A wake with nobody waiting is a no-op.
+    emit(c,arm64.cmp_imm_x(2,1,iie));arm64.assembler_b_cond(c,0,"native_word_wake_one");wr_num(c,0,261);arm64.assembler_b(c,"native_word_wake_go");
+    arm64.assembler_label(c,"native_word_wake_one");wr_num(c,0,5);
+    arm64.assembler_label(c,"native_word_wake_go");move_x(c,1,13);emit(c,arm64.movz_x(2,0,0));wr_num(c,16,516);emit(c,arm64.svc(128));emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
+    // word_wait(h, i, expected): returns once the word differs from expected, on a wake, or after at most 100 ms (callers re-check).
     arm64.assembler_label(c,"native_word_wait");word_address(c,p,first,"native_word_bad");
     emit(c,arm64.sub_imm_x(31,31,48,iie));emit(c,arm64.str_x(30,31,0));emit(c,arm64.str_x(0,31,8));emit(c,arm64.str_x(1,31,16));emit(c,arm64.str_x(2,31,24));
     // Short holds are the common case: spin a bounded number of reads (no safepoint needed, it ends in microseconds) before sleeping.
     wr_num(c,15,4000);arm64.assembler_label(c,"native_word_wait_spin");emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
     emit(c,arm64.sub_imm_x(15,15,1,iie));arm64.assembler_cbnz_x(c,15,"native_word_wait_spin");
-    // Then sleep with exponential backoff (50us doubling to 20ms, 64 rounds at most) taking a safepoint every round: a long waiter costs almost
-    // no CPU and does not hammer the registry lock, so a hundred blocked threads cannot starve the ones that make progress or the collector's handshake.
-    wr_num(c,9,50000);emit(c,arm64.str_x(9,31,32));wr_num(c,9,64);emit(c,arm64.str_x(9,31,40));
-    arm64.assembler_label(c,"native_word_wait_sleep");emit(c,arm64.ldr_x(0,31,32));arm64.assembler_bl(c,"attached_worker_wait");
-    emit(c,arm64.ldr_x(0,31,8));emit(c,arm64.ldr_x(1,31,16));word_address(c,p,first,"native_word_wait_done");emit(c,arm64.ldar_x(14,13));emit(c,arm64.ldr_x(2,31,24));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
-    emit(c,arm64.ldr_x(9,31,32));emit(c,arm64.lsl_x(9,9,1));wr_num(c,10,20000000);emit(c,arm64.cmp_x(9,10));arm64.assembler_b_cond(c,9,"native_word_wait_cap");move_x(c,9,10);
-    arm64.assembler_label(c,"native_word_wait_cap");emit(c,arm64.str_x(9,31,32));emit(c,arm64.ldr_x(9,31,40));emit(c,arm64.sub_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,31,40));arm64.assembler_cbnz_x(c,9,"native_word_wait_sleep");
+    // Then block in the kernel on the word (ulock wait, 64-bit compare-and-wait) until a wake or 100 ms (a safety net: callers re-check the word).
+    // The thread is in the blocked region for the whole wait, exactly like a blocking write: a stop-the-world collection does not wait for it and its
+    // roots are already published; leaving the region parks it if a collection is running. This replaces the sleep-polling loop, whose shortest sleep
+    // cost about 0.65 ms on macOS (a ping-pong round trip took 1.3 ms) and which needed a periodic wake-up per waiting thread.
+    wr_num(c,0,5);move_x(c,1,13);emit(c,arm64.ldr_x(2,31,24));wr_num(c,3,100000);wr_num(c,16,515);
+    arm64.assembler_bl(c,"attached_native_enter");emit(c,arm64.svc(128));arm64.assembler_bl(c,"attached_native_leave");
     arm64.assembler_label(c,"native_word_wait_done");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,48,iie));emit(c,arm64.ret());
 }
 waza wr_imports(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {attached_data_address(c,p,first,7);}
