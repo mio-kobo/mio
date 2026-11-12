@@ -595,6 +595,12 @@ def thread_checks(report, cli, target, work):
         return
     # darwin-arm64 now implements every thread native (start, join, join_status, the word natives); its coverage is darwin-thread-core and
     # darwin-thread-programs. Every other target must still reject any thread program.
+    if target == "linux-arm64":
+        # The same native suites as darwin-arm64, run by the linux-arm64 job: start/join, every thread and channel program, the faults and the
+        # ownership rejections. They are required (a failure here fails the job).
+        linux_arm64_thread_core(report, cli, work / "core")
+        darwin_thread_programs(report, cli, work / "programs", target="linux-arm64", prefix="linux-arm64")
+        darwin_thread_faults(report, cli, work / "faults", target="linux-arm64", prefix="linux-arm64")
     if target in ("darwin-arm64", "linux-arm64"):
         return report.check("thread-natives-fail-closed", "NOT_APPLICABLE", "native", "", required=False,
                             note="%s implements the thread natives; see %s-thread-programs" % (target, target.split("-")[0] if target == "darwin-arm64" else target))
@@ -717,8 +723,8 @@ def darwin_thread_programs(report, cli, work, target="darwin-arm64", prefix="dar
 def linux_arm64_thread_core(report, cli, work):
     """Public thread natives on linux-arm64, first slice: `start` and `join` through the cooperative worker bridge on the Linux thread layer (clone, futex, TPIDR_EL0 keys; bunko/kiso/aot/lower/linuxthreads.mio), tests/threads/core_runtime.mio.
 
-    Built by the native CLI like any program (`mio build`, host target linux-arm64), run on this host normally and with --gc-stress, repeated. Not
-    required and not yet a parity claim: the word natives, kiso/thread and channels are still missing on this target (matrix cells I/J/K stay UNSUPPORTED).
+    Built by the native CLI like any program (`mio build`, host target linux-arm64), run on this host normally and with --gc-stress, repeated. Required: a
+    failure fails the linux-arm64 job.
     """
     expected = b"hai\n7\n500500\n2001000\n4501500\n1400\n"
     Path(work).mkdir(parents=True, exist_ok=True)
@@ -736,8 +742,8 @@ def linux_arm64_thread_core(report, cli, work):
                 break
         else:
             passed.append(label)
-    report.check("linux-arm64-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], required=False, passed=passed,
-                 note="start and join only (clone, futex, TPIDR_EL0 keys); word natives, kiso/thread and channels are not available on linux-arm64 yet")
+    report.check("linux-arm64-thread-core", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:700], passed=passed,
+                 note="start and join (clone, futex, TPIDR_EL0 keys), normal and gc-stress, repeated")
 
 
 def darwin_thread_probe(report, cli, work):
@@ -995,10 +1001,6 @@ def follower(args, target):
         report.check("cross-equals-native", "PASS" if same else "FAIL", "native",
                      "" if same else "the Linux cross build (A) differs from this host's native build (B)")
         smoke(report, cli, target, work)
-        if target == "linux-arm64":
-            linux_arm64_thread_core(report, cli, work / "thread-core")
-            darwin_thread_programs(report, cli, work / "thread-programs", target="linux-arm64", prefix="linux-arm64")
-            darwin_thread_faults(report, cli, work / "thread-faults", target="linux-arm64", prefix="linux-arm64")
         if target == "darwin-arm64":
             darwin_profile(report, cli, work)
             darwin_worker_baseline(report, cli, work / "worker-baseline")
