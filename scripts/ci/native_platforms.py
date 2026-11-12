@@ -697,11 +697,17 @@ def darwin_thread_programs(report, cli, work):
                 failures.append("%s/%s: build failed: %s" % (name, label, brief(reason, 160)))
                 continue
             repeats = 3 if label == "normal" else 1
+            if name == "creation_limit":
+                repeats = 5   # every run is recorded: a timing-dependent failure shows as a rate instead of the first failure
+            bad = []
             for repeat in range(repeats):
-                code, out, err, _ = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
+                code, out, err, seconds = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
                 if code != 0 or out.encode() != module.PROGRAMS[name]:
-                    failures.append("%s/%s run %d: exit %s stdout %r stderr %s" % (name, label, repeat, code, out[:120], brief(err, 120)))
-                    break
+                    bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
+                    if name != "creation_limit":
+                        break
+            if bad:
+                failures.append("%s/%s: %d of %d runs failed (%s)" % (name, label, len(bad), repeats, "; ".join(bad)[:400]))
             else:
                 passed.append("%s/%s" % (name, label))
     report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
