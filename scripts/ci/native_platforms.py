@@ -724,6 +724,55 @@ def darwin_thread_probe(report, cli, work):
     report.check("darwin-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
 
 
+def darwin_thread_faults(report, cli, work):
+    """reclaim (heavy allocation across threads), the thread-stack overflow fault and the compile-time ownership rejections, for darwin-arm64.
+
+    The fault must end the process by a signal after the expected output (the guard page of a thread stack): macOS reports a stack overflow as
+    SIGSEGV or SIGBUS, either is accepted and the one seen is recorded. Ownership errors are frontend diagnostics and must be identical here.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("threads_run", ROOT / "tests/threads/run.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    Path(work).mkdir(parents=True, exist_ok=True)
+    failures, passed = [], []
+    image = Path(work) / "reclaim"
+    ok, reason, _ = cli_build(report, "darwin-thread-faults-build-reclaim", cli, str(ROOT / "tests/threads/reclaim.mio"), "darwin-arm64", image)
+    if not ok:
+        failures.append("reclaim: build failed: %s" % brief(reason, 200))
+    else:
+        for repeat in range(3):
+            code, out, err, seconds = run(report, "darwin-thread-faults-run-reclaim-%d" % repeat, [image], timeout=300)
+            if code != 0 or out.encode() != module.PROGRAMS["reclaim"]:
+                failures.append("reclaim run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
+                break
+        else:
+            passed.append("reclaim")
+    for name, (before, _signal) in module.FAULTS.items():
+        image = Path(work) / name
+        ok, reason, _ = cli_build(report, "darwin-thread-faults-build-" + name, cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", image)
+        if not ok:
+            failures.append("%s: build failed: %s" % (name, brief(reason, 200)))
+            continue
+        seen = []
+        for repeat in range(3):
+            code, out, err, seconds = run(report, "darwin-thread-faults-run-%s-%d" % (name, repeat), [image], timeout=120)
+            seen.append(code)
+            if code not in (-11, -10) or out.encode() != before:
+                failures.append("%s run %d: exit %s stdout %r, want death by SIGSEGV or SIGBUS after %r" % (name, repeat, code, out[:80], before))
+                break
+        else:
+            passed.append("%s (exit %s)" % (name, ",".join(str(c) for c in seen)))
+    for name, code_text in module.NEGATIVE.items():
+        code, out, err, _ = run(report, "darwin-thread-faults-negative-" + name,
+                                [cli, "build", str(ROOT / "tests/threads" / (name + ".mio")), "--target=darwin-arm64", "-o", Path(work) / name], timeout=CLI_BUILD_TIMEOUT)
+        if code == 0 or code_text not in (out + err):
+            failures.append("%s: expected compile error %s, got exit %s: %s" % (name, code_text, code, brief(err or out, 160)))
+        else:
+            passed.append("%s rejected with %s" % (name, code_text))
+    report.check("darwin-thread-faults", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
+
+
 def contract(report, cli, target, reference="", suite="contract"):
     """tests/runtime-abi/run.py --suite contract (RA-1 cases) or differential (former pureLowerPrograms corpus)."""
     output = report.output / ("runtime-abi" if suite == "contract" else "native-differential")
@@ -924,6 +973,7 @@ def follower(args, target):
             darwin_thread_core(report, cli, work / "thread-core")
             darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
+            darwin_thread_faults(report, cli, work / "thread-faults")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
