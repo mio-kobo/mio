@@ -83,7 +83,19 @@ waza wr_current(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
     emit(c,arm64.ldr_x(10,0,gc.thread_registered));arm64.assembler_cbz_x(c,10,"runtime_error");
     emit(c,arm64.add_imm_x(9,0,gc.thread_shadow,iie));emit(c,arm64.stlr_x(24,9));wr_imports(c,p,first);
 }
-waza wr_call(c:arm64.Assembler,name:string) -> unit {arm64.assembler_bl(c,string.concat("attached_",name));arm64.assembler_cbnz_x(c,0,"runtime_error");}
+// A failed runtime call ends the process. In the public thread build the exit status says which call failed and how (30 + 4 * call + min(result, 3));
+// test builds keep the plain runtime error (status 1).
+waza wr_call(c:arm64.Assembler,name:string) -> unit {
+    arm64.assembler_bl(c,string.concat("attached_",name));
+    moshi(arm64.assembler_label_word(c,"worker_evidence")>=0){arm64.assembler_cbnz_x(c,0,"runtime_error");}
+    sore {
+        kaku names=["gc_block_enter","gc_block_leave","thread_open_shared","thread_wait_started","thread_wait_completion","thread_close","gc_mutator_poll","gc_heap_enter","thread_attach","thread_enter","thread_leave","gc_scan_roots"];
+        kaku id=11;kaku i=0;aida(i<len(names)){moshi(names[i]==name){id=i;}i=i+1;}
+        kaku ok=block_label("wr_ok_",len(c.words));arm64.assembler_cbz_x(c,0,ok);
+        emit(c,arm64.cmp_imm_x(0,3,iie));kaku keep=block_label("wr_rc_",len(c.words));arm64.assembler_b_cond(c,9,keep);emit(c,arm64.movz_x(0,3,0));arm64.assembler_label(c,keep);
+        emit(c,arm64.add_imm_x(0,0,30+id*4,iie));emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));arm64.assembler_label(c,ok);
+    }
+}
 waza wr_poll(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,operation:string) -> unit {wr_current(c,p,first);move_x(c,1,24);wr_call(c,operation);}
 waza wr_addr(c:arm64.Assembler,r:int64,base:int64,offset:int64) -> unit {wr_num(c,12,offset);emit(c,arm64.add_x(r,base,12));}
 waza wr_increment(c:arm64.Assembler,ctx:int64,offset:int64) -> unit {emit(c,arm64.ldr_x(10,ctx,offset));emit(c,arm64.add_imm_x(10,10,1,iie));emit(c,arm64.str_x(10,ctx,offset));}
