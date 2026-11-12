@@ -593,11 +593,13 @@ def thread_checks(report, cli, target, work):
                      "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                      note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
         return
-    # darwin-arm64 implements start, join, the word natives and so kiso/thread channels (checks darwin-thread-core, darwin-thread-programs); what
-    # must still fail closed there is join_status (join_checked), which invalid_handles.mio needs. Every other target must reject any thread program.
-    partial = target == "darwin-arm64"
-    program = "invalid_handles.mio" if partial else "basic.mio"
-    label = "thread-invalid-handles-fail-closed" if partial else "thread-natives-fail-closed"
+    # darwin-arm64 now implements every thread native (start, join, join_status, the word natives); its coverage is darwin-thread-core and
+    # darwin-thread-programs. Every other target must still reject any thread program.
+    if target == "darwin-arm64":
+        return report.check("thread-natives-fail-closed", "NOT_APPLICABLE", "native", "", required=False, note="darwin-arm64 implements the thread natives; see darwin-thread-programs")
+    partial = False
+    program = "basic.mio"
+    label = "thread-natives-fail-closed"
     image = Path(work) / ("thread-program" + EXE.get(target, ""))
     Path(work).mkdir(parents=True, exist_ok=True)
     built, reason, _ = cli_build(report, "thread-natives-build", cli, str(ROOT / "tests/threads" / program), target, image)
@@ -680,7 +682,8 @@ def darwin_thread_programs(report, cli, work):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
-             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle"]
+             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
+             "shutdown_active"]
     stress = ["basic", "nested", "channel_basic", "channel_close"]
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
@@ -694,14 +697,31 @@ def darwin_thread_programs(report, cli, work):
                 failures.append("%s/%s: build failed: %s" % (name, label, brief(reason, 160)))
                 continue
             repeats = 3 if label == "normal" else 1
+            if name == "creation_limit":
+                repeats = 5   # every run is recorded: a timing-dependent failure shows as a rate instead of the first failure
+            bad = []
             for repeat in range(repeats):
-                code, out, err, _ = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
+                code, out, err, seconds = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
                 if code != 0 or out.encode() != module.PROGRAMS[name]:
-                    failures.append("%s/%s run %d: exit %s stdout %r stderr %s" % (name, label, repeat, code, out[:120], brief(err, 120)))
-                    break
+                    bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
+                    if name != "creation_limit":
+                        break
+            if bad:
+                failures.append("%s/%s: %d of %d runs failed (%s)" % (name, label, len(bad), repeats, "; ".join(bad)[:400]))
             else:
                 passed.append("%s/%s" % (name, label))
     report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], required=False, passed=passed)
+
+
+def darwin_thread_probe(report, cli, work):
+    """Diagnostic (non-required): tests/threads/limit_probe.mio output, exit status and time are recorded as evidence, never compared."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "limit-probe"
+    ok, reason, _ = cli_build(report, "darwin-thread-probe-build", cli, str(ROOT / "tests/threads/limit_probe.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-thread-probe", "FAIL", "native", brief(reason, 300), required=False)
+    code, out, err, seconds = run(report, "darwin-thread-probe-run", [image], timeout=120)
+    report.check("darwin-thread-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %s stderr %s" % (code, seconds or 0, out.replace("\n", ",")[:600], brief(err, 200)), required=False)
 
 
 def contract(report, cli, target, reference="", suite="contract"):
@@ -902,6 +922,7 @@ def follower(args, target):
             darwin_profile(report, cli, work)
             darwin_worker_baseline(report, cli, work / "worker-baseline")
             darwin_thread_core(report, cli, work / "thread-core")
+            darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)

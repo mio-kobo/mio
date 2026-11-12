@@ -1606,7 +1606,7 @@ waza emit_function_epilogue(code: arm64.Assembler, id: int64) -> unit {
 waza emit_native_body(code: arm64.Assembler, patches: []macho.AddressPatch, analysis: types.TypeAnalysis,
     function: mochi.Function, op: int64) -> bool {
     moshi (nativefs.parameter_count(op) != function.parameter_count || !function.returns_value) { kaesu iie; }
-    moshi (op >= 43 && op <= 50 && !worker_roots_enabled(code)) { kaesu iie; }   // the word natives exist only in the Darwin thread build
+    moshi (op >= 43 && op <= 51 && !worker_roots_enabled(code)) { kaesu iie; }   // the word natives exist only in the Darwin thread build
     moshi (nativefs.entry_label(op) == "") { kaesu iie; }   // operations without an arm64 routine (the OS thread natives) fail closed
     kaku roots = 0; kaku index = 0;
     aida (index < function.parameter_count) { moshi (nativefs.parameter_is_root(op, index)) { roots = roots + 1; } index = index + 1; }
@@ -2392,7 +2392,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (problem != mu) { kaesu failed(problem); }
     arm64.assembler_label(code, "normal_exit");
     // Completion cannot precede outstanding user callbacks or their reports.
-    moshi(worker_roots_enabled(code)){arm64.assembler_bl(code,"attached_workers_join_all");}
+    moshi(worker_roots_enabled(code) && arm64.assembler_label_word(code,"worker_evidence")>=0){arm64.assembler_bl(code,"attached_workers_join_all");}
     moshi (uses_testing_packet(file)) { emit_testing_completion(code); }
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
     moshi (native_fs) { arm64.assembler_bl(code, "nativefs_cleanup"); }
