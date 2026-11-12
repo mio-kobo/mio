@@ -1,0 +1,124 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "selfhost/parser";
+yobu "selfhost/resolver";
+
+// Cross-thread send boundary (docs/concurrency.md, E0705).
+//
+// `kiso/thread::send` hands its value to another thread. A value that can reach mutable state (arrays, Maps, closures and the cells they
+// capture, resources, structs and enums holding them, unresolved type parameters) may only cross that boundary through an explicit `yuzuru`
+// transfer, which the transfer pass then checks (use after transfer, live aliases, escapes). Scalars, strings, immutable structs of those and
+// the synchronized Channel handle may be sent as they are. The callee is identified by its resolved symbol (package path and name), so an
+// import alias or a generic instantiation cannot change what is checked; a wrapper that forwards a parameter is checked at its own send
+// site, where a parameter cannot be transferred and is therefore rejected too. The check does not depend on the program writing `yuzuru`.
+// The Go reference frontend cannot load `mio/thread/runtime`, so thread programs only reach this self-hosted checker.
+
+waza send_type_name_equal(info_name: string, package_path: string, name: string) -> bool {
+    kaesu info_name == string.concat(package_path, string.concat(".", name));
+}
+
+waza send_visiting(visiting: []int64, type_id: int64) -> bool {
+    kaku index = 0;
+    aida (index < len(visiting)) { moshi (visiting[index] == type_id) { kaesu hai; } index = index + 1; }
+    kaesu iie;
+}
+
+waza send_names(parameters: []TypeParameter) -> []string {
+    kaku names = array.with_capacity[string](len(parameters));
+    kaku index = 0;
+    aida (index < len(parameters)) { array.push(names, parameters[index].name); index = index + 1; }
+    kaesu names;
+}
+
+// Whether a value of this type can reach state another thread could observe changing. Unknown types count as mutable (over-reject only).
+waza send_type_mutable(env: TypeEnvironment, type_id: int64, visiting: []int64) -> bool {
+    moshi (type_id <= 0 || type_id >= len(env.result.types)) { kaesu hai; }
+    kaku info = env.result.types[type_id];
+    kaku kind = type_kind_code(info.kind);
+    moshi (kind == 16) { kaesu send_type_mutable(env, info.element, visiting); }
+    moshi (kind == 0 || kind == 14 || kind == 15 || kind == 18 || kind == 19) { kaesu hai; }
+    moshi (kind != 17) { kaesu iie; }
+    moshi (info.name == "Map") { kaesu hai; }
+    moshi (send_type_name_equal(info.name, "kiso/thread", "Channel")) { kaesu iie; }
+    moshi (send_visiting(visiting, type_id)) { kaesu iie; }
+    array.push(visiting, type_id);
+    kaku index = 0;
+    aida (index < len(env.result.structs)) {
+        kaku definition = env.result.structs[index];
+        moshi (send_type_name_equal(info.name, definition.package_path, definition.name)) {
+            kaku names = send_names(definition.parameters);
+            kaku field = 0;
+            aida (field < len(definition.fields)) {
+                kaku field_type = substitute_type(env, definition.fields[field].type_id, names, info.arguments);
+                moshi (send_type_mutable(env, field_type, visiting)) { kaesu hai; }
+                field = field + 1;
+            }
+            kaesu iie;
+        }
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(env.result.enums)) {
+        kaku definition = env.result.enums[index];
+        moshi (send_type_name_equal(info.name, definition.package_path, definition.name)) {
+            kaku names = send_names(definition.parameters);
+            kaku variant = 0;
+            aida (variant < len(definition.variants)) {
+                kaku field = 0;
+                aida (field < len(definition.variants[variant].fields)) {
+                    kaku field_type = substitute_type(env, definition.variants[variant].fields[field], names, info.arguments);
+                    moshi (send_type_mutable(env, field_type, visiting)) { kaesu hai; }
+                    field = field + 1;
+                }
+                variant = variant + 1;
+            }
+            kaesu iie;
+        }
+        index = index + 1;
+    }
+    kaesu hai;
+}
+
+waza send_symbol(env: TypeEnvironment) -> int64 {
+    kaku index = 0;
+    aida (index < len(env.resolved.symbols)) {
+        kaku symbol = env.resolved.symbols[index];
+        kaku kind = resolver.symbol_kind_code(symbol.kind);
+        moshi ((kind == 4 || kind == 5) && symbol.package_path == "kiso/thread" && symbol.name == "send") { kaesu index; }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+waza send_check_node(env: TypeEnvironment, file_id: int64, node_id: int64, send: int64) -> unit {
+    kaku node = node_at(env, file_id, node_id);
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi (kind == 22 && len(node.children) >= 3) {
+        kaku target_id = node.children[0];
+        kaku target = node_at(env, file_id, target_id);
+        moshi (parser.node_kind_code(target.kind) == 23) { target_id = target.children[0]; }
+        moshi (binding_of(env, file_id, target_id) == send) {
+            kaku value_id = node.children[2];
+            kaku value = node_at(env, file_id, value_id);
+            aida (parser.node_kind_code(value.kind) == 13) { value_id = value.children[0]; value = node_at(env, file_id, value_id); }
+            moshi (!(parser.node_kind_code(value.kind) == 12 && value.operator == 51)) {
+                kaku type_id = own_node_type(env, file_id, node.children[2]);
+                moshi (type_id <= 0 || send_type_mutable(env, type_id, array.with_capacity[int64](4))) {
+                    add_type_error(env, TypeErrorKind.OwnershipError(), "E0705", file_id, node.children[2], 0, type_id, "thread.send of a value that can reach mutable state requires a yuzuru transfer");
+                }
+            }
+        }
+    }
+    kaku child = 0;
+    aida (child < len(node.children)) { send_check_node(env, file_id, node.children[child], send); child = child + 1; }
+}
+
+waza check_send_boundary(env: TypeEnvironment) -> unit {
+    kaku send = send_symbol(env);
+    moshi (send < 0) { kaesu; }
+    kaku file_id = 0;
+    aida (file_id < len(env.resolved.files)) {
+        send_check_node(env, file_id, env.resolved.files[file_id].root, send);
+        file_id = file_id + 1;
+    }
+}
