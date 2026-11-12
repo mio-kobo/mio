@@ -769,7 +769,7 @@ def darwin_thread_bench(report, cli, work):
         return report.check("darwin-thread-bench", "FAIL", "native", brief(reason, 300), required=False)
     lines = []
     for repeat in range(2):
-        code, out, err, seconds = run(report, "darwin-thread-bench-run-%d" % repeat, [image], timeout=240)
+        code, out, err, seconds = run_sampled(report, "darwin-thread-bench-run-%d" % repeat, [image], timeout=240, sample_after=45 if repeat == 0 else 100000)
         lines.append("run %d: exit %s after %.1fs %s" % (repeat, code, seconds or 0, out.strip().replace("\n", " ")[:400]))
     report.check("darwin-thread-bench", "PASS", "native", " | ".join(lines)[:1500], required=False)
 
