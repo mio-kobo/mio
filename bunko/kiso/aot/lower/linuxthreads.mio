@@ -95,7 +95,14 @@ waza emit_linux_threads(c: arm64.Assembler, p: []macho.AddressPatch, first: int6
     arm64.assembler_label(c, "lxt_cond_wake"); move_x(c, 15, 0);
     arm64.assembler_label(c, "lxt_cond_bump"); emit(c, arm64.ldxr_x(9, 15, hai)); emit(c, arm64.add_imm_x(9, 9, 1, iie)); emit(c, arm64.stxr_x(11, 9, 15, hai));
     arm64.assembler_cbnz_x(c, 11, "lxt_cond_bump");
-    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 129, 0)); move_x(c, 2, 13); lxt_sys(c, 98); lxt_zero_return(c);
+    move_x(c, 0, 15); emit(c, arm64.movz_x(1, 129, 0)); move_x(c, 2, 13); lxt_sys(c, 98);
+    // The collector's gc_end broadcasts to every thread and the owner may start its next epoch within nanoseconds, before a woken thread (tens of
+    // microseconds away on Linux) can run: a thread that was parked would never get to allocate. When a wake really woke a waiter, pause 30 us so
+    // that waiter can run first.
+    emit(c, arm64.cmp_imm_x(0, 0, iie)); arm64.assembler_b_cond(c, 13, "lxt_wake_none");
+    emit(c, arm64.sub_imm_x(31, 31, 16, iie)); emit(c, arm64.movz_x(9, 0, 0)); emit(c, arm64.str_x(9, 31, 0)); wr_num(c, 10, 30000); emit(c, arm64.str_x(10, 31, 8));
+    move_x(c, 0, 31); emit(c, arm64.movz_x(1, 0, 0)); lxt_sys(c, 101); emit(c, arm64.add_imm_x(31, 31, 16, iie));
+    arm64.assembler_label(c, "lxt_wake_none"); lxt_zero_return(c);
     // pthread_cond_timedwait_relative_np(cond, mutex, relative timespec*): unlock, futex wait on the sequence read before unlocking, lock again.
     // Returns 0 (woken, or a changed sequence) or 60 (timed out).
     arm64.assembler_label(c, "lxt_cond_timedwait");
