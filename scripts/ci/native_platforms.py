@@ -150,6 +150,40 @@ def run(report, label, argv, cwd=ROOT, stdin=None, timeout=1800, env=None):
     return code, out.decode(errors="replace"), err.decode(errors="replace"), seconds
 
 
+def run_sampled(report, label, argv, timeout, sample_after=10, cwd=ROOT):
+    """Like run(), for macOS: a program that is still running after sample_after seconds gets a `sample` of all its threads' call stacks (kept in the
+    log of this run, after its output), then it is waited for until the timeout. Returns what run() returns."""
+    argv = [*report.exec_prefix, *argv]
+    environment = dict(os.environ, MIO_BUNKO=str(ROOT / "bunko"))
+    started = time.monotonic()
+    sampled = ""
+    proc = subprocess.Popen([str(a) for a in argv], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+    try:
+        out, err = proc.communicate(timeout=sample_after)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        try:
+            taken = subprocess.run(["/usr/bin/sample", str(proc.pid), "3", "-mayDie"], capture_output=True, timeout=90)
+            sampled = taken.stdout.decode(errors="replace")[:200000] + taken.stderr.decode(errors="replace")[:2000]
+        except (OSError, subprocess.TimeoutExpired) as error:
+            sampled = "sample failed: %s" % error
+        try:
+            out, err = proc.communicate(timeout=max(1, timeout - sample_after - 3))
+            code = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+            code = None
+            err = (err or b"") + b"\n[timed out]"
+    seconds = time.monotonic() - started
+    with open(report.logs / (label + ".log"), "wb") as stream:
+        stream.write(("$ %s\n[cwd %s] [exit %s] [%.1fs]\n" % (" ".join(str(a) for a in argv), cwd, code, seconds)).encode())
+        stream.write(b"--- stdout\n" + (out or b"") + b"\n--- stderr\n" + (err or b""))
+        if sampled:
+            stream.write(b"\n--- sample (taken after %d s while the program was still running)\n" % sample_after + sampled.encode())
+    return code, (out or b"").decode(errors="replace"), (err or b"").decode(errors="replace"), seconds
+
+
 def brief(text, limit=300):
     text = " ".join(text.split())
     return text[-limit:]
@@ -701,7 +735,7 @@ def darwin_thread_programs(report, cli, work):
                 repeats = 5   # every run is recorded: a timing-dependent failure shows as a rate instead of the first failure
             bad = []
             for repeat in range(repeats):
-                code, out, err, seconds = run(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180)
+                code, out, err, seconds = run_sampled(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180, sample_after=20)
                 if code != 0 or out.encode() != module.PROGRAMS[name]:
                     bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
                     if name != "creation_limit":
@@ -738,6 +772,22 @@ def darwin_thread_bench(report, cli, work):
         code, out, err, seconds = run(report, "darwin-thread-bench-run-%d" % repeat, [image], timeout=240)
         lines.append("run %d: exit %s after %.1fs %s" % (repeat, code, seconds or 0, out.strip().replace("\n", " ")[:400]))
     report.check("darwin-thread-bench", "PASS", "native", " | ".join(lines)[:1500], required=False)
+
+
+def darwin_thread_repro(report, cli, work):
+    """Diagnostic (non-required): tests/threads/pingpong_close.mio, run three times with a stack sample of any run that takes longer than 8 seconds."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "pingpong-close"
+    ok, reason, _ = cli_build(report, "darwin-thread-repro-build", cli, str(ROOT / "tests/threads/pingpong_close.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-thread-repro", "FAIL", "native", brief(reason, 300), required=False)
+    lines, bad = [], 0
+    for repeat in range(3):
+        code, out, err, seconds = run_sampled(report, "darwin-thread-repro-run-%d" % repeat, [image], timeout=90, sample_after=8)
+        good = code == 0 and out == "2000\n2000\n"
+        bad += 0 if good else 1
+        lines.append("run %d: exit %s after %.1fs stdout %r" % (repeat, code, seconds or 0, out[:60]))
+    report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:900], required=False)
 
 
 def darwin_thread_faults(report, cli, work):
@@ -991,6 +1041,7 @@ def follower(args, target):
             darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
             darwin_thread_faults(report, cli, work / "thread-faults")
+            darwin_thread_repro(report, cli, work / "thread-repro")
             darwin_thread_bench(report, cli, work / "thread-bench")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
