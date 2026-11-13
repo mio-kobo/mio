@@ -30,13 +30,18 @@ yobu "kiso/array";
 // a collection waits until such a thread returns.
 
 // gc_state() + 72 is the saved initial stack pointer and + 80 the testing failure counter: these words are free.
-koukai teisu mut_lock = 88;
+// The heap lock has a cache line of its own (data offset 1088, in the unused range): every allocation writes it, while every thread reads the stop
+// flag at each poll. Sharing a line made each allocation invalidate that flag in all other cores' caches.
+koukai teisu mut_lock = -2512;
 koukai teisu mut_stop = 96;
 koukai teisu mut_count = 104;
 koukai teisu mut_registry = 112;
 koukai teisu mut_table = 120;           // address of the thread handle table (mmap, 4096 slots of 16 bytes), set by rt.mut_init
 koukai teisu mut_slab_next = 128;        // channel word blocks are carved from 64 KiB chunks that are never unmapped
 koukai teisu mut_slab_end = 136;
+// Set by the allocator (under the heap lock) when the allocation volume reaches the threshold, cleared when the collector resumes the world: a
+// poll reads this word instead of the volume and threshold words, which every allocation writes.
+koukai teisu mut_want = 144;
 koukai teisu thread_slots = 4096;
 koukai teisu mut_main_record = 256;      // offset from gc_state(): the main thread's record
 
@@ -46,13 +51,19 @@ koukai teisu rec_state = 16;
 koukai teisu rec_rbp = 24;
 koukai teisu rec_ret = 32;
 koukai teisu rec_entry = 40;
+// Per-thread allocation cache: five singly linked lists of free blocks of exactly 24, 32, 40, 48 and 56 bytes (record words 11..15; the record is 128 bytes and word 10 is the join status). A small
+// allocation pops from the thread's own list, with no lock and no write to shared memory; an empty list is refilled with 64 blocks carved from one
+// locked allocation. The blocks in a cache are ordinary free blocks (valid header, mark word 0), so a sweep reclaims them like any dead block; the
+// collector empties every thread's lists before it resumes the world.
+koukai teisu rec_cache = 88;                // words 11..15 (88..127); word 10 (80) is the join status
 koukai teisu rec_tid = 48;
 koukai teisu rec_result = 56;
 koukai teisu rec_base = 64;
 koukai teisu rec_size = 72;
 koukai teisu rec_joinerr = 80;           // status of this thread's last join: 0 ok, 22 (EINVAL) = not a live thread handle
-koukai teisu rec_pin0 = 88;              // two heap references (GC roots) kept alive while the thread is in a blocking region: 0 when unused
-koukai teisu rec_pin1 = 96;
+// The allocation cache occupies 88..127. Leave word 128 available for the joined-stack pool; the thread mapping reserves 256 bytes here.
+koukai teisu rec_pin0 = 136;             // two heap references (GC roots) kept alive while the thread is in a blocking region: 0 when unused
+koukai teisu rec_pin1 = 144;
 
 koukai teisu thread_stack_bytes = 1048576;
 koukai teisu thread_guard_bytes = 4096;
@@ -112,13 +123,76 @@ waza emit_lock_routines(code: x86_64.Assembler) -> unit {
 // rt.alloc (mutator mode): take the heap lock around the unchanged single-mutator allocator, which is emitted as rt.alloc.locked.
 waza emit_alloc_wrapper(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.alloc");
+    // fast path: sizes 24..56 come from the thread's own cache. rdx = size - 24 = 8 * class (anything else wraps or exceeds 32: slow path)
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.sub_ri(code, x86_64.rdx, 24);
+    x86_64.cmp_ri(code, x86_64.rdx, 32);
+    x86_64.jcc(code, x86_64.cc_a, "rt.alloc.slow");
+    fs_self(code, x86_64.rcx);
+    x86_64.add_rr(code, x86_64.rcx, x86_64.rdx);                  // rcx = record + 8 * class
+    x86_64.mov_load(code, x86_64.r8, x86_64.rcx, rec_cache);
+    x86_64.test_rr(code, x86_64.r8, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_e, "rt.alloc.refill");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.r8, 16);
+    x86_64.mov_store(code, x86_64.rcx, rec_cache, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 0);                           // the block is handed out zeroed (only these three words were written)
+    x86_64.mov_store(code, x86_64.r8, 0, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.r8, 8, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.r8, 16, x86_64.rdx);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r8);
+    x86_64.ret(code);
+    // refill: one locked allocation of 64 blocks, carved into free blocks; the first is returned and the rest become the cache
+    x86_64.label(code, "rt.alloc.refill");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.push_r(code, x86_64.r9);
+    x86_64.push_r(code, x86_64.r10);
+    x86_64.push_r(code, x86_64.r11);
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);                  // block size
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rcx);                  // record + 8 * class
+    x86_64.shl_ri(code, x86_64.rax, 6);
+    x86_64.call(code, "rt.alloc.slow");                          // rax = a zeroed chunk of 64 blocks
+    x86_64.mov_rr(code, x86_64.r9, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.r8, x86_64.rsi);
+    x86_64.shl_ri(code, x86_64.r8, 8);                            // free block header: size << 8, kind 0
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.r9);
+    x86_64.mov_ri(code, x86_64.r10, 63);
+    x86_64.label(code, "rt.alloc.carve");
+    x86_64.mov_rr(code, x86_64.r11, x86_64.rdx);
+    x86_64.add_rr(code, x86_64.r11, x86_64.rsi);
+    x86_64.mov_store(code, x86_64.rdx, 0, x86_64.r8);
+    x86_64.mov_store(code, x86_64.rdx, 16, x86_64.r11);
+    x86_64.mov_rr(code, x86_64.rdx, x86_64.r11);
+    x86_64.sub_ri(code, x86_64.r10, 1);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.alloc.carve");
+    x86_64.mov_store(code, x86_64.rdx, 0, x86_64.r8);             // the last block keeps next = 0
+    x86_64.mov_load(code, x86_64.rdx, x86_64.r9, 16);
+    x86_64.mov_store(code, x86_64.rdi, rec_cache, x86_64.rdx);    // the cache is everything after the first block
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.r9, 0, x86_64.rdx);
+    x86_64.mov_store(code, x86_64.r9, 16, x86_64.rdx);
+    x86_64.mov_rr(code, x86_64.rax, x86_64.r9);
+    x86_64.pop_r(code, x86_64.r11);
+    x86_64.pop_r(code, x86_64.r10);
+    x86_64.pop_r(code, x86_64.r9);
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.pop_r(code, x86_64.rsi);
+    x86_64.ret(code);
+    // slow path: the heap lock around the unchanged single-mutator allocator
+    x86_64.label(code, "rt.alloc.slow");
     x86_64.mov_ri(code, x86_64.r8, 0);
     x86_64.mov_ri(code, x86_64.rcx, mut_state_address() + mut_lock);
     x86_64.label(code, "rt.alloc.acquire");
+    // test and test-and-set: a waiter only reads the lock word (a shared cache line) until it looks free; the atomic exchange that writes it
+    // is tried only then. A plain exchange loop made every waiting thread invalidate the line on every attempt.
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 0);
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.alloc.busy");
     x86_64.mov_ri(code, x86_64.rdx, 1);
     x86_64.xchg_store(code, x86_64.rcx, x86_64.rdx);
     x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
     x86_64.jcc(code, x86_64.cc_e, "rt.alloc.held");
+    x86_64.label(code, "rt.alloc.busy");
     x86_64.add_ri(code, x86_64.r8, 1);
     x86_64.cmp_ri(code, x86_64.r8, 64);
     x86_64.jcc(code, x86_64.cc_b, "rt.alloc.pause");
@@ -377,10 +451,27 @@ koukai waza emit_collect_mutators(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.mgc.marked");
     x86_64.call(code, "rt.gc_drain");
     emit_gc_sweep(code);
+    // the sweep rebuilt every free list from the heap itself, so the blocks in the threads' caches are on them again: empty all caches
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_registry);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.label(code, "rt.mgc.cache_loop");
+    x86_64.test_rr(code, x86_64.rdx, x86_64.rdx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.mgc.cache_done");
+    x86_64.mov_store(code, x86_64.rdx, rec_cache, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rdx, rec_cache + 8, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rdx, rec_cache + 16, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rdx, rec_cache + 24, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rdx, rec_cache + 32, x86_64.rax);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rdx, rec_next);
+    x86_64.jmp(code, "rt.mgc.cache_loop");
+    x86_64.label(code, "rt.mgc.cache_done");
     // resume the world
     fs_self(code, x86_64.rsi);
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.mov_store(code, x86_64.rsi, rec_state, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_want);
+    x86_64.mov_store(code, x86_64.rdi, 0, x86_64.rdx);   // no collection wanted any more (the sweep reset the volume)
     x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);
     x86_64.xchg_store(code, x86_64.rdi, x86_64.rdx);     // stop = 0 (sequentially consistent)
     x86_64.mov_ri(code, x86_64.rdi, mut_state_address() + mut_stop);

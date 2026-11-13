@@ -41,5 +41,7 @@ waza test_handle_table_and_slab_words_do_not_alias_other_state() -> unit {
     testing.expect(mut_main_record > mut_slab_end, "the main record starts after the last state word");
     testing.expect(thread_slots == 4096 && thread_slots * 16 == 65536, "4096 slots of 16 bytes");
     testing.expect(rec_joinerr == 80 && rec_joinerr + 8 <= 128, "the join status word is inside the 128-byte record");
-    testing.expect(rec_pin0 == 88 && rec_pin1 == 96 && rec_pin1 + 8 <= 128, "the blocking-region pin words follow the join status inside the 128-byte record");
+    testing.expect(rec_pin0 >= rec_cache + 40 && rec_pin1 == rec_pin0 + 8, "blocking roots must not alias any allocation-cache list");
+    testing.expect(rec_pin0 > 128 && rec_pin1 + 8 <= 256, "blocking roots leave the stack-pool link free and fit in the reserved thread record area");
+    testing.expect(mut_main_record + rec_pin1 + 8 <= 4096 - 3600, "main-thread blocking roots must not overlap the free-list bins");
 }
