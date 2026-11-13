@@ -24,7 +24,23 @@ waza gc_park_locked_program() -> ir.Function {
     ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"resumed");ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);ir.put(f,ir.release_store,0,0,12,thread_ack_epoch);ir.put(f,ir.copy,19,12,0,0);
     ir.put(f,ir.acquire_load,12,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,17,12,15,0);ir.branch(f,ir.nonzero,17,"check_deadline");ir.put(f,ir.copy,15,12,0,0);ir.invoke_function(f,"platform_now",14,[]);ir.put(f,ir.add,14,14,16,0);
     ir.branch(f,ir.label,0,"check_deadline");ir.invoke_function(f,"platform_now",17,[]);ir.put(f,ir.less_unsigned,18,17,14,0);ir.branch(f,ir.zero,18,"fatal");
-    tload(f,2,thread_mutex);tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",5,[3,2,4]);ir.branch(f,ir.zero,5,"wait");tcheck(f,5,1,"wait");terror(f,5);ir.branch(f,ir.jump,0,"wait");
+    // An epoch normally lasts until its owner's next poll, a few microseconds: spin on the owner word before the kernel wait, so that a thread that
+    // is released quickly resumes with no system call. The mutex is released for the spin so a collector can inspect the published parked state and its acknowledged epoch. A new epoch
+    // still needs this thread to refresh its acknowledgement; trylock alone does not acknowledge a gc-parked thread. After the spin the thread takes the
+    // mutex again and, if the epoch is still active, sleeps in the timed wait below as before.
+    tload(f,2,thread_mutex);ir.call(f,ir.mutex_unlock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");
+    tconstant(f,7,4000);tconstant(f,8,-1);
+    ir.branch(f,ir.label,0,"spin");ir.put(f,ir.acquire_load,9,10,0,gc_registry_owner);ir.branch(f,ir.zero,9,"spin_over");
+    ir.put(f,ir.add,7,7,8,0);ir.branch(f,ir.nonzero,7,"spin");
+    // the spin ended with the epoch still active: take the mutex again, look once more (an epoch that ended meanwhile has already sent its wake-up,
+    // which a sleep begun now would miss) and only then sleep
+    ir.call(f,ir.mutex_lock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");ir.put(f,ir.acquire_load,9,10,0,gc_registry_owner);ir.branch(f,ir.zero,9,"wait");
+    // A new epoch can replace the old one during the unlocked spin without an observed zero owner. gc_begin requires a gc-parked thread to
+    // acknowledge that new epoch itself; refresh the acknowledgement through the existing wait loop before entering the kernel wait.
+    ir.put(f,ir.acquire_load,9,10,0,gc_registry_epoch);ir.put(f,ir.equal,9,9,19,0);ir.branch(f,ir.zero,9,"wait");ir.branch(f,ir.jump,0,"do_wait");
+    // the epoch ended during the spin: take the mutex again and resume through the owner check at the top of the loop (never into the sleep)
+    ir.branch(f,ir.label,0,"spin_over");ir.call(f,ir.mutex_lock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");ir.branch(f,ir.jump,0,"wait");
+    ir.branch(f,ir.label,0,"do_wait");tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",5,[3,2,4]);ir.branch(f,ir.zero,5,"wait");tcheck(f,5,1,"wait");terror(f,5);ir.branch(f,ir.jump,0,"wait");
     // Publish the Epoch actually acknowledged while parked. A new owner can
     // publish its next Epoch after our zero-owner load; do not label that
     // unacknowledged future request as a completed park.
