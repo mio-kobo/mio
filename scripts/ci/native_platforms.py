@@ -800,6 +800,42 @@ def darwin_thread_repro(report, cli, work):
     report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:900], required=False)
 
 
+def darwin_alloc_probe(report, cli, work):
+    """Diagnostic (non-required): tests/threads/alloc_probe.mio (4 threads allocating) with a stack sample after 20 seconds; output and time are recorded."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "alloc-probe"
+    ok, reason, _ = cli_build(report, "darwin-alloc-probe-build", cli, str(ROOT / "tests/threads/alloc_probe.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-alloc-probe", "FAIL", "native", brief(reason, 300), required=False)
+    code, out, err, seconds = run_sampled(report, "darwin-alloc-probe-run", [image], timeout=240, sample_after=20)
+    lines = ["four threads: exit %s after %.1fs stdout %r" % (code, seconds or 0, out[:40])]
+    # the same single-threaded loop as an ordinary program and as a thread build: the bridge's own cost per allocation
+    for name in ("alloc_plain", "alloc_bridge"):
+        single = Path(work) / name
+        built, why, _ = cli_build(report, "darwin-alloc-probe-build-" + name, cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", single)
+        if not built:
+            lines.append("%s: build failed: %s" % (name, brief(why, 100)))
+            continue
+        c2, o2, e2, s2 = run(report, "darwin-alloc-probe-run-" + name, [single], timeout=120)
+        lines.append("%s: exit %s after %.1fs stdout %r" % (name, c2, s2 or 0, o2.replace("\n", " ")[:60]))
+    # the plain loop with the runtime's own counters (--observe prints them to stderr at exit): how many collections does 2M allocations cause?
+    observed = Path(work) / "alloc_plain_observed"
+    built_o, why_o, _ = cli_build(report, "darwin-alloc-probe-build-alloc_plain_observed", cli, str(ROOT / "tests/threads/alloc_plain.mio"), "darwin-arm64", observed, extra=("--observe",))
+    if built_o:
+        c4, o4, e4, s4 = run(report, "darwin-alloc-probe-run-alloc_plain_observed", [observed], timeout=120)
+        keep = [ln.strip() for ln in e4.splitlines() if any(k in ln for k in ("gc_count", "heap_goal", "heap_limit", "heap_committed", "allocated_objects", "heap_capacity", "gc_total_reclaimed", "heap_live", "gc_before", "gc_after", "gc_last"))]
+        lines.append("observed plain: exit %s after %.1fs stdout %r counters %s" % (c4, s4 or 0, o4.replace("\n", " ")[:40], "; ".join(keep)[:500]))
+    else:
+        lines.append("observed plain: build failed: %s" % brief(why_o, 100))
+    # one thread of a thread build, long enough to be sampled: where does a single allocating thread spend its time?
+    long_image = Path(work) / "alloc_bridge_long"
+    built, why, _ = cli_build(report, "darwin-alloc-probe-build-alloc_bridge_long", cli, str(ROOT / "tests/threads/alloc_bridge_long.mio"), "darwin-arm64", long_image)
+    if built:
+        c3, o3, e3, s3 = run_sampled(report, "darwin-alloc-probe-run-alloc_bridge_long", [long_image], timeout=180, sample_after=8)
+        lines.append("alloc_bridge_long: exit %s after %.1fs stdout %r" % (c3, s3 or 0, o3.replace("\n", " ")[:60]))
+    report.check("darwin-alloc-probe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:900], required=False)
+
+
 def darwin_thread_faults(report, cli, work):
     """reclaim (heavy allocation across threads), the thread-stack overflow fault and the compile-time ownership rejections, for darwin-arm64.
 
@@ -1052,6 +1088,7 @@ def follower(args, target):
             darwin_thread_programs(report, cli, work / "thread-programs")
             darwin_thread_faults(report, cli, work / "thread-faults")
             darwin_thread_repro(report, cli, work / "thread-repro")
+            darwin_alloc_probe(report, cli, work / "alloc-probe")
             darwin_thread_bench(report, cli, work / "thread-bench")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
