@@ -636,6 +636,10 @@ def thread_checks(report, cli, target, work):
         report.check("linux-thread-gc", "PASS" if code == 0 and executed else "FAIL", "native",
                      "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                      note="real compiled multi-threaded programs, normal and --gc-stress, repeated; registration, stop-the-world, heap lock, join")
+        code, out, err, seconds = run(report, "linux-channel-wake-benchmark", [sys.executable,
+                ROOT / "tests/threads/bench_channel.py", "--mio", str(cli), "--output", report.logs / "channel-benchmark"], timeout=900)
+        report.check("linux-channel-wake-benchmark", "PASS" if code == 0 else "NOT_RUN" if code == 2 else "FAIL", "native",
+                     brief(out + err), required=False, seconds=round(seconds, 1))
         return
     # darwin-arm64 now implements every thread native (start, join, join_status, the word natives); its coverage is darwin-thread-core and
     # darwin-thread-programs. Every other target must still reject any thread program.

@@ -1,0 +1,22 @@
+// Same-thread buffered send/receive: no waiter is present, so the wake syscall is pure overhead.
+yobu "kiso/thread";
+yobu "kiso/os";
+yobu "kiso/math";
+waza worker() -> int64 { kaesu 7; }
+waza run() -> int64 {
+    moshi (thread.join(thread.start(worker)) != 7) { math.fail("thread setup"); }
+    kaku channel = thread.channel_new[int64](1, 0);
+    kaku started = os.monotonic_ms();
+    kaku i = 0; kaku sum = 0;
+    aida (i < 2000000) {
+        kaku sent = thread.send[int64](channel, i);
+        kaku got = thread.receive[int64](channel);
+        moshi (!sent.sent || got.closed) { math.fail("channel transfer"); }
+        sum = sum + got.item; i = i + 1;
+    }
+    chant(os.monotonic_ms() - started);
+    chant(sum);
+    thread.destroy[int64](channel);
+    kaesu 0;
+}
+run();
