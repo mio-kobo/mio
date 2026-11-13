@@ -4,7 +4,7 @@ Status: analysis with measurements, for a maintainer decision. No runtime change
 
 ## Measurements (macOS ARM64 runner, hosted `macos-15`, 3 cores)
 
-All numbers come from the non-required checks `darwin-thread-bench` and `darwin-alloc-probe` (see `scripts/ci/native_platforms.py`) and are one runner's.
+All numbers come from non-required diagnostics (the `darwin-thread-bench` check and temporary allocation probes) and are one runner's.
 
 | 2,000,000 small allocations, one thread | time |
 |---|---|
@@ -47,4 +47,4 @@ Recommendation: C first (small, safe), then A with the safety checks above, vali
 
 ## What this PR contains
 
-Non-required diagnostics only: `tests/threads/alloc_probe.mio`, `alloc_plain.mio`, `alloc_bridge.mio`, `alloc_bridge_long.mio` and the check `darwin-alloc-probe` (four allocating threads with a stack sample, the plain and bridge loops, the observed counters of the plain loop, one sampled thread of a thread build), and a lighter variant of the allocation test (`alloc_cache_light.mio`, 20000 iterations) that fits the macOS speed.
+The analysis only, plus a lighter variant of the allocation test (`alloc_cache_light.mio`, 20000 iterations instead of 400000) that fits the macOS allocation speed and joins the required macOS thread programs. The diagnostic programs and checks that produced the measurements were removed again so that they do not keep costing macOS runner time; the numbers above are the record.
