@@ -1248,7 +1248,7 @@ koukai waza compile_with_gc_threshold(file: mochi.File, gc_threshold: int64) -> 
     emit_string_constants(code, file);
     kaku assembled = x86_64.assemble(code);
     moshi (assembled.error != "") { kaesu failed(assembled.error); }
-    kaku bss = 8192 + 2097152 + 131072 + 8 * file.global_count + 32;
+    kaku bss = 8192 + 2097152 + 131072 + 98304 + 8 * file.global_count + 32;
     kaku imports: []pe.ImportLibrary = [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["GetStdHandle", "WriteFile", "ExitProcess", "VirtualAlloc", "CreateFileW", "ReadFile", "CloseHandle", "MultiByteToWideChar", "GetLastError", "GetFileAttributesW", "CreateDirectoryW", "FindFirstFileW", "FindNextFileW", "FindClose", "WideCharToMultiByte", "GetCommandLineW", "GetEnvironmentStringsW", "DeleteFileW", "RemoveDirectoryW", "GetCurrentProcessId", "GetTickCount64", "GetFullPathNameW", "GetModuleFileNameW", "CreateProcessW", "WaitForSingleObject", "GetExitCodeProcess", "TerminateProcess", "GetStartupInfoW", "PeekNamedPipe", "GetFileType", "Sleep"] }];
     moshi (ctx.sockets) { array.push(imports, winsock_imports()); }
     kaku image = pe.executable_placed(pe.ImageSpec { text: assembled.bytes, rdata: [], data: [], zero_fill: bss, entry: 0,

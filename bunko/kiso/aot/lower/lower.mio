@@ -1606,6 +1606,7 @@ waza emit_function_epilogue(code: arm64.Assembler, id: int64) -> unit {
 waza emit_native_body(code: arm64.Assembler, patches: []macho.AddressPatch, analysis: types.TypeAnalysis,
     function: mochi.Function, op: int64) -> bool {
     moshi (nativefs.parameter_count(op) != function.parameter_count || !function.returns_value) { kaesu iie; }
+    moshi (op >= 43 && op <= 51 && !worker_roots_enabled(code)) { kaesu iie; }   // the word natives exist only in the Darwin thread build
     moshi (nativefs.entry_label(op) == "") { kaesu iie; }   // operations without an arm64 routine (the OS thread natives) fail closed
     kaku roots = 0; kaku index = 0;
     aida (index < function.parameter_count) { moshi (nativefs.parameter_is_root(op, index)) { roots = roots + 1; } index = index + 1; }
@@ -2259,6 +2260,14 @@ koukai waza compile_with_worker_bridge(file:mochi.File,capacity:int64,gc_stress:
     }
     kaesu compile_worker_impl(file,gc_stress,capacity,iie,iie,hai,bindings,iie,32768,iie,iie);
 }
+// Public thread natives on Darwin/AArch64 (the mio/thread/runtime start and join natives, ids given by the pipeline). The same cooperative
+// bridge as above, with the shutdown evidence record on stderr switched off (abi 3). An entry may return an int64; join returns it.
+koukai waza compile_with_public_threads(file:mochi.File,capacity:int64,gc_stress:bool,start_id:int64,join_id:int64) -> LowerResult {
+    moshi(start_id<0 || start_id>=len(file.functions) || join_id<0 || join_id>=len(file.functions) || start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaku s=file.functions[start_id];kaku j=file.functions[join_id];
+    moshi(s.parameter_count!=1 || !s.returns_value || j.parameter_count!=1 || !j.returns_value){kaesu failed(LowerError.InvalidFunction());}
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3);
+}
 // Experimental Old collector with typed SATB and coordinated allocation/Minor.
 // Unsupported writes still Abort/join. This is not full E4 capability acceptance.
 koukai waza compile_with_old_mark_proto(file:mochi.File,capacity:int64,bindings:[]int64) -> LowerResult {
@@ -2311,6 +2320,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (type_result.error_detail != 0) { kaesu failed(LowerError.UnsafeType(type_result.error_detail)); }
     kaku worker_reachable=types.reachable_functions(file);
     kaku wi=0;aida(wi<len(worker_bindings)){
+      moshi(worker_bindings[wi]>=0){
         kaku node=type_result.locals[worker_bindings[wi]][0];kaku kind=types.type_kind(type_result,node);
         moshi(worker_reachable[worker_bindings[wi]]){
             kaku returned=type_result.returns[worker_bindings[wi]];
@@ -2320,6 +2330,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
             moshi(types.type_kind(type_result,returned)!=types.type_integer || types.type_nullable(type_result,returned) || types.integer_descriptor(type_result,returned)>1){kaesu failed(LowerError.InvalidFunction());}
             moshi(types.type_nullable(type_result,node) || (wi==0 && kind!=types.type_function_ref) || (wi>0 && (kind!=types.type_integer || types.integer_descriptor(type_result,node)>1))){kaesu failed(LowerError.InvalidFunction());}
         }
+      }
         wi=wi+1;
     }
     kaku ids = string_ids(file.constants);
@@ -2333,6 +2344,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     kaku testing = uses_testing(file);
     moshi(attached){arm64.assembler_label(code,"attached_roots_enabled");}
     moshi(len(worker_bindings)>0){arm64.assembler_label(code,"worker_roots_enabled");}
+    moshi(abi!=3){arm64.assembler_label(code,"worker_evidence");}
     moshi(old_proto){arm64.assembler_label(code,"old_mark_proto_enabled");}
     moshi(full_sweep){arm64.assembler_label(code,"old_sweep_enabled");}
     moshi(release_fault){arm64.assembler_label(code,"sweep_unmap_fault_enabled");}
@@ -2380,7 +2392,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (problem != mu) { kaesu failed(problem); }
     arm64.assembler_label(code, "normal_exit");
     // Completion cannot precede outstanding user callbacks or their reports.
-    moshi(worker_roots_enabled(code)){arm64.assembler_bl(code,"attached_workers_join_all");}
+    moshi(worker_roots_enabled(code) && arm64.assembler_label_word(code,"worker_evidence")>=0){arm64.assembler_bl(code,"attached_workers_join_all");}
     moshi (uses_testing_packet(file)) { emit_testing_completion(code); }
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
     moshi (native_fs) { arm64.assembler_bl(code, "nativefs_cleanup"); }
@@ -2455,7 +2467,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     emit_float_output_runtime(code);
     moshi (managed) { emit_managed_runtime(code, gc_stress, metadata_bytes, observation); }
     moshi (native_fs) { nativefs.emit_runtime(code, empty_string_id(file.constants, ids) * 2 + 1, patches, os_state); }
-    moshi (socket_runtime) { nativefs.emit_socket_runtime(code, empty_string_id(file.constants, ids) * 2 + 1); }
+    moshi (socket_runtime) { nativefs.emit_socket_runtime(code, empty_string_id(file.constants, ids) * 2 + 1, abi); }
     kaku data_words = file.global_count;
     moshi (testing) { data_words = data_words + 1; }
     moshi (os_state >= 0) { data_words = data_words + 3; }

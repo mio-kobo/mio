@@ -413,6 +413,78 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.pop_r(code, x86_64.rbp);
     x86_64.ret(code);
 
+    // The reactor primitives: kqueue when the lowering targets Darwin (the adapter label exists), epoll otherwise.
+    moshi (x86_64.label_offset(code, "darwin_abi") >= 0) { emit_reactor_kqueue(code); } sore { emit_reactor_epoll(code); }
+
+    // rt.sock_accept: rdi = token -> token of the accepted connection (a failed handle carries the error)
+    x86_64.label(code, "rt.sock_accept");
+    x86_64.call(code, "rt.sock_fd");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_accept.state");
+    x86_64.mov_rr(code, x86_64.r9, x86_64.rax);
+    x86_64.label(code, "rt.sock_accept.again");
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r9);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_eax_imm(code, 43);
+    x86_64.syscall(code);
+    x86_64.cmp_ri(code, x86_64.rax, -4);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_accept.again");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.sock_wrap");
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_reuse");
+    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_wrap");
+    x86_64.push_r(code, x86_64.rcx);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
+    x86_64.mov_eax_imm(code, 3);
+    x86_64.syscall(code);
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.jmp(code, "rt.sock_wrap");
+    x86_64.label(code, "rt.sock_accept.state");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.lea(code, x86_64.rsi, x86_64.rax, 10);
+    x86_64.mov_ri(code, x86_64.rdi, -1);
+    x86_64.call(code, "rt.fs_alloc");
+    x86_64.ret(code);
+
+    // rt.sock_read / rt.sock_write: rdi = token, rsi = byte array, rdx = offset, rcx = length, r8 = status array -> message
+    emit_socket_transfer(code, "rt.sock_read", hai);
+    emit_socket_transfer(code, "rt.sock_write", iie);
+
+    // rt.sock_close: rdi = token, rsi = status array -> message
+    x86_64.label(code, "rt.sock_close");
+    x86_64.push_r(code, x86_64.rsi);
+    x86_64.call(code, "rt.fs_lookup");
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.sock_close.closed");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rax, 0);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store(code, x86_64.rax, 8, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rsi, 0);
+    x86_64.cmp_ri(code, x86_64.rcx, 1);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_close.done");
+    x86_64.mov_eax_imm(code, 3);
+    x86_64.syscall(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ge, "rt.sock_close.done");
+    x86_64.neg_r(code, x86_64.rax);
+    x86_64.call(code, "rt.sock_classify");
+    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
+    x86_64.label(code, "rt.sock_close.done");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.jmp(code, "rt.sock_status_one");
+    x86_64.label(code, "rt.sock_close.closed");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rsi, 2);
+    x86_64.jmp(code, "rt.sock_status_one");
+}
+
+waza emit_reactor_epoll(code: x86_64.Assembler) -> unit {
     // ---- reactor (epoll) primitives ----
     // rt.reactor_open: rdi = kind (0 epoll instance, 1 eventfd) -> token (a failed handle carries the error)
     x86_64.label(code, "rt.reactor_open");
@@ -626,73 +698,6 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     // counter is already signalled / nothing is pending).
     emit_reactor_event(code, "rt.reactor_signal", iie);
     emit_reactor_event(code, "rt.reactor_ack", hai);
-
-    // rt.sock_accept: rdi = token -> token of the accepted connection (a failed handle carries the error)
-    x86_64.label(code, "rt.sock_accept");
-    x86_64.call(code, "rt.sock_fd");
-    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
-    x86_64.jcc(code, x86_64.cc_l, "rt.sock_accept.state");
-    x86_64.mov_rr(code, x86_64.r9, x86_64.rax);
-    x86_64.label(code, "rt.sock_accept.again");
-    x86_64.mov_rr(code, x86_64.rdi, x86_64.r9);
-    x86_64.mov_ri(code, x86_64.rsi, 0);
-    x86_64.mov_ri(code, x86_64.rdx, 0);
-    x86_64.mov_eax_imm(code, 43);
-    x86_64.syscall(code);
-    x86_64.cmp_ri(code, x86_64.rax, -4);
-    x86_64.jcc(code, x86_64.cc_e, "rt.sock_accept.again");
-    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
-    x86_64.jcc(code, x86_64.cc_l, "rt.sock_wrap");
-    x86_64.push_r(code, x86_64.rax);
-    x86_64.call(code, "rt.sock_reuse");
-    x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
-    x86_64.pop_r(code, x86_64.rax);
-    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
-    x86_64.jcc(code, x86_64.cc_e, "rt.sock_wrap");
-    x86_64.push_r(code, x86_64.rcx);
-    x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
-    x86_64.mov_eax_imm(code, 3);
-    x86_64.syscall(code);
-    x86_64.pop_r(code, x86_64.rax);
-    x86_64.jmp(code, "rt.sock_wrap");
-    x86_64.label(code, "rt.sock_accept.state");
-    x86_64.neg_r(code, x86_64.rax);
-    x86_64.lea(code, x86_64.rsi, x86_64.rax, 10);
-    x86_64.mov_ri(code, x86_64.rdi, -1);
-    x86_64.call(code, "rt.fs_alloc");
-    x86_64.ret(code);
-
-    // rt.sock_read / rt.sock_write: rdi = token, rsi = byte array, rdx = offset, rcx = length, r8 = status array -> message
-    emit_socket_transfer(code, "rt.sock_read", hai);
-    emit_socket_transfer(code, "rt.sock_write", iie);
-
-    // rt.sock_close: rdi = token, rsi = status array -> message
-    x86_64.label(code, "rt.sock_close");
-    x86_64.push_r(code, x86_64.rsi);
-    x86_64.call(code, "rt.fs_lookup");
-    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
-    x86_64.jcc(code, x86_64.cc_e, "rt.sock_close.closed");
-    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
-    x86_64.mov_load(code, x86_64.rdi, x86_64.rax, 0);
-    x86_64.mov_ri(code, x86_64.rdx, 0);
-    x86_64.mov_store(code, x86_64.rax, 8, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rsi, 0);
-    x86_64.cmp_ri(code, x86_64.rcx, 1);
-    x86_64.jcc(code, x86_64.cc_ne, "rt.sock_close.done");
-    x86_64.mov_eax_imm(code, 3);
-    x86_64.syscall(code);
-    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
-    x86_64.jcc(code, x86_64.cc_ge, "rt.sock_close.done");
-    x86_64.neg_r(code, x86_64.rax);
-    x86_64.call(code, "rt.sock_classify");
-    x86_64.mov_rr(code, x86_64.rsi, x86_64.rax);
-    x86_64.label(code, "rt.sock_close.done");
-    x86_64.pop_r(code, x86_64.rdi);
-    x86_64.jmp(code, "rt.sock_status_one");
-    x86_64.label(code, "rt.sock_close.closed");
-    x86_64.pop_r(code, x86_64.rdi);
-    x86_64.mov_ri(code, x86_64.rsi, 2);
-    x86_64.jmp(code, "rt.sock_status_one");
 }
 
 waza emit_reactor_event(code: x86_64.Assembler, name: string, reading: bool) -> unit {

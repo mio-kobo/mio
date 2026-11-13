@@ -192,9 +192,10 @@ EINTR makes `poll` return zero events early (never an error). Wakes coalesce int
 | target | reactor | evidence |
 |---|---|---|
 | linux-amd64 | **Implemented, Tested** | native `mio test bunko/kiso/reactor` (13 tests) and `tests/reactor/run.py` in CI (`linux-reactor` check) |
-| darwin-arm64, darwin-amd64 | Unsupported (fail closed: `open` returns `Unsupported`); kqueue **Planned** | NOT_RUN |
+| darwin-arm64 | **Implemented (kqueue)**; validation is the `darwin-reactor` CI check on the macOS ARM64 runner (see `docs/async-parity-ledger.json`) | see ledger |
+| darwin-amd64 | Unsupported (fail closed: `open` returns `Unsupported`); kqueue through the `darwin_syscall` adapter **Planned** | NOT_RUN |
 | windows-amd64, windows-arm64 | Unsupported (fail closed); IOCP **Planned** | NOT_RUN |
-| linux-arm64 | Unsupported (the AArch64 lowering has fail-closed stubs); epoll on ARM64 **Planned** (same syscalls, different numbers) | NOT_RUN |
+| linux-arm64 | Unsupported (the AArch64 kqueue routines reach the Linux adapter and fail with ENOSYS, reported as `Unsupported`); epoll on ARM64 **Planned** | NOT_RUN |
 
 Planned backends (not part of this phase): **kqueue** has the same readiness shape (`EVFILT_READ`/`EVFILT_WRITE`, `EVFILT_USER` for the wake-up) and maps onto submit/poll/cancel/wake directly. **IOCP** is completion based and must not be forced into
 the epoll shape: `submit` would start an overlapped operation whose `OVERLAPPED` and buffer are owned by the adapter until the completion packet has been dequeued, including after `CancelIoEx`; `poll` is `GetQueuedCompletionStatusEx`; `wake` is `PostQueuedCompletionStatus`.

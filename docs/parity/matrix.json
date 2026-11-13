@@ -6,7 +6,7 @@
     "run": 42969371443,
     "url": "https://github.com/mio-kobo/mio/actions/runs/42969371443",
     "head_sha": "d265bb0",
-    "note": "PR #72 head after merging Mio-2.2.0; Mio-2.2.0 at 94316df additionally contains the async session's reactor (#75): its CI evidence is its own PR run"
+    "note": "PR #72 head after merging Mio-2.2.0; Mio-2.2.0 at 94316df additionally contains the async session's reactor (#75): its CI evidence is its own PR run; darwin-arm64 groups I, J and K cite their own run 43166577034 (PR #92 head c5b3b54, macos-15)"
   },
   "platforms": [
     "linux-amd64",
@@ -621,19 +621,20 @@
       "platform": "linux-arm64",
       "feature": "L",
       "feature_name": "nonblocking TCP",
-      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "implementation": "linux-arm64: the same AArch64 routines through the Linux adapter (ioctl, getsockopt and errno-value translation), bunko/kiso/net/tcp_async",
       "verification": "mio test bunko/kiso/net/tcp_async",
       "pr": [
-        "#65"
+        "#65",
+        "#80"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 42996397268,
+        "head": "2bf061b",
         "checks": [
-          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/net/tcp_async"
         ]
       }
     },
@@ -641,19 +642,20 @@
       "platform": "linux-arm64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "linux-arm64: epoll backend through direct Linux system calls (epoll_create1/ctl/pwait, eventfd2), bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-reactor / linux-arm64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#81"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43001794132,
+        "head": "a2d6474",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
@@ -926,19 +928,20 @@
       "platform": "darwin-amd64",
       "feature": "L",
       "feature_name": "nonblocking TCP",
-      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "implementation": "darwin-amd64: Linux x86-64 set_nonblocking/finish_connect routines through the Darwin adapter (ioctl FIONBIO and getsockopt SO_ERROR translation), bunko/kiso/net/tcp_async",
       "verification": "mio test bunko/kiso/net/tcp_async",
       "pr": [
-        "#65"
+        "#65",
+        "#85"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 42997247888,
+        "head": "377e7d2",
         "checks": [
-          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/net/tcp_async"
         ]
       }
     },
@@ -946,19 +949,20 @@
       "platform": "darwin-amd64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "darwin-amd64: kqueue backend (kqueue/kevent passed through the Darwin adapter), wake-up through a second kqueue with an EVFILT_USER event, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-amd64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#PR"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43005838558,
+        "head": "3a01c3e",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
@@ -1166,21 +1170,24 @@
       "platform": "darwin-arm64",
       "feature": "I",
       "feature_name": "native multithreading",
-      "implementation": "linux-amd64: bunko/kiso/aot/lowerlinux/mutators.mio (clone, registry, stop-the-world, handle table); others: none",
-      "verification": "python tests/threads/run.py --mio <native cli>",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers threads start/join incl. nested, handles, limits, lifecycle and shutdown programs",
       "pr": [
-        "#63",
-        "#64",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
@@ -1188,20 +1195,24 @@
       "platform": "darwin-arm64",
       "feature": "J",
       "feature_name": "thread synchronisation",
-      "implementation": "linux-amd64: futex mutex and word natives in kiso/thread",
-      "verification": "python tests/threads/run.py (futex mutex, word_wait/wake in channels)",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers word natives (cas, add, wait, wake), stop-the-world with up to 128 live threads, gc_stress, gc_lifecycle, reclaim, channel_races",
       "pr": [
-        "#66",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
@@ -1209,20 +1220,24 @@
       "platform": "darwin-arm64",
       "feature": "K",
       "feature_name": "channels",
-      "implementation": "bunko/kiso/thread (Channel<T>, yuzuru transfer)",
-      "verification": "python tests/threads/run.py (channel_* programs)",
+      "implementation": "darwin-arm64: bunko/kiso/aot/lower/worker_roots.mio (cooperative worker bridge: 128 slots, generation-checked handles, word natives, 4000-entry root snapshot), selfhost/pipeline/compiler.mio (thread build route), bunko/kiso/runtime/os/darwin/thread.mio",
+      "verification": "Native / darwin-arm64: checks darwin-thread-core, darwin-thread-programs, darwin-thread-faults (tests/threads on macos-15); covers channel programs: basic, close, graphs, mpmc, summary_copy, races, lifecycle, creation limit",
       "pr": [
-        "#66",
-        "#72"
+        "#79",
+        "#89",
+        "#91",
+        "#92"
       ],
-      "limitations": "Fails closed: the target rejects programs that use the thread natives (compile error or a loud run-time unsupported); there is no single-thread fallback",
-      "next_action": "Priority 1, planned slices (docs/threading-stages.md, Stage Three): route thread-native programs through the existing Darwin worker bridge, map start/join with the Stage One error contract, implement the word natives, then enable tests/threads on macos-15",
-      "status": "UNSUPPORTED",
+      "limitations": "128 live threads (4096 on linux-amd64) and a start beyond that returns -11; 16384 channel control blocks per process; each thread image is about 6.5 MB (the runtime area is stored in the file); word_wait is a bounded spin then an exponential-backoff sleep up to 20 ms, not a park; a thread stack overflow ends with the runtime's controlled error (exit 1) where Linux dies by SIGSEGV; OS calls other than join and the word natives are not safepoint-aware in a thread; stress runs do not prove race freedom",
+      "next_action": "none (validated); wake latency and image size are tracked as follow-ups",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43166577034,
+        "head": "c5b3b54",
         "checks": [
-          "thread-natives-fail-closed"
+          "darwin-thread-core",
+          "darwin-thread-programs",
+          "darwin-thread-faults"
         ]
       }
     },
@@ -1230,19 +1245,20 @@
       "platform": "darwin-arm64",
       "feature": "L",
       "feature_name": "nonblocking TCP",
-      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "implementation": "darwin-arm64: AArch64 set_nonblocking (ioctl FIONBIO) and finish_connect (poll + getsockopt SO_ERROR), 4096-entry NativeFS handle table, bunko/kiso/net/tcp_async",
       "verification": "mio test bunko/kiso/net/tcp_async",
       "pr": [
-        "#65"
+        "#65",
+        "#80"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 42996397268,
+        "head": "2bf061b",
         "checks": [
-          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/net/tcp_async"
         ]
       }
     },
@@ -1250,19 +1266,20 @@
       "platform": "darwin-arm64",
       "feature": "M",
       "feature_name": "Reactor / event loop",
-      "implementation": "linux-amd64: epoll natives, bunko/kiso/reactor",
-      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py",
+      "implementation": "darwin-arm64: kqueue backend (kqueue/kevent), wake-up through a second kqueue with an EVFILT_USER event, bunko/kiso/reactor",
+      "verification": "mio test bunko/kiso/reactor; python tests/reactor/run.py (the darwin-reactor / linux-arm64-reactor check)",
       "pr": [
-        "#75"
+        "#75",
+        "#81"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "level-triggered only; at most 64 events per poll; a reactor is owned by one OS thread (only wake is cross-thread)",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43001794132,
+        "head": "a2d6474",
         "checks": [
-          "mio-test bunko/kiso/reactor (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/reactor"
         ]
       }
     },
@@ -1534,19 +1551,20 @@
       "platform": "windows-amd64",
       "feature": "L",
       "feature_name": "nonblocking TCP",
-      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "implementation": "windows-amd64: ioctlsocket(FIONBIO) and getsockopt (SO_ERROR, SO_CONNECT_TIME) over Winsock, 4096-slot handle table, bunko/kiso/net/tcp_async",
       "verification": "mio test bunko/kiso/net/tcp_async",
       "pr": [
-        "#65"
+        "#65",
+        "#86"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43013590043,
+        "head": "00e8321",
         "checks": [
-          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/net/tcp_async"
         ]
       }
     },
@@ -1839,19 +1857,20 @@
       "platform": "windows-arm64",
       "feature": "L",
       "feature_name": "nonblocking TCP",
-      "implementation": "linux-amd64: set_nonblocking/finish_connect natives, bunko/kiso/net/tcp_async",
+      "implementation": "windows-arm64: Darwin-ABI adapter translates ioctl(FIONBIO) to ioctlsocket, getsockopt (SO_ERROR mapped to errno), connect-completion poll, recv/send for sockets, 4032-entry socket descriptor table, bunko/kiso/net/tcp_async",
       "verification": "mio test bunko/kiso/net/tcp_async",
       "pr": [
-        "#65"
+        "#65",
+        "#90"
       ],
-      "limitations": "Fails closed; CI records NOT_RUN (never PASS). Owned by the async session: wait for its Phase D PR before building non-Linux backends here",
-      "next_action": "after the async session's backend PR for this target",
-      "status": "UNSUPPORTED",
+      "limitations": "",
+      "next_action": "keep green; no regression",
+      "status": "VALIDATED_BY_CI",
       "ci_evidence": {
-        "run": 42969371443,
-        "head": "d265bb0",
+        "run": 43074089739,
+        "head": "a39bbcf",
         "checks": [
-          "mio-test bunko/kiso/net/tcp_async (NOT_RUN: no native backend yet)"
+          "mio-test bunko/kiso/net/tcp_async"
         ]
       }
     },

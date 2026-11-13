@@ -82,7 +82,7 @@ def verify_winsock(data):
     img = parse(data)
     slots = read_imports(data, img).get("WS2_32.dll", {})
     expected = {"WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
-                "bind", "connect", "listen", "accept", "recv", "send", "closesocket"}
+                "bind", "connect", "listen", "accept", "recv", "send", "closesocket", "ioctlsocket", "getsockopt"}
     require(slots.keys() == expected, "unexpected Winsock imports: " + repr(list(slots)))
     iat, iat_size = img["dirs"][12]
     text = next(s for s in img["secs"] if s["name"] == ".text")

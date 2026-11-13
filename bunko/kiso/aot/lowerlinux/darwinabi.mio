@@ -113,12 +113,12 @@ koukai waza emit_darwin_abi_runtime(c: x86_64.Assembler) -> unit {
     x86_64.push_r(c, x86_64.r8); x86_64.push_r(c, x86_64.r9); x86_64.push_r(c, x86_64.r10);
     x86_64.sub_ri(c, x86_64.rsp, 200);
     // ---- direct translations: (Linux, Darwin)
-    kaku direct = [0, 3, 1, 4, 3, 6, 7, 230, 33, 90, 38, 83, 39, 20, 43, 30, 50, 106, 59, 59, 61, 7, 83, 136, 84, 137, 87, 10, 90, 15, 160, 195, 231, 1];
+    kaku direct = [0, 3, 1, 4, 3, 6, 7, 230, 33, 90, 38, 83, 39, 20, 43, 30, 50, 106, 59, 59, 61, 7, 83, 136, 84, 137, 87, 10, 90, 15, 160, 195, 231, 1, 362, 362, 363, 363];
     kaku at = 0;
     aida (at < len(direct)) { dx_direct(c, direct[at], direct[at + 1], at); at = at + 2; }
     // ---- translated calls
-    kaku calls = [2, 9, 4, 217, 89, 57, 228, 44, 54, 49, 42, 41, 13, 15];
-    kaku names = ["dx_open", "dx_mmap", "dx_stat", "dx_dirents", "dx_readlink", "dx_fork", "dx_clock", "dx_sendto", "dx_setsockopt", "dx_bind", "dx_connect", "dx_socket", "dx_unsupported", "dx_unsupported"];
+    kaku calls = [2, 9, 4, 217, 89, 57, 228, 44, 54, 49, 42, 41, 13, 15, 16, 55];
+    kaku names = ["dx_open", "dx_mmap", "dx_stat", "dx_dirents", "dx_readlink", "dx_fork", "dx_clock", "dx_sendto", "dx_setsockopt", "dx_bind", "dx_connect", "dx_socket", "dx_unsupported", "dx_unsupported", "dx_ioctl", "dx_getsockopt"];
     at = 0;
     aida (at < len(calls)) { dx_dispatch(c, calls[at], names[at], at); at = at + 1; }
     x86_64.label(c, "dx_unsupported"); x86_64.mov_ri(c, x86_64.rax, -38); dx_jmp(c, "dx_return");
@@ -276,6 +276,22 @@ koukai waza emit_darwin_abi_runtime(c: x86_64.Assembler) -> unit {
     x86_64.mov_load(c, x86_64.rcx, x86_64.rsi, 8); x86_64.mov_store(c, x86_64.rsp, 8, x86_64.rcx);
     x86_64.mov_ri(c, x86_64.rcx, 16); x86_64.mov_store8(c, x86_64.rsp, 0, x86_64.rcx); x86_64.mov_ri(c, x86_64.rcx, 2); x86_64.mov_store8(c, x86_64.rsp, 1, x86_64.rcx);
     x86_64.mov_rr(c, x86_64.rsi, x86_64.rsp); dx_jmp(c, "dx_svc");
+
+    // ---- ioctl(fd, request, argp): only FIONBIO (Linux 0x5421) is translated, to the Darwin request 0x8004667e; anything else is ENOSYS
+    x86_64.label(c, "dx_ioctl");
+    x86_64.mov_ri(c, x86_64.rcx, 21537); x86_64.cmp_rr(c, x86_64.rsi, x86_64.rcx); dx_jcc(c, x86_64.cc_ne, "dx_unsupported");
+    x86_64.mov_ri(c, x86_64.rsi, 2147772030); x86_64.mov_eax_imm(c, dx_class(54)); dx_jmp(c, "dx_svc");
+    // ---- getsockopt(fd, level, name, value, length): only SOL_SOCKET (1 -> 0xffff) / SO_ERROR (4 -> 0x1007) is translated. The pending
+    // error stored in *value is a Darwin errno; it is translated to the Linux number like a failed call's errno. [rsp+200] is the saved r10 (value).
+    x86_64.label(c, "dx_getsockopt");
+    x86_64.cmp_ri(c, x86_64.rsi, 1); dx_jcc(c, x86_64.cc_ne, "dx_unsupported"); x86_64.mov_ri(c, x86_64.rsi, 65535);
+    x86_64.cmp_ri(c, x86_64.rdx, 4); dx_jcc(c, x86_64.cc_ne, "dx_unsupported"); x86_64.mov_ri(c, x86_64.rdx, 4103);
+    x86_64.mov_eax_imm(c, dx_class(118)); x86_64.syscall_raw(c); dx_jcc(c, x86_64.cc_ae, "dx_getsockopt_ok"); dx_jmp(c, "dx_fail");
+    x86_64.label(c, "dx_getsockopt_ok");
+    x86_64.mov_load(c, x86_64.rcx, x86_64.rsp, 200); x86_64.mov_load(c, x86_64.rax, x86_64.rcx, 0);
+    x86_64.mov_ri(c, x86_64.rdx, 4294967295); x86_64.and_rr(c, x86_64.rax, x86_64.rdx);
+    x86_64.call(c, "dx_errno"); x86_64.mov_store(c, x86_64.rcx, 0, x86_64.rax);
+    x86_64.mov_ri(c, x86_64.rax, 0); dx_jmp(c, "dx_return");
 
     dx_tail(c);
     dx_errno(c);
