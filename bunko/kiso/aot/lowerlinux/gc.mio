@@ -354,7 +354,20 @@ waza emit_gc_drain(code: x86_64.Assembler) -> unit {
     x86_64.jcc(code, x86_64.cc_e, "rt.gc_drain.map");
     x86_64.cmp_ri(code, x86_64.rax, 13);
     x86_64.jcc(code, x86_64.cc_e, "rt.gc_drain.entry");
+    x86_64.cmp_ri(code, x86_64.rax, 14);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc_drain.table");
     x86_64.jmp(code, "rt.gc_drain.next");
+    // map bucket tables: every bucket head ([16] holds the bucket count)
+    x86_64.label(code, "rt.gc_drain.table");
+    x86_64.mov_load(code, x86_64.r9, x86_64.r8, 16);
+    x86_64.lea(code, x86_64.rsi, x86_64.r8, 24);
+    x86_64.label(code, "rt.gc_drain.table_loop");
+    x86_64.test_rr(code, x86_64.r9, x86_64.r9);
+    x86_64.jcc(code, x86_64.cc_e, "rt.gc_drain.next");
+    mark_word(code, x86_64.rsi, 0);
+    x86_64.add_ri(code, x86_64.rsi, 8);
+    x86_64.sub_ri(code, x86_64.r9, 1);
+    x86_64.jmp(code, "rt.gc_drain.table_loop");
     // maps: the head entry; entries: the next entry, the key when it is a reference, the value when it is a reference
     x86_64.label(code, "rt.gc_drain.map");
     mark_word(code, x86_64.r8, 16);
