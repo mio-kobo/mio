@@ -727,7 +727,7 @@ def darwin_thread_programs(report, cli, work):
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
              "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
-             "shutdown_active"]
+             "shutdown_active", "alloc_cache_light"]
     stress = ["basic", "nested", "channel_basic", "channel_close"]
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []

@@ -27,7 +27,7 @@ In a thread build the lowering (`bunko/kiso/aot/lower/lower.mio`, the "opt-in co
 * One thread: no thread to park, but the registry lock, the epoch bookkeeping, a root snapshot per allocation and a clock read per wait loop remain: 0.8 us per allocation instead of 0.06 us.
 * Several threads: each epoch parks and wakes every other thread through the kernel: about 100 us per heap access, and the cost grows with the number of threads. A stack sample of four allocating threads shows about 60 percent of each worker's time in the condition wait, 15 percent in the broadcast and about 28 percent in clock reads inside those loops.
 
-Smaller issues found on the way, already fixed: a 30 second ceiling on `join` (#108), one second limits in the handshake and the registry lock (#109), a sleep-polling channel wait with no wake-up (the 1.3 ms ping-pong round trip, #107).
+Smaller issues found on the way: a 30 second ceiling on `join` (fixed in #108), one second limits in the handshake and the registry lock (fixed in #109), and a sleep-polling channel wait with no wake-up (the 1.3 ms ping-pong round trip, proposed fix #107, not yet merged).
 
 ## Why it is built this way
 
