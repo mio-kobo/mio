@@ -537,6 +537,58 @@ func TestMioTypecheckerDifferential(t *testing.T) {
 	}
 }
 
+// TestNullableLoopNarrowing checks aida loop narrowing against independently
+// stated expectations (wantReject), not only Go/Mio agreement: a loop condition
+// proves the variable non-null at body entry, and any mutation or call that may
+// mutate it invalidates the fact, including across the loop backedge and after
+// the loop.
+func TestNullableLoopNarrowing(t *testing.T) {
+	cases := []struct {
+		name       string
+		source     string
+		wantReject bool
+	}{
+		{"condition fact does not survive backedge mutation", "waza main() -> unit { kaku x: int64? = mu; x = 1; aida (x > 0) { x = mu; } }", true},
+		{"condition proves non-null in body", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; x = mu; } }", false},
+		{"nil assignment kills fact", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; kaku y: int64 = x; } }", true},
+		{"non-null reassignment restores fact", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; x = 7; kaku y: int64 = x; x = mu; } }", false},
+		{"fact before loop does not survive backedge mutation", "waza main() -> unit { kaku x: int64? = mu; x = 1; kaku n: int64 = 0; aida (n < 3) { kaku y: int64 = x; x = mu; n = n + 1; } }", true},
+		{"global mutated through call", "kaku g: int64? = 1; waza clear() -> unit { g = mu; } waza main() -> unit { aida (g != mu) { clear(); kaku y: int64 = g; } }", true},
+		{"no fact after loop", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; } kaku y: int64 = x; }", true},
+		{"nested branch mutation", "waza main() -> unit { kaku x: int64? = 5; kaku n: int64 = 1; aida (x != mu) { moshi (n > 0) { x = mu; } kaku y: int64 = x; } }", true},
+		{"nested branch read", "waza main() -> unit { kaku x: int64? = 5; kaku n: int64 = 1; aida (x != mu) { moshi (n > 0) { kaku y: int64 = x; } x = mu; } }", false},
+		{"break after read", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; nukeru; } }", false},
+		{"continue after read", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; x = mu; tsuzuku; } }", false},
+		{"equality loop condition proves nothing", "waza main() -> unit { kaku x: int64? = 5; aida (x == mu) { kaku y: int64 = x; } }", true},
+	}
+	sources := make([]string, len(cases))
+	for index, item := range cases {
+		sources[index] = item.source
+	}
+	actual, _ := runMioTypecheck(t, sources)
+	for index, item := range cases {
+		goFailed := runGoTypecheck(item.source) != nil
+		mioFailed := actual[index].errors != 0
+		if goFailed != item.wantReject {
+			t.Errorf("%s: Go reject=%v, want %v\n%s", item.name, goFailed, item.wantReject, item.source)
+		}
+		if mioFailed != item.wantReject {
+			t.Errorf("%s: Mio reject=%v, want %v\n%s", item.name, mioFailed, item.wantReject, item.source)
+		}
+		if goFailed && mioFailed {
+			_, _, err := runGoTypecheckDetailed(item.source)
+			var goDiagnostic *diagnostic.Diagnostic
+			if errors.As(err, &goDiagnostic) && len(actual[index].errorDetails) > 0 {
+				label, ok := goDiagnostic.PrimaryLabel()
+				first := actual[index].errorDetails[0]
+				if ok && (first.code != goDiagnostic.Code || first.start != label.Span.Start.Offset) {
+					t.Errorf("%s: diagnostic mismatch Go=%s@%d Mio=%s@%d", item.name, goDiagnostic.Code, label.Span.Start.Offset, first.code, first.start)
+				}
+			}
+		}
+	}
+}
+
 // 测试逐表达式静态类型与泛型替换结果一致
 func TestMioTypecheckerNodeTypeDifferential(t *testing.T) {
 	sources := []string{

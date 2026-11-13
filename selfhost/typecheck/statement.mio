@@ -148,9 +148,11 @@ waza check_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> un
         kaesu;
     }
     moshi (kind == 19) {
+        invalidate_loop_facts(env, file_id, node.children[0], node.children[1]);
         kaku condition_type = check_expression(env, file_id, node.children[0]);
         moshi (condition_type != builtin_type(env, "bool")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], builtin_type(env, "bool"), condition_type, "while condition must be bool"); }
-        env.loop_depth[0] = env.loop_depth[0] + 1; check_block(env, file_id, node.children[1]); env.loop_depth[0] = env.loop_depth[0] - 1; kaesu;
+        kaku narrowing = condition_narrowing(env, file_id, node.children[0]);
+        env.loop_depth[0] = env.loop_depth[0] + 1; check_block_with_fact(env, file_id, node.children[1], narrowing, narrowing.true_non_nil); env.loop_depth[0] = env.loop_depth[0] - 1; kaesu;
     }
     moshi (kind == 20 || kind == 21) { moshi (env.loop_depth[0] == 0) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, 0, 0, "loop control outside loop"); } kaesu; }
     moshi (kind == 31) {
