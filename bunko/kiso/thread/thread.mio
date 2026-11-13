@@ -64,6 +64,32 @@ waza unlock<T>(channel: Channel<T>) -> int64 {
     }
     kaesu 0;
 }
+// Waiter counts live in word 7: the receivers sleeping on word 5 in the low 32 bits, the senders sleeping on word 6 in the high bits. A thread that is
+// about to sleep announces itself (a full barrier) before the kernel compares the sequence word with the value it saw; a thread that changed the
+// sequence word (a full barrier) reads the counts afterwards. Either the sleeper sees the new sequence and does not sleep, or the waker sees the
+// sleeper and wakes it: no wake-up is lost, and a transfer that nobody waits for costs no system call.
+teisu receiver_unit = 1;
+teisu sender_unit = 4294967296;
+waza sleep_on<T>(channel: Channel<T>, sequence: int64, seen: int64, unit: int64) -> int64 {
+    runtime.word_add(channel.words, 7, unit);
+    runtime.word_wait(channel.words, sequence, seen);
+    runtime.word_add(channel.words, 7, 0 - unit);
+    kaesu 0;
+}
+// One item was queued: wake one sleeping receiver, if there is any. (A woken receiver re-checks the queue under the lock, so one wake per item
+// is enough; close and destroy wake everybody.)
+waza wake_receiver<T>(channel: Channel<T>) -> int64 {
+    kaku counts = runtime.word_get(channel.words, 7);
+    kaku receivers = counts - (counts / 4294967296) * 4294967296;
+    moshi (receivers != 0) { runtime.word_wake(channel.words, 5, 1); }
+    kaesu 0;
+}
+// One slot was freed: wake one sleeping sender, if there is any.
+waza wake_sender<T>(channel: Channel<T>) -> int64 {
+    kaku counts = runtime.word_get(channel.words, 7);
+    moshi (counts / 4294967296 != 0) { runtime.word_wake(channel.words, 6, 1); }
+    kaesu 0;
+}
 waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((index + 1) / capacity) * capacity; }
 
 // Blocks while the channel is full. Pass the graph with yuzuru: `thread.send[Graph](channel, yuzuru graph)`.
@@ -79,12 +105,12 @@ koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
             runtime.word_set(channel.words, 3, count + 1);
             runtime.word_add(channel.words, 5, 1);
             unlock[T](channel);
-            runtime.word_wake(channel.words, 5, 1000000);
+            wake_receiver[T](channel);
             kaesu SendResult[T] { sent: hai, back: channel.filler };
         }
         kaku seen = runtime.word_get(channel.words, 6);
         unlock[T](channel);
-        runtime.word_wait(channel.words, 6, seen);
+        sleep_on[T](channel, 6, seen, sender_unit);
     }
     kaesu SendResult[T] { sent: iie, back: value };
 }
@@ -102,13 +128,13 @@ koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
             runtime.word_set(channel.words, 3, count - 1);
             runtime.word_add(channel.words, 6, 1);
             unlock[T](channel);
-            runtime.word_wake(channel.words, 6, 1000000);
+            wake_sender[T](channel);
             kaesu Received[T] { item: item, closed: iie };
         }
         moshi (runtime.word_get(channel.words, 4) != 0) { unlock[T](channel); kaesu Received[T] { item: channel.filler, closed: hai }; }
         kaku seen = runtime.word_get(channel.words, 5);
         unlock[T](channel);
-        runtime.word_wait(channel.words, 5, seen);
+        sleep_on[T](channel, 5, seen, receiver_unit);
     }
     kaesu Received[T] { item: channel.filler, closed: hai };
 }
@@ -132,7 +158,6 @@ koukai waza close<T>(channel: Channel<T>) -> int64 {
 koukai waza destroy<T>(channel: Channel<T>) -> int64 {
     lock[T](channel);
     runtime.word_set(channel.words, 4, 1);
-    runtime.word_set(channel.words, 7, 1);
     runtime.word_set(channel.words, 3, 0);
     runtime.word_set(channel.words, 1, 0);
     runtime.word_set(channel.words, 2, 0);
