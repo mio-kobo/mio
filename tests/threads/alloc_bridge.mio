@@ -1,0 +1,17 @@
+// The same loop as alloc_plain.mio in a program that imports the thread package, which selects the thread (bridge) build on the targets that have
+// one, although no thread is started. Elapsed milliseconds printed.
+yobu "kiso/os";
+yobu "kiso/thread";
+
+waza run() -> int64 {
+    kaku t0 = os.monotonic_ms();
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 2000000) { kaku cell = [i, i + 1]; t = t + cell[1]; i = i + 1; }
+    chant(os.monotonic_ms() - t0);
+    chant(t);
+    kaku h = thread.start(waza () -> int64 { kaesu 1; });
+    chant(thread.join(h));
+    kaesu 0;
+}
+run();

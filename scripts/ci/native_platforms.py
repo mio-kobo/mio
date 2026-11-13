@@ -798,7 +798,17 @@ def darwin_alloc_probe(report, cli, work):
     if not ok:
         return report.check("darwin-alloc-probe", "FAIL", "native", brief(reason, 300), required=False)
     code, out, err, seconds = run_sampled(report, "darwin-alloc-probe-run", [image], timeout=240, sample_after=20)
-    report.check("darwin-alloc-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %r" % (code, seconds or 0, out[:60]), required=False)
+    lines = ["four threads: exit %s after %.1fs stdout %r" % (code, seconds or 0, out[:40])]
+    # the same single-threaded loop as an ordinary program and as a thread build: the bridge's own cost per allocation
+    for name in ("alloc_plain", "alloc_bridge"):
+        single = Path(work) / name
+        built, why, _ = cli_build(report, "darwin-alloc-probe-build-" + name, cli, str(ROOT / "tests/threads" / (name + ".mio")), "darwin-arm64", single)
+        if not built:
+            lines.append("%s: build failed: %s" % (name, brief(why, 100)))
+            continue
+        c2, o2, e2, s2 = run(report, "darwin-alloc-probe-run-" + name, [single], timeout=120)
+        lines.append("%s: exit %s after %.1fs stdout %r" % (name, c2, s2 or 0, o2.replace("\n", " ")[:60]))
+    report.check("darwin-alloc-probe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:900], required=False)
 
 
 def darwin_thread_faults(report, cli, work):
