@@ -135,6 +135,8 @@ waza test_cross_file_and_package_constants() -> unit {
 }
 
 waza test_nullable_loop_narrowing() -> unit {
+    kaku condition=check_source("waza main() -> unit { kaku x: int64? = mu; x = 1; aida (x > 0) { x = mu; } }");
+    testing.expect(len(condition.errors)>0,"a loop condition cannot reuse a fact invalidated by the backedge");
     kaku body=check_source("waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; x = mu; } }");
     testing.expect(len(body.errors)==0,"aida condition proves a nullable non-nil inside the body");
     kaku killed=check_source("waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; kaku y: int64 = x; } }");

@@ -548,6 +548,7 @@ func TestNullableLoopNarrowing(t *testing.T) {
 		source     string
 		wantReject bool
 	}{
+		{"condition fact does not survive backedge mutation", "waza main() -> unit { kaku x: int64? = mu; x = 1; aida (x > 0) { x = mu; } }", true},
 		{"condition proves non-null in body", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { kaku y: int64 = x; x = mu; } }", false},
 		{"nil assignment kills fact", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; kaku y: int64 = x; } }", true},
 		{"non-null reassignment restores fact", "waza main() -> unit { kaku x: int64? = 5; aida (x != mu) { x = mu; x = 7; kaku y: int64 = x; x = mu; } }", false},
