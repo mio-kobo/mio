@@ -808,6 +808,12 @@ def darwin_alloc_probe(report, cli, work):
             continue
         c2, o2, e2, s2 = run(report, "darwin-alloc-probe-run-" + name, [single], timeout=120)
         lines.append("%s: exit %s after %.1fs stdout %r" % (name, c2, s2 or 0, o2.replace("\n", " ")[:60]))
+    # one thread of a thread build, long enough to be sampled: where does a single allocating thread spend its time?
+    long_image = Path(work) / "alloc_bridge_long"
+    built, why, _ = cli_build(report, "darwin-alloc-probe-build-alloc_bridge_long", cli, str(ROOT / "tests/threads/alloc_bridge_long.mio"), "darwin-arm64", long_image)
+    if built:
+        c3, o3, e3, s3 = run_sampled(report, "darwin-alloc-probe-run-alloc_bridge_long", [long_image], timeout=180, sample_after=8)
+        lines.append("alloc_bridge_long: exit %s after %.1fs stdout %r" % (c3, s3 or 0, o3.replace("\n", " ")[:60]))
     report.check("darwin-alloc-probe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:900], required=False)
 
 
