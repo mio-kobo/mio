@@ -11,7 +11,13 @@ waza jitter(seed: int64) -> int64 {
     kaku n = (next(seed) / 65536) - ((next(seed) / 65536) / 200) * 200;
     kaku i = 0;
     kaku t = 0;
-    aida (i < n) { kaku cell = [i]; t = t + cell[0]; i = i + 1; }
+    // Spin for a seed-dependent time. Every eighth step allocates (so the collector still runs during the races); the other steps are
+    // plain arithmetic, which keeps the Darwin worker bridge from taking a collector epoch for every single step.
+    aida (i < n) {
+        moshi (i - (i / 8) * 8 == 0) { kaku cell = [i]; t = t + cell[0]; }
+        t = t + 1;
+        i = i + 1;
+    }
     kaesu t;
 }
 
