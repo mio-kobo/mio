@@ -1,0 +1,132 @@
+// Multithreading efficiency microbenchmarks (Linux x86-64 and macOS ARM64): wall-clock milliseconds for fixed amounts of work, one line per
+// measurement "name,ms,operations". Run the image several times and compare medians; the numbers are one machine's.
+//   start_join    20000 threads started and joined one after the other (creation + join latency)
+//   fan_join      200 rounds of 32 threads started together and joined (creation under load)
+//   pingpong      20000 round trips between two threads over two 1-slot channels (wake-up latency of a blocked receiver)
+//   mpmc          4 producers and 4 consumers moving 200000 integers through a 16-slot channel (contended throughput)
+//   alloc_1/2/4   1, 2 and 4 threads each doing 2000000 small allocations (collector coordination: ideal is the same time for all three)
+yobu "kiso/thread";
+yobu "kiso/array";
+yobu "kiso/os";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+waza nothing() -> int64 { kaesu 1; }
+
+waza report(name: string, ms: int64, operations: int64) -> int64 {
+    chant(string.concat(name, string.concat(",", string.concat(convert.format_int(ms), string.concat(",", convert.format_int(operations))))));
+    kaesu 0;
+}
+
+waza start_join() -> int64 {
+    kaku t0 = os.monotonic_ms();
+    kaku i = 0;
+    aida (i < 20000) { thread.join(thread.start(nothing)); i = i + 1; }
+    report("start_join", os.monotonic_ms() - t0, 20000);
+    kaesu 0;
+}
+
+waza fan_join() -> int64 {
+    kaku t0 = os.monotonic_ms();
+    kaku round = 0;
+    aida (round < 200) {
+        kaku handles: []int64 = [];
+        kaku i = 0;
+        aida (i < 32) { array.push(handles, thread.start(nothing)); i = i + 1; }
+        i = 0;
+        aida (i < 32) { thread.join(handles[i]); i = i + 1; }
+        round = round + 1;
+    }
+    report("fan_join", os.monotonic_ms() - t0, 6400);
+    kaesu 0;
+}
+
+waza pingpong() -> int64 {
+    kaku ping = thread.channel_new[int64](1, 0);
+    kaku pong = thread.channel_new[int64](1, 0);
+    kaku echo = waza () -> int64 {
+        aida (hai) {
+            kaku got = thread.receive[int64](ping);
+            moshi (got.closed) { nukeru; }
+            thread.send[int64](pong, got.item);
+        }
+        kaesu 0;
+    };
+    kaku handle = thread.start(echo);
+    kaku t0 = os.monotonic_ms();
+    kaku i = 0;
+    aida (i < 20000) { thread.send[int64](ping, i); thread.receive[int64](pong); i = i + 1; }
+    kaku elapsed = os.monotonic_ms() - t0;
+    thread.close[int64](ping);
+    thread.join(handle);
+    report("pingpong", elapsed, 20000);
+    kaesu 0;
+}
+
+waza mpmc() -> int64 {
+    kaku channel = thread.channel_new[int64](16, 0);
+    kaku producers: []int64 = [];
+    kaku consumers: []int64 = [];
+    kaku t0 = os.monotonic_ms();
+    kaku p = 0;
+    aida (p < 4) {
+        kaku base = p * 50000;
+        array.push(producers, thread.start(waza () -> int64 {
+            kaku n = 0;
+            aida (n < 50000) { thread.send[int64](channel, base + n); n = n + 1; }
+            kaesu n;
+        }));
+        p = p + 1;
+    }
+    kaku c = 0;
+    aida (c < 4) {
+        array.push(consumers, thread.start(waza () -> int64 {
+            kaku got = 0;
+            aida (hai) {
+                kaku r = thread.receive[int64](channel);
+                moshi (r.closed) { nukeru; }
+                got = got + 1;
+            }
+            kaesu got;
+        }));
+        c = c + 1;
+    }
+    kaku total = 0;
+    p = 0;
+    aida (p < 4) { total = total + thread.join(producers[p]); p = p + 1; }
+    thread.close[int64](channel);
+    c = 0;
+    aida (c < 4) { total = total + thread.join(consumers[c]); c = c + 1; }
+    report("mpmc", os.monotonic_ms() - t0, total);
+    kaesu 0;
+}
+
+waza allocate() -> int64 {
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 2000000) { kaku cell = [i, i + 1]; t = t + cell[1]; i = i + 1; }
+    kaesu t;
+}
+
+waza alloc_scale(threads: int64) -> int64 {
+    kaku handles: []int64 = [];
+    kaku t0 = os.monotonic_ms();
+    kaku i = 0;
+    aida (i < threads) { array.push(handles, thread.start(allocate)); i = i + 1; }
+    i = 0;
+    aida (i < threads) { thread.join(handles[i]); i = i + 1; }
+    report(string.concat("alloc_", convert.format_int(threads)), os.monotonic_ms() - t0, threads * 2000000);
+    kaesu 0;
+}
+
+waza run() -> int64 {
+    start_join();
+    fan_join();
+    pingpong();
+    mpmc();
+    alloc_scale(1);
+    alloc_scale(2);
+    alloc_scale(4);
+    kaesu 0;
+}
+run();

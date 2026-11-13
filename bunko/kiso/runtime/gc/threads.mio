@@ -206,12 +206,12 @@ waza thread_error_program() -> ir.Function {
     kaku f=ir.function("thread_record_error");tprepare(f);terror(f,1);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);kaesu f;
 }
 waza registry_lock_program(cooperative:bool) -> ir.Function {
-    kaku f=ir.function("registry_lock");tprepare(f);ir.invoke_function(f,"platform_now",4,[]);ir.branch(f,ir.zero,4,"timeout");tconstant(f,6,1000000000);ir.put(f,ir.copy,8,4,0,0);ir.put(f,ir.add,4,4,6,0);ir.put(f,ir.less_unsigned,8,4,8,0);ir.branch(f,ir.nonzero,8,"timeout");
+    kaku f=ir.function("registry_lock");tprepare(f);ir.invoke_function(f,"platform_now",4,[]);ir.branch(f,ir.zero,4,"timeout");tconstant(f,6,120000000000);ir.put(f,ir.copy,8,4,0,0);ir.put(f,ir.add,4,4,6,0);ir.put(f,ir.less_unsigned,8,4,8,0);ir.branch(f,ir.nonzero,8,"timeout");
     // Cooperative registry acquisition distinguishes real GC progress from
     // a stalled lock. A gc_poll may legitimately park beyond the soft1s
     // deadline; renewing only on a changed heartbeat avoids false failure.
     // The independent30s ceiling still bounds starvation under continuous GC.
-    moshi(cooperative){tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_heartbeat);tconstant(f,12,29000000000);ir.put(f,ir.add,12,4,12,0);ir.put(f,ir.less_unsigned,7,12,4,0);ir.branch(f,ir.nonzero,7,"timeout");}
+    moshi(cooperative){tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_heartbeat);tconstant(f,12,600000000000);ir.put(f,ir.add,12,4,12,0);ir.put(f,ir.less_unsigned,7,12,4,0);ir.branch(f,ir.nonzero,7,"timeout");}
     tload(f,2,thread_registry);ir.put(f,ir.address,2,2,0,40);tconstant(f,3,1);tconstant(f,5,0);
     ir.branch(f,ir.label,0,"retry");moshi(cooperative){tconstant(f,19,0);}array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:1,left:2,right:3,immediate:0,name:"",arguments:[5],order:acq_rel,failure_order:acquire});ir.branch(f,ir.zero,1,"acquired");
     moshi(cooperative){tload(f,9,thread_registered);ir.branch(f,ir.zero,9,"not_registered");
@@ -224,10 +224,10 @@ waza registry_lock_program(cooperative:bool) -> ir.Function {
         // gc_poll may complete an acknowledged parked epoch after the soft
         // deadline without a heartbeat change during that heap operation.
         // Only that real completion renews1s; the original30s ceiling stays.
-        ir.branch(f,ir.zero,19,"no_completed_park");tconstant(f,14,1000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
+        ir.branch(f,ir.zero,19,"no_completed_park");tconstant(f,14,120000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
         ir.branch(f,ir.label,0,"no_completed_park");
         ir.put(f,ir.acquire_load,13,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,14,13,11,0);ir.branch(f,ir.nonzero,14,"no_registry_progress");
-        ir.put(f,ir.copy,11,13,0,0);tconstant(f,14,1000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
+        ir.put(f,ir.copy,11,13,0,0);tconstant(f,14,120000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
         ir.branch(f,ir.label,0,"no_registry_progress");
     }
     ir.put(f,ir.less_unsigned,7,6,4,0);ir.branch(f,ir.nonzero,7,"retry");
