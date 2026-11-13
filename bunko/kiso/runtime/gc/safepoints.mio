@@ -25,8 +25,8 @@ waza gc_park_locked_program() -> ir.Function {
     ir.put(f,ir.acquire_load,12,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,17,12,15,0);ir.branch(f,ir.nonzero,17,"check_deadline");ir.put(f,ir.copy,15,12,0,0);ir.invoke_function(f,"platform_now",14,[]);ir.put(f,ir.add,14,14,16,0);
     ir.branch(f,ir.label,0,"check_deadline");ir.invoke_function(f,"platform_now",17,[]);ir.put(f,ir.less_unsigned,18,17,14,0);ir.branch(f,ir.zero,18,"fatal");
     // An epoch normally lasts until its owner's next poll, a few microseconds: spin on the owner word before the kernel wait, so that a thread that
-    // is released quickly resumes with no system call. The mutex is released for the spin (a collector acknowledges a parked thread by trylock on
-    // it) and the thread stays published as parked; a collector that starts meanwhile proceeds exactly as before. After the spin the thread takes the
+    // is released quickly resumes with no system call. The mutex is released for the spin so a collector can inspect the published parked state and its acknowledged epoch. A new epoch
+    // still needs this thread to refresh its acknowledgement; trylock alone does not acknowledge a gc-parked thread. After the spin the thread takes the
     // mutex again and, if the epoch is still active, sleeps in the timed wait below as before.
     tload(f,2,thread_mutex);ir.call(f,ir.mutex_unlock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");
     tconstant(f,7,4000);tconstant(f,8,-1);
