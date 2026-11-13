@@ -134,6 +134,12 @@ waza test_cross_file_and_package_constants() -> unit {
     testing.expect(len(app.errors) == 0 && has_integer_constant(app, 42), "cross-package constant evaluates");
 }
 
+waza test_equality_operand_contract() -> unit {
+    testing.expect(len(check_source("chant(1 == 2); chant(\"a\" != \"b\");").errors)==0,"scalars and strings compare");
+    testing.expect(len(check_source("kaku l = [1]; kaku r = [1]; chant(l == r);").errors)>0,"arrays are not comparable");
+    testing.expect(len(check_source("chant(mu == mu);").errors)>0,"mu == mu is rejected");
+}
+
 waza test_nullable_recheck_and_function_fact_isolation() -> unit {
     kaku repeated=check_source("waza main(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} moshi(value==mu){kaesu 0;} kaesu value; }");
     testing.expect(len(repeated.errors)==0,"nullable declaration remains comparable to mu after narrowing");
