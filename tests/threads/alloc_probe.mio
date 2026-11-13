@@ -1,0 +1,23 @@
+// Diagnostic for the allocation cost of a multithreaded program on macOS ARM64: 4 threads each allocate 300000 small arrays and sum a field. CI
+// runs it with a stack sample taken after 20 seconds and records its output and time (no fixed expectation). Output: the checksum.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+waza allocate() -> int64 {
+    kaku i = 0;
+    kaku t = 0;
+    aida (i < 300000) { kaku cell = [i, i + 1]; t = t + cell[1]; i = i + 1; }
+    kaesu t;
+}
+
+waza run() -> int64 {
+    kaku handles: []int64 = [];
+    kaku k = 0;
+    aida (k < 4) { array.push(handles, thread.start(allocate)); k = k + 1; }
+    kaku total = 0;
+    k = 0;
+    aida (k < 4) { total = total + thread.join(handles[k]); k = k + 1; }
+    chant(total);
+    kaesu 0;
+}
+run();

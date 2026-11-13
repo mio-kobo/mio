@@ -715,7 +715,7 @@ def darwin_thread_programs(report, cli, work):
     spec = importlib.util.spec_from_file_location("threads_run", ROOT / "tests/threads/run.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy", "alloc_cache",
+    names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy", "alloc_cache_light",
              "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
              "shutdown_active"]
     stress = ["basic", "nested", "channel_basic", "channel_close"]
@@ -788,6 +788,17 @@ def darwin_thread_repro(report, cli, work):
         bad += 0 if good else 1
         lines.append("run %d: exit %s after %.1fs stdout %r" % (repeat, code, seconds or 0, out[:60]))
     report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:900], required=False)
+
+
+def darwin_alloc_probe(report, cli, work):
+    """Diagnostic (non-required): tests/threads/alloc_probe.mio (4 threads allocating) with a stack sample after 20 seconds; output and time are recorded."""
+    Path(work).mkdir(parents=True, exist_ok=True)
+    image = Path(work) / "alloc-probe"
+    ok, reason, _ = cli_build(report, "darwin-alloc-probe-build", cli, str(ROOT / "tests/threads/alloc_probe.mio"), "darwin-arm64", image)
+    if not ok:
+        return report.check("darwin-alloc-probe", "FAIL", "native", brief(reason, 300), required=False)
+    code, out, err, seconds = run_sampled(report, "darwin-alloc-probe-run", [image], timeout=240, sample_after=20)
+    report.check("darwin-alloc-probe", "PASS" if code == 0 else "FAIL", "native", "exit %s after %.1fs stdout %r" % (code, seconds or 0, out[:60]), required=False)
 
 
 def darwin_thread_faults(report, cli, work):
@@ -1042,6 +1053,7 @@ def follower(args, target):
             darwin_thread_programs(report, cli, work / "thread-programs")
             darwin_thread_faults(report, cli, work / "thread-faults")
             darwin_thread_repro(report, cli, work / "thread-repro")
+            darwin_alloc_probe(report, cli, work / "alloc-probe")
             darwin_thread_bench(report, cli, work / "thread-bench")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
