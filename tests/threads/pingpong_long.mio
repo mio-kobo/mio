@@ -1,0 +1,26 @@
+// Bisect of a macOS ARM64 hang (see pingpong_close.mio): the same ping-pong, close and join, with 20000 round trips and no earlier thread
+// activity. Output: the round trips and the echo thread's result.
+yobu "kiso/thread";
+
+waza run() -> int64 {
+    kaku ping = thread.channel_new[int64](1, 0);
+    kaku pong = thread.channel_new[int64](1, 0);
+    kaku echo = waza () -> int64 {
+        kaku seen = 0;
+        aida (hai) {
+            kaku got = thread.receive[int64](ping);
+            moshi (got.closed) { nukeru; }
+            thread.send[int64](pong, got.item);
+            seen = seen + 1;
+        }
+        kaesu seen;
+    };
+    kaku handle = thread.start(echo);
+    kaku i = 0;
+    aida (i < 20000) { thread.send[int64](ping, i); thread.receive[int64](pong); i = i + 1; }
+    thread.close[int64](ping);
+    chant(i);
+    chant(thread.join(handle));
+    kaesu 0;
+}
+run();

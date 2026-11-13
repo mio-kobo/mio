@@ -1,0 +1,45 @@
+// Bisect of a macOS ARM64 hang (see pingpong_close.mio): 26400 threads are started and joined first (20000 one after the other, 6400 in rounds of
+// 32), then the ping-pong with only 2000 round trips, close and join. Output: the round trips and the echo thread's result.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+waza nothing() -> int64 { kaesu 1; }
+
+waza churn() -> int64 {
+    kaku i = 0;
+    aida (i < 20000) { thread.join(thread.start(nothing)); i = i + 1; }
+    kaku round = 0;
+    aida (round < 200) {
+        kaku handles: []int64 = [];
+        kaku k = 0;
+        aida (k < 32) { array.push(handles, thread.start(nothing)); k = k + 1; }
+        k = 0;
+        aida (k < 32) { thread.join(handles[k]); k = k + 1; }
+        round = round + 1;
+    }
+    kaesu 0;
+}
+
+waza run() -> int64 {
+    churn();
+    kaku ping = thread.channel_new[int64](1, 0);
+    kaku pong = thread.channel_new[int64](1, 0);
+    kaku echo = waza () -> int64 {
+        kaku seen = 0;
+        aida (hai) {
+            kaku got = thread.receive[int64](ping);
+            moshi (got.closed) { nukeru; }
+            thread.send[int64](pong, got.item);
+            seen = seen + 1;
+        }
+        kaesu seen;
+    };
+    kaku handle = thread.start(echo);
+    kaku i = 0;
+    aida (i < 2000) { thread.send[int64](ping, i); thread.receive[int64](pong); i = i + 1; }
+    thread.close[int64](ping);
+    chant(i);
+    chant(thread.join(handle));
+    kaesu 0;
+}
+run();

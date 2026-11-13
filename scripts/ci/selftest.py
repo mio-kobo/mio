@@ -776,5 +776,34 @@ exit "$result"
         # the rendered table is the committed one
         self.assertEqual(parity_matrix.render(document), (HERE.parents[1] / "docs/parity/README.md").read_text(encoding="utf-8"))
 
+class ThreadBenchmarkEvidenceTests(unittest.TestCase):
+    complete = "start_join,1,20000\nfan_join,1,6400\npingpong,1,20000\nmpmc,1,400000\nalloc_1,1,2000000\nalloc_2,1,4000000\nalloc_4,1,8000000\n"
+
+    def status(self, code, output):
+        class Evidence:
+            def check(self, name, status, *args, **kwargs):
+                self.status = status
+        evidence = Evidence()
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(native, "cli_build", return_value=(True, "", 0)), \
+             patch.object(native, "run_sampled", return_value=(code, output, "", 240)):
+            native.darwin_thread_bench(evidence, Path("unused"), Path(directory))
+        return evidence.status
+
+    def test_complete_successful_benchmark_passes(self):
+        self.assertEqual(self.status(0, self.complete), "PASS")
+
+    def test_timed_out_benchmark_cannot_pass(self):
+        self.assertEqual(self.status(None, self.complete), "FAIL")
+
+    def test_nonzero_exit_cannot_pass(self):
+        self.assertEqual(self.status(1, self.complete), "FAIL")
+
+    def test_missing_phases_cannot_pass(self):
+        self.assertEqual(self.status(0, "start_join,1,20000\n"), "FAIL")
+
+    def test_wrong_work_count_cannot_pass(self):
+        self.assertEqual(self.status(0, self.complete.replace("mpmc,1,400000", "mpmc,1,1")), "FAIL")
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
