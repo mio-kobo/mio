@@ -1,0 +1,77 @@
+// The per-thread allocation cache: four threads and the main thread allocate objects of every cached size class (24 to 56 bytes: records of 1 to 5
+// integer fields), keep a ring of them alive while the collector runs, and verify every field of every object they take out of the ring. A block
+// handed out twice, a block reclaimed while still referenced, or a stale cache entry after a collection shows up as a field mismatch.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata A { a: int64; }
+kata B { a: int64; b: int64; }
+kata C { a: int64; b: int64; c: int64; }
+kata D { a: int64; b: int64; c: int64; d: int64; }
+kata E { a: int64; b: int64; c: int64; d: int64; e: int64; }
+
+waza mix(seed: int64, i: int64, k: int64) -> int64 { kaesu (seed * 1000003 + i * 7919 + k * 131) - ((seed * 1000003 + i * 7919 + k * 131) / 1000000007) * 1000000007; }
+
+waza worker(seed: int64) -> int64 {
+    kaku ring_a: []A = []; kaku ring_b: []B = []; kaku ring_c: []C = []; kaku ring_d: []D = []; kaku ring_e: []E = [];
+    kaku fill_a = A { a: 0 }; kaku fill_b = B { a: 0, b: 0 }; kaku fill_c = C { a: 0, b: 0, c: 0 };
+    kaku fill_d = D { a: 0, b: 0, c: 0, d: 0 }; kaku fill_e = E { a: 0, b: 0, c: 0, d: 0, e: 0 };
+    kaku n = 0;
+    aida (n < 32) { array.push(ring_a, fill_a); array.push(ring_b, fill_b); array.push(ring_c, fill_c); array.push(ring_d, fill_d); array.push(ring_e, fill_e); n = n + 1; }
+    kaku bad = 0;
+    kaku sum = 0;
+    kaku i = 0;
+    aida (i < 400000) {
+        kaku slot = i - (i / 32) * 32;
+        kaku kind = i - (i / 5) * 5;
+        moshi (i >= 160) {
+            // verify what this slot holds from 32 rounds ago before replacing it
+            kaku old = i - 160;
+            moshi (kind == 0) { kaku o = ring_a[slot]; moshi (o.a != mix(seed, old, 1)) { bad = bad + 1; } sum = sum + o.a; }
+            moshi (kind == 1) { kaku o = ring_b[slot]; moshi (o.a != mix(seed, old, 1) || o.b != mix(seed, old, 2)) { bad = bad + 1; } sum = sum + o.b; }
+            moshi (kind == 2) { kaku o = ring_c[slot]; moshi (o.a != mix(seed, old, 1) || o.c != mix(seed, old, 3)) { bad = bad + 1; } sum = sum + o.c; }
+            moshi (kind == 3) { kaku o = ring_d[slot]; moshi (o.a != mix(seed, old, 1) || o.d != mix(seed, old, 4)) { bad = bad + 1; } sum = sum + o.d; }
+            moshi (kind == 4) { kaku o = ring_e[slot]; moshi (o.a != mix(seed, old, 1) || o.e != mix(seed, old, 5)) { bad = bad + 1; } sum = sum + o.e; }
+        }
+        moshi (kind == 0) { ring_a[slot] = A { a: mix(seed, i, 1) }; }
+        moshi (kind == 1) { ring_b[slot] = B { a: mix(seed, i, 1), b: mix(seed, i, 2) }; }
+        moshi (kind == 2) { ring_c[slot] = C { a: mix(seed, i, 1), b: mix(seed, i, 6), c: mix(seed, i, 3) }; }
+        moshi (kind == 3) { ring_d[slot] = D { a: mix(seed, i, 1), b: mix(seed, i, 6), c: mix(seed, i, 7), d: mix(seed, i, 4) }; }
+        moshi (kind == 4) { ring_e[slot] = E { a: mix(seed, i, 1), b: mix(seed, i, 6), c: mix(seed, i, 7), d: mix(seed, i, 8), e: mix(seed, i, 5) }; }
+        i = i + 1;
+    }
+    kaesu bad * 1000000000000 + sum - (sum / 1000000007) * 1000000007;
+}
+
+waza run() -> int64 {
+    // An invalid join stores a status word in this thread's record: it must not overlap the allocation cache of the smallest size class (an object of
+    // 24 bytes, one integer field, is allocated right afterwards).
+    thread.join(0);
+    kaku probe = A { a: 41 };
+    thread.join(123456789);
+    kaku probe2 = A { a: 42 };
+    kaku handles: []int64 = [];
+    kaku t = 1;
+    aida (t <= 4) {
+        kaku seed = t;
+        array.push(handles, thread.start(waza () -> int64 { kaesu worker(seed); }));
+        t = t + 1;
+    }
+    kaku mine = worker(9);
+    kaku total = 0;
+    kaku failures = 0;
+    kaku i = 0;
+    aida (i < len(handles)) {
+        kaku r = thread.join(handles[i]);
+        moshi (r >= 1000000000000) { failures = failures + 1; }
+        total = total + r - (r / 1000000000000) * 1000000000000;
+        i = i + 1;
+    }
+    moshi (mine >= 1000000000000) { failures = failures + 1; }
+    chant(probe.a + probe2.a);
+    chant(failures);
+    chant(len(handles));
+    chant(total > 0);
+    kaesu 0;
+}
+run();

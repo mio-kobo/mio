@@ -170,6 +170,15 @@ waza emit_gc_alloc(code: x86_64.Assembler) -> unit {
     x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 8);
     x86_64.add_rr(code, x86_64.rdx, x86_64.rax);
     x86_64.mov_store(code, x86_64.rcx, 8, x86_64.rdx);
+    moshi (mutators_enabled(code)) {
+        // tell the pollers (one word, rarely written) that the threshold was reached
+        x86_64.mov_load(code, x86_64.r8, x86_64.rcx, 16);
+        x86_64.cmp_rr(code, x86_64.rdx, x86_64.r8);
+        x86_64.jcc(code, x86_64.cc_b, "rt.alloc.nowant");
+        x86_64.mov_ri(code, x86_64.r8, 1);
+        x86_64.mov_store(code, x86_64.rcx, mut_want, x86_64.r8);
+        x86_64.label(code, "rt.alloc.nowant");
+    }
     x86_64.cmp_ri(code, x86_64.rax, 512);
     x86_64.jcc(code, x86_64.cc_a, "rt.alloc.large");
     x86_64.mov_ri(code, x86_64.r8, bins_base());
@@ -646,10 +655,9 @@ waza emit_poll(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAna
         x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_stop);
         x86_64.test_rr(code, x86_64.rax, x86_64.rax);
         x86_64.jcc(code, x86_64.cc_ne, collect);
-        x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 8);
-        x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, 16);
-        x86_64.cmp_rr(code, x86_64.rax, x86_64.rdx);
-        x86_64.jcc(code, x86_64.cc_b, skip);
+        x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_want);    // not the volume word: every allocation writes that one
+        x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+        x86_64.jcc(code, x86_64.cc_e, skip);
         x86_64.label(code, collect);
         x86_64.call(code, "rt.gc");
         kaku threaded = emit_frame_descriptor(code, file, analysis, function_id, offset, parameters);
