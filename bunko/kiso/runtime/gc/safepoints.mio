@@ -34,7 +34,10 @@ waza gc_park_locked_program() -> ir.Function {
     ir.put(f,ir.add,7,7,8,0);ir.branch(f,ir.nonzero,7,"spin");
     // the spin ended with the epoch still active: take the mutex again, look once more (an epoch that ended meanwhile has already sent its wake-up,
     // which a sleep begun now would miss) and only then sleep
-    ir.call(f,ir.mutex_lock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");ir.put(f,ir.acquire_load,9,10,0,gc_registry_owner);ir.branch(f,ir.zero,9,"wait");ir.branch(f,ir.jump,0,"do_wait");
+    ir.call(f,ir.mutex_lock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");ir.put(f,ir.acquire_load,9,10,0,gc_registry_owner);ir.branch(f,ir.zero,9,"wait");
+    // A new epoch can replace the old one during the unlocked spin without an observed zero owner. gc_begin requires a gc-parked thread to
+    // acknowledge that new epoch itself; refresh the acknowledgement through the existing wait loop before entering the kernel wait.
+    ir.put(f,ir.acquire_load,9,10,0,gc_registry_epoch);ir.put(f,ir.equal,9,9,19,0);ir.branch(f,ir.zero,9,"wait");ir.branch(f,ir.jump,0,"do_wait");
     // the epoch ended during the spin: take the mutex again and resume through the owner check at the top of the loop (never into the sleep)
     ir.branch(f,ir.label,0,"spin_over");ir.call(f,ir.mutex_lock,6,[2]);ir.branch(f,ir.nonzero,6,"fatal");ir.branch(f,ir.jump,0,"wait");
     ir.branch(f,ir.label,0,"do_wait");tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",5,[3,2,4]);ir.branch(f,ir.zero,5,"wait");tcheck(f,5,1,"wait");terror(f,5);ir.branch(f,ir.jump,0,"wait");
