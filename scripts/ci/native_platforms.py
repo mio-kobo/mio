@@ -808,6 +808,15 @@ def darwin_alloc_probe(report, cli, work):
             continue
         c2, o2, e2, s2 = run(report, "darwin-alloc-probe-run-" + name, [single], timeout=120)
         lines.append("%s: exit %s after %.1fs stdout %r" % (name, c2, s2 or 0, o2.replace("\n", " ")[:60]))
+    # the plain loop with the runtime's own counters (--observe prints them to stderr at exit): how many collections does 2M allocations cause?
+    observed = Path(work) / "alloc_plain_observed"
+    built_o, why_o, _ = cli_build(report, "darwin-alloc-probe-build-alloc_plain_observed", cli, str(ROOT / "tests/threads/alloc_plain.mio"), "darwin-arm64", observed, extra=("--observe",))
+    if built_o:
+        c4, o4, e4, s4 = run(report, "darwin-alloc-probe-run-alloc_plain_observed", [observed], timeout=120)
+        keep = [ln.strip() for ln in e4.splitlines() if any(k in ln for k in ("gc_count", "heap_goal", "heap_limit", "heap_committed", "allocated_objects", "heap_capacity", "gc_total_reclaimed", "heap_live", "gc_before", "gc_after", "gc_last"))]
+        lines.append("observed plain: exit %s after %.1fs stdout %r counters %s" % (c4, s4 or 0, o4.replace("\n", " ")[:40], "; ".join(keep)[:500]))
+    else:
+        lines.append("observed plain: build failed: %s" % brief(why_o, 100))
     # one thread of a thread build, long enough to be sampled: where does a single allocating thread spend its time?
     long_image = Path(work) / "alloc_bridge_long"
     built, why, _ = cli_build(report, "darwin-alloc-probe-build-alloc_bridge_long", cli, str(ROOT / "tests/threads/alloc_bridge_long.mio"), "darwin-arm64", long_image)
