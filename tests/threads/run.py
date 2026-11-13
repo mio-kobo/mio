@@ -13,6 +13,7 @@ Programs (expected output):
   nested       threads starting and joining threads, three levels deep
   many         32 thread lifetimes (8 at a time x 4 rounds), more than the cores
   reclaim      ~19 GiB of garbage through an 8 GiB heap from 5 threads: only finishes if concurrent collections reclaim memory
+  socket_gc_progress  collections complete while other threads are blocked in a socket read, write, accept or reactor poll
   channel_*    zero-copy channels (kiso/thread): producer/consumer, close and failed-send hand-back, shared sub-objects / cycles / deep and
                large graphs, 3 producers x 3 consumers; reject_*: compile-time rejection of use after send, live alias, double send
 """
@@ -47,6 +48,7 @@ PROGRAMS = {
     "channel_races": b"80\n",
     "gc_lifecycle": b"913200\n",
     "channel_lifecycle": b"2000\nhai\n9\nhai\n1\n",
+    "socket_gc_progress": b"20000\n107\nhai\n20000\nhai\nhai\n20000\n1\nhai\n20000\n1\nhai\n",
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
