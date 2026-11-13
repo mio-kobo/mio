@@ -159,9 +159,19 @@ def run_sampled(report, label, argv, timeout, sample_after=10, cwd=ROOT):
     sampled = ""
     proc = subprocess.Popen([str(a) for a in argv], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
     try:
-        out, err = proc.communicate(timeout=sample_after)
+        out, err = proc.communicate(timeout=min(sample_after, timeout))
         code = proc.returncode
     except subprocess.TimeoutExpired:
+        if sample_after >= timeout:   # no sample wanted before the limit: the limit is the end of the run
+            proc.kill()
+            out, err = proc.communicate()
+            code = None
+            err = (err or b"") + b"\n[timed out]"
+            seconds = time.monotonic() - started
+            with open(report.logs / (label + ".log"), "wb") as stream:
+                stream.write(("$ %s\n[cwd %s] [exit %s] [%.1fs]\n" % (" ".join(str(a) for a in argv), cwd, code, seconds)).encode())
+                stream.write(b"--- stdout\n" + (out or b"") + b"\n--- stderr\n" + (err or b""))
+            return code, (out or b"").decode(errors="replace"), (err or b"").decode(errors="replace"), seconds
         try:
             taken = subprocess.run(["/usr/bin/sample", str(proc.pid), "3", "-mayDie"], capture_output=True, timeout=90)
             sampled = taken.stdout.decode(errors="replace")[:200000] + taken.stderr.decode(errors="replace")[:2000]
