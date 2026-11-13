@@ -20,7 +20,7 @@ waza gc_park_locked_program() -> ir.Function {
     // A stuck owner causes process abort rather than releasing live root frames.
     kaku f=ir.function("gc_park_locked");tprepare(f);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"idle");ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.nonzero,12,"idle");
     tload(f,13,thread_progress);ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);ir.put(f,ir.release_store,0,0,12,thread_ack_epoch);ir.put(f,ir.copy,19,12,0,0);tpublish(f,thread_progress,thread_gc_parked);
-    ir.put(f,ir.acquire_load,15,10,0,gc_registry_heartbeat);ir.invoke_function(f,"platform_now",14,[]);tconstant(f,16,30000000000);ir.put(f,ir.add,14,14,16,0);
+    ir.put(f,ir.acquire_load,15,10,0,gc_registry_heartbeat);ir.invoke_function(f,"platform_now",14,[]);tconstant(f,16,600000000000);ir.put(f,ir.add,14,14,16,0);
     ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"resumed");ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);ir.put(f,ir.release_store,0,0,12,thread_ack_epoch);ir.put(f,ir.copy,19,12,0,0);
     ir.put(f,ir.acquire_load,12,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,17,12,15,0);ir.branch(f,ir.nonzero,17,"check_deadline");ir.put(f,ir.copy,15,12,0,0);ir.invoke_function(f,"platform_now",14,[]);ir.put(f,ir.add,14,14,16,0);
     ir.branch(f,ir.label,0,"check_deadline");ir.invoke_function(f,"platform_now",17,[]);ir.put(f,ir.less_unsigned,18,17,14,0);ir.branch(f,ir.zero,18,"fatal");
@@ -51,7 +51,7 @@ waza gc_begin_program() -> ir.Function {
     kaku f=ir.function("gc_begin");tprepare(f);ir.invoke_function(f,"gc_poll",2,[0,1]);ir.invoke_function(f,"registry_lock",2,[0]);ir.branch(f,ir.nonzero,2,"failed_lock");
     tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.nonzero,11,"unlock_failed");ir.put(f,ir.load,11,10,0,gc_registry_epoch);tconstant(f,12,-1);ir.put(f,ir.equal,12,11,12,0);ir.branch(f,ir.nonzero,12,"unlock_failed");
     tconstant(f,12,1);ir.put(f,ir.add,11,11,12,0);ir.put(f,ir.release_store,0,10,11,gc_registry_epoch);ir.put(f,ir.release_store,0,0,11,thread_ack_epoch);ir.put(f,ir.release_store,0,10,12,gc_registry_phase);ir.put(f,ir.release_store,0,10,0,gc_registry_owner);gc_heartbeat(f,10);
-    ir.invoke_function(f,"platform_now",20,[]);tconstant(f,21,1000000000);ir.put(f,ir.add,20,20,21,0);
+    ir.invoke_function(f,"platform_now",20,[]);tconstant(f,21,120000000000);ir.put(f,ir.add,20,20,21,0);   // 120 s for every thread to reach a safepoint: an overloaded machine can leave a thread unscheduled for seconds
     ir.branch(f,ir.label,0,"retry");ir.put(f,ir.load,13,10,0,32);tconstant(f,14,0);
     ir.branch(f,ir.label,0,"member");ir.branch(f,ir.zero,13,"check_all");ir.put(f,ir.equal,15,13,0,0);ir.branch(f,ir.nonzero,15,"next");
     ir.put(f,ir.acquire_load,15,13,0,thread_error);ir.branch(f,ir.nonzero,15,"abort");ir.put(f,ir.load,16,13,0,thread_mutex);ir.invoke_function(f,"platform_trylock",17,[16]);tcheck(f,17,1,"not_ready");ir.branch(f,ir.nonzero,17,"abort");
