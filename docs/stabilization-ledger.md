@@ -20,7 +20,7 @@ Platforms other than linux-amd64 were not available locally; their cells say NOT
 | 4b | Other safepoint-unaware blocking calls: fs read/write natives, os poll/wait4 | linux-amd64 | CONFIRMED by source only | static | none (follow-up) | none |
 | 5a | `thread.send` of a mutable graph accepted when the program has no `yuzuru` | self-hosted frontend | CONFIRMED | executed (`mio check`) | #100 | `reject_send_*`, `channel_send_boundary` |
 | 5b | Closure captures of `thread.start` are not checked | self-hosted frontend | CONFIRMED (accepted by `mio check`) / **DESIGN_DECISION** (capture rule needed) | executed | none | none |
-| 6 | Native Map lookup is a linear walk of one list | linux-amd64, windows-amd64 (`lower*/maps.mio`), arm64 (`lower/map.mio`) | CONFIRMED by source | static | not started | |
+| 6 | Native Map lookup is a linear walk of one list | linux-amd64, windows-amd64 (`lower*/maps.mio`) fixed; arm64 (`lower/map.mio`) unchanged | CONFIRMED; fixed with a hash table on the x86-64 lowerings | executed on linux-amd64 (scaling table in #102); windows-amd64 and darwin-arm64 CI only for the new case; arm64 `lower/map.mio` still linear (static) | #102 | `maps_hashing` differential case |
 | 7 | Runtime traps print only the message (`runtime error: index out of range`), no file/line/column | native runtimes | CONFIRMED | executed | none (proposal below) | |
 | 8 | `mio fmt` exists in the Go reference CLI (`cmd/mio/fmt_command.go`, `internal/format`); the native CLI `help` lists no `fmt` | native CLI | CONFIRMED gap | executed (`mio help`) | none | |
 
@@ -36,3 +36,10 @@ Platforms other than linux-amd64 were not available locally; their cells say NOT
 * **Runtime source locations.** Traps carry no location. A narrow route: the x86-64 inline frame descriptors already identify every call site; add a (file index, line, column) triple per descriptor behind a flag, and have `rt.trap.*` print the innermost managed frame's location. Costs image size, changes the descriptor layout (RA-1 ABI gate), so it needs its own PR and ABI review. No DWARF/DAP.
 * **Formatter in the native CLI.** The reference formatter exists; porting or wrapping it for the native CLI is a tooling task, separate from runtime stabilization. Semantic rename stays a separate tooling task.
 * **Language ergonomics** (mutable struct fields, `Result`/`Option`, changing `FileResult`, new ownership syntax): not changed. `m[key]` and missing-key behavior are unchanged by #97.
+
+## CI evidence at 2026-11-13 (Draft PRs #95 to #102)
+
+* #95, #96, #97, #98, #100, #102: darwin-arm64, darwin-amd64, windows-amd64 and windows-arm64 jobs passed (the differential and contract suites include the new cases).
+* darwin-arm64 `channel_races` timed out (180 s) once on #95, #100 and #101 (#101 is documentation only, so the change cannot be the cause). The reruns of the same commits passed. Classification: intermittent, pre-existing, not caused by these PRs; its cause was not investigated and it is not fixed here.
+* #99 `Native / darwin-arm64` was cancelled on the first attempt because no macOS runner was ever acquired (NOT_RUN, not a result); rerun requested. #101 `candidates (windows-amd64)` failed on a GitHub API rate limit inside `Repair-WinGetPackageManager` (infrastructure); rerun requested.
+* A cancelled, skipped or unacquired job is NOT_RUN and is never counted as a pass.
