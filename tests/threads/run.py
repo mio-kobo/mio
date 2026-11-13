@@ -14,7 +14,7 @@ Programs (expected output):
   many         32 thread lifetimes (8 at a time x 4 rounds), more than the cores
   reclaim      ~19 GiB of garbage through an 8 GiB heap from 5 threads: only finishes if concurrent collections reclaim memory
   channel_*    zero-copy channels (kiso/thread): producer/consumer, close and failed-send hand-back, shared sub-objects / cycles / deep and
-               large graphs, 3 producers x 3 consumers; reject_*: compile-time rejection of use after send, live alias, double send
+               large graphs, 3 producers x 3 consumers; reject_*: compile-time rejection of use after send, live alias, double send, sending a mutable graph without yuzuru
 """
 import argparse
 import os
@@ -47,6 +47,7 @@ PROGRAMS = {
     "channel_races": b"80\n",
     "gc_lifecycle": b"913200\n",
     "channel_lifecycle": b"2000\nhai\n9\nhai\n1\n",
+    "channel_send_boundary": b"13\nhello\n25\n9\nhai\n3\niie\n2\n",
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
@@ -54,7 +55,8 @@ HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repe
 
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
 NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",
-            "reject_escape_global": "E0701"}
+            "reject_escape_global": "E0701", "reject_send_shared": "E0705", "reject_send_nested": "E0705", "reject_send_wrapper": "E0705",
+            "reject_send_map": "E0705"}
 STRESS_SKIPPED = {"reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
 
 

@@ -338,6 +338,15 @@ declared in the transferring function), **E0702** use after transfer (flow sensi
 sound-by-over-approximation grouping described in `internal/typecheck/ownership.go`. At run time `yuzuru x` is a plain read
 of `x`: it never copies, so identity, sharing and cycles are untouched. Programs without `yuzuru` are not analysed at all.
 
+**E0705 (self-hosted checker, the one that builds native thread programs):** `kiso/thread::send` — identified by its resolved symbol, so
+import aliases and generic instantiations are covered — rejects a value that can reach mutable state (arrays, Maps, closures, resources,
+structs/enums holding them, unresolved type parameters) unless the argument is a `yuzuru` transfer. Scalars, strings, immutable structs of
+those and the `kiso/thread.Channel` handle may be sent directly. This check runs even when the program never writes `yuzuru`; the transfer
+analysis above still runs only when it does. A wrapper that forwards a parameter is rejected at its own send site, because a parameter
+cannot be transferred. **Open design decision:** closures passed to `thread.start` may capture mutable variables that the starting thread
+still uses; no capture rule exists yet (the supported tests/threads/captures.mio relies on the creator dropping every other reference),
+so captures are not enforced.
+
 Not implemented yet: the points-to/effect-summary engine (PR-2; today's grouping rejects more than necessary), element and
 field operands, parameter transfer, any runtime/threads/channels, and every target's concurrency capability (all flags unchanged).
 

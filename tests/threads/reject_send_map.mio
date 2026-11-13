@@ -1,0 +1,13 @@
+// Must NOT compile (E0705): a Map held in a struct is mutable shared state that crosses the thread boundary without a transfer.
+yobu "kiso/thread";
+
+kata Table { entries: Map<string, int64>; }
+
+waza run() -> int64 {
+    kaku fresh = Map[string, int64]();
+    kaku channel = thread.channel_new[Table](1, Table { entries: fresh });
+    kaku table = Table { entries: Map[string, int64]() };
+    thread.send[Table](channel, table);
+    kaesu 0;
+}
+chant(run());
