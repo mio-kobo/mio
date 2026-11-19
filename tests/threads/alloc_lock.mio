@@ -1,0 +1,58 @@
+// Allocation-lock regression (cooperative Darwin thread build; also runs unchanged on every other target). Four workers and the main thread allocate
+// structs, array literals and growing arrays in tight loops while a rolling window of survivors keeps collections meaningful, and some iterations
+// grow arrays (an Epoch-owning mutation) or allocate more than the lock fast path serves (a large request takes the Epoch path). Each worker's
+// result is compared with the same function run sequentially afterwards: a lost, duplicated or torn allocation changes a total.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Pair { a: int64; b: int64; }
+
+waza churn(seed: int64, n: int64) -> int64 {
+    kaku keep: []Pair = [];
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) {
+        kaku p = Pair { a: i + seed, b: i * 3 };
+        kaku arr = [p.a, p.b, i];
+        t = t + p.b + arr[1] - arr[0] + arr[2];
+        moshi (i - (i / 64) * 64 == 0) {
+            array.push(keep, p);
+            moshi (len(keep) > 256) { keep = []; }
+        }
+        moshi (i - (i / 5000) * 5000 == 0) {
+            kaku big: []int64 = [];
+            kaku j = 0;
+            aida (j < 700) { array.push(big, j + seed); j = j + 1; }
+            t = t + big[699] - big[0];
+        }
+        i = i + 1;
+    }
+    kaku k = 0;
+    aida (k < len(keep)) { t = t + keep[k].a - keep[k].b; k = k + 1; }
+    kaesu t;
+}
+
+waza w0() -> int64 { kaesu churn(1, 300000); }
+waza w1() -> int64 { kaesu churn(2, 300000); }
+waza w2() -> int64 { kaesu churn(3, 300000); }
+waza w3() -> int64 { kaesu churn(4, 300000); }
+
+waza run() -> int64 {
+    kaku h0 = thread.start(w0);
+    kaku h1 = thread.start(w1);
+    kaku h2 = thread.start(w2);
+    kaku h3 = thread.start(w3);
+    kaku own = churn(5, 300000);
+    kaku r0 = thread.join(h0);
+    kaku r1 = thread.join(h1);
+    kaku r2 = thread.join(h2);
+    kaku r3 = thread.join(h3);
+    chant(r0 == churn(1, 300000));
+    chant(r1 == churn(2, 300000));
+    chant(r2 == churn(3, 300000));
+    chant(r3 == churn(4, 300000));
+    chant(own == churn(5, 300000));
+    chant(r0 + r1 + r2 + r3 + own);
+    kaesu 0;
+}
+run();

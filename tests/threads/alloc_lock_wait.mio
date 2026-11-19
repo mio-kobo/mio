@@ -1,0 +1,59 @@
+// Start 28 mutators together and reuse their thread slots across batches.
+// A surviving array must remain rooted across small allocations and the large allocation.
+yobu "mio/thread/runtime";
+yobu "kiso/array";
+
+teisu workers = 28;
+teisu iterations = 400;
+
+waza churn(gate: int64, seed: int64) -> int64 {
+    kaku captured = [seed];
+    runtime.word_add(gate, 0, 1);
+    runtime.word_wake(gate, 0, workers);
+    aida (runtime.word_get(gate, 1) == 0) {
+        runtime.word_wait(gate, 1, 0);
+    }
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < iterations) {
+        kaku inner = [captured[0], i];
+        kaku outer = [inner];
+        total = total + outer[0][0] + outer[0][1];
+        i = i + 1;
+    }
+    kaku large = array.make[int64](17000, captured[0]);
+    kaesu total + large[16999];
+}
+
+waza batch() -> bool {
+    kaku gate = runtime.words_new(2);
+    kaku handles: []int64 = [];
+    kaku i = 0;
+    aida (i < workers) {
+        kaku seed = i;
+        kaku handle = runtime.start(waza() -> int64 { kaesu churn(gate, seed); });
+        moshi (handle <= 0) { kaesu iie; }
+        array.push(handles, handle);
+        i = i + 1;
+    }
+    kaku ready = runtime.word_get(gate, 0);
+    aida (ready < workers) {
+        runtime.word_wait(gate, 0, ready);
+        ready = runtime.word_get(gate, 0);
+    }
+    runtime.word_set(gate, 1, 1);
+    runtime.word_wake(gate, 1, workers);
+    kaku ok = hai;
+    i = 0;
+    aida (i < workers) {
+        kaku expected = (iterations + 1) * i + iterations * (iterations - 1) / 2;
+        moshi (runtime.join(handles[i]) != expected) { ok = iie; }
+        i = i + 1;
+    }
+    runtime.words_free(gate, 2);
+    kaesu ok;
+}
+
+chant(batch());
+chant(batch());
+chant(batch());

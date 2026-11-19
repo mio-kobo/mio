@@ -19,7 +19,7 @@ ci-pr.yml / ci-full.yml
 
 Python 标准库负责调度及协议；Bash、Python、Git、Go/gofmt 是开发依赖。原生模块还需要 macOS ARM64、codesign 和主机提供的 Native Seed。参考模块构建现有 Go 工具；它们不用于正式原生构建。工具缺失为 NOT_RUN；真实执行非零、超时为 FAIL；平台/等级策略为 SKIP；没有执行、缺少必需检查、损坏报告为 NOT_RUN。退出码 0/1/2 分别代表通过、失败、存在环境或基础设施问题；混合失败时总状态保留 FAIL，退出码可能为 2。
 
-GF4 SHA256 固定为 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`，与既有约定一致。runner 在首次原生构建前验证文件与摘要，不下载或自动替换 Seed；然后仅构建一次当前工作树 selfhost/cli。后续原生检查复用该产物，显式传当前 Bunko root。构建有独立命令、日志、Seed/产物哈希；构建失败为 FAIL，依赖测试为 NOT_RUN。缺少或错误 Seed 不执行编译器/测试，返回 NOT_RUN/2。本次真实 Seed/签名及原生构建 **NOT_RUN**；自检仅用临时夹具验证协议，不是信任真实 Seed 的证据。
+Native Seed SHA256 固定为 `be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79`（bootstrap-v2.1.0-seed.1 发布资产 mio-v2.1.0-darwin-arm64；旧 GF4 Seed 已弃用），与既有约定一致。runner 在首次原生构建前验证文件与摘要，不下载或自动替换 Seed；然后仅构建一次当前工作树 selfhost/cli。后续原生检查复用该产物，显式传当前 Bunko root。构建有独立命令、日志、Seed/产物哈希；构建失败为 FAIL，依赖测试为 NOT_RUN。缺少或错误 Seed 不执行编译器/测试，返回 NOT_RUN/2。本次真实 Seed/签名及原生构建 **NOT_RUN**；自检仅用临时夹具验证协议，不是信任真实 Seed 的证据。
 
 ## 2. 远端问题及准确分类
 

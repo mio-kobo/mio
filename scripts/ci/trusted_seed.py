@@ -12,7 +12,7 @@ from urllib.error import URLError
 from native_platforms import (ROOT, Report, brief, cli_build,
                               cli_chain, run, sha256, verify_host)
 from seed_source import SeedUnavailable, download_seed
-from seed_evidence import (CROSS_TARGETS, GF4, GF4_SEED_SHA256, SEED_KINDS, SEED_LOGS,
+from seed_evidence import (CROSS_TARGETS, GF4, NATIVE_V21, NATIVE_V21_SEED_SHA256, SEED_KINDS, SEED_LOGS,
                            REPOSITORY, WORKFLOW, release_context, seed_identity, seed_record,
                            stable_version, valid_run)
 
@@ -23,11 +23,11 @@ from seed_evidence import (CROSS_TARGETS, GF4, GF4_SEED_SHA256, SEED_KINDS, SEED
 SEED_BUILD_TIMEOUT = 7200
 
 
-def verify(output, local_seed=None, kind=GF4):
+def verify(output, local_seed=None, kind=NATIVE_V21):
     identity = seed_identity(kind)
     report = Report('darwin-arm64', output, require_seed=True)
     report.data.update(schema_version=2, suite=f'trusted-{kind}-distribution',
-                       seed=dict(status='NOT_RUN', sha256=identity.sha256 if identity else GF4_SEED_SHA256))
+                       seed=dict(status='NOT_RUN', sha256=identity.sha256 if identity else NATIVE_V21_SEED_SHA256))
     if local_seed is not None and kind != GF4:
         report.check('seed-source', 'FAIL', 'host', 'local replay is only available for frozen GF4')
         return 1
@@ -143,7 +143,7 @@ def verify(output, local_seed=None, kind=GF4):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--seed', choices=SEED_KINDS, default=GF4)
+    parser.add_argument('--seed', choices=SEED_KINDS, default=NATIVE_V21)
     parser.add_argument('--local-seed', type=Path, help='Independent frozen GF4 replay outside GitHub Actions only')
     args = parser.parse_args()
     result = verify(args.output, args.local_seed, args.seed)

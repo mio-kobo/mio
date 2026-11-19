@@ -8,6 +8,8 @@ import re
 
 from versions import STABLE_VERSION, stable_version  # noqa: F401  (re-exported API)
 
+# DEPRECATED: the frozen GF4 executable is no longer a trusted seed for any CI run. This pin only identifies the historical immutable v2.1.0
+# release asset (it must keep matching that asset); CI bootstraps from NATIVE_V21_SEED_SHA256 below.
 GF4_SEED_SHA256 = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
 REPOSITORY = 'mio-kobo/mio'
 WORKFLOW = '.github/workflows/distribution-pr.yml'

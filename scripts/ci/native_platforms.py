@@ -14,7 +14,7 @@ Engines are recorded separately for native execution, build and PE inspection, t
            Windows also runs the two TCP echo examples as separate native processes.
   summary  Combines the platform reports; fails unless every required check is PASS.
 
-This candidate suite does not use the trusted GF4 seed. Stable distribution verifies it separately.
+This candidate suite does not use the trusted native seed. Stable distribution verifies it separately.
 Python only starts processes, compares bytes and writes JSON; it generates no code.
 """
 import argparse
@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT / "tests/windows-amd64"))
 from verify_pe import verify_winsock
 
 sys.path.insert(0, str(ROOT / "scripts/distribution"))
-from seed_evidence import GF4_SEED_SHA256
+from seed_evidence import NATIVE_V21_SEED_SHA256
 from prepare import EMPTY
 
 STARTED = time.monotonic()
@@ -91,8 +91,8 @@ class Report:
                                   url="%s/%s/actions/runs/%s" % (os.environ.get("GITHUB_SERVER_URL", ""),
                                                                  os.environ.get("GITHUB_REPOSITORY", ""),
                                                                  os.environ.get("GITHUB_RUN_ID", ""))),
-                         seed=dict(status="NOT_RUN", sha256=GF4_SEED_SHA256,
-                                   reason="the candidate suite does not use the trusted GF4 Native Seed; "
+                         seed=dict(status="NOT_RUN", sha256=NATIVE_V21_SEED_SHA256,
+                                   reason="the candidate suite does not use the trusted Native Seed (bootstrap-v2.1.0-seed.1); "
                                           "Stage A comes from the Go-hosted reference VM and is not seed-verified"),
                          checks=self.checks, hashes=self.hashes)
         inputs = ROOT / "distribution-input.json"
@@ -220,11 +220,11 @@ def peak_rss_mib(err):
     return int(match.group(1)) // 1024 if match else 0
 
 
-def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT):
+def cli_build(report, label, cli, entry, target, output, extra=(), cwd=ROOT, env=None):
     argv = [cli, "build", entry, "--target=" + target, "-o", output, *extra]
     if not report.exec_prefix and platform.system() == "Darwin" and Path("/usr/bin/time").exists():
         argv = ["/usr/bin/time", "-l", *argv]  # resource usage only; the build itself is unchanged
-    code, out, err, seconds = run(report, label, argv, cwd=cwd, timeout=CLI_BUILD_TIMEOUT)
+    code, out, err, seconds = run(report, label, argv, cwd=cwd, timeout=CLI_BUILD_TIMEOUT, env=env)
     ok = code == 0 and Path(output).is_file()
     if ok and not is_windows(target):
         os.chmod(output, 0o755)
@@ -731,8 +731,8 @@ def darwin_thread_programs(report, cli, work):
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
              "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
-             "shutdown_active"]
-    stress = ["basic", "nested", "channel_basic", "channel_close"]
+             "shutdown_active", "epoch_retention", "heap_invariants", "alloc_lock", "alloc_lock_stress", "alloc_lock_wait"]
+    stress = ["basic", "nested", "channel_basic", "channel_close", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
     for name in names:
@@ -759,6 +759,28 @@ def darwin_thread_programs(report, cli, work):
             else:
                 passed.append("%s/%s" % (name, label))
     report.check("darwin-thread-programs", "FAIL" if failures else "PASS", "native", "; ".join(failures)[:900], passed=passed)
+
+
+def darwin_thread_epochs(report, cli, work):
+    """Evidence for the heap-exclusion classification (non-required until it has a CI history).
+    Static half: tests/threads/heap_epochs.py cross-builds tests/threads/heap_epochs.mio for darwin-arm64 and counts the heap-entering call sites per
+    function of the emitted image. Run-time half: the same program built natively, normal and --gc-stress, run on this host, output compared."""
+    code, out, err, seconds = run(report, "darwin-thread-epochs-static", [sys.executable, ROOT / "tests/threads/heap_epochs.py", "--mio", str(cli)], timeout=300)
+    problems = [] if code == 0 else ["static: " + brief((out + err).replace("\n", " | "), 300)]
+    Path(work).mkdir(parents=True, exist_ok=True)
+    expected = b"hai\nhai\nhai\nhai\n4266394162\n"
+    for label, extra in (("normal", ()), ("gc-stress", ("--gc-stress",))):
+        image = Path(work) / ("heap-epochs-" + label)
+        ok, reason, _ = cli_build(report, "darwin-thread-epochs-build-" + label, cli, str(ROOT / "tests/threads/heap_epochs.mio"), "darwin-arm64", image, extra=extra)
+        if not ok:
+            problems.append("%s: build failed: %s" % (label, brief(reason, 160)))
+            continue
+        for repeat in range(3):
+            code, out, err, seconds = run_sampled(report, "darwin-thread-epochs-run-%s-%d" % (label, repeat), [image], timeout=180, sample_after=60)
+            if code != 0 or out.encode() != expected:
+                problems.append("%s run %d: exit %s after %.1fs stdout %r stderr %s" % (label, repeat, code, seconds or 0, out[:80], brief(err, 80)))
+                break
+    report.check("darwin-thread-epochs", "FAIL" if problems else "PASS", "native", "; ".join(problems)[:900], required=False)
 
 
 def darwin_thread_probe(report, cli, work):
@@ -798,6 +820,86 @@ def darwin_thread_bench(report, cli, work):
     report.check("darwin-thread-bench", "PASS" if complete else "FAIL", "native", " | ".join(lines)[:1500], required=False)
 
 
+# Baseline of the phase comparison: the last natively measured head (ebff537: bounded epoch retention, observation build, spin 128). The candidate adds the
+# allocation lock (docs/darwin-thread-heap-exclusion-design.md section 11), so baseline and candidate thread images differ and the comparison is the A/B of
+# that change; the A/A noise floor of the comparison was measured earlier (c7bece5 against 868068c, byte-identical images).
+BASELINE_SHA = "ebff537c86f0b669794000ddcabd45e3cab92b1f"
+
+
+def darwin_thread_phases(report, cli, work):
+    """Evidence only (non-required): every benchmark phase of benchmarks/threads/efficiency.mio built and run as its own process with its own budget
+    (scripts/ci/thread_bench.py), plus the 10 s mpmc_probe that reports per-worker counts. Unlike darwin-thread-bench, an unfinished mpmc cannot hide
+    start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded)."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    # Weak scaling alloc_1/2/4 (2000000 iterations per thread), strong scaling alloc_s1/alloc_s4 (4000000 in total; alloc_2 is the 2-thread point),
+    # the original mpmc_long reproducer (unchanged program, 120 s watchdog) and the bounded probe. Everything lands under logs/ so the CI upload keeps
+    # reports, raw stdout/stderr of every run (failed and timed-out ones too), samples and symbol maps.
+    phases = ["start_join", "fan_join", "pingpong", "alloc_1", "alloc_2", "alloc_4", "alloc_s1", "alloc_s4", "mpmc_probe", "mpmc_long"]
+    phases_dir = report.logs / "thread-phases"
+    argv = [sys.executable, ROOT / "scripts/ci/thread_bench.py", "--mio", str(cli), "--target", "darwin-arm64", "--repeat", "4", "--budget", "120",
+            "--sample-after", "25", "--symbols", "--output", str(phases_dir)]
+    # Baseline compiler: the previous head (BASELINE_SHA) built natively by the compiler under test,
+    # so baseline and candidate images run on the same runner in the same job. If it cannot be built the phases run for the candidate only.
+    base_dir = Path(work) / "baseline-src"
+    base_cli = Path(work) / "mio-baseline"
+    shutil.rmtree(base_dir, ignore_errors=True)
+    base_dir.mkdir(parents=True)
+    code, out, err, _ = run(report, "darwin-thread-phases-baseline-fetch", ["git", "fetch", "--depth=1", "origin", BASELINE_SHA], timeout=300)
+    if code == 0:
+        code, out, err, _ = run(report, "darwin-thread-phases-baseline-archive", ["sh", "-c", "git archive %s | tar -x -C %s" % (BASELINE_SHA, base_dir)], timeout=300)
+    if code == 0:
+        ok, reason, _ = cli_build(report, "darwin-thread-phases-baseline-build", cli, "selfhost/cli", "darwin-arm64", base_cli, extra=("--bunko-root", str(base_dir / "bunko")), cwd=base_dir)
+        if ok:
+            argv += ["--baseline-mio", str(base_cli)]
+    for phase in phases:
+        argv += ["--phase", phase]
+    code, out, err, seconds = run(report, "darwin-thread-phases-run", argv, timeout=6600)
+    lines = []
+    try:
+        data = json.loads((phases_dir / "report.json").read_text())
+        for phase, entry in data["phases"].items():
+            for label, contender in entry["contenders"].items():
+                runs = contender.get("runs") or []
+                # A run cut off at the budget is a censored observation: its wall time is a lower bound (">"), never an exact duration.
+                lines.append("%s/%s=%s wall%s cpu%s" % (phase, label[:4], contender.get("status"),
+                             [(">%s(censored)" if r.get("status") == "PARTIAL" else "%s") % r.get("wall_s") for r in runs],
+                             [round(r.get("user_s", 0) + r.get("system_s", 0), 1) for r in runs]))
+    except (OSError, ValueError, KeyError) as problem:
+        lines.append("no report: %s" % problem)
+    report.check("darwin-thread-phases", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
+
+
+def darwin_thread_observe(report, cli, work):
+    """Evidence only (non-required, INSTRUMENTED runs, never used for timing): the thread phases built with --observe, once with and once without
+    bounded epoch retention (same compiler, MIO_OBSERVE_NO_RETENTION=1). The images print the epochs entered, the wait distributions of the epoch
+    protocol calls (heap enter, poll/park, block leave), the heap observation record (collections, pause histogram, live/peak bytes) and the driver adds
+    per-run peak RSS and context switches. Reports and raw stderr land under logs/thread-observe (uploaded). PASS only if every run completed and printed counters."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    out_dir = report.logs / "thread-observe"
+    argv = [sys.executable, ROOT / "scripts/ci/thread_bench.py", "--mio", str(cli), "--target", "darwin-arm64", "--observe", "--repeat", "1", "--budget", "120",
+            "--output", str(out_dir)]
+    for phase in ("alloc_1", "alloc_2", "pingpong", "mpmc_probe"):
+        argv += ["--phase", phase]
+    code, out, err, seconds = run(report, "darwin-thread-observe-run", argv, timeout=2400)
+    lines = []
+    try:
+        data = json.loads((out_dir / "report.json").read_text())
+        for phase, entry in data["phases"].items():
+            for label, contender in entry["contenders"].items():
+                runs = contender.get("runs") or []
+                for r in runs:
+                    obs = r.get("observation") or {}
+                    he = (r.get("waits") or {}).get("heap_enter", {})
+                    lines.append("%s/%s=%s epochs=%s heap_enter p95<=%s mean_ns=%s gc=%s rss_mb=%s vcsw=%s" % (
+                        phase, label.replace("observed-", "")[:6], r.get("status"), obs.get("thread.epochs_entered"), he.get("p95_bucket_upper"), he.get("mean_ns"),
+                        obs.get("gc.gc_count"), round(r.get("maxrss_bytes", 0) / 1048576), r.get("voluntary_csw")))
+    except (OSError, ValueError, KeyError) as problem:
+        lines.append("no report: %s" % problem)
+    report.check("darwin-thread-observe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
+
+
 def darwin_thread_repro(report, cli, work):
     """Diagnostic (non-required): tests/threads/pingpong_close.mio, run three times with a stack sample of any run that takes longer than 8 seconds."""
     Path(work).mkdir(parents=True, exist_ok=True)
@@ -823,6 +925,64 @@ def darwin_thread_repro(report, cli, work):
         bad += 0 if (code == 0 and out == expected) else 1
         lines.append("%s: exit %s after %.1fs stdout %r" % (name, code, seconds or 0, out[:40]))
     report.check("darwin-thread-repro", "FAIL" if bad else "PASS", "native", " | ".join(lines)[:1200], required=False)
+
+
+def darwin_thread_lockstress(report, cli, work):
+    """Closes the gap that --gc-stress compiles the allocation lock out (docs/darwin-thread-heap-exclusion-design.md section 12). Test-only image
+    (MIO_ALLOC_LOCK_STRESS=1 with --observe): the real lock fast path and, on every fourth locked attempt, a forced try-failure that falls back to a
+    real collection, with in-lock checks (no stopped world, epoch counter unchanged) that abort the image. Runs repeatedly; PASS needs the exact
+    output AND counters proving that BOTH the lock path (alloc_lock_fast, alloc_lock_invariant_checked) and collections/fallback (alloc_epoch_path,
+    alloc_lock_forced_fail, gc_count) really ran in every run. The `violate` image polls inside the locked region on purpose and must trip the checks
+    in at least one run (detector sensitivity, counted only when the stress image itself passed); an unexpected pass of the control is reported FAIL because the checks would then be untested.
+    Non-required until it has passed repeatedly on native runners."""
+    import re
+    Path(work).mkdir(parents=True, exist_ok=True)
+    source = str(ROOT / "tests/threads/alloc_lock_stress.mio")
+    expected = "hai\nhai\nhai\nhai\nhai\n3047825\n"
+    failures, lines = [], []
+
+    def counters(err):
+        found = {}
+        for key, value in re.findall(r"mio-(?:thread|gc) ([a-z_]+)=(\d+)", err):
+            found[key] = int(value)
+        return found
+
+    image = Path(work) / "stress"
+    ok, reason, _ = cli_build(report, "darwin-thread-lockstress-build", cli, source, "darwin-arm64", image, extra=("--observe",), env={"MIO_ALLOC_LOCK_STRESS": "1"})
+    if not ok:
+        report.check("darwin-thread-lockstress", "FAIL", "native", "build failed: " + brief(reason, 300), required=False)
+        return
+    for repeat in range(6):
+        code, out, err, seconds = run_sampled(report, "darwin-thread-lockstress-run-%d" % repeat, [image], timeout=240, sample_after=60)
+        c = counters(err or "")
+        need = ("alloc_lock_fast", "alloc_epoch_path", "alloc_lock_forced_fail", "alloc_lock_invariant_checked", "gc_count")
+        missing = [k for k in need if not c.get(k)]
+        lines.append("run%d exit=%s %.1fs fast=%s epoch_path=%s forced=%s checked=%s gc=%s epochs=%s gave_up=%s" % (
+            repeat, code, seconds or 0, c.get("alloc_lock_fast"), c.get("alloc_epoch_path"), c.get("alloc_lock_forced_fail"),
+            c.get("alloc_lock_invariant_checked"), c.get("gc_count"), c.get("epochs_entered"), c.get("alloc_lock_gave_up")))
+        if code != 0 or out != expected:
+            failures.append("run %d: exit %s stdout %r stderr %s" % (repeat, code, out[:80], brief(err, 120)))
+        elif missing:
+            failures.append("run %d: counters absent or zero (%s): the path under test did not run" % (repeat, ",".join(missing)))
+    control = Path(work) / "violate"
+    ok, reason, _ = cli_build(report, "darwin-thread-lockstress-control-build", cli, source, "darwin-arm64", control, extra=("--observe",), env={"MIO_ALLOC_LOCK_STRESS": "violate"})
+    tripped = 0
+    stress_failed = bool(failures)
+    if ok:
+        for repeat in range(4):
+            code, out, err, seconds = run_sampled(report, "darwin-thread-lockstress-control-run-%d" % repeat, [control], timeout=240, sample_after=60)
+            lines.append("control%d exit=%s %.1fs" % (repeat, code, seconds or 0))
+            if code != 0:
+                tripped += 1
+        if stress_failed:
+            # a control that fails because the stress image itself fails shows nothing about the checks
+            lines.append("control INCONCLUSIVE: the stress image failed, so a control failure cannot be attributed to the injected violation")
+        elif not tripped:
+            failures.append("control image (poll inside the lock) never tripped the in-lock checks in 4 runs: detector sensitivity not shown")
+    else:
+        failures.append("control build failed: " + brief(reason, 200))
+    lines.append("control tripped %d of 4%s" % (tripped, " (not attributable)" if stress_failed else ""))
+    report.check("darwin-thread-lockstress", "FAIL" if failures else "PASS", "native", ("; ".join(failures) + " | " + " | ".join(lines))[:9000], required=False)
 
 
 def darwin_thread_faults(report, cli, work):
@@ -1075,9 +1235,13 @@ def follower(args, target):
             darwin_thread_core(report, cli, work / "thread-core")
             darwin_thread_probe(report, cli, work / "thread-probe")
             darwin_thread_programs(report, cli, work / "thread-programs")
+            darwin_thread_epochs(report, cli, work / "thread-epochs")
+            darwin_thread_lockstress(report, cli, work / "thread-lockstress")
             darwin_thread_faults(report, cli, work / "thread-faults")
             darwin_thread_repro(report, cli, work / "thread-repro")
             darwin_thread_bench(report, cli, work / "thread-bench")
+            darwin_thread_phases(report, cli, work / "thread-phases")
+            darwin_thread_observe(report, cli, work / "thread-observe")
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
@@ -1256,7 +1420,7 @@ def summary(args):
     if any(result != "success" for result in jobs.values()):
         overall = "FAIL"
     text = ["## Native verification: %s" % overall, "",
-            "Stage A is go-hosted (Go reference VM runs the pure-Mio Linux lowering); the trusted GF4 Native Seed is "
+            "Stage A is go-hosted (Go reference VM runs the pure-Mio Linux lowering); the trusted Native Seed (bootstrap-v2.1.0-seed.1) is "
             "NOT_RUN. Native execution, builds and static PE checks are recorded separately.", "",
             "| target | status | checks | seed |", "|---|---|---|---|", *rows, ""]
     text.extend(f"- Native {name} job: {result}" for name, result in jobs.items() if result != "success")

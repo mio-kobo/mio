@@ -16,7 +16,7 @@ from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGETS = {"linux-amd64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64")}
-SEED_SHA256 = "4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da"
+SEED_SHA256 = "be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79"
 
 
 @contextmanager
@@ -348,7 +348,7 @@ def run(args):
                 if seed_valid is None:
                     seed_valid = seed.is_file() and sha256(seed) == SEED_SHA256
                 if not seed_valid:
-                    item.update(status="NOT_RUN", reason="verified MIO_NATIVE_SEED missing or GF4 SHA256 mismatch",
+                    item.update(status="NOT_RUN", reason="verified MIO_NATIVE_SEED missing or native seed SHA256 mismatch",
                                 checks=[dict(name=name, status="NOT_RUN", reason="native compiler unavailable") for name in required])
                     exit_code = 2
                     continue

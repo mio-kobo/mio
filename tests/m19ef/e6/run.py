@@ -4,7 +4,7 @@ from pathlib import Path
 import os,sys,json,hashlib,shutil,subprocess,signal,time,re,fcntl
 r=Path.cwd();out=(r/sys.argv[1]).resolve();assert out.is_relative_to(r/'build/m19ef-evidence');out.mkdir()
 lock=(r/'build/.m19ef-native-test.lock').open('a+');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-seed=Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest();assert sha(seed)=='4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
+seed=Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest();assert sha(seed)=='be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79'
 def save(p,x):p.write_text(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n')
 review=json.loads((r/'build/m19ef-evidence/E5-v21-fixed32-20261030-01/final-integrity-review.json').read_text());assert review['E5']=='PASS_SCOPED'
 rows=[];snap=r
@@ -59,7 +59,7 @@ for package in ('bunko/...','selfhost/frontend','selfhost/pipeline','selfhost/ls
 shutil.copyfile(snap/'tests/m19ef/user-workers/worker_trace.py',out/'worker_trace.py')
 for helper in ('bulk_overlay.py','bulk_trace.py'):shutil.copyfile(snap/'tests/m19ef/old-mark-faults'/helper,out/helper)
 for phase,original,destination in [('E3','tests/m19ef/user-workers/run.py','E3-workers-'+out.name),('E4','tests/m19ef/old-mark-faults/run.py','E4-faults-'+out.name)]:
- source=(snap/original).read_text();source=source.replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da',sha(compiler));controller=out/(phase+'-controller-current-D.py');controller.write_text(source);run(phase+'-complete-regression',[sys.executable,controller,r/'build/m19ef-evidence'/destination],timeout=7200,cwd=r)
+ source=(snap/original).read_text();source=source.replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79',sha(compiler));controller=out/(phase+'-controller-current-D.py');controller.write_text(source);run(phase+'-complete-regression',[sys.executable,controller,r/'build/m19ef-evidence'/destination],timeout=7200,cwd=r)
 # Rebuild and run both observer inputs with the CURRENT actual D generation.
 snapshot_tools=out/'snapshot-tools';snapshot_tools.mkdir()
 shutil.copyfile(snap/'tests/m19ef/e6/snapshot/overlay.py',snapshot_tools/'overlay.py')
@@ -74,7 +74,7 @@ for mode in ('known','unknown'):
 # differ. Production GC/test case Mio sources remain the frozen final sources.
 gc_tools=out/'sweep-tools';gc_tools.mkdir()
 for original in (snap/'tests/m19ef/old-sweep-v2').glob('*.py'):
- source=original.read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da',sha(compiler))
+ source=original.read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79',sha(compiler))
  for child in ('run.py','ungated_matrix.py'):
   source=source.replace("'tests/m19ef/old-sweep-v2/"+child+"'",repr(str(gc_tools/child)))
  (gc_tools/original.name).write_text(source)

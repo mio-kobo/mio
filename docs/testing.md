@@ -53,10 +53,10 @@ bash scripts/ci/run.sh macos-arm64 native-release release
 
 会核对真实 OS 和架构。交叉编译不等于原生执行：darwin/windows 的 Stage A 由 Linux 原生 CLI 交叉构建，只在对应 runner 上执行后才计为 PASS。
 
-开发驱动要求 Bash、Python 3.9+、Git；参考测试另需 Go（版本见 go.mod）。原生测试先用主机提供的 `MIO_NATIVE_SEED` 构建当前工作树的 `selfhost/cli`，整次运行只构建一次，再由各模块复用当前源码编译器。GF4 Seed 的 SHA256 必须为：
+开发驱动要求 Bash、Python 3.9+、Git；参考测试另需 Go（版本见 go.mod）。原生测试先用主机提供的 `MIO_NATIVE_SEED` 构建当前工作树的 `selfhost/cli`，整次运行只构建一次，再由各模块复用当前源码编译器。Native Seed（bootstrap-v2.1.0-seed.1 的 mio-v2.1.0-darwin-arm64）的 SHA256 必须为：
 
 ```text
-4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da
+be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79
 ```
 
 该约定来自现有 `tests/m19ef/README.md`、ABCD 和生产流水线，不新增 Go Seed，也不下载不明原生产物。所有 Mio 原生测试显式传递当前 `--bunko-root`，避免读到 Seed 内嵌的历史库。缺少 Seed 或哈希不符返回 NOT_RUN/2，不降级到 Go 冒充原生。系统 `codesign` 只用于签名验证；真正的原生代码生成、链接、签名由现有 Mio 实现负责。

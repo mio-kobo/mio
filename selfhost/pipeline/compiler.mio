@@ -8,6 +8,7 @@ yobu "kiso/convert";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "kiso/fs";
+yobu "kiso/os";
 
 koukai kata NativeBuildResult { bytes: []uint8; error: string; }
 
@@ -116,7 +117,7 @@ koukai waza build_signed_source_diagnostic(root: string, entry: string, bunko_ro
     // routine yet and the lowering rejects the build.)
     moshi (thread_start >= 0 || thread_join >= 0) {
         moshi (thread_start < 0 || thread_join < 0) { kaesu NativeBuildResult { bytes: [], error: "E_THREAD darwin-arm64 thread programs must declare start and join together" }; }
-        kaesu build_signed_thread_image(file, 1073741824, gc_stress, thread_start, thread_join);
+        kaesu build_signed_thread_image(file, 1073741824, gc_stress, thread_start, thread_join, symbols, observation);
     }
     kaku compiled = build_file_observed(file, 1073741824, gc_stress, observation, symbols);
     moshi (compiled.error != "") { kaesu compiled; }
@@ -126,8 +127,28 @@ koukai waza build_signed_source_diagnostic(root: string, entry: string, bunko_ro
 }
 
 // Darwin ARM64 image with the thread runtime: lowered by the worker bridge, linked against libSystem's pthread symbols and ad-hoc signed.
-waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64) -> NativeBuildResult {
+waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64, symbols: string, observation: bool) -> NativeBuildResult {
     kaku lowered = lower.compile_with_public_threads(file, capacity, gc_stress, start_id, join_id);
+    // --observe: a diagnostic image that prints the heap observation record and the epoch-protocol counters on stderr at exit (never for timing).
+    // MIO_OBSERVE_NO_RETENTION=1 builds that image without bounded epoch retention so the epoch counts of both variants can be compared.
+    moshi (observation) { lowered = lower.compile_with_public_threads_observed(file, capacity, gc_stress, start_id, join_id, os.getenv("MIO_OBSERVE_NO_RETENTION") != "1"); }
+    // MIO_ALLOC_LOCK_STRESS=1 (with --observe): the test-only image that runs the real allocation lock fast path next to frequent real collections
+    // (docs/darwin-thread-heap-exclusion-design.md section 12). Requires --observe; without it the variable has no effect.
+    // MIO_ALLOC_LOCK_STRESS=violate is the detector-sensitivity control: it polls inside the locked region on purpose, and the in-lock checks must trip.
+    moshi (observation && (os.getenv("MIO_ALLOC_LOCK_STRESS") == "1" || os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate")) {
+        lowered = lower.compile_with_public_threads_lock_stress(file, capacity, start_id, join_id, os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate");
+    }
+    moshi(observation){
+        kaku wait_test=os.getenv("MIO_ALLOC_WAIT_TEST");
+        moshi(wait_test=="owner"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,3);}
+        moshi(wait_test=="errno"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,4);}
+        moshi(wait_test=="park"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,5);}
+    }
+    // --emit-symbols: the same function/runtime word map as for ordinary images, so stack samples of a thread image can be attributed.
+    moshi (symbols != "" && lowered.error == mu) {
+        kaku written = write_symbols(symbols, file, lowered);
+        moshi (written != "") { kaesu NativeBuildResult { bytes: [], error: written }; }
+    }
     kaku problem = lowered.error;
     moshi (problem != mu) {
         kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
