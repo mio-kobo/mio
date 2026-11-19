@@ -1,0 +1,16 @@
+// Must NOT compile (E0705): forwarding a parameter through a wrapper does not bypass the check. The send inside the wrapper has no
+// transfer (and a parameter cannot be transferred), so it is rejected at the wrapper's own send site.
+yobu "kiso/thread";
+
+waza forward<T>(channel: thread.Channel<T>, value: T) -> int64 {
+    thread.send[T](channel, value);
+    kaesu 0;
+}
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[[]int64](1, []);
+    kaku shared = [1, 2, 3];
+    forward[[]int64](channel, shared);
+    kaesu len(shared);
+}
+chant(run());

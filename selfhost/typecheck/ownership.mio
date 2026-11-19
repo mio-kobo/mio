@@ -842,6 +842,8 @@ waza own_check_file(pass: OwnPass) -> unit {
 
 // Entry point: runs after type checking succeeded and records ownership diagnostics in env.result.errors.
 waza check_ownership(env: TypeEnvironment) -> unit {
+    // The thread send boundary applies whether or not the program writes `yuzuru` anywhere.
+    check_send_boundary(env);
     kaku count = len(env.resolved.symbols);
     kaku scan = OwnScan { env: env, reached: array.make[int64](count, 0), captured: array.make[int64](count, 0), uses_transfer: [0] };
     kaku file_id = 0;
