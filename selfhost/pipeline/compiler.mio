@@ -138,6 +138,12 @@ waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: boo
     moshi (observation && (os.getenv("MIO_ALLOC_LOCK_STRESS") == "1" || os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate")) {
         lowered = lower.compile_with_public_threads_lock_stress(file, capacity, start_id, join_id, os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate");
     }
+    moshi(observation){
+        kaku wait_test=os.getenv("MIO_ALLOC_WAIT_TEST");
+        moshi(wait_test=="owner"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,3);}
+        moshi(wait_test=="errno"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,4);}
+        moshi(wait_test=="park"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,5);}
+    }
     // --emit-symbols: the same function/runtime word map as for ordinary images, so stack samples of a thread image can be attributed.
     moshi (symbols != "" && lowered.error == mu) {
         kaku written = write_symbols(symbols, file, lowered);

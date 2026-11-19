@@ -243,7 +243,9 @@ Sections 4 and 9 assumed that a heap lock *replaces* the Epoch for ordinary heap
 * **Only allocation changes.** Every mutation of an existing object (array push/reserve/truncate/append, element and field stores with a barrier, captured-cell stores, map operations, closure capture) keeps its full Epoch. An array read therefore still cannot overlap a growth: the language semantics, the ownership rules and the racy-program behaviour are exactly what they are today (and section 9.1's "accidentally safer than Linux" property is preserved). The maintainers' decision in 9.1 is only needed for a future protocol that replaces Epochs for mutations; it is not needed here.
 * **No collection under the lock.** The allocator is run in *try mode* (the same code, `x21 = 256`): every edge that would collect, grow the heap, map a large object or report out-of-memory returns 0 without side effects, and the caller falls back to the existing Epoch + root-snapshot + `runtime_alloc_legacy` path. So 9.3's split is realised inside the existing routine as a flag, not as a second allocator, and the collecting path is byte-for-byte the previous one.
 
-### 11.2 The protocol
+### 11.2 The original PR #115 protocol
+
+Section 13 describes the experimental contention-aware retry.
 `runtime_alloc(size, type)` (wrapper, `worker_roots.mio`):
 1. If the request is larger than 4095 bytes, or the lock was not obtained within a spin budget of 256 attempts: Epoch path (unchanged).
 2. Acquire the lock word (`ldaxr`/`stlxr`, word at `wr_alloc_lock` in the tail of context 0), call `runtime_alloc_try`, release with `stlr`.
@@ -303,3 +305,68 @@ Assumed or not provable by this mechanism:
 * Exact roots: the try-mode allocator never collects, never scans roots and has no side effects when it fails; an allocation that needs a collection always falls back to the unchanged snapshot path. This is supported by the forced fallback counters and the unchanged `gc-stress` suites, but rests on the code argument.
 * ARM64 memory ordering: acquire (`ldaxr`) / release (`stlr`) on the lock, `ldar` registry reads, release stores and acquire loads in the poll/acknowledge protocol. A weakly ordered 3-core hosted runner exercises it; many-core hardware (for example M4 Pro) was NOT measured and is not claimed.
 * The instrumented stress image collects on every allocation: its timing says nothing about performance.
+
+## 13. Bounded Darwin allocation-lock waits
+
+A small-object allocator first tries the existing allocation lock for up to
+256 iterations, including failed exclusive stores. On contention it can enter
+the native blocked-mutator protocol, attempt a 64-bit compare-and-wait, leave
+through the GC handshake, and retry. Each kernel wait requests at most 1 ms.
+The wrapper falls back to an Epoch after 64 such rounds, on oversize requests,
+or when the non-collecting allocator returns zero.
+
+The allocation word encodes free (0), held (1), and held with waiter interest
+(2). Only running mutators acquire it (0 → 1). A parked waiter can advertise
+interest (1 → 2) but cannot enter the heap. Darwin ARM64's release exchange
+clears the word and returns the earlier value. If that value was 2, wake all
+waiters. A waiter that races with release either fails to set the flag or
+compares against the new word in the kernel. Spurious wakes and timeouts retry
+after the mutator resumes. The reset and wake use the same state transition in
+ordinary execution and on a forced try-failure in section 12.
+
+The wait begins with the same published operands that the legacy Epoch path
+would scan. The holder runs through release with its mutator active, so another
+coordinator cannot stop the world while it is mutating allocator metadata.
+The wrapper restores the original size and layout arguments after each wait.
+The new path reserves no managed memory. Thread lifecycle, object initialization
+and remembered-set updates use their existing protocols.
+
+In an observe build `alloc_lock_contended` counts requests that enter this wait
+path and `alloc_lock_wait_rounds` counts their attempts. Some attempts see a free
+word on recheck and return without a kernel wait. `alloc_lock_gave_up` counts
+exhaustion of the full contention budget. `tests/threads/alloc_lock_wait.mio`
+starts 28 workers together, reuses their slots, and validates small and
+large-object results by exact checksums.
+
+## 14. Allocation wait guard and Darwin syscall outcomes
+
+A stopped Epoch owner excludes every other allocator lock holder. A contender
+can still exhaust its spin budget on failed exclusive stores against a free
+word. An exclusive store can lose its reservation without another mutator
+acquiring the lock. The owned-Epoch exclusion argument alone therefore cannot
+rule out reaching the earlier experiment's blocking branch.
+
+The revised cold path uses `attached_alloc_enter`. It publishes the shadow
+chain and reads the registry owner before calling `gc_block_enter`. If the
+owner is this mutator, the allocation takes `runtime_alloc_slow` and
+`gc_heap_enter` retains the existing Epoch. An unrelated mutator can publish
+its own request during the check. The per-thread block-entry handshake
+coordinates with that request. No other thread can make this mutator an owner.
+The cold path also rechecks the lock before entering the blocked protocol.
+
+A Darwin raw syscall sets carry for an errno returned in x0. Wait timeout and
+interruption consume a round and recheck. Wake `ENOENT` is an empty queue. A
+hard error on wait or wake disables further allocation waits for this process.
+An affected waiter leaves the blocked region before falling back. In-flight
+waiters have finite deadlines, so failure of a notification cannot strand them.
+Unlock still atomically exchanges zero through SWPL and wakes all if its old
+value was 2.
+
+Run the Darwin witnesses with
+`python3 tests/threads/alloc_wait_deterministic.py --mio /path/to/mio --output /path/to/logs`.
+The independent kernel witness uses barriers and Mach thread states. The Mio
+witness parks a real mutator, makes a stopped coordinator observe it entering
+`gc_block_leave`, and checks that the collection serial has advanced while
+the worker's roots survive. The `owner` and `errno` images deliberately force
+the ownership guard and a rejected kernel wait. These hooks require both
+`--observe` and an explicit test mode.

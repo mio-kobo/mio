@@ -2359,6 +2359,11 @@ koukai waza compile_with_public_threads_lock_stress(file:mochi.File,capacity:int
     kaku mode=1;moshi(violate){mode=2;}
     kaesu compile_worker_target(file,hai,capacity,hai,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,hai,mode);
 }
+// Test-only entry that forces the allocation wait guard and kernel errno paths.
+koukai waza compile_with_public_threads_wait_test(file:mochi.File,capacity:int64,start_id:int64,join_id:int64,mode:int64) -> LowerResult {
+    moshi(start_id<0||join_id<0||start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaesu compile_worker_target(file,mode==5,capacity,hai,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,hai,mode);
+}
 koukai waza compile_with_public_threads_observed(file:mochi.File,capacity:int64,gc_stress:bool,start_id:int64,join_id:int64,retention:bool) -> LowerResult {
     moshi(start_id<0 || start_id>=len(file.functions) || join_id<0 || join_id>=len(file.functions) || start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
     kaku s=file.functions[start_id];kaku j=file.functions[join_id];
@@ -2447,6 +2452,12 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi(len(worker_bindings)>0 && retention && (!gc_stress || lock_stress>0) && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock");}
     moshi(lock_stress>0 && len(worker_bindings)>0 && retention && abi==3 && observation && gc_stress && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock_stress");}
     moshi(lock_stress==2 && len(worker_bindings)>0 && retention && abi==3 && observation && gc_stress && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock_violate");}
+    moshi(observation && abi==3 && len(worker_bindings)>0 && lock_stress>=3){
+        arm64.assembler_label(code,"worker_alloc_wait_test");
+        moshi(lock_stress==3){arm64.assembler_label(code,"worker_alloc_wait_owner_test");}
+        moshi(lock_stress==4){arm64.assembler_label(code,"worker_alloc_wait_error_test");}
+        moshi(lock_stress==5){arm64.assembler_label(code,"worker_alloc_wait_park_test");}
+    }
     moshi(old_proto){arm64.assembler_label(code,"old_mark_proto_enabled");}
     moshi(full_sweep){arm64.assembler_label(code,"old_sweep_enabled");}
     moshi(release_fault){arm64.assembler_label(code,"sweep_unmap_fault_enabled");}
