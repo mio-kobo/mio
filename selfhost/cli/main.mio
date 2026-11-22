@@ -61,14 +61,14 @@ waza add_link_option(options: []string, option: string, value: string) -> string
     }
     moshi (option == "--link" || option == "-L" || option == "-F") {
         kaku resolved = os.canonical_path(value);
-        moshi (resolved == mu) { kaesu string.concat("E_CABI linker input does not exist: ", value); }
+        moshi (resolved == mu) { kaesu error_message("E_CABI", i18n.key_err_link_input, value); }
         moshi (option == "--link") {
             moshi (!fs.is_file(resolved) || !(string.has_suffix(value, ".o") || string.has_suffix(value, ".a") || string.has_suffix(value, ".dylib"))) {
                 kaesu "E_CABI --link requires an existing .o, .a or .dylib";
             }
             array.push(options, resolved);
         } sore {
-            moshi (!fs.is_dir(resolved)) { kaesu string.concat("E_CABI linker search path is not a directory: ", value); }
+            moshi (!fs.is_dir(resolved)) { kaesu error_message("E_CABI", i18n.key_err_link_search, value); }
             array.push(options, string.concat(option, resolved));
         }
         kaesu "";
@@ -263,7 +263,7 @@ waza run() -> unit {
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
     moshi (len(link_options) != 0 && (target != "darwin-arm64" || host != "darwin-arm64" || emit_mochi || command != "build")) {
-        fail("E_CABI link options require mio build for darwin-arm64 on Apple Silicon macOS", 2); kaesu;
+        fail(error_message("E_CABI", i18n.key_err_link_options, ""), 2); kaesu;
     }
     moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_symbols, ""), 2); kaesu; }
     moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_observe, ""), 2); kaesu; }
