@@ -1,6 +1,5 @@
 // Independent Darwin ARM64 kernel oracle for the emitted allocation lock.
 // The Mio test image separately exercises the managed-mutator handshake.
-#include <assert.h>
 #include <errno.h>
 #include <mach/mach.h>
 #include <pthread.h>
@@ -9,9 +8,27 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 enum { free_word, held, waiters };
+
+// Every check runs and is verified in all build modes (unlike assert, it is not
+// removed by NDEBUG). The expression is evaluated exactly once, so it may hold
+// the operation under test (a syscall, a thread call or an atomic exchange).
+// A failed check reports its source text and line, then aborts.
+#define CHECK(expression) \
+    do { \
+        if (!(expression)) { \
+            check_failed(#expression, __LINE__); \
+        } \
+    } while (0)
+
+static _Noreturn void check_failed(const char *expression, int line)
+{
+    fprintf(stderr, "check failed at line %d: %s\n", line, expression);
+    abort();
+}
 
 static _Alignas(128) _Atomic uint64_t lock_word;
 
@@ -26,7 +43,7 @@ struct contender {
 static uint64_t now_ns(void)
 {
     struct timespec ts;
-    assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
     return (uint64_t)ts.tv_sec * 1000000000 + (uint64_t)ts.tv_nsec;
 }
 
@@ -34,7 +51,7 @@ static void await_at_least(_Atomic int *word, int value)
 {
     const uint64_t deadline = now_ns() + 5000000000;
     while (atomic_load_explicit(word, memory_order_acquire) < value) {
-        assert(now_ns() < deadline);
+        CHECK(now_ns() < deadline);
         sched_yield();
     }
 }
@@ -67,7 +84,7 @@ static void *contend(void *opaque)
     uint64_t before = held;
     if (!atomic_compare_exchange_strong_explicit(&lock_word, &before, waiters,
             memory_order_release, memory_order_relaxed)) {
-        assert(before == waiters);
+        CHECK(before == waiters);
     }
     atomic_store_explicit(&c->stage, 1, memory_order_release);
     await_at_least(&c->permit, 1);
@@ -81,7 +98,7 @@ static void *contend(void *opaque)
 static void start(struct contender *c, unsigned timeout)
 {
     c->timeout = timeout;
-    assert(pthread_create(&c->thread, NULL, contend, c) == 0);
+    CHECK(pthread_create(&c->thread, NULL, contend, c) == 0);
     await_at_least(&c->stage, 1);
 }
 
@@ -93,24 +110,24 @@ static void wait_in_kernel(struct contender *c)
     for (;;) {
         thread_basic_info_data_t info;
         mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
-        assert(thread_info(pthread_mach_thread_np(c->thread), THREAD_BASIC_INFO,
-                   (thread_info_t)&info, &count) == KERN_SUCCESS);
+        CHECK(thread_info(pthread_mach_thread_np(c->thread), THREAD_BASIC_INFO,
+                  (thread_info_t)&info, &count) == KERN_SUCCESS);
         // After stage 3 this thread has no other blocking operation.
         if (info.run_state == TH_STATE_WAITING) {
             return;
         }
-        assert(now_ns() < deadline);
+        CHECK(now_ns() < deadline);
         sched_yield();
     }
 }
 
 static void join(struct contender *c, int expected)
 {
-    assert(pthread_join(c->thread, NULL) == 0);
+    CHECK(pthread_join(c->thread, NULL) == 0);
     if (c->status != expected) {
         fprintf(stderr, "wait status %d, expected %d\n", c->status, expected);
     }
-    assert(c->status == expected);
+    CHECK(c->status == expected);
 }
 
 static void release_before_wait(bool at_syscall)
@@ -122,9 +139,9 @@ static void release_before_wait(bool at_syscall)
         atomic_store_explicit(&c.permit, 1, memory_order_release);
         await_at_least(&c.stage, 2);
     }
-    assert(release() == waiters);
-    assert(ulock(516, 0x105, 0, 0) == ENOENT);
-    assert(atomic_load_explicit(&lock_word, memory_order_acquire) == free_word);
+    CHECK(release() == waiters);
+    CHECK(ulock(516, 0x105, 0, 0) == ENOENT);
+    CHECK(atomic_load_explicit(&lock_word, memory_order_acquire) == free_word);
     atomic_store_explicit(&c.permit, 2, memory_order_release);
     join(&c, 0);
     puts(at_syscall ? "B pre-syscall mismatch" : "A post-advertisement mismatch");
@@ -139,8 +156,8 @@ static void wake_all(void)
         wait_in_kernel(&c[i]);
     }
     puts("C four kernel waiters");
-    assert(release() == waiters);
-    assert(ulock(516, 0x105, 0, 0) == 0);
+    CHECK(release() == waiters);
+    CHECK(ulock(516, 0x105, 0, 0) == 0);
     for (unsigned i = 0; i < 4; ++i) {
         join(&c[i], 0);
     }
@@ -155,15 +172,15 @@ static void timeout_over_change(void)
     wait_in_kernel(&c);
     // Fault injection: make the owed notification fail after state 2 -> 0.
     // A new holder arrives while the old waiter is still in the kernel.
-    assert(release() == waiters);
-    assert(ulock(516, 0x1ff, 0, 0) == EINVAL);
+    CHECK(release() == waiters);
+    CHECK(ulock(516, 0x1ff, 0, 0) == EINVAL);
     uint64_t before = free_word;
-    assert(atomic_compare_exchange_strong(&lock_word, &before, held));
+    CHECK(atomic_compare_exchange_strong(&lock_word, &before, held));
     join(&c, ETIMEDOUT);
-    assert(release() == held);
+    CHECK(release() == held);
     before = free_word;
-    assert(atomic_compare_exchange_strong(&lock_word, &before, held));
-    assert(release() == held);
+    CHECK(atomic_compare_exchange_strong(&lock_word, &before, held));
+    CHECK(release() == held);
     puts("G timeout across release and reacquire");
 }
 
@@ -178,17 +195,17 @@ static void interrupt_wait(void)
     struct contender c = {0};
     struct sigaction act = {0};
     act.sa_handler = handle_signal;
-    assert(sigemptyset(&act.sa_mask) == 0);
-    assert(sigaction(SIGUSR1, &act, NULL) == 0);
+    CHECK(sigemptyset(&act.sa_mask) == 0);
+    CHECK(sigaction(SIGUSR1, &act, NULL) == 0);
     atomic_store_explicit(&lock_word, held, memory_order_relaxed);
     start(&c, 2000000);
     wait_in_kernel(&c);
-    assert(pthread_kill(c.thread, SIGUSR1) == 0);
+    CHECK(pthread_kill(c.thread, SIGUSR1) == 0);
     join(&c, EINTR);
-    assert(caught == SIGUSR1);
-    assert(release() == waiters);
-    assert(ulock(516, 0x105, 0, 0) == ENOENT);
-    assert(ulock(515, 255, waiters, 1000) == EINVAL);
+    CHECK(caught == SIGUSR1);
+    CHECK(release() == waiters);
+    CHECK(ulock(516, 0x105, 0, 0) == ENOENT);
+    CHECK(ulock(515, 255, waiters, 1000) == EINVAL);
     puts("H EINTR and EINVAL");
 }
 
