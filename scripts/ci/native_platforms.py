@@ -985,6 +985,34 @@ def darwin_thread_lockstress(report, cli, work):
     report.check("darwin-thread-lockstress", "FAIL" if failures else "PASS", "native", ("; ".join(failures) + " | " + " | ".join(lines))[:9000], required=False)
 
 
+def darwin_thread_alloc_wait(report, cli, work):
+    """Deterministic witnesses of the allocation-lock wait guard (docs/darwin-thread-heap-exclusion-design.md section 14), non-required until it has a CI history.
+    tests/threads/alloc_wait_deterministic.py runs four cases, `--repeat` times each: `kernel` (the independent C oracle for the ulock wait/wake outcomes),
+    `park` (a parked mutator rendezvous with a real stopped Epoch), `errno` (a rejected kernel wait disables further waits) and `owner` (the control that
+    must trip the owned-Epoch guard with exit status 90). The script prints `NOT_RUN` and exits 0 on a host that cannot run them, and it exits 0 only if
+    every run passed, so PASS here additionally requires one PASS line for every case and repeat and no FAIL line. Raw per-run output stays under logs/."""
+    import re
+    repeat, cases = 5, ("kernel", "park", "errno", "owner")
+    output = report.logs / "thread-alloc-wait"
+    code, out, err, seconds = run(report, "darwin-thread-alloc-wait-run", [sys.executable, ROOT / "tests/threads/alloc_wait_deterministic.py", "--mio", str(cli),
+                                  "--output", str(output), "--repeat", str(repeat)], timeout=1200)
+    results = re.findall(r"^(\w+) (\d+) (PASS|FAIL) exit=", out, re.MULTILINE)
+    passed = {(name, int(index)) for name, index, verdict in results if verdict == "PASS"}
+    failed = [(name, int(index)) for name, index, verdict in results if verdict == "FAIL"]
+    missing = [(name, index) for name in cases for index in range(repeat) if (name, index) not in passed]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if "NOT_RUN" in out:
+        problems.append("the witnesses reported NOT_RUN on this host")
+    if failed:
+        problems.append("failed: %s" % failed)
+    if missing:
+        problems.append("%d of %d expected case runs have no PASS line" % (len(missing), len(cases) * repeat))
+    report.check("darwin-thread-alloc-wait", "FAIL" if problems else "PASS", "native",
+                 ("; ".join(problems) if problems else "%d case runs passed (%s)" % (len(passed), ", ".join(cases)))[:900] + " | " + brief(out + err, 300), required=False)
+
+
 def darwin_thread_faults(report, cli, work):
     """reclaim (heavy allocation across threads), the thread-stack overflow fault and the compile-time ownership rejections, for darwin-arm64.
 
@@ -1237,6 +1265,7 @@ def follower(args, target):
             darwin_thread_programs(report, cli, work / "thread-programs")
             darwin_thread_epochs(report, cli, work / "thread-epochs")
             darwin_thread_lockstress(report, cli, work / "thread-lockstress")
+            darwin_thread_alloc_wait(report, cli, work / "thread-alloc-wait")
             darwin_thread_faults(report, cli, work / "thread-faults")
             darwin_thread_repro(report, cli, work / "thread-repro")
             darwin_thread_bench(report, cli, work / "thread-bench")

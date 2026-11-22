@@ -364,6 +364,7 @@ value was 2.
 
 Run the Darwin witnesses with
 `python3 tests/threads/alloc_wait_deterministic.py --mio /path/to/mio --output /path/to/logs`.
+The Native workflow runs the same script as the non-required `darwin-thread-alloc-wait` check. It passes only when every case and repeat printed a PASS line; a host that cannot run the witnesses is reported as a failed check, never as a pass.
 The independent kernel witness uses barriers and Mach thread states. The Mio
 witness parks a real mutator, makes a stopped coordinator observe it entering
 `gc_block_leave`, and checks that the collection serial has advanced while
