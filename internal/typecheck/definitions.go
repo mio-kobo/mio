@@ -111,6 +111,10 @@ func (c *Checker) resolveType(ref *ast.TypeRef, parameters map[string]struct{}) 
 		return KindUint16, nil
 	case "uint32":
 		return KindUint32, nil
+	case "uint64":
+		return KindCUint64, nil
+	case "cptr":
+		return KindCPointer, nil
 	case "float64":
 		return KindFloat, nil
 	case "float32":

@@ -1,5 +1,6 @@
 yobu "selfhost/progress";
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/string";
 yobu "selfhost/parser";
 yobu "selfhost/resolver";
@@ -179,6 +180,19 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
                 }
                 kaku return_type = builtin_type(env, "unit");
                 moshi (child < len(node.children) - 1) { return_type = resolve_type_node(env, file_id, node.children[child], type_params); }
+                moshi (node.extra != "") {
+                    kaku invalid = len(type_params) != 0 || node.operator > 256 || child >= len(node.children) - 1;
+                    kaku pi = 0;
+                    aida (pi < len(parameter_types)) {
+                        kaku code = cabi.type_code(env.result.types[parameter_types[pi]].name);
+                        moshi (code == "" || code == "v") { invalid = hai; }
+                        pi = pi + 1;
+                    }
+                    moshi (invalid || cabi.type_code(env.result.types[return_type].name) == "") {
+                        add_type_error(env, TypeErrorKind.InvalidCall(), "E_CABI", file_id, node_id, 0, 0,
+                            "C ABI requires a fixed prototype with explicit scalar parameters and a scalar or unit result");
+                    }
+                }
                 kaku symbol_id = binding_of(env, file_id, node_id);
                 add_signature(env, FunctionSignature { symbol_id: symbol_id, name: node.text, package_path: env.resolved.package_path, type_parameters: type_params, parameters: parameter_types, result: return_type });
                 moshi (len(type_params) == 0) { set_symbol_type(env, symbol_id, function_type(env.result, parameter_types, return_type)); }
@@ -201,7 +215,7 @@ waza copy_type_memo(result: TypeCheckResult, source: TypeCheckResult, id: int64,
     moshi (memo[id] >= 0) { kaesu memo[id]; }
     kaku info = source.types[id];
     kaku code = type_kind_code(info.kind); kaku copied = 0;
-    moshi (code <= 14) { copied = copy_type_info(result, source, id); }
+    moshi (code <= 14 || code >= 20) { copied = copy_type_info(result, source, id); }
     moshi (code == 15) { copied = array_type(result, copy_type_memo(result, source, info.element, memo)); }
     moshi (code == 16) { copied = nullable_type(result, copy_type_memo(result, source, info.element, memo)); }
     moshi (code == 17) {
@@ -214,7 +228,7 @@ waza copy_type_memo(result: TypeCheckResult, source: TypeCheckResult, id: int64,
         aida (index < len(info.parameters)) { array.push(parameters, copy_type_memo(result, source, info.parameters[index], memo)); index = index + 1; }
         copied = function_type(result, parameters, copy_type_memo(result, source, info.result, memo));
     }
-    moshi (code >= 19) { copied = parameter_type(result, info.name); }
+    moshi (code == 19) { copied = parameter_type(result, info.name); }
     memo[id] = copied;
     kaesu copied;
 }
@@ -223,7 +237,7 @@ koukai waza copy_type_info(result: TypeCheckResult, source: TypeCheckResult, id:
     moshi(id<0 || id>=len(source.types)){kaesu 0;}
     kaku info = source.types[id];
     kaku code = type_kind_code(info.kind);
-    moshi (code <= 14) {
+    moshi (code <= 14 || code >= 20) {
         kaku at=0;aida(at<len(result.types)){moshi(type_kind_code(result.types[at].kind)==code && result.types[at].name==info.name){kaesu at;}at=at+1;}kaesu 0;
     }
     moshi (code == 15) { kaesu array_type(result, copy_type_info(result, source, info.element)); }

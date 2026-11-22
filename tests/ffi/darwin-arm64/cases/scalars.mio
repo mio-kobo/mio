@@ -1,0 +1,60 @@
+waza add(a: int32, b: int32) -> int32 = c "mio_add";
+waza no_args() -> int32 = c "mio_no_args";
+waza signed8(x: int8) -> int8 = c "mio_signed8";
+waza signed16(x: int16) -> int16 = c "mio_signed16";
+waza unsigned8(x: uint8) -> uint8 = c "mio_unsigned8";
+waza unsigned16(x: uint16) -> uint16 = c "mio_unsigned16";
+waza unsigned32(x: uint32) -> uint32 = c "mio_unsigned32";
+waza unsigned64(x: uint64) -> uint64 = c "mio_unsigned64";
+waza float_call(a: float32, b: float32) -> float32 = c "mio_float";
+waza mixed(a: int64, b: float64, c: int32, d: float32) -> float64 = c "mio_mixed";
+waza stack(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64, h: int64,
+    i: int8, j: uint8, k: int16, l: uint16, m: int32, n: uint32, o: int64) -> int64 = c "mio_stack";
+waza float_stack(a: float32, b: float64, c: float32, d: float64, e: float32, f: float64,
+    g: float32, h: float64, i: float32, j: int64, k: float64, l: float32) -> float64 = c "mio_float_stack";
+waza both_stack(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64, h: int64,
+    i: float64, j: float64, k: float64, l: float64, m: float64, n: float64, o: float64, p: float64,
+    q: int8, r: float32, s: uint16, t: float64, u: bool) -> float64 = c "mio_both_stack";
+waza new_pointer(x: int64) -> cptr = c "mio_new";
+waza load(p: cptr) -> int64 = c "mio_load";
+waza store(p: cptr, x: int64) -> unit = c "mio_store";
+waza free(p: cptr) -> unit = c "free";
+waza copy(dst: cptr, src: cptr, size: uint64) -> cptr = c "memcpy";
+waza invert(x: bool) -> bool = c "mio_not";
+waza clobber(x: int64) -> int64 = c "mio_clobber";
+waza c_print() -> unit = c "mio_print";
+waza pid() -> int32 = c "getpid";
+
+chant(add(123, -20));
+chant(no_args());
+chant(signed8(-117));
+chant(signed16(-30001));
+chant(unsigned8(250));
+chant(unsigned16(64001));
+chant(unsigned32(4000000000));
+chant(int64(unsigned64(uint64(-1))));
+chant(float_call(1.25, 2.0) == float32(4.5));
+chant(mixed(4000000000, 1.5, -9, 0.25) == 3999999994.25);
+chant(stack(1, 2, 3, 4, 5, 6, 7, 8, -9, 251, -3000, 64000, -13000, 3500000000, 7000000000));
+chant(float_stack(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10, 11.0, 12.0) == 650.0);
+chant(both_stack(1, 2, 3, 4, 5, 6, 7, 8, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0,
+    -7, 1.25, 23, 10.0, hai) == 177.5);
+chant(invert(iie) && !invert(hai));
+kaku handle = new_pointer(123456789);
+chant(handle != cptr(0));
+chant(load(handle));
+store(handle, -987654321);
+chant(load(handle));
+kaku destination = new_pointer(0);
+chant(copy(destination, handle, uint64(8)) == destination);
+chant(load(destination));
+free(destination);
+free(handle);
+chant(load(cptr(0)));
+waza nested(x: int64, y: int64) -> int64 {
+    kaku kept = x * y;
+    kaesu kept + clobber(x) + clobber(y) + kept;
+}
+chant(nested(7, 9));
+chant(pid() > int32(0));
+c_print();

@@ -35,7 +35,7 @@ func (p *ownershipPass) summaryOf(sym resolver.Symbol) *ownSummary {
 		return summary
 	}
 	fn, ok := p.functions[sym]
-	if !ok || fn.Native || fn.Body == nil {
+	if !ok || fn.Native || fn.CSymbol != "" || fn.Body == nil {
 		p.summaries[sym] = nil
 		return nil
 	}
