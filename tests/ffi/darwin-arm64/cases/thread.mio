@@ -1,0 +1,17 @@
+yobu "kiso/thread";
+waza pid() -> int32 = c "getpid";
+waza sleep_us(us: uint32) -> int32 = c "usleep";
+waza worker() -> int64 {
+    kaku values = [1234, 5678];
+    moshi (sleep_us(10000) != int32(0)) { kaesu -1; }
+    kaesu values[0] + int64(pid());
+}
+kaku handle = thread.start(worker);
+kaku sum = 0;
+kaku i = 0;
+aida (i < 64) {
+    kaku values = [i, i + 1];
+    sum = sum + values[0];
+    i = i + 1;
+}
+chant(thread.join(handle) == 1234 + int64(pid()) && sum == 2016);

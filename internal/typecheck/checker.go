@@ -382,7 +382,7 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 
 			// 基础非空类型继续使用原有相等规则
 			switch left {
-			case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString:
+			case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString, KindCPointer, KindCUint64:
 				return KindBool, nil
 
 			default:
@@ -476,6 +476,24 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 		source, err := c.checkExpression(n.Arguments[0])
 		if err != nil {
 			return KindInvalid, err
+		}
+		switch n.Target {
+		case "cptr":
+			if literal, ok := n.Arguments[0].(*ast.IntegerLiteral); ok && literal.Value == 0 {
+				return KindCPointer, nil
+			}
+			return KindInvalid, fmt.Errorf("E_CABI cptr(0) constructs null; other C pointers must come from C")
+		case "uint64":
+			if source.IsInteger() {
+				n.Source = source.String()
+				return KindCUint64, nil
+			}
+			return KindInvalid, fmt.Errorf("E_CABI uint64 conversion requires a Mio integer")
+		case "int64":
+			if source == KindCUint64 {
+				n.Source = source.String()
+				return KindInt, nil
+			}
 		}
 		target := integerKind(n.Target)
 		if target.IsInteger() {

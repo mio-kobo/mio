@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"Mio/internal/ast"
+	"Mio/internal/cabi"
 	"Mio/internal/code"
 	"Mio/internal/diagnostic"
 	"Mio/internal/resolver"
@@ -167,6 +168,10 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 		switch n.Target {
+		case "cptr":
+			return nil
+		case "uint64":
+			return c.emit(code.OpIntegerConvert, code.IntegerInt64)
 		case "float32":
 			if _, integer := integerTypeCode(n.Source); integer {
 				return c.emit(code.OpIntToFloat32)
@@ -1096,9 +1101,21 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 		id := len(c.functions)
 		c.functionIDs[symbol] = id
 		c.functionReturns[symbol] = returnsValue
+		name := fn.Name.Name
+		if fn.CSymbol != "" {
+			var prototype strings.Builder
+			prototype.WriteString(cabi.Prefix)
+			prototype.WriteString(fn.CSymbol)
+			prototype.WriteByte(':')
+			prototype.WriteString(cabi.TypeCode(fn.ReturnType.Name))
+			for _, param := range fn.Parameters {
+				prototype.WriteString(cabi.TypeCode(param.DeclaredType.Name))
+			}
+			name = prototype.String()
+		}
 		c.functions = append(c.functions, CompiledFunction{
 			ID:             id,
-			Name:           fn.Name.Name,
+			Name:           name,
 			ParameterCount: len(fn.Parameters),
 			ReturnsValue:   returnsValue,
 		})
@@ -1123,7 +1140,7 @@ func (c *Compiler) compileFunction(fn *ast.FunctionStatement) error {
 		}
 		return fmt.Errorf("function %q has no FunctionID", fn.Name.Name)
 	}
-	if fn.Native || fn.Intrinsic != "" {
+	if fn.Native || fn.Intrinsic != "" || fn.CSymbol != "" {
 		c.functions[id].LocalCount = len(fn.Parameters)
 		return nil
 	}

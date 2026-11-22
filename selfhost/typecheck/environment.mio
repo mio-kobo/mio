@@ -64,6 +64,8 @@ waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: pro
     scalar_type(result, TypeKind.Nil(), "mu");
     scalar_type(result, TypeKind.Unit(), "unit");
     scalar_type(result, TypeKind.Resource(), "resource");
+    scalar_type(result, TypeKind.CPointer(), "cptr");
+    scalar_type(result, TypeKind.CUint64(), "uint64");
     kaku versions = array.make[int64](len(resolved.symbols), 0);
     kaku bindings = resolver.build_binding_table(resolved);
     kaesu TypeEnvironment {
@@ -92,7 +94,7 @@ waza builtin_type(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.types)) {
         kaku info = env.result.types[index];
-        moshi (info.name == wanted && type_kind_code(info.kind) <= 14) { kaesu index; }
+        moshi (info.name == wanted && (type_kind_code(info.kind) <= 14 || type_kind_code(info.kind) >= 20)) { kaesu index; }
         index = index + 1;
     }
     kaesu 0;
