@@ -307,7 +307,8 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
         index = 0;
         aida (index < len(dependencies)) {
             kaku dependency = 0;
-            aida (dependency < len(state.paths) && state.paths[dependency] != dependencies[index]) { dependency = dependency + 1; }
+            kaku identity = package_identity(root, dependencies[index]);
+            aida (dependency < len(state.paths) && state.paths[dependency] != identity) { dependency = dependency + 1; }
             moshi (dependency == len(state.paths) && state.analysis_mode) { index = index + 1; tsuzuku; }
             moshi (dependency == len(state.paths)) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IMPORT missing dependency: ", dependencies[index]); nukeru; }
             array.push(resolved_dependencies, state.resolved[dependency]);
@@ -315,6 +316,25 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             index = index + 1;
         }
         moshi (!state.failed[0]) {
+            // The resolver compares dependency identities, while the parser's
+            // alias comes from the original import spelling.
+            kaku fi = 0;
+            aida (fi < len(files)) {
+                kaku file = files[fi];
+                kaku children = file.ast.nodes[file.root].children;
+                kaku ni = 0;
+                aida (ni < len(children)) {
+                    kaku id = children[ni];
+                    kaku node = file.ast.nodes[id];
+                    moshi (parser.node_kind_code(node.kind) == 1) {
+                        file.ast.nodes[id] = parser.Node { kind: node.kind, text: package_identity(root, node.text),
+                            extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator,
+                            children: node.children, span: node.span };
+                    }
+                    ni = ni + 1;
+                }
+                fi = fi + 1;
+            }
             kaku resolved = resolver.resolve_package_with_progress(package_path, files, resolved_dependencies,state.work);
             moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
             kaku checked = typecheck.check_package_with_progress(resolved, checked_dependencies,state.work);

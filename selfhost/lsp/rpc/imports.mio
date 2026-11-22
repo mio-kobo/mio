@@ -1,0 +1,176 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "selfhost/imports";
+yobu "selfhost/frontend";
+yobu "selfhost/lexer";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+waza import_index(state: Session, filename: string) -> imports.Index {
+    kaku root = analysis_root(state, filename);
+    kaku at = 0;
+    aida (at < len(state.import_indexes)) {
+        kaku catalog = state.import_indexes[at];
+        moshi (catalog.root == root && catalog.bunko == state.bunko[0]) {
+            set_import_overlays(state, catalog);
+            kaesu catalog;
+        }
+        at = at + 1;
+    }
+    kaku catalog = imports.index(root, state.bunko[0]);
+    array.push(state.import_indexes, catalog);
+    set_import_overlays(state, catalog);
+    kaesu catalog;
+}
+
+waza set_import_overlays(state: Session, catalog: imports.Index) -> unit {
+    array.truncate(catalog.overlays, 0);
+    kaku at = 0;
+    aida (at < len(state.documents.documents)) {
+        kaku document = state.documents.documents[at];
+        kaku path = analysis_path(state, document.uri);
+        array.push(catalog.overlays, frontend.SourceOverlay { path: path, bytes: string.to_bytes(document.text) });
+        at = at + 1;
+    }
+}
+
+waza invalidate_imports(state: Session) -> unit {
+    kaku at = 0;
+    aida (at < len(state.import_indexes)) {
+        imports.invalidate(state.import_indexes[at]);
+        at = at + 1;
+    }
+}
+
+waza text_edit(buffer: lsp.TextBuffer, edit: imports.Edit) -> string {
+    kaesu string.concat("{\"range\":", string.concat(range_json(buffer, edit.start, edit.end),
+        string.concat(",\"newText\":", string.concat(json.quote(edit.text), "}"))));
+}
+
+waza import_completion(state: Session, analysis: DocumentAnalysis, tokens: []lexer.Token, dot: int64,
+    buffer: lsp.TextBuffer, start: int64, offset: int64, end: int64) -> string {
+    kaku empty = "{\"isIncomplete\":false,\"items\":[]}";
+    moshi (dot <= 0 || lexer.token_kind_code(tokens[dot - 1].kind) != 2) { kaesu empty; }
+    moshi (dot >= 2 && lexer.token_kind_code(tokens[dot - 2].kind) == 30) { kaesu empty; }
+    kaku receiver = tokens[dot - 1];
+    kaku resolved = imports.package_for(analysis.index.analysis, analysis.path);
+    moshi (resolved == mu) { kaesu empty; }
+    moshi (imports.has_alias(resolved, receiver.literal) ||
+        lsp.symbol_at(analysis.index, analysis.path, receiver.end.offset - 1) != mu) { kaesu empty; }
+    kaku i = 0;
+    aida (i < len(analysis.index.symbols)) {
+        kaku symbol = analysis.index.symbols[i];
+        moshi (symbol.name == receiver.literal && completion_rank(analysis, symbol, receiver.start.offset) >= 0) {
+            kaesu empty;
+        }
+        i = i + 1;
+    }
+    kaku candidates = imports.candidates(import_index(state, analysis.path), receiver.literal, resolved.package_path, state.work);
+    moshi (len(candidates) != 1 || progress.cancelled(state.work)) { kaesu empty; }
+    kaku candidate = candidates[0];
+    kaku edit = imports.insertion(buffer.data, candidate.name);
+    moshi (edit == mu) { kaesu empty; }
+    moshi (edit.end >= start) { kaesu empty; }
+    kaku items: []Completion = [];
+    i = 0;
+    aida (i < len(candidate.members)) {
+        kaku member = candidate.members[i];
+        offer(items, Completion { label: member.name, detail: candidate.name, insert: member.name,
+            kind: completion_kind(member.kind), rank: 1, snippet: iie });
+        i = i + 1;
+    }
+    kaku extra = string.concat(",\"additionalTextEdits\":[", string.concat(text_edit(buffer, edit), "]"));
+    kaesu completion_json(items, byte_text(buffer.data, start, offset), buffer, start, end, extra);
+}
+
+waza action_allowed(request: json.Document, kinds: int64, kind: string) -> bool {
+    moshi (kinds < 0 || request.values[kinds].kind != 4) { kaesu hai; }
+    kaku children = request.values[kinds].children;
+    kaku i = 0;
+    aida (i < len(children)) {
+        kaku filter = json.text(request, children[i]);
+        moshi (filter == kind || string.has_prefix(kind, string.concat(filter, "."))) { kaesu hai; }
+        i = i + 1;
+    }
+    kaesu iie;
+}
+
+waza edit_action(analysis: DocumentAnalysis, buffer: lsp.TextBuffer, title: string, kind: string, edit: imports.Edit) -> string {
+    kaku output = string.new_builder();
+    string.write_string(output, "{\"title\":");
+    string.write_string(output, json.quote(title));
+    string.write_string(output, ",\"kind\":");
+    string.write_string(output, json.quote(kind));
+    string.write_string(output, ",\"edit\":{\"documentChanges\":[{\"textDocument\":{\"uri\":");
+    string.write_string(output, json.quote(analysis.uri));
+    string.write_string(output, ",\"version\":");
+    moshi (analysis.version > 0) { string.write_string(output, convert.format_int(analysis.version)); }
+    sore { string.write_string(output, "null"); }
+    string.write_string(output, "},\"edits\":[");
+    string.write_string(output, text_edit(buffer, edit));
+    string.write_string(output, "]}]}}");
+    kaesu string.builder_string(output);
+}
+
+waza code_actions(state: Session, analysis: DocumentAnalysis, request: json.Document, params: int64) -> string {
+    kaku buffer = source_buffer(analysis, analysis.path);
+    moshi (buffer == mu) { kaesu "[]"; }
+    kaku context = json.member(request, params, "context");
+    kaku kinds = json.member(request, context, "only");
+    kaku actions: []string = [];
+    kaku catalog = import_index(state, analysis.path);
+    moshi (action_allowed(request, kinds, "source.organizeImports")) {
+        kaku organized = imports.organize(buffer.data, analysis.path, analysis.index.analysis, catalog, state.work);
+        moshi (organized != mu) {
+            array.push(actions, edit_action(analysis, buffer, "Organize imports", "source.organizeImports", organized));
+        }
+    }
+    moshi (action_allowed(request, kinds, "quickfix")) {
+        kaku resolved = imports.package_for(analysis.index.analysis, analysis.path);
+        kaku range = json.member(request, params, "range");
+        kaku first = position_field(request, json.member(request, range, "start"));
+        kaku last = position_field(request, json.member(request, range, "end"));
+        moshi (resolved != mu) {
+            moshi (first != mu) {
+                moshi (last != mu) {
+                    kaku start = lsp.offset_at(buffer, first);
+                    kaku end = lsp.offset_at(buffer, last);
+                    kaku all = imports.missing(resolved, analysis.path);
+                    kaku seen: []string = [];
+                    kaku i = 0;
+                    aida (i < len(all) && progress.checkpoint(state.work)) {
+                        kaku item = all[i];
+                        i = i + 1;
+                        moshi (item.start > end || item.end < start) { tsuzuku; }
+                        kaku candidates = imports.matches(catalog, all, item, resolved.package_path, state.work);
+                        kaku j = 0;
+                        aida (j < len(candidates)) {
+                            kaku name = candidates[j].name;
+                            j = j + 1;
+                            kaku k = 0;
+                            aida (k < len(seen) && seen[k] != name) { k = k + 1; }
+                            moshi (k < len(seen)) { tsuzuku; }
+                            array.push(seen, name);
+                            kaku edit = imports.insertion(buffer.data, name);
+                            moshi (edit != mu) {
+                                array.push(actions, edit_action(analysis, buffer, string.concat("Add import: ", name), "quickfix", edit));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    kaku output = string.new_builder();
+    string.write_string(output, "[");
+    kaku i = 0;
+    aida (i < len(actions)) {
+        moshi (i > 0) { string.write_string(output, ","); }
+        string.write_string(output, actions[i]);
+        i = i + 1;
+    }
+    string.write_string(output, "]");
+    kaesu string.builder_string(output);
+}

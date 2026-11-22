@@ -1,3 +1,4 @@
+yobu "selfhost/fmtcmd";
 yobu "kiso/os";
 yobu "selfhost/bunkopath";
 yobu "kiso/array";
@@ -45,7 +46,7 @@ waza slice(data: []uint8, first: int64, end: int64) -> string {
 }
 waza value_of(option: string, prefix: string) -> string { kaesu slice(string.to_bytes(option), string.byte_len(prefix), string.byte_len(option)); }
 waza takes_value(option: string) -> bool {
-    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols";
+    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--stdin-filepath";
 }
 
 // Global options may appear before or after the command, so they are removed
@@ -141,6 +142,15 @@ waza run() -> unit {
     moshi (len(args) < 2) { show_help(language, ""); kaesu; }
     kaku command = args[1];
     moshi (command == "test") { os.exit(testrunner.command(args, language, color, selected_theme)); kaesu; }
+    moshi (command == "fmt") {
+        kaku at = 2;
+        aida (at < len(args) && args[at] != "--") {
+            moshi (args[at] == "--help" || args[at] == "-h") { show_help(language, "fmt"); kaesu; }
+            moshi (args[at] == "--stdin-filepath") { at = at + 1; }
+            at = at + 1;
+        }
+        os.exit(fmtcmd.run(args, language)); kaesu;
+    }
     moshi (command == "lsp") { os.exit(rpc.run_command(args, language)); kaesu; }
     moshi (command == "version" || command == "--version") {
         moshi (len(args) != 2) { fail(error_message("E_OPTIONS", i18n.key_err_version_args, ""), 2); kaesu; }

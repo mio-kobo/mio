@@ -120,6 +120,28 @@ mio run hello.mio
 mio test
 ```
 
+### Formatting and imports
+
+The native `mio fmt` command uses four spaces per indentation level and
+preserves literal spelling and comments. It refuses malformed source.
+By default it also organizes `yobu` declarations using local package
+exports, adding unique matches and retaining imports whose use or side
+effects cannot be ruled out.
+
+```sh
+mio fmt file.mio
+mio fmt .
+mio fmt --check .
+mio fmt --diff .
+mio fmt --stdin --stdin-filepath path/to/file.mio
+```
+
+`--check` returns 1 when changes are needed and 2 when formatting fails.
+`--diff` prints a unified diff without writing files. Use
+`--no-organize-imports` to format whitespace only and `--bunko-root`
+to select an installed library tree. In VS Code the Mio language
+server supplies import completion and the standard Organize Imports action.
+
 ## Platform support and roadmap
 
 Mio 2.2 validates native compiler builds, self-hosting fixed point, Runtime ABI, GC correctness, blocking & nonblocking TCP, and the Bunko standard library across all six native targets in CI.
