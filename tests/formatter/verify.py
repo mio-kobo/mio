@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ CLI = ()
 
 def run(cli, workspace, *args, source=b""):
     return subprocess.run(
-        [cli, *args, "--bunko-root", str(workspace / "bunko")], cwd=workspace,
+        [cli, *args], cwd=workspace, env={**os.environ, "MIO_BUNKO": str(workspace / "bunko")},
         input=source, capture_output=True, timeout=30, check=False,
     )
 
@@ -83,6 +84,24 @@ class FormatterTests(unittest.TestCase):
         self.both(text, text)
         source = text[text.index(b"kata "):]
         self.both(source, source)
+
+    def test_program_output_is_stable_across_formatting(self):
+        source = (b'yobu "kiso/convert";\n\nkata Record{monotonic_ms:int64;}\n'
+                  b'waza value(convert:Record)->int64{kaesu convert.monotonic_ms+2;}\n'
+                  b'chant(value(Record{monotonic_ms:40}));\n')
+        file = self.work / "main.mio"
+        for cli in CLI:
+            with self.subTest(cli=cli):
+                file.write_bytes(source)
+                before = run(cli, self.work, "run", str(file))
+                self.assertEqual(before.returncode, 0, before.stderr)
+                self.assertEqual(before.stdout, b"42\n")
+                formatted = run(cli, self.work, "fmt", str(file))
+                self.assertEqual(formatted.returncode, 0, formatted.stderr)
+                self.assertNotIn(b'yobu "kiso/convert";', file.read_bytes())
+                after = run(cli, self.work, "run", str(file))
+                self.assertEqual(after.returncode, 0, after.stderr)
+                self.assertEqual(after.stdout, before.stdout)
 
     def test_local_export_and_ambiguity(self):
         local = self.work / "support" / "convert"
