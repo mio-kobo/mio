@@ -25,6 +25,8 @@ koukai sentaku TypeKind {
     Named;
     Function;
     TypeParameter;
+    CPointer;
+    CUint64;
 }
 
 koukai kata TypeInfo {
@@ -221,6 +223,8 @@ koukai waza type_kind_code(kind: TypeKind) -> int64 {
         baai Named { kaesu 17; }
         baai Function { kaesu 18; }
         baai TypeParameter { kaesu 19; }
+        baai CPointer { kaesu 20; }
+        baai CUint64 { kaesu 21; }
     }
     kaesu 0;
 }
@@ -372,7 +376,7 @@ koukai waza type_name(result: TypeCheckResult, id: int64) -> string {
     moshi (id < 0 || id >= len(result.types)) { kaesu "invalid"; }
     kaku info = result.types[id];
     kaku code = type_kind_code(info.kind);
-    moshi (code <= 14 || code == 19) { kaesu info.name; }
+    moshi (code <= 14 || code >= 19) { kaesu info.name; }
     moshi (code == 15) { kaesu string.concat("[]", type_name(result, info.element)); }
     moshi (code == 16) { kaesu string.concat(type_name(result, info.element), "?"); }
     moshi (code == 17) {

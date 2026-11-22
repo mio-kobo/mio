@@ -14,6 +14,8 @@ const (
 	KindUint8    Kind = "uint8"
 	KindUint16   Kind = "uint16"
 	KindUint32   Kind = "uint32"
+	KindCUint64  Kind = "uint64"
+	KindCPointer Kind = "cptr"
 	KindFloat    Kind = "float64"
 	KindFloat32  Kind = "float32"
 	KindBool     Kind = "bool"

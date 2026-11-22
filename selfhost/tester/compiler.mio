@@ -9,12 +9,13 @@ yobu "selfhost/pipeline";
 koukai kata TestPlan { bytes: []uint8; tests: []frontend.TestCase; error: string; entry: string; requested: string; dispatch: []uint8; }
 
 koukai waza plan(root: string, entry: string, bunko_root: string) -> TestPlan {
-    kaku compiled = frontend.compile_tests(root, entry, bunko_root);
+    kaku allow_c = pipeline.host_target() == "darwin-arm64";
+    kaku compiled = frontend.compile_tests(root, entry, bunko_root, allow_c);
     kaku identity=frontend.package_identity(root,entry);
     kaku dispatch: []uint8 = [];
     // Only worth a second frontend pass when it saves at least one native build.
     moshi (compiled.error == "" && len(compiled.tests) >= 2) {
-        kaku dispatched = frontend.compile_tests_dispatched(root, entry, bunko_root, compiled.tests);
+        kaku dispatched = frontend.compile_tests_dispatched(root, entry, bunko_root, compiled.tests, allow_c);
         // The dispatched program must contain exactly the same tests; otherwise keep one image per test.
         moshi (dispatched.error == "" && same_tests(dispatched.tests, compiled.tests)) { dispatch = dispatched.bytes; }
     }

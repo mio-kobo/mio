@@ -1,0 +1,14 @@
+yobu "kiso/testing";
+
+waza test_fixed_c_signature() -> unit {
+    kaku parsed = signature("$cabi::mio_sum:eigk", 3, hai);
+    testing.expect(parsed.valid && parsed.symbol == "mio_sum", "symbol survives Mochi metadata");
+    testing.expect(parsed.result == 101 && len(parsed.parameters) == 3, "C prototype result and arity");
+    testing.expect(!signature("$cabi::mio_sum:eigk", 2, hai).valid, "arity mismatch");
+    testing.expect(!signature("$cabi::mio_sum:vv", 1, iie).valid, "void parameter");
+    testing.expect(!signature("$cabi::mio-sum:v", 0, iie).valid, "invalid external symbol");
+    testing.expect(!signature("$cabi::mio_sum:z", 0, hai).valid, "unknown result type");
+    testing.expect(is_external("$cabi::mio_sum:v") && !is_external("ordinary"), "isolated external namespace");
+    testing.expect(valid_symbol("mio_sum") && !valid_symbol("main"), "the Mio entry is reserved");
+    testing.expect(type_code("float64") == "j" && type_code("string") == "", "supported scalar names");
+}

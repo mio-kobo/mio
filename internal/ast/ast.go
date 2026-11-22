@@ -276,6 +276,7 @@ type FunctionStatement struct {
 	Native      bool
 	Test        bool
 	Intrinsic   string
+	CSymbol     string
 	Range       Span
 }
 

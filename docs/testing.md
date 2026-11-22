@@ -16,6 +16,7 @@ scripts/ci/
   test.sh                     quality 基础设施检查
   native_platforms.py         三平台 Native 验证驱动（.github/workflows/native.yml）
 tests/runtime-abi/run.py       Runtime ABI 契约（RA-1）与 VM/Native 差分语料的逐目标运行器
+tests/ffi/darwin-arm64/run.py    Darwin ARM64 C ABI 的 Clang fixture 与实际链接执行
 selfhost/cli/test.sh           core：Mio 测试 → 独立原生验证
 selfhost/test.sh               selfhost：原生测试全集
 selfhost/bootstrap/test.sh     Mio 测试 → 原生 ABCD 固定点及复核
@@ -34,6 +35,7 @@ tools/native-ci/test.sh        原生 archive 测试 → 既有生产流水线 �
 bash scripts/ci/selftest.sh
 bash scripts/ci/run.sh macos-arm64 core quick
 bash scripts/ci/run.sh macos-arm64 aot unit
+bash scripts/ci/run.sh macos-arm64 kiso/aot/cabi quick
 bash scripts/ci/run.sh macos-arm64 gc quick
 bash scripts/ci/run.sh macos-arm64 all quick
 bash scripts/ci/run.sh macos-arm64 all full
@@ -59,7 +61,7 @@ bash scripts/ci/run.sh macos-arm64 native-release release
 be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79
 ```
 
-该约定来自现有 `tests/m19ef/README.md`、ABCD 和生产流水线，不新增 Go Seed，也不下载不明原生产物。所有 Mio 原生测试显式传递当前 `--bunko-root`，避免读到 Seed 内嵌的历史库。缺少 Seed 或哈希不符返回 NOT_RUN/2，不降级到 Go 冒充原生。系统 `codesign` 只用于签名验证；真正的原生代码生成、链接、签名由现有 Mio 实现负责。
+该约定来自现有 `tests/m19ef/README.md`、ABCD 和生产流水线，不新增 Go Seed，也不下载不明原生产物。所有 Mio 原生测试显式传递当前 `--bunko-root`，避免读到 Seed 内嵌的历史库。缺少 Seed 或哈希不符返回 NOT_RUN/2，不降级到 Go 冒充原生。系统 `codesign` 只用于签名验证；普通程序的原生代码生成、链接和签名由 Mio 实现。使用 [Darwin ARM64 C ABI](darwin-arm64-c-ffi.md) 的测试程序另需 Apple Clang、链接器和 macOS SDK。
 
 ## 模块与等级
 
@@ -99,7 +101,7 @@ GC 独立路径复用现有 `automatic-roots/builder.mio`，由纯 Mio 生成受
 
 ABCD 继续使用现有、带冻结源和哈希/签名复核的脚本；不重写自举算法。依赖 Go AOT 的历史 BCD/M18 gate 已随 Go AOT 后端删除（它们只能验证已废弃的 Go 引导路径，且在当前源码上已不可复现）；纯 Mio 的固定点由 native.yml 在三个平台上验证。
 
-Bunko 每个库公开函数（`koukai waza`）都必须有覆盖它的原生测试：`scripts/ci/bunko_matrix.py --check`（quality 的 bunko-coverage 检查）从源码生成函数清单并核对 `*_test.mio`、`tests/native-differential` 用例与 `bunko_matrix_coverage.json` 中登记的 runner 协议（子进程、exec、exit、测试通道）。native.yml 的 summary 用三平台原生报告生成逐函数矩阵（`bunko-test-matrix.json/.md`，提交版见 [tests/bunko-matrix/bunko-test-matrix.md](../tests/bunko-matrix/bunko-test-matrix.md)），覆盖的库函数在任一平台非 PASS（UNSUPPORTED 需登记技术原因）即失败。部分 nativefs/sign 辅助包通过原生库/集成路径间接覆盖；不创建空入口。selfhost 阶段全集有原生测试，但尚未逐阶段配置独立 oracle。外部 FFI/完整 ABI、长期 GC 压力、新平台后端仍未覆盖。原有 E5/E6 等脚本保留，其硬编码 Seed、固定 fixture、分支或恢复要求不被本次静默改写；未接入项应明确记录 NOT_RUN。
+Bunko 每个库公开函数（`koukai waza`）都必须有覆盖它的原生测试：`scripts/ci/bunko_matrix.py --check`（quality 的 bunko-coverage 检查）从源码生成函数清单并核对 `*_test.mio`、`tests/native-differential` 用例与 `bunko_matrix_coverage.json` 中登记的 runner 协议（子进程、exec、exit、测试通道）。native.yml 的 summary 用三平台原生报告生成逐函数矩阵（`bunko-test-matrix.json/.md`，提交版见 [tests/bunko-matrix/bunko-test-matrix.md](../tests/bunko-matrix/bunko-test-matrix.md)），覆盖的库函数在任一平台非 PASS（UNSUPPORTED 需登记技术原因）即失败。部分 nativefs/sign 辅助包通过原生库/集成路径间接覆盖；不创建空入口。selfhost 阶段全集有原生测试，但尚未逐阶段配置独立 oracle。Darwin ARM64 固定原型 C ABI 有专用原生与独立验证。长期 GC 压力和新平台后端仍未覆盖。原有 E5/E6 等脚本保留，其硬编码 Seed、固定 fixture、分支或恢复要求不被本次静默改写；未接入项应明确记录 NOT_RUN。
 
 ## 模块接口
 
@@ -165,7 +167,7 @@ ARM64 编码器、Mach-O Writer 可以单独执行原生测试及独立 backend 
 
 `ci-module.json` 可声明 `requires`（该模块额外工具）、`required_checks`（全部 suite 的必需检查）和 `suite_checks`（按 suite 增加必需检查）。可选字段 `standalone: true` 表示长时间独立模块：`all` 不运行它（在报告中记为带原因的 SKIP），只在被显式点名时运行；`module_timeout`（秒，≤21600）覆盖该模块的整体超时。缺失依赖记录 NOT_RUN/2；单独请求不支持的平台/等级也返回 2。模块 ID 从仓库相邻清单发现，不依赖 GitHub 环境。
 
-尚未独立接入的库包包括 array、bytes、convert、fs、os、string、testing、utf8、aot/lower/nativefs、aot/sign、runtime/ir 和 regexp/unicode_data：当前没有自己的 `*_test.mio`，通过调用者部分覆盖，不能声称逐包独立测试通过。`net/tcp.before-patch` 是历史快照；E5/E6 长压力、并发 GC、外部 FFI ABI 尚未整体接入。未跟踪的 PE 开发文件属于用户正在进行的工作，不由此次 CI 改造注册或修改。
+尚未独立接入的库包包括 array、bytes、convert、fs、os、string、testing、utf8、aot/lower/nativefs、aot/sign、runtime/ir 和 regexp/unicode_data：当前没有自己的 `*_test.mio`，通过调用者部分覆盖，不能声称逐包独立测试通过。`net/tcp.before-patch` 是历史快照；E5/E6 长压力和并发 GC 尚未整体接入。未跟踪的 PE 开发文件属于用户正在进行的工作，不由此次 CI 改造注册或修改。
 
 工作流和本地验证证据见 [本次审计](testing-audit.md)。macOS 原生新 oracle 未在本 Windows 主机执行，不能把静态检查通过等同于原生通过。
 
