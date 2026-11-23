@@ -11,7 +11,7 @@ out=(root/sys.argv[1]).resolve();assert out.is_relative_to(root/'build/m19ef-evi
 out.mkdir();snap=out/'source-snapshot';snap.mkdir()
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 seed=pathlib.Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio')
-assert sha(seed)=='4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
+assert sha(seed)=='be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79'
 def source_files():
  return sorted(p for folder in ['bunko','selfhost','tests/m19ef'] for p in (root/folder).rglob('*.mio'))
 manifest={}

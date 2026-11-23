@@ -8,6 +8,8 @@ import re
 
 from versions import STABLE_VERSION, stable_version  # noqa: F401  (re-exported API)
 
+# DEPRECATED: the frozen GF4 executable is no longer a trusted seed for any CI run. This pin only identifies the historical immutable v2.1.0
+# release asset (it must keep matching that asset); CI bootstraps from NATIVE_V21_SEED_SHA256 below.
 GF4_SEED_SHA256 = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
 REPOSITORY = 'mio-kobo/mio'
 WORKFLOW = '.github/workflows/distribution-pr.yml'
@@ -25,7 +27,7 @@ SEED_LOGS = ('seed-release-attestation.log', 'seed-signature.log', 'seed-build-A
             *(f'cross-{stage}-{target}.log' for target in CROSS_TARGETS for stage in 'BC'))
 
 
-# Mio v2.1 native bootstrap seed
+# Mio v2.1 native bootstrap seed (active default)
 NATIVE_V21_SEED_SHA256 = (
     'be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79'
 )
@@ -37,9 +39,12 @@ NATIVE_V21_SOURCE = {
 }
 
 NATIVE_V21_ASSET_NAME = 'mio-v2.1.0-darwin-arm64'
+NATIVE_V21_SIZE = 7281904
+NATIVE_V21_PLATFORM = 'darwin-arm64'
 
 GF4 = 'gf4'
 NATIVE_V21 = 'native-v21'
+ACTIVE_SEED_KIND = NATIVE_V21
 SEED_KINDS = (GF4, NATIVE_V21)
 GF4_LOGS = SEED_LOGS  # Historical evidence uses the same set of execution logs.
 
@@ -52,6 +57,8 @@ class SeedIdentity:
     asset_id: int
     asset_name: str
     sha256: str
+    size: int = None
+    platform: str = 'darwin-arm64'
 
     @property
     def source(self):
@@ -70,15 +77,20 @@ class SeedIdentity:
         return self.artifact + '-logs'
 
 
-def seed_identity(kind):
+def seed_identity(kind=ACTIVE_SEED_KIND):
     if kind == GF4:
         if GF4_SOURCE is None:
             return None
         return SeedIdentity('trusted-gf4', **GF4_SOURCE, asset_name=GF4_ASSET_NAME, sha256=GF4_SEED_SHA256)
     if kind == NATIVE_V21:
         return SeedIdentity('trusted-native-v21', **NATIVE_V21_SOURCE,
-                            asset_name=NATIVE_V21_ASSET_NAME, sha256=NATIVE_V21_SEED_SHA256)
+                            asset_name=NATIVE_V21_ASSET_NAME, sha256=NATIVE_V21_SEED_SHA256,
+                            size=NATIVE_V21_SIZE, platform=NATIVE_V21_PLATFORM)
     raise ValueError(f'unknown bootstrap seed: {kind}')
+
+
+def active_seed_identity():
+    return seed_identity(ACTIVE_SEED_KIND)
 
 
 def seed_record(identity, kind):
@@ -97,7 +109,7 @@ def valid_run(run):
     return all(re.fullmatch(r'[1-9][0-9]*', run.get(key, '')) for key in ('id', 'attempt'))
 
 
-def validate_seed(seed, source, version, run, kind=GF4):
+def validate_seed(seed, source, version, run, kind=ACTIVE_SEED_KIND):
     """Require complete hosted evidence for the selected seed, release and attempt."""
     identity = seed_identity(kind)
     if (identity is None or not stable_version(version)
@@ -145,7 +157,7 @@ def validate_seed(seed, source, version, run, kind=GF4):
         raise ValueError('Trusted seed execution logs are incomplete')
 
 
-def seed_binding(seed, report, inputs, target, compiler_sha, evidence_sha, kind=GF4):
+def seed_binding(seed, report, inputs, target, compiler_sha, evidence_sha, kind=ACTIVE_SEED_KIND):
     """Bind a separately authenticated seed report to the tested native bytes."""
     validate_seed(seed, inputs['source_sha'], inputs['version'], report['run'], kind)
     if (seed['distribution_input'] != inputs or report['distribution_input'] != inputs

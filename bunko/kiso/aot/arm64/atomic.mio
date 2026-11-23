@@ -1,37 +1,68 @@
-// A64 base ISA atomics: no dependency on optional LSE instructions.
+// A64 atomics. Callers of optional LSE instructions must ensure target support.
 // LDAR/STLR provide acquire/release. LL/SC loops live in the CPU adapter.
 // Encodings follow Arm A64 ISA (load/store exclusive and barrier classes).
-koukai waza read_nzcv(rt:int64) -> Instruction {
-    kaku error=register_error(rt);moshi(error!=mu){kaesu Instruction {word:uint32(0),error:error};}
-    kaesu instruction(3577430528+rt);
+koukai waza read_nzcv(rt: int64) -> Instruction {
+    kaku error = register_error(rt);
+    moshi (error != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: error };
+    }
+    kaesu instruction(3577430528 + rt);
 }
-koukai waza write_nzcv(rt:int64) -> Instruction {
-    kaku error=register_error(rt);moshi(error!=mu){kaesu Instruction {word:uint32(0),error:error};}
-    kaesu instruction(3575333376+rt);
+koukai waza write_nzcv(rt: int64) -> Instruction {
+    kaku error = register_error(rt);
+    moshi (error != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: error };
+    }
+    kaesu instruction(3575333376 + rt);
 }
 koukai waza ldar_x(rt: int64, rn: int64) -> Instruction {
-    kaku error = register_error(rt); moshi (error == mu) { error = register_error(rn); }
-    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
+    kaku error = register_error(rt);
+    moshi (error == mu) {
+        error = register_error(rn);
+    }
+    moshi (error != mu) { kaesu Instruction { word: uint32(0), error: error }; }
     kaesu instruction(3370122240 + rn * 32 + rt);
 }
 koukai waza stlr_x(rt: int64, rn: int64) -> Instruction {
-    kaku error = register_error(rt); moshi (error == mu) { error = register_error(rn); }
-    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
+    kaku error = register_error(rt);
+    moshi (error == mu) {
+        error = register_error(rn);
+    }
+    moshi (error != mu) { kaesu Instruction { word: uint32(0), error: error }; }
     kaesu instruction(3365927936 + rn * 32 + rt);
 }
 koukai waza ldxr_x(rt: int64, rn: int64, acquire: bool) -> Instruction {
-    kaku error = register_error(rt); moshi (error == mu) { error = register_error(rn); }
-    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
-    kaku base = 3361700864; moshi (acquire) { base = base + 32768; }
+    kaku error = register_error(rt);
+    moshi (error == mu) {
+        error = register_error(rn);
+    }
+    moshi (error != mu) { kaesu Instruction { word: uint32(0), error: error }; }
+    kaku base = 3361700864;
+    moshi (acquire) {
+        base = base + 32768;
+    }
     kaesu instruction(base + rn * 32 + rt);
 }
 koukai waza stxr_x(status: int64, rt: int64, rn: int64, release: bool) -> Instruction {
     kaku error = three_registers(status, rt, rn);
     // Status may not alias source/base (architecturally unpredictable).
-    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
-    moshi (status == rt || (status == rn && rn != 31)) { kaesu Instruction {word:uint32(0),error:EncodeError.InvalidRegister()}; }
-    kaku base = 3355474944; moshi (release) { base = base + 32768; }
+    moshi (error != mu) { kaesu Instruction { word: uint32(0), error: error }; }
+    moshi (status == rt || (status == rn && rn != 31)) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidRegister() }; }
+    kaku base = 3355474944;
+    moshi (release) {
+        base = base + 32768;
+    }
     kaesu instruction(base + status * 65536 + rn * 32 + rt);
 }
 koukai waza dmb_ish() -> Instruction { kaesu instruction(3573758911); }
 koukai waza clrex() -> Instruction { kaesu instruction(3573759839); }
+
+// FEAT_LSE exchange with release ordering. Rs may be XZR. Rn is the address
+// (31 denotes SP), and Rt receives the old value.
+koukai waza swpl_x(rs:int64, rt:int64, rn:int64) -> Instruction {
+    kaku error = three_registers(rs, rt, rn);
+    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
+    kaesu instruction(4167073792 + rs * 65536 + rn * 32 + rt);
+}

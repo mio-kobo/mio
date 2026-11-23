@@ -7,16 +7,48 @@ koukai sentaku BinaryError {
     MalformedVarint;
 }
 
-koukai kata U8Result { value: uint8; error: BinaryError?; }
-koukai kata U16Result { value: uint16; error: BinaryError?; }
-koukai kata U32Result { value: uint32; error: BinaryError?; }
-koukai kata I8Result { value: int8; error: BinaryError?; }
-koukai kata I16Result { value: int16; error: BinaryError?; }
-koukai kata I32Result { value: int32; error: BinaryError?; }
-koukai kata I64Result { value: int64; error: BinaryError?; }
-koukai kata BytesResult { data: []uint8; error: BinaryError?; }
-koukai kata VarU32Result { value: uint32; count: int64; error: BinaryError?; }
-koukai kata VarI64Result { value: int64; count: int64; error: BinaryError?; }
+koukai kata U8Result {
+    value: uint8;
+    error: BinaryError?;
+}
+koukai kata U16Result {
+    value: uint16;
+    error: BinaryError?;
+}
+koukai kata U32Result {
+    value: uint32;
+    error: BinaryError?;
+}
+koukai kata I8Result {
+    value: int8;
+    error: BinaryError?;
+}
+koukai kata I16Result {
+    value: int16;
+    error: BinaryError?;
+}
+koukai kata I32Result {
+    value: int32;
+    error: BinaryError?;
+}
+koukai kata I64Result {
+    value: int64;
+    error: BinaryError?;
+}
+koukai kata BytesResult {
+    data: []uint8;
+    error: BinaryError?;
+}
+koukai kata VarU32Result {
+    value: uint32;
+    count: int64;
+    error: BinaryError?;
+}
+koukai kata VarI64Result {
+    value: int64;
+    count: int64;
+    error: BinaryError?;
+}
 
 waza range_error(data: []uint8, offset: int64, width: int64) -> BinaryError? {
     moshi (offset < 0) { kaesu BinaryError.InvalidOffset(); }
@@ -148,7 +180,10 @@ waza write_signed64(destination: []uint8, offset: int64, value: int64, little: b
     aida (index < 8) {
         kaku quotient = remaining / 256;
         kaku remainder = remaining - quotient * 256;
-        moshi (remainder < 0) { remainder = remainder + 256; quotient = quotient - 1; }
+        moshi (remainder < 0) {
+            remainder = remainder + 256;
+            quotient = quotient - 1;
+        }
         kaku target = offset + index;
         moshi (!little) { target = offset + 7 - index; }
         destination[target] = uint8(remainder);
@@ -158,18 +193,42 @@ waza write_signed64(destination: []uint8, offset: int64, value: int64, little: b
     kaesu mu;
 }
 
-koukai waza write_u8(destination: []uint8, offset: int64, value: uint8) -> BinaryError? { kaesu write_unsigned(destination, offset, 1, int64(value), hai); }
-koukai waza write_u16_le(destination: []uint8, offset: int64, value: uint16) -> BinaryError? { kaesu write_unsigned(destination, offset, 2, int64(value), hai); }
-koukai waza write_u16_be(destination: []uint8, offset: int64, value: uint16) -> BinaryError? { kaesu write_unsigned(destination, offset, 2, int64(value), iie); }
-koukai waza write_u32_le(destination: []uint8, offset: int64, value: uint32) -> BinaryError? { kaesu write_unsigned(destination, offset, 4, int64(value), hai); }
-koukai waza write_u32_be(destination: []uint8, offset: int64, value: uint32) -> BinaryError? { kaesu write_unsigned(destination, offset, 4, int64(value), iie); }
-koukai waza write_i8(destination: []uint8, offset: int64, value: int8) -> BinaryError? { kaesu write_unsigned(destination, offset, 1, int64(value) + 256, hai); }
-koukai waza write_i16_le(destination: []uint8, offset: int64, value: int16) -> BinaryError? { kaesu write_unsigned(destination, offset, 2, int64(value) + 65536, hai); }
-koukai waza write_i16_be(destination: []uint8, offset: int64, value: int16) -> BinaryError? { kaesu write_unsigned(destination, offset, 2, int64(value) + 65536, iie); }
-koukai waza write_i32_le(destination: []uint8, offset: int64, value: int32) -> BinaryError? { kaesu write_unsigned(destination, offset, 4, int64(value) + 4294967296, hai); }
-koukai waza write_i32_be(destination: []uint8, offset: int64, value: int32) -> BinaryError? { kaesu write_unsigned(destination, offset, 4, int64(value) + 4294967296, iie); }
-koukai waza write_i64_le(destination: []uint8, offset: int64, value: int64) -> BinaryError? { kaesu write_signed64(destination, offset, value, hai); }
-koukai waza write_i64_be(destination: []uint8, offset: int64, value: int64) -> BinaryError? { kaesu write_signed64(destination, offset, value, iie); }
+koukai waza write_u8(destination: []uint8, offset: int64, value: uint8) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 1, int64(value), hai);
+}
+koukai waza write_u16_le(destination: []uint8, offset: int64, value: uint16) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 2, int64(value), hai);
+}
+koukai waza write_u16_be(destination: []uint8, offset: int64, value: uint16) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 2, int64(value), iie);
+}
+koukai waza write_u32_le(destination: []uint8, offset: int64, value: uint32) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 4, int64(value), hai);
+}
+koukai waza write_u32_be(destination: []uint8, offset: int64, value: uint32) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 4, int64(value), iie);
+}
+koukai waza write_i8(destination: []uint8, offset: int64, value: int8) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 1, int64(value) + 256, hai);
+}
+koukai waza write_i16_le(destination: []uint8, offset: int64, value: int16) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 2, int64(value) + 65536, hai);
+}
+koukai waza write_i16_be(destination: []uint8, offset: int64, value: int16) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 2, int64(value) + 65536, iie);
+}
+koukai waza write_i32_le(destination: []uint8, offset: int64, value: int32) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 4, int64(value) + 4294967296, hai);
+}
+koukai waza write_i32_be(destination: []uint8, offset: int64, value: int32) -> BinaryError? {
+    kaesu write_unsigned(destination, offset, 4, int64(value) + 4294967296, iie);
+}
+koukai waza write_i64_le(destination: []uint8, offset: int64, value: int64) -> BinaryError? {
+    kaesu write_signed64(destination, offset, value, hai);
+}
+koukai waza write_i64_be(destination: []uint8, offset: int64, value: int64) -> BinaryError? {
+    kaesu write_signed64(destination, offset, value, iie);
+}
 
 koukai waza write_var_u32(value: uint32) -> BytesResult {
     kaku output = array.with_capacity[uint8](5);
@@ -188,7 +247,10 @@ koukai waza read_var_u32(data: []uint8, offset: int64) -> VarU32Result {
     kaku factor = 1;
     kaku index = 0;
     aida (index < 5) {
-        moshi (offset + index >= len(data)) { kaesu VarU32Result { value: uint32(0), count: index, error: BinaryError.InsufficientData() }; }
+        moshi (offset + index >= len(data)) {
+            kaesu VarU32Result {
+                value: uint32(0), count: index, error: BinaryError.InsufficientData() };
+        }
         kaku current = int64(data[offset + index]);
         kaku payload = current;
         moshi (payload >= 128) { payload = payload - 128; }
@@ -196,7 +258,10 @@ koukai waza read_var_u32(data: []uint8, offset: int64) -> VarU32Result {
         value = value + payload * factor;
         moshi (current < 128) {
             kaku encoded = write_var_u32(uint32(value));
-            moshi (len(encoded.data) != index + 1) { kaesu VarU32Result { value: uint32(0), count: index + 1, error: BinaryError.MalformedVarint() }; }
+            moshi (len(encoded.data) != index + 1) {
+                kaesu VarU32Result {
+                    value: uint32(0), count: index + 1, error: BinaryError.MalformedVarint() };
+            }
             kaesu VarU32Result { value: uint32(value), count: index + 1, error: mu };
         }
         factor = factor * 128;
@@ -212,7 +277,10 @@ koukai waza write_var_i64(value: int64) -> BytesResult {
     aida (!done) {
         kaku quotient = remaining / 128;
         kaku payload = remaining - quotient * 128;
-        moshi (payload < 0) { payload = payload + 128; quotient = quotient - 1; }
+        moshi (payload < 0) {
+            payload = payload + 128;
+            quotient = quotient - 1;
+        }
         done = (quotient == 0 && payload < 64) || (quotient == -1 && payload >= 64);
         moshi (!done) { payload = payload + 128; }
         array.push(output, uint8(payload));
@@ -240,10 +308,16 @@ koukai waza read_var_i64(data: []uint8, offset: int64) -> VarI64Result {
         moshi (current < 128) {
             moshi (index < 9 && current >= 64) { value = value - factor * 128; }
             kaku encoded = write_var_i64(value);
-            moshi (len(encoded.data) != index + 1) { kaesu VarI64Result { value: 0, count: index + 1, error: BinaryError.MalformedVarint() }; }
+            moshi (len(encoded.data) != index + 1) {
+                kaesu VarI64Result {
+                    value: 0, count: index + 1, error: BinaryError.MalformedVarint() };
+            }
             kaku compare = 0;
             aida (compare < len(encoded.data)) {
-                moshi (encoded.data[compare] != data[offset + compare]) { kaesu VarI64Result { value: 0, count: index + 1, error: BinaryError.MalformedVarint() }; }
+                moshi (encoded.data[compare] != data[offset + compare]) {
+                    kaesu VarI64Result {
+                        value: 0, count: index + 1, error: BinaryError.MalformedVarint() };
+                }
                 compare = compare + 1;
             }
             kaesu VarI64Result { value: value, count: index + 1, error: mu };

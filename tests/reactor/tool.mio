@@ -22,7 +22,10 @@ waza fail(message: string) -> unit {
 
 waza kv(name: string, value: int64) -> unit { chant(string.concat(string.concat(name, "="), convert.format_int(value))); }
 
-koukai kata Pair { client: tcp_async.AsyncConnection?; server: tcp_async.AsyncConnection?; }
+koukai kata Pair {
+    client: tcp_async.AsyncConnection?;
+    server: tcp_async.AsyncConnection?;
+}
 
 waza make_pair(listener: tcp_async.AsyncListener, port: int64) -> Pair {
     kaku started = tcp_async.connect(loopback(port));
@@ -40,40 +43,65 @@ waza make_pair(listener: tcp_async.AsyncListener, port: int64) -> Pair {
     }
     kaku accepted = tcp_async.accept(listener);
     tries = 0;
-    aida (accepted.pending && tries < 1000000) { accepted = tcp_async.accept(listener); tries = tries + 1; }
+    aida (accepted.pending && tries < 1000000) {
+        accepted = tcp_async.accept(listener);
+        tries = tries + 1;
+    }
     kaku maybe_server = accepted.connection;
-    moshi (maybe_server == mu) { tcp_async.close(client); kaesu Pair { client: mu, server: mu }; }
+    moshi (maybe_server == mu) {
+        tcp_async.close(client);
+        kaesu Pair {
+            client: mu, server: mu };
+    }
     kaku server = maybe_server;
     kaesu Pair { client: client, server: server };
 }
 
-koukai kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+koukai kata Bound {
+    listener: tcp_async.AsyncListener?;
+    port: int64;
+}
 waza bind_free(base: int64) -> Bound {
     kaku port = base;
     kaku attempt = tcp_async.listen(loopback(port), 4096);
-    aida (attempt.error != mu && port < base + 200) { port = port + 1; attempt = tcp_async.listen(loopback(port), 4096); }
+    aida (attempt.error != mu && port < base + 200) {
+        port = port + 1;
+        attempt = tcp_async.listen(loopback(port), 4096);
+    }
     kaesu Bound { listener: attempt.listener, port: port };
 }
 
 waza arg_int(index: int64) -> int64 {
     kaku text = os.argument(index);
-    moshi (text == mu) { fail("missing argument"); kaesu 0; }
+    moshi (text == mu) {
+        fail("missing argument");
+        kaesu 0;
+    }
     kaku value = convert.parse_int(text);
-    moshi (value == mu) { fail("bad number"); kaesu 0; }
+    moshi (value == mu) {
+        fail("bad number");
+        kaesu 0;
+    }
     kaesu value;
 }
 
 waza stress(rounds: int64, pairs: int64) -> unit {
     kaku bound = bind_free(44000);
     kaku maybe_listener = bound.listener;
-    moshi (maybe_listener == mu) { fail("listen"); kaesu; }
+    moshi (maybe_listener == mu) {
+        fail("listen");
+        kaesu;
+    }
     kaku listener = maybe_listener;
     kaku total_events = 0;
     kaku garbage = 0;
     kaku round = 0;
     aida (round < rounds) {
         kaku maybe = reactor.open().reactor;
-        moshi (maybe == mu) { fail("open"); kaesu; }
+        moshi (maybe == mu) {
+            fail("open");
+            kaesu;
+        }
         kaku r = maybe;
         kaku clients: []tcp_async.AsyncConnection = [];
         kaku servers: []tcp_async.AsyncConnection = [];
@@ -83,11 +111,22 @@ waza stress(rounds: int64, pairs: int64) -> unit {
             kaku pair = make_pair(listener, bound.port);
             kaku c = pair.client;
             kaku s = pair.server;
-            moshi (c == mu) { fail("pair client"); kaesu; }
-            moshi (s == mu) { fail("pair server"); kaesu; }
+            moshi (c == mu) {
+                fail("pair client");
+                kaesu;
+            }
+            moshi (s == mu) {
+                fail("pair server");
+                kaesu;
+            }
             kaku op = reactor.submit(r, s.handle, reactor.readable).operation;
-            moshi (op == mu) { fail("submit"); kaesu; }
-            array.push(clients, c); array.push(servers, s); array.push(operations, op);
+            moshi (op == mu) {
+                fail("submit");
+                kaesu;
+            }
+            array.push(clients, c);
+            array.push(servers, s);
+            array.push(operations, op);
             // garbage while operations are pending: the reactor must keep the watched handles reachable
             kaku junk = array.make[int64](512, index);
             garbage = garbage + len(junk);
@@ -95,13 +134,19 @@ waza stress(rounds: int64, pairs: int64) -> unit {
         }
         kaku payload: []uint8 = [uint8(3)];
         index = 0;
-        aida (index < pairs) { tcp_async.write(clients[index], payload, 0, 1); index = index + 1; }
+        aida (index < pairs) {
+            tcp_async.write(clients[index], payload, 0, 1);
+            index = index + 1;
+        }
         kaku seen = 0;
         kaku buffer: []uint8 = [uint8(0)];
         kaku spins = 0;
         aida (seen < pairs && spins < 10000) {
             kaku batch = reactor.poll(r, 1000, 64);
-            moshi (batch.error != mu) { fail("poll"); kaesu; }
+            moshi (batch.error != mu) {
+                fail("poll");
+                kaesu;
+            }
             kaku e = 0;
             aida (e < len(batch.events)) {
                 kaku event = batch.events[e];
@@ -110,15 +155,25 @@ waza stress(rounds: int64, pairs: int64) -> unit {
             }
             spins = spins + 1;
         }
-        moshi (seen != pairs) { fail("lost readiness"); kaesu; }
+        moshi (seen != pairs) {
+            fail("lost readiness");
+            kaesu;
+        }
         total_events = total_events + seen;
         index = 0;
         aida (index < pairs) {
-            moshi (reactor.cancel(r, operations[index], servers[index].handle).error != mu) { fail("cancel"); kaesu; }
-            tcp_async.close(clients[index]); tcp_async.close(servers[index]);
+            moshi (reactor.cancel(r, operations[index], servers[index].handle).error != mu) {
+                fail("cancel");
+                kaesu;
+            }
+            tcp_async.close(clients[index]);
+            tcp_async.close(servers[index]);
             index = index + 1;
         }
-        moshi (reactor.close(r).error != mu) { fail("close"); kaesu; }
+        moshi (reactor.close(r).error != mu) {
+            fail("close");
+            kaesu;
+        }
         round = round + 1;
     }
     tcp_async.close_listener(listener);
@@ -130,10 +185,16 @@ waza stress(rounds: int64, pairs: int64) -> unit {
 waza load(pairs: int64, idle_ms: int64) -> unit {
     kaku bound = bind_free(45000);
     kaku maybe_listener = bound.listener;
-    moshi (maybe_listener == mu) { fail("listen"); kaesu; }
+    moshi (maybe_listener == mu) {
+        fail("listen");
+        kaesu;
+    }
     kaku listener = maybe_listener;
     kaku maybe = reactor.open().reactor;
-    moshi (maybe == mu) { fail("open"); kaesu; }
+    moshi (maybe == mu) {
+        fail("open");
+        kaesu;
+    }
     kaku r = maybe;
     kaku clients: []tcp_async.AsyncConnection = [];
     kaku servers: []tcp_async.AsyncConnection = [];
@@ -144,11 +205,22 @@ waza load(pairs: int64, idle_ms: int64) -> unit {
         kaku pair = make_pair(listener, bound.port);
         kaku c = pair.client;
         kaku s = pair.server;
-        moshi (c == mu) { fail("pair client"); kaesu; }
-        moshi (s == mu) { fail("pair server"); kaesu; }
+        moshi (c == mu) {
+            fail("pair client");
+            kaesu;
+        }
+        moshi (s == mu) {
+            fail("pair server");
+            kaesu;
+        }
         kaku op = reactor.submit(r, s.handle, reactor.readable).operation;
-        moshi (op == mu) { fail("submit"); kaesu; }
-        array.push(clients, c); array.push(servers, s); array.push(operations, op);
+        moshi (op == mu) {
+            fail("submit");
+            kaesu;
+        }
+        array.push(clients, c);
+        array.push(servers, s);
+        array.push(operations, op);
         index = index + 1;
     }
     kaku setup_ms = os.monotonic_ms() - setup_start;
@@ -170,14 +242,20 @@ waza load(pairs: int64, idle_ms: int64) -> unit {
     kaku payload: []uint8 = [uint8(1)];
     kaku burst_start = os.monotonic_ms();
     index = 0;
-    aida (index < pairs) { tcp_async.write(clients[index], payload, 0, 1); index = index + 1; }
+    aida (index < pairs) {
+        tcp_async.write(clients[index], payload, 0, 1);
+        index = index + 1;
+    }
     kaku handled = 0;
     kaku burst_polls = 0;
     kaku stale = 0;
     kaku buffer: []uint8 = [uint8(0)];
     aida (handled < pairs && burst_polls < 100000) {
         kaku batch = reactor.poll(r, 1000, 64);
-        moshi (batch.error != mu) { fail("poll"); kaesu; }
+        moshi (batch.error != mu) {
+            fail("poll");
+            kaesu;
+        }
         burst_polls = burst_polls + 1;
         stale = stale + batch.stale;
         kaku e = 0;
@@ -191,7 +269,8 @@ waza load(pairs: int64, idle_ms: int64) -> unit {
     index = 0;
     aida (index < pairs) {
         reactor.cancel(r, operations[index], servers[index].handle);
-        tcp_async.close(clients[index]); tcp_async.close(servers[index]);
+        tcp_async.close(clients[index]);
+        tcp_async.close(servers[index]);
         index = index + 1;
     }
     reactor.close(r);
@@ -206,13 +285,19 @@ waza load(pairs: int64, idle_ms: int64) -> unit {
     kv("burst_polls", burst_polls);
     kv("handled", handled);
     kv("stale", stale);
-    moshi (handled != pairs || idle_events != 0 || stale != 0) { fail("load check failed"); kaesu; }
+    moshi (handled != pairs || idle_events != 0 || stale != 0) {
+        fail("load check failed");
+        kaesu;
+    }
     chant("OK");
 }
 
 waza eintr(total_ms: int64) -> unit {
     kaku maybe = reactor.open().reactor;
-    moshi (maybe == mu) { fail("open"); kaesu; }
+    moshi (maybe == mu) {
+        fail("open");
+        kaesu;
+    }
     kaku r = maybe;
     kaku start = os.monotonic_ms();
     kaku early = 0;
@@ -224,23 +309,40 @@ waza eintr(total_ms: int64) -> unit {
             kaku batch = reactor.poll(r, left, 8);
             polls = polls + 1;
             moshi (batch.error != mu) { errors = errors + 1; }
-            moshi (batch.error == mu && len(batch.events) == 0 && !batch.woken && os.monotonic_ms() - start < total_ms - 50) { early = early + 1; }
+            moshi (batch.error == mu && len(batch.events) == 0 && !batch.woken && os.monotonic_ms() - start < total_ms - 50) {
+                early = early + 1;
+            }
         }
     }
     reactor.close(r);
     kv("polls", polls);
     kv("early_returns", early);
     kv("errors", errors);
-    moshi (errors != 0) { fail("poll reported an error"); kaesu; }
+    moshi (errors != 0) {
+        fail("poll reported an error");
+        kaesu;
+    }
     chant("OK");
 }
 
 waza main() -> unit {
     kaku mode = os.argument(1);
-    moshi (mode == mu) { fail("mode"); kaesu; }
-    moshi (mode == "stress") { stress(arg_int(2), arg_int(3)); kaesu; }
-    moshi (mode == "load") { load(arg_int(2), arg_int(3)); kaesu; }
-    moshi (mode == "eintr") { eintr(arg_int(2)); kaesu; }
+    moshi (mode == mu) {
+        fail("mode");
+        kaesu;
+    }
+    moshi (mode == "stress") {
+        stress(arg_int(2), arg_int(3));
+        kaesu;
+    }
+    moshi (mode == "load") {
+        load(arg_int(2), arg_int(3));
+        kaesu;
+    }
+    moshi (mode == "eintr") {
+        eintr(arg_int(2));
+        kaesu;
+    }
     fail("unknown mode");
 }
 main();

@@ -6,12 +6,16 @@ exec python3 - "$MIO_ABCD_ROOT" "${BASH_SOURCE[0]}" "$@" <<'PY'
 from pathlib import Path
 import argparse,fcntl,hashlib,json,os,platform,re,shutil,signal,subprocess,sys,time,traceback
 root=Path(sys.argv[1]);script=Path(sys.argv[2]).resolve()
+sys.path.insert(0,str(root/'scripts/distribution'))
+sys.path.insert(0,str(root/'scripts/ci'))
+import seed_evidence,seed_source
+_active_seed=seed_evidence.active_seed_identity()
 parser=argparse.ArgumentParser(description='Native Seed→A→B→C→D; exact signed/unsigned B=C=D, signatures and per-generation smoke. This is not full E6 acceptance.')
 sub=parser.add_subparsers(dest='mode',required=True)
 build=sub.add_parser('build',help='freeze sources, compile all generations, then verify')
 build.add_argument('--out',required=True,type=Path,help='NEW output directory under build/m19ef-evidence')
-build.add_argument('--seed',type=Path,default=Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio'))
-build.add_argument('--seed-sha256',default='4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da')
+build.add_argument('--seed',type=Path,default=seed_source.default_seed_path(_active_seed))
+build.add_argument('--seed-sha256',default=_active_seed.sha256)
 build.add_argument('--timeout',type=int,default=1800,help='seconds per native command; default 1800')
 verify=sub.add_parser('verify',help='independently recheck saved hashes, frozen sources, signatures and complete fixed point')
 verify.add_argument('--out',required=True,type=Path)
@@ -75,6 +79,8 @@ require(args.timeout>0,'timeout must be positive')
 seed=args.seed.expanduser().resolve()
 require(re.fullmatch('[0-9a-f]{64}',args.seed_sha256) is not None,'invalid seed SHA256')
 require(sha(seed)==args.seed_sha256,'seed SHA256 mismatch')
+if args.seed_sha256==_active_seed.sha256:
+ seed_source.verify_seed_file(seed,_active_seed,check_arch=True,check_signature=True)
 lock=os.fdopen(os.dup(int(os.environ['MIO_E5_TEST_LOCK_FD'])),'a+') if 'MIO_E5_TEST_LOCK_FD' in os.environ else (root/'build/.m19ef-native-test.lock').open('a+')
 try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 except BlockingIOError:raise SystemExit('Another native acceptance run holds the test lock. No build started.')

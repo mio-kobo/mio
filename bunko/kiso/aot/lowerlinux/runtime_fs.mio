@@ -22,7 +22,10 @@ waza emit_string_object(code: x86_64.Assembler, label: string, text: string) -> 
     emit_word(code, 0);
     emit_word(code, len(bytes));
     kaku at = 0;
-    aida (at < len(bytes)) { x86_64.byte(code, int64(bytes[at])); at = at + 1; }
+    aida (at < len(bytes)) {
+        x86_64.byte(code, int64(bytes[at]));
+        at = at + 1;
+    }
 }
 
 waza message_for(code: int64) -> string {
@@ -412,7 +415,6 @@ waza emit_fs_transfer(code: x86_64.Assembler, name: string, reading: bool) -> un
     leave_frame(code);
 }
 
-
 // ---- directories, stat, mkdir ------------------------------------------------------------------------
 // Directory iteration state lives in a second table indexed like the handle table:
 // 4 words per slot: buffer (backing payload), bytes in buffer, read position, current entry (0 = none).
@@ -790,7 +792,10 @@ waza operation_name(operation: string) -> string {
     kaku bytes = string.to_bytes(operation);
     kaku output: []uint8 = [];
     kaku at = 3;
-    aida (at < len(bytes)) { array.push(output, bytes[at]); at = at + 1; }
+    aida (at < len(bytes)) {
+        array.push(output, bytes[at]);
+        at = at + 1;
+    }
     kaku text = string.from_utf8(output);
     moshi (text == mu) { kaesu ""; }
     kaesu text;
@@ -805,7 +810,10 @@ waza native_operation(name: string) -> string {
             kaku bytes = string.to_bytes(name);
             kaku at = string.byte_len(prefixes[which]);
             kaku output: []uint8 = [];
-            aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(output, bytes[at]); at = at + 1; }
+            aida (at < len(bytes) && bytes[at] != uint8(58)) {
+                array.push(output, bytes[at]);
+                at = at + 1;
+            }
             kaku text = string.from_utf8(output);
             moshi (text == mu) { kaesu ""; }
             kaesu string.concat(labels[which], text);
@@ -822,7 +830,10 @@ waza native_routine(operation: string) -> string {
         kaku operation_bytes = string.to_bytes(operation);
         kaku operation_text: []uint8 = [];
         kaku operation_at = 7;
-        aida (operation_at < len(operation_bytes)) { array.push(operation_text, operation_bytes[operation_at]); operation_at = operation_at + 1; }
+        aida (operation_at < len(operation_bytes)) {
+            array.push(operation_text, operation_bytes[operation_at]);
+            operation_at = operation_at + 1;
+        }
         kaku thread_operation = string.from_utf8(operation_text);
         moshi (thread_operation == mu) { kaesu ""; }
         moshi (thread_operation == "start") { kaesu "rt.thread_start"; }

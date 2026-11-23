@@ -1,26 +1,116 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;next:Node?;}
-kata Graph {head:Node?;a:[]Node?;b:[]Node?;}
-kaku shared:Graph?=mu;kaku control=0;kaku ready_a=0;kaku ready_b=0;kaku done_a=0;kaku done_b=0;kaku failures=0;
-waza work(id:int64) -> unit {
- moshi(id==0){ready_a=1;}sore{ready_b=1;}aida(control==0){kaku waited=rt_wait(100000);}
- kaku g=shared;moshi(g==mu){failures=1;kaesu;}kaku head=g.head;moshi(head==mu){failures=2;kaesu;}
- kaku large=array.make[uint8](131072,uint8(71+id));kaku slots=g.a;moshi(id!=0){slots=g.b;}
- kaku i=0;aida(i<40){kaku fresh=Node {value:id*1000+i,next:head};slots[0]=fresh;moshi(fresh.value!=id*1000+i || head.value!=63 || large[131071]!=uint8(71+id)){failures=3;kaesu;}kaku observed=rt_collect(5);i=i+1;}
- moshi(id==0){done_a=1;}sore{done_b=1;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    next: Node?;
 }
-waza first() -> unit {work(0);}
-waza second() -> unit {work(1);}
-waza dead_witness() -> unit {kaku dead=Node {value:99999,next:mu};kaku i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}moshi(dead.value!=99999){failures=4;}}
+kata Graph {
+    head: Node?;
+    a: []Node?;
+    b: []Node?;
+}
+kaku shared: Graph?= mu;
+kaku control = 0;
+kaku ready_a = 0;
+kaku ready_b = 0;
+kaku done_a = 0;
+kaku done_b = 0;
+kaku failures = 0;
+waza work(id: int64) -> unit {
+    moshi (id == 0) {
+        ready_a = 1;
+    } sore {
+        ready_b = 1;
+    }
+    aida (control == 0) {
+        kaku waited = rt_wait(100000);
+    }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 1;
+        kaesu;
+    }
+    kaku head = g.head;
+    moshi (head == mu) {
+        failures = 2;
+        kaesu;
+    }
+    kaku large = array.make[uint8](131072, uint8(71 + id));
+    kaku slots = g.a;
+    moshi (id != 0) {
+        slots = g.b;
+    }
+    kaku i = 0;
+    aida (i<40) {
+        kaku fresh = Node {
+            value: id * 1000 + i, next: head };
+        slots[0] = fresh;
+        moshi (fresh.value != id * 1000 + i || head.value != 63 || large[131071] != uint8(71 + id)) {
+            failures = 3;
+            kaesu;
+        }
+        kaku observed = rt_collect(5);
+        i = i + 1;
+    }
+    moshi (id == 0) {
+        done_a = 1;
+    } sore {
+        done_b = 1;
+    }
+}
+waza first() -> unit { work(0); }
+waza second() -> unit { work(1); }
+waza dead_witness() -> unit {
+    kaku dead = Node {
+        value: 99999, next: mu };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) {
+        failures = 4;
+    }
+}
 waza run() -> unit {
- kaku head:Node?=mu;kaku i=0;aida(i<64){head=Node {value:i,next:head};i=i+1;}shared=Graph {head:head,a:array.make[Node?](1,mu),b:array.make[Node?](1,mu)};
- kaku a=rt_start(first);kaku b=rt_start(second);aida(ready_a+ready_b<2){kaku waited=rt_wait(100000);}dead_witness();kaku started=rt_collect(2);control=1;
- i=0;aida(i<100){kaku occupied=rt_collect(0);i=i+1;}
- aida(done_a+done_b<2 && failures==0){kaku waited=rt_wait(100000);}kaku ja=rt_join(a);kaku jb=rt_join(b);
- chant(failures+started+ja+jb);chant(done_a+done_b);chant(rt_collect(4));chant(rt_collect(12));kaku marked=rt_collect(3);chant(marked>=71);chant(rt_collect(4));shared=mu;
+    kaku head: Node?= mu;
+    kaku i = 0;
+    aida (i<64) {
+        head = Node {
+            value: i, next: head };
+        i = i + 1;
+    }
+    shared = Graph {
+        head: head, a: array.make[Node?](1, mu), b: array.make[Node?](1, mu) };
+    kaku a = rt_start(first);
+    kaku b = rt_start(second);
+    aida (ready_a + ready_b<2) {
+        kaku waited = rt_wait(100000);
+    }
+    dead_witness();
+    kaku started = rt_collect(2);
+    control = 1;
+    i = 0;
+    aida (i<100) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    aida (done_a + done_b<2 && failures == 0) {
+        kaku waited = rt_wait(100000);
+    }
+    kaku ja = rt_join(a);
+    kaku jb = rt_join(b);
+    chant(failures + started + ja + jb);
+    chant(done_a + done_b);
+    chant(rt_collect(4));
+    chant(rt_collect(12));
+    kaku marked = rt_collect(3);
+    chant(marked >= 71);
+    chant(rt_collect(4));
+    shared = mu;
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

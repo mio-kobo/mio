@@ -35,16 +35,40 @@ waza reserved_name(name: string) -> bool { kaesu string.has_prefix(name, "__"); 
 waza ir_read(c: x86_64.Assembler, virtual: int64, r: int64) -> unit { x86_64.mov_load(c, r, x86_64.rsp, virtual * 8); }
 waza ir_write(c: x86_64.Assembler, virtual: int64, r: int64) -> unit { x86_64.mov_store(c, x86_64.rsp, virtual * 8, r); }
 waza argument_register(index: int64) -> int64 {
-    moshi (index == 0) { kaesu x86_64.rdi; } moshi (index == 1) { kaesu x86_64.rsi; }
-    moshi (index == 2) { kaesu x86_64.rdx; } moshi (index == 3) { kaesu x86_64.rcx; }
-    moshi (index == 4) { kaesu x86_64.r8; } moshi (index == 5) { kaesu x86_64.r9; }
+    moshi (index == 0) {
+        kaesu x86_64.rdi;
+    }
+    moshi (index == 1) {
+        kaesu x86_64.rsi;
+    }
+    moshi (index == 2) {
+        kaesu x86_64.rdx;
+    }
+    moshi (index == 3) {
+        kaesu x86_64.rcx;
+    }
+    moshi (index == 4) {
+        kaesu x86_64.r8;
+    }
+    moshi (index == 5) {
+        kaesu x86_64.r9;
+    }
     kaesu x86_64.r10;
 }
 waza validate(functions: []ir.Function, bindings: []ir.Binding, slots: int64) -> string {
     kaku fi = 0;
     aida (fi < len(functions)) {
-        kaku f = functions[fi]; moshi (f.name == "") { kaesu "INVALID_RUNTIME_FUNCTION"; }
-        kaku j = 0; aida (j < fi) { moshi (functions[j].name == f.name) { kaesu "DUPLICATE_RUNTIME_FUNCTION"; } j = j + 1; }
+        kaku f = functions[fi];
+        moshi (f.name == "") {
+            kaesu "INVALID_RUNTIME_FUNCTION";
+        }
+        kaku j = 0;
+        aida (j < fi) {
+            moshi (functions[j].name == f.name) {
+                kaesu "DUPLICATE_RUNTIME_FUNCTION";
+            }
+            j = j + 1;
+        }
         kaku si = 0;
         aida (si < len(f.steps)) {
             kaku s = f.steps[si];
@@ -52,32 +76,67 @@ waza validate(functions: []ir.Function, bindings: []ir.Binding, slots: int64) ->
             moshi (!ir.valid_step(s)) { kaesu "INVALID_RUNTIME_STEP"; }
             moshi (s.kind == ir.label) {
                 moshi (reserved_name(s.name)) { kaesu "RESERVED_RUNTIME_LABEL"; }
-                j = 0; aida (j < si) { moshi (f.steps[j].kind == ir.label && f.steps[j].name == s.name) { kaesu "DUPLICATE_RUNTIME_LABEL"; } j = j + 1; }
+                j = 0;
+                aida (j < si) {
+                    moshi (f.steps[j].kind == ir.label && f.steps[j].name == s.name) {
+                        kaesu "DUPLICATE_RUNTIME_LABEL";
+                    }
+                    j = j + 1;
+                }
             }
             moshi (s.kind == ir.compare_exchange && len(s.arguments) != 1) { kaesu "INVALID_CAS_ARGUMENT"; }
             moshi (s.kind == ir.fetch_add || s.kind == ir.compare_exchange) {
-                kaku operation = gc.atomic_add; moshi (s.kind == ir.compare_exchange) { operation = gc.atomic_cas; }
-                moshi (!gc.valid_operation(gc.RuntimeOp { kind: operation, address: 0, value: 1, expected: 2, result: 3, status: 4, order: s.order, failure_order: s.failure_order, alignment: 8, epoch: 0 })) { kaesu "INVALID_RUNTIME_ATOMIC_ORDER"; }
+                kaku operation = gc.atomic_add;
+                moshi (s.kind == ir.compare_exchange) {
+                    operation = gc.atomic_cas;
+                }
+                moshi (!gc.valid_operation(gc.RuntimeOp {
+                            kind: operation, address: 0, value: 1, expected: 2, result: 3, status: 4, order: s.order, failure_order: s.failure_order, alignment: 8, epoch: 0 })) {
+                    kaesu "INVALID_RUNTIME_ATOMIC_ORDER";
+                }
             }
             moshi (s.kind == ir.system) {
-                kaku found = iie; j = 0;
+                kaku found = iie;
+                j = 0;
                 aida (j < len(bindings)) {
                     kaku b = bindings[j];
                     moshi (b.operation == s.immediate) {
-                        moshi (found || b.slot < 0 || b.slot >= slots || len(b.arguments) > 6 || (b.result_bits != 32 && b.result_bits != 64)) { kaesu "INVALID_RUNTIME_BINDING"; }
-                        found = hai; kaku a = 0;
-                        aida (a < len(b.arguments)) { moshi (b.arguments[a] >= len(s.arguments) || b.arguments[a] < -65536) { kaesu "INVALID_RUNTIME_ARGUMENT"; } a = a + 1; }
+                        moshi (found || b.slot < 0 || b.slot >= slots || len(b.arguments) > 6 || (b.result_bits != 32 && b.result_bits != 64)) {
+                            kaesu "INVALID_RUNTIME_BINDING";
+                        }
+                        found = hai;
+                        kaku a = 0;
+                        aida (a < len(b.arguments)) {
+                            moshi (b.arguments[a] >= len(s.arguments) || b.arguments[a] < -65536) {
+                                kaesu "INVALID_RUNTIME_ARGUMENT";
+                            }
+                            a = a + 1;
+                        }
                     }
                     j = j + 1;
                 }
                 moshi (!found) { kaesu "NOT_SUPPORTED_RUNTIME_OPERATION"; }
             }
             moshi (s.kind == ir.invoke || s.kind == ir.function_address) {
-                kaku found = iie; j = 0; aida (j < len(functions)) { moshi (functions[j].name == s.name) { found = hai; } j = j + 1; }
+                kaku found = iie;
+                j = 0;
+                aida (j < len(functions)) {
+                    moshi (functions[j].name == s.name) {
+                        found = hai;
+                    }
+                    j = j + 1;
+                }
                 moshi (!found) { kaesu "UNDEFINED_RUNTIME_FUNCTION"; }
             }
             moshi (s.kind == ir.jump || s.kind == ir.zero || s.kind == ir.nonzero) {
-                kaku found = iie; j = 0; aida (j < len(f.steps)) { moshi (f.steps[j].kind == ir.label && f.steps[j].name == s.name) { found = hai; } j = j + 1; }
+                kaku found = iie;
+                j = 0;
+                aida (j < len(f.steps)) {
+                    moshi (f.steps[j].kind == ir.label && f.steps[j].name == s.name) {
+                        found = hai;
+                    }
+                    j = j + 1;
+                }
                 moshi (!found) { kaesu "UNDEFINED_RUNTIME_LABEL"; }
             }
             si = si + 1;
@@ -87,47 +146,85 @@ waza validate(functions: []ir.Function, bindings: []ir.Binding, slots: int64) ->
     kaesu "";
 }
 koukai waza emit_program(c: x86_64.Assembler, functions: []ir.Function, bindings: []ir.Binding, slots: int64, prefix: string) -> string {
-    kaku problem = validate(functions, bindings, slots); moshi (problem != "") { kaesu problem; }
+    kaku problem = validate(functions, bindings, slots);
+    moshi (problem != "") {
+        kaesu problem;
+    }
     kaku fi = 0;
     aida (fi < len(functions)) {
         kaku f = functions[fi];
         x86_64.label(c, ir_name(prefix, f.name));
-        x86_64.push_r(c, x86_64.rbx); x86_64.sub_ri(c, x86_64.rsp, 320); x86_64.mov_rr(c, x86_64.rbx, x86_64.r11);
+        x86_64.push_r(c, x86_64.rbx);
+        x86_64.sub_ri(c, x86_64.rsp, 320);
+        x86_64.mov_rr(c, x86_64.rbx, x86_64.r11);
         kaku i = 0;
-        aida (i < 7) { ir_write(c, i, argument_register(i)); i = i + 1; }
+        aida (i < 7) {
+            ir_write(c, i, argument_register(i));
+            i = i + 1;
+        }
         x86_64.xor_rr(c, x86_64.rax, x86_64.rax);
-        aida (i < 32) { ir_write(c, i, x86_64.rax); i = i + 1; }
+        aida (i < 32) {
+            ir_write(c, i, x86_64.rax);
+            i = i + 1;
+        }
         i = 0;
         aida (i < len(f.steps)) {
-            kaku s = f.steps[i]; kaku kind = s.kind;
-            moshi (kind == ir.constant) { x86_64.mov_ri(c, x86_64.rax, s.immediate); ir_write(c, s.destination, x86_64.rax); }
-            moshi (kind == ir.copy) { ir_read(c, s.left, x86_64.rax); ir_write(c, s.destination, x86_64.rax); }
+            kaku s = f.steps[i];
+            kaku kind = s.kind;
+            moshi (kind == ir.constant) {
+                x86_64.mov_ri(c, x86_64.rax, s.immediate);
+                ir_write(c, s.destination, x86_64.rax);
+            }
+            moshi (kind == ir.copy) {
+                ir_read(c, s.left, x86_64.rax);
+                ir_write(c, s.destination, x86_64.rax);
+            }
             moshi (kind == ir.address || kind == ir.load || kind == ir.store || kind == ir.acquire_load || kind == ir.release_store) {
-                ir_read(c, s.left, x86_64.rax); x86_64.add_ri(c, x86_64.rax, s.immediate);
+                ir_read(c, s.left, x86_64.rax);
+                x86_64.add_ri(c, x86_64.rax, s.immediate);
                 moshi (kind == ir.address) { ir_write(c, s.destination, x86_64.rax); }
-                moshi (kind == ir.load || kind == ir.acquire_load) { x86_64.mov_load(c, x86_64.rcx, x86_64.rax, 0); ir_write(c, s.destination, x86_64.rcx); }
-                moshi (kind == ir.store || kind == ir.release_store) { ir_read(c, s.right, x86_64.rcx); x86_64.mov_store(c, x86_64.rax, 0, x86_64.rcx); }
+                moshi (kind == ir.load || kind == ir.acquire_load) {
+                    x86_64.mov_load(c, x86_64.rcx, x86_64.rax, 0);
+                    ir_write(c, s.destination, x86_64.rcx);
+                }
+                moshi (kind == ir.store || kind == ir.release_store) {
+                    ir_read(c, s.right, x86_64.rcx);
+                    x86_64.mov_store(c, x86_64.rax, 0, x86_64.rcx);
+                }
             }
             moshi (kind >= ir.add && kind <= ir.less_unsigned) {
-                ir_read(c, s.left, x86_64.rax); ir_read(c, s.right, x86_64.rcx);
+                ir_read(c, s.left, x86_64.rax);
+                ir_read(c, s.right, x86_64.rcx);
                 moshi (kind == ir.add) { x86_64.add_rr(c, x86_64.rax, x86_64.rcx); }
                 moshi (kind == ir.subtract) { x86_64.sub_rr(c, x86_64.rax, x86_64.rcx); }
                 moshi (kind == ir.multiply) { x86_64.imul_rr(c, x86_64.rax, x86_64.rcx); }
                 moshi (kind == ir.divide_unsigned) {
                     kaku skip = local_label(prefix, f.name, string.concat("__div_zero_", convert.format_int(len(c.bytes))));
                     kaku done = local_label(prefix, f.name, string.concat("__div_done_", convert.format_int(len(c.bytes))));
-                    x86_64.test_rr(c, x86_64.rcx, x86_64.rcx); x86_64.jcc(c, x86_64.cc_e, skip);
-                    x86_64.xor_rr(c, x86_64.rdx, x86_64.rdx); x86_64.div_r(c, x86_64.rcx); x86_64.jmp(c, done);
-                    x86_64.label(c, skip); x86_64.xor_rr(c, x86_64.rax, x86_64.rax); x86_64.label(c, done);
+                    x86_64.test_rr(c, x86_64.rcx, x86_64.rcx);
+                    x86_64.jcc(c, x86_64.cc_e, skip);
+                    x86_64.xor_rr(c, x86_64.rdx, x86_64.rdx);
+                    x86_64.div_r(c, x86_64.rcx);
+                    x86_64.jmp(c, done);
+                    x86_64.label(c, skip);
+                    x86_64.xor_rr(c, x86_64.rax, x86_64.rax);
+                    x86_64.label(c, done);
                 }
-                moshi (kind == ir.equal) { x86_64.cmp_rr(c, x86_64.rax, x86_64.rcx); x86_64.setcc_rax(c, x86_64.cc_e); }
-                moshi (kind == ir.less_unsigned) { x86_64.cmp_rr(c, x86_64.rax, x86_64.rcx); x86_64.setcc_rax(c, x86_64.cc_b); }
+                moshi (kind == ir.equal) {
+                    x86_64.cmp_rr(c, x86_64.rax, x86_64.rcx);
+                    x86_64.setcc_rax(c, x86_64.cc_e);
+                }
+                moshi (kind == ir.less_unsigned) {
+                    x86_64.cmp_rr(c, x86_64.rax, x86_64.rcx);
+                    x86_64.setcc_rax(c, x86_64.cc_b);
+                }
                 ir_write(c, s.destination, x86_64.rax);
             }
             moshi (kind == ir.label) { x86_64.label(c, local_label(prefix, f.name, s.name)); }
             moshi (kind == ir.jump) { x86_64.jmp(c, local_label(prefix, f.name, s.name)); }
             moshi (kind == ir.zero || kind == ir.nonzero) {
-                ir_read(c, s.left, x86_64.rax); x86_64.test_rr(c, x86_64.rax, x86_64.rax);
+                ir_read(c, s.left, x86_64.rax);
+                x86_64.test_rr(c, x86_64.rax, x86_64.rax);
                 moshi (kind == ir.zero) { x86_64.jcc(c, x86_64.cc_e, local_label(prefix, f.name, s.name)); }
                 sore { x86_64.jcc(c, x86_64.cc_ne, local_label(prefix, f.name, s.name)); }
             }
@@ -143,7 +240,10 @@ koukai waza emit_program(c: x86_64.Assembler, functions: []ir.Function, bindings
                             sore { ir_read(c, s.arguments[selector], argument_register(ai)); }
                             ai = ai + 1;
                         }
-                        kaku failure = emit_import_call(c, x86_64.rbx, b.slot, slots); moshi (failure != "") { kaesu failure; }
+                        kaku failure = emit_import_call(c, x86_64.rbx, b.slot, slots);
+                        moshi (failure != "") {
+                            kaesu failure;
+                        }
                         moshi (b.result_bits == 32) { x86_64.zero_extend_eax(c); }
                     }
                     bi = bi + 1;
@@ -151,26 +251,48 @@ koukai waza emit_program(c: x86_64.Assembler, functions: []ir.Function, bindings
                 ir_write(c, s.destination, x86_64.rax);
             }
             moshi (kind == ir.invoke) {
-                kaku ai = 0; aida (ai < len(s.arguments)) { ir_read(c, s.arguments[ai], argument_register(ai)); ai = ai + 1; }
-                x86_64.mov_rr(c, x86_64.r11, x86_64.rbx); x86_64.call(c, ir_name(prefix, s.name)); ir_write(c, s.destination, x86_64.rax);
+                kaku ai = 0;
+                aida (ai < len(s.arguments)) {
+                    ir_read(c, s.arguments[ai], argument_register(ai));
+                    ai = ai + 1;
+                }
+                x86_64.mov_rr(c, x86_64.r11, x86_64.rbx);
+                x86_64.call(c, ir_name(prefix, s.name));
+                ir_write(c, s.destination, x86_64.rax);
             }
-            moshi (kind == ir.function_address) { x86_64.lea_label(c, x86_64.rax, ir_name(prefix, s.name)); ir_write(c, s.destination, x86_64.rax); }
+            moshi (kind == ir.function_address) {
+                x86_64.lea_label(c, x86_64.rax, ir_name(prefix, s.name));
+                ir_write(c, s.destination, x86_64.rax);
+            }
             moshi (kind == ir.imports) { ir_read(c, s.left, x86_64.rbx); }
-            moshi (kind == ir.scratch_address) { x86_64.lea(c, x86_64.rax, x86_64.rsp, 256 + s.immediate); ir_write(c, s.destination, x86_64.rax); }
+            moshi (kind == ir.scratch_address) {
+                x86_64.lea(c, x86_64.rax, x86_64.rsp, 256 + s.immediate);
+                ir_write(c, s.destination, x86_64.rax);
+            }
             moshi (kind == ir.fetch_add || kind == ir.compare_exchange) {
-                ir_read(c, s.left, x86_64.rdi); ir_read(c, s.right, x86_64.rsi);
+                ir_read(c, s.left, x86_64.rdi);
+                ir_read(c, s.right, x86_64.rsi);
                 moshi (kind == ir.compare_exchange) { ir_read(c, s.arguments[0], x86_64.rdx); }
-                kaku atomic_kind = gc.atomic_add; moshi (kind == ir.compare_exchange) { atomic_kind = gc.atomic_cas; }
-                kaku error = emit_atomic(c, gc.RuntimeOp { kind: atomic_kind, address: 0, value: 1, expected: 2, result: 3, status: 4, order: s.order, failure_order: s.failure_order, alignment: 8, epoch: 0 });
+                kaku atomic_kind = gc.atomic_add;
+                moshi (kind == ir.compare_exchange) {
+                    atomic_kind = gc.atomic_cas;
+                }
+                kaku error = emit_atomic(c, gc.RuntimeOp {
+                        kind: atomic_kind, address: 0, value: 1, expected: 2, result: 3, status: 4, order: s.order, failure_order: s.failure_order, alignment: 8, epoch: 0 });
                 moshi (error != "") { kaesu error; }
                 ir_write(c, s.destination, x86_64.rax);
             }
-            moshi (kind == ir.result) { ir_read(c, s.left, x86_64.rax); x86_64.jmp(c, local_label(prefix, f.name, "__epilogue")); }
+            moshi (kind == ir.result) {
+                ir_read(c, s.left, x86_64.rax);
+                x86_64.jmp(c, local_label(prefix, f.name, "__epilogue"));
+            }
             i = i + 1;
         }
         x86_64.xor_rr(c, x86_64.rax, x86_64.rax);
         x86_64.label(c, local_label(prefix, f.name, "__epilogue"));
-        x86_64.add_ri(c, x86_64.rsp, 320); x86_64.pop_r(c, x86_64.rbx); x86_64.ret(c);
+        x86_64.add_ri(c, x86_64.rsp, 320);
+        x86_64.pop_r(c, x86_64.rbx);
+        x86_64.ret(c);
         fi = fi + 1;
     }
     // Surface anything the encoder recorded (out-of-range immediate or register, duplicate label ...).

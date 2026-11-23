@@ -7,7 +7,9 @@ import (
 	"unicode/utf8"
 
 	"Mio/internal/ast"
+	"Mio/internal/cabi"
 	"Mio/internal/diagnostic"
+	"Mio/internal/ffi"
 	"Mio/internal/lexer"
 	"Mio/internal/token"
 )
@@ -725,7 +727,7 @@ func (p *Parser) typeArgumentStartsAtPeek() bool {
 
 func looksLikeTypeName(name string) bool {
 	switch name {
-	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "resource", "Map":
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "bool", "string", "unit", "resource", "cptr", "uint64", "Map":
 		return true
 	}
 	return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'
@@ -894,7 +896,7 @@ func (p *Parser) parseCallExpression(function ast.Expression) (ast.Expression, e
 
 func isNumericTypeName(name string) bool {
 	switch name {
-	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64":
+	case "int8", "int16", "int32", "int64", "rune", "uint8", "uint16", "uint32", "float32", "float64", "uint64", "cptr":
 		return true
 	default:
 		return false
@@ -1201,6 +1203,13 @@ func (p *Parser) parseFunctionParameters() ([]*ast.Identifier, error) {
 		// 移动到形参名称
 		p.nextToken()
 
+		if p.curToken.Type == token.Dot && p.peekToken.Type == token.Dot {
+			p.nextToken()
+			if p.peekToken.Type == token.Dot {
+				return nil, fmt.Errorf("E_CABI variadic parameters are unsupported")
+			}
+			return nil, fmt.Errorf("expected parameter name, got %s", token.Dot)
+		}
 		if p.curToken.Type != token.Ident {
 			return nil, fmt.Errorf(
 				"expected parameter name, got %s",
@@ -1295,6 +1304,48 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 		if err != nil {
 			return nil, fmt.Errorf("expected return type after '->': %w", err)
 		}
+	}
+
+	if p.peekToken.Type == token.Assign {
+		p.nextToken()
+		if p.peekToken.Type != token.Ident || p.peekToken.Literal != "c" {
+			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
+		}
+		p.nextToken()
+		if p.peekToken.Type != token.String {
+			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
+		}
+		p.nextToken()
+		symbol := p.curToken
+		if p.peekToken.Type == token.String || ffi.ValidName(symbol.Literal, true) {
+			if returnType == nil || len(typeParams) != 0 {
+				return nil, fmt.Errorf("E_FFI_PROTOTYPE explicit non-generic C prototype required")
+			}
+			dll, export := symbol.Literal, name.Name
+			if p.peekToken.Type == token.String {
+				p.nextToken()
+				export = p.curToken.Literal
+			}
+			if p.peekToken.Type != token.Semicolon {
+				return nil, fmt.Errorf("E_FFI_PROTOTYPE expected ';' after C declaration")
+			}
+			p.nextToken()
+			return &ast.FunctionStatement{Name: name, Parameters: params, ReturnType: returnType, Body: &ast.BlockStatement{}, Native: true, CABI: true, CDLL: dll, CSymbol: export, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
+		}
+		if !cabi.ValidSymbol(symbol.Literal) {
+			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
+		}
+		if p.peekToken.Type != token.Semicolon {
+			return nil, p.expected("';'", " after C declaration", p.peekToken)
+		}
+		p.nextToken()
+		end := p.curToken.End
+		return &ast.FunctionStatement{
+			Name: name, TypeParams: typeParams, Constraints: constraints,
+			Parameters: params, ReturnType: returnType, CSymbol: symbol.Literal,
+			Body:  &ast.BlockStatement{Range: ast.Span{Start: symbol.Start, End: end}},
+			Range: ast.Span{Start: start, End: end},
+		}, nil
 	}
 
 	// 检查函数体左大括号

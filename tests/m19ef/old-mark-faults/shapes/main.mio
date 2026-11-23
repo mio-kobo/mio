@@ -1,43 +1,177 @@
-yobu "kiso/array";yobu "kiso/string";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;}
-kata Box<T> {value:T;}
-sentaku Packet<T> {Data(T);Empty;}
-kata Shared {packets:[]Packet<Box<Node>>;}
-kaku shared:Shared?=mu;kaku control=0;kaku ready_a=0;kaku ready_b=0;kaku done_a=0;kaku done_b=0;kaku failures=0;kaku result_a=0;kaku result_b=0;
-waza many(a:Node,b:Node,c:Node,d:Node,e:Node,f:Node,g:Node,h:Node,i:Node,j:Node) -> int64 {
- a=Node {value:11};j=Node {value:20};kaku occupied=rt_collect(0);
- kaesu a.value+b.value+c.value+d.value+e.value+f.value+g.value+h.value+i.value+j.value;
+yobu "kiso/array";
+yobu "kiso/string";
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node { value: int64; }
+kata Box<T> { value: T; }
+sentaku Packet<T> {
+    Data(T);
+    Empty;
+}
+kata Shared { packets: []Packet<Box<Node>>; }
+kaku shared: Shared?= mu;
+kaku control = 0;
+kaku ready_a = 0;
+kaku ready_b = 0;
+kaku done_a = 0;
+kaku done_b = 0;
+kaku failures = 0;
+kaku result_a = 0;
+kaku result_b = 0;
+waza many(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, g: Node, h: Node, i: Node, j: Node) -> int64 {
+    a = Node {
+        value: 11 };
+    j = Node {
+        value: 20 };
+    kaku occupied = rt_collect(0);
+    kaesu a.value + b.value + c.value + d.value + e.value + f.value + g.value + h.value + i.value + j.value;
 }
 waza round() -> int64 {
- kaku packet=Packet.Data[Box<Node>](Box[Node] {value:Node {value:9}});kaku scalar:int64?=0;kaku fraction=4096.5;kaku text=string.concat("alpha","beta");
- kaku sum=many(Node {value:1},Node {value:2},Node {value:3},Node {value:4},Node {value:5},Node {value:6},Node {value:7},Node {value:8},Node {value:9},Node {value:10});
- moshi(scalar==mu){failures=1;}sore{moshi(scalar!=0){failures=2;}}
- moshi(fraction!=4096.5 || string.byte_len(text)!=9){failures=3;}
- awase(packet){baai Data(box){kaesu sum+box.value.value;}baai Empty{kaesu -1;}}
+    kaku packet = Packet.Data[Box<Node>](Box[Node] {
+            value: Node {
+                value: 9 }
+        });
+    kaku scalar: int64?= 0;
+    kaku fraction = 4096.5;
+    kaku text = string.concat("alpha", "beta");
+    kaku sum = many(Node {
+            value: 1 }, Node {
+            value: 2 }, Node {
+            value: 3 }, Node {
+            value: 4 }, Node {
+            value: 5 }, Node {
+            value: 6 }, Node {
+            value: 7 }, Node {
+            value: 8 }, Node {
+            value: 9 }, Node {
+            value: 10 });
+    moshi (scalar == mu) {
+        failures = 1;
+    } sore {
+        moshi (scalar != 0) {
+            failures = 2;
+        }
+    }
+    moshi (fraction != 4096.5 || string.byte_len(text) != 9) { failures = 3; }
+    awase (packet) {
+        baai Data(box) {
+            kaesu sum + box.value.value;
+        }
+        baai Empty {
+            kaesu -1;
+        }
+    }
 }
-waza work(id:int64) -> unit {
- moshi(id==0){ready_a=1;}sore{ready_b=1;}aida(control==0){kaku waited=rt_wait(100000);}
- kaku g=shared;moshi(g==mu){failures=9;kaesu;}
- kaku i=id;kaku total=0;aida(i<64){
-  kaku old=g.packets[i];awase(old){baai Data(box){moshi(box.value.value!=i){failures=4;}}baai Empty{failures=5;}}
-  g.packets[i]=Packet.Data[Box<Node>](Box[Node] {value:Node {value:i+100}});total=total+round();kaku observed=rt_collect(5);i=i+2;
- }
- moshi(id==0){result_a=total;done_a=1;}sore{result_b=total;done_b=1;}
+waza work(id: int64) -> unit {
+    moshi (id == 0) {
+        ready_a = 1;
+    } sore {
+        ready_b = 1;
+    }
+    aida (control == 0) {
+        kaku waited = rt_wait(100000);
+    }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 9;
+        kaesu;
+    }
+    kaku i = id;
+    kaku total = 0;
+    aida (i<64) {
+        kaku old = g.packets[i];
+        awase (old) {
+            baai Data(box) {
+                moshi (box.value.value != i) {
+                    failures = 4;
+                }
+            }
+            baai Empty {
+                failures = 5;
+            }
+        }
+        g.packets[i] = Packet.Data[Box<Node>](Box[Node] {
+                value: Node {
+                    value: i + 100 }
+            });
+        total = total + round();
+        kaku observed = rt_collect(5);
+        i = i + 2;
+    }
+    moshi (id == 0) {
+        result_a = total;
+        done_a = 1;
+    } sore {
+        result_b = total;
+        done_b = 1;
+    }
 }
-waza first() -> unit {work(0);}
-waza second() -> unit {work(1);}
-waza dead_witness() -> unit {kaku dead=Node {value:99999};kaku i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}moshi(dead.value!=99999){failures=6;}}
+waza first() -> unit { work(0); }
+waza second() -> unit { work(1); }
+waza dead_witness() -> unit {
+    kaku dead = Node {
+        value: 99999 };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) {
+        failures = 6;
+    }
+}
 waza run() -> unit {
- kaku g=Shared {packets:array.with_capacity[Packet<Box<Node>>](64)};shared=g;
- kaku i=0;aida(i<64){array.push(g.packets,Packet.Data[Box<Node>](Box[Node] {value:Node {value:i}}));i=i+1;}
- kaku a=rt_start(first);kaku b=rt_start(second);aida(ready_a+ready_b<2){kaku waited=rt_wait(100000);}
- dead_witness();kaku started=rt_collect(2);control=1;
- aida(done_a+done_b<2 && failures==0){kaku occupied=rt_collect(0);kaku waited=rt_wait(100000);}
- kaku ja=rt_join(a);kaku jb=rt_join(b);i=0;aida(i<64){kaku value=g.packets[i];awase(value){baai Data(box){moshi(box.value.value!=i+100){failures=7;}}baai Empty{failures=8;}}i=i+1;}
- chant(failures+started+ja+jb);chant(result_a);chant(result_b);chant(rt_collect(4));kaku marked=rt_collect(3);chant(marked>=196);chant(rt_collect(6)>=1);chant(rt_collect(4));shared=mu;
+    kaku g = Shared {
+        packets: array.with_capacity[Packet<Box<Node>>](64) };
+    shared = g;
+    kaku i = 0;
+    aida (i<64) {
+        array.push(g.packets, Packet.Data[Box<Node>](Box[Node] {
+                    value: Node {
+                        value: i }
+                }));
+        i = i + 1;
+    }
+    kaku a = rt_start(first);
+    kaku b = rt_start(second);
+    aida (ready_a + ready_b<2) {
+        kaku waited = rt_wait(100000);
+    }
+    dead_witness();
+    kaku started = rt_collect(2);
+    control = 1;
+    aida (done_a + done_b<2 && failures == 0) {
+        kaku occupied = rt_collect(0);
+        kaku waited = rt_wait(100000);
+    }
+    kaku ja = rt_join(a);
+    kaku jb = rt_join(b);
+    i = 0;
+    aida (i<64) {
+        kaku value = g.packets[i];
+        awase (value) {
+            baai Data(box) {
+                moshi (box.value.value != i + 100) {
+                    failures = 7;
+                }
+            }
+            baai Empty {
+                failures = 8;
+            }
+        }
+        i = i + 1;
+    }
+    chant(failures + started + ja + jb);
+    chant(result_a);
+    chant(result_b);
+    chant(rt_collect(4));
+    kaku marked = rt_collect(3);
+    chant(marked >= 196);
+    chant(rt_collect(6) >= 1);
+    chant(rt_collect(4));
+    shared = mu;
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

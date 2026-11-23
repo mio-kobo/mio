@@ -1,11 +1,31 @@
 // RA-1 / references inside maps and arrays: values reachable only through map entries, nested arrays and arrays of
 // maps survive collections; overwritten and removed entries do not keep stale data visible.
 yobu "kiso/array";
-kata Rec { id: int64; name: string; tags: []string; }
+kata Rec {
+    id: int64;
+    name: string;
+    tags: []string;
+}
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
-waza churn(n: int64) -> int64 { kaku t = 0; kaku i = 0; aida (i < n) { kaku j = array.make[int64](32768, i); t = t + j[1]; i = i + 1; } kaesu t; }
-kaku by_id = Map[int64, Rec](); kaku by_name = Map[string, []Rec](); kaku grid: [][]Rec = [];
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
+waza churn(n: int64) -> int64 {
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) {
+        kaku j = array.make[int64](32768, i);
+        t = t + j[1];
+        i = i + 1;
+    }
+    kaesu t;
+}
+kaku by_id = Map[int64, Rec]();
+kaku by_name = Map[string, []Rec]();
+kaku grid: [][]Rec = [];
 kaku maps = [Map[int64, string]()];
 kaku i = 0;
 aida (i < 500) {
@@ -15,21 +35,37 @@ aida (i < 500) {
 }
 i = 0;
 aida (i < 20) {
-    kaku row: []Rec = []; kaku j = 0;
-    aida (j < 20) { array.push(row, Rec { id: i * 20 + j, name: "cell", tags: [] }); j = j + 1; }
+    kaku row: []Rec = [];
+    kaku j = 0;
+    aida (j < 20) {
+        array.push(row, Rec {
+                id: i * 20 + j, name: "cell", tags: [] });
+        j = j + 1;
+    }
     array.push(grid, row);
-    kaku m = Map[int64, string](); m[i] = "m"; array.push(maps, m);
+    kaku m = Map[int64, string]();
+    m[i] = "m";
+    array.push(maps, m);
     i = i + 1;
 }
-kaku evens_list: []Rec = []; kaku odds_list: []Rec = [];
+kaku evens_list: []Rec = [];
+kaku odds_list: []Rec = [];
 i = 0;
 aida (i < 500) {
     kaku r = by_id[i];
-    moshi (r != mu) { kaku target = odds_list; moshi (i - (i / 2) * 2 == 0) { target = evens_list; } array.push(target, r); }
+    moshi (r != mu) {
+        kaku target = odds_list;
+        moshi (i - (i / 2) * 2 == 0) {
+            target = evens_list;
+        }
+        array.push(target, r);
+    }
     i = i + 1;
 }
-by_name["evens"] = evens_list; by_name["odds"] = odds_list;
-evens_list = []; odds_list = [];
+by_name["evens"] = evens_list;
+by_name["odds"] = odds_list;
+evens_list = [];
+odds_list = [];
 // overwrite half of the entries under pressure
 i = 0;
 aida (i < 500) {
@@ -39,21 +75,55 @@ aida (i < 500) {
 }
 churn(64);
 waza verify(r: Rec?, i: int64) -> int64 {
-    moshi (r == mu) { check(iie, "missing entry"); kaesu 0; }
-    moshi (i - (i / 2) * 2 == 1) { check(r.id == i * 10 && r.name == "new" && r.tags[0] == "z", "overwritten entry"); kaesu r.id; }
+    moshi (r == mu) {
+        check(iie, "missing entry");
+        kaesu 0;
+    }
+    moshi (i - (i / 2) * 2 == 1) {
+        check(r.id == i * 10 && r.name == "new" && r.tags[0] == "z", "overwritten entry");
+        kaesu r.id;
+    }
     check(r.id == i && r.name == "rec" && len(r.tags) == 2, "kept entry");
     kaesu r.id;
 }
-kaku sum = 0; i = 0;
-aida (i < 500) { sum = sum + verify(by_id[i], i); i = i + 1; }
-waza text_is(s: string?, want: string) -> bool { moshi (s == mu) { kaesu iie; } kaesu s == want; }
+kaku sum = 0;
+i = 0;
+aida (i < 500) {
+    sum = sum + verify(by_id[i], i);
+    i = i + 1;
+}
+waza text_is(s: string?, want: string) -> bool {
+    moshi (s == mu) {
+        kaesu iie;
+    }
+    kaesu s == want;
+}
 waza verify_list(l: ([]Rec)?, last: int64) -> unit {
-    moshi (l == mu) { check(iie, "list missing"); kaesu; }
+    moshi (l == mu) {
+        check(iie, "list missing");
+        kaesu;
+    }
     check(len(l) == 250 && l[249].id == last && l[249].tags[1] == "y", "list values");
 }
-verify_list(by_name["evens"], 498); verify_list(by_name["odds"], 499);
-kaku cells = 0; i = 0;
-aida (i < 20) { kaku j = 0; aida (j < 20) { cells = cells + grid[i][j].id; j = j + 1; } check(text_is(maps[i + 1][i], "m"), "array of maps"); i = i + 1; }
-chant(sum); chant(cells);
+verify_list(by_name["evens"], 498);
+verify_list(by_name["odds"], 499);
+kaku cells = 0;
+i = 0;
+aida (i < 20) {
+    kaku j = 0;
+    aida (j < 20) {
+        cells = cells + grid[i][j].id;
+        j = j + 1;
+    }
+    check(text_is(maps[i + 1][i], "m"), "array of maps");
+    i = i + 1;
+}
+chant(sum);
+chant(cells);
 check(cells == 79800, "grid");
-moshi (failures == 0) { chant("maps_arrays: ok"); } sore { chant("maps_arrays: FAIL"); chant(failures); }
+moshi (failures == 0) {
+    chant("maps_arrays: ok");
+} sore {
+    chant("maps_arrays: FAIL");
+    chant(failures);
+}

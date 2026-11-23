@@ -1,0 +1,16 @@
+waza pid() -> uint32 = c "kernel32.dll" "GetCurrentProcessId";
+waza pid_alias() -> uint32 = c "KERNEL32.DLL" "GetCurrentProcessId";
+waza current() -> cptr = c "kernel32.dll" "GetCurrentProcess";
+waza process_id(p: cptr) -> uint32 = c "kernel32.dll" "GetProcessId";
+waza ticks() -> uint64 = c "kernel32.dll" "GetTickCount64";
+waza last_error() -> uint32 = c "kernel32.dll" "GetLastError";
+waza set_error(code: uint32) -> unit = c "kernel32.dll" "SetLastError";
+waza fixture() -> int32 = c "mio_ffi_fixture.dll" "mio_c_no_args";
+waza unused() -> unit = c "this_dll_must_not_be_imported.dll";
+chant(pid() == pid_alias());
+chant(pid() == process_id(current()));
+chant(current() != cptr(0));
+chant(int64(ticks()) > 0);
+set_error(12345);
+chant(last_error());
+chant(fixture());

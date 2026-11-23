@@ -1,6 +1,6 @@
-/* Classic Worker that hosts one Go/Wasm runtime (the Web reference VM) for one request.
-   Go's matching wasm_exec.js provides the js/wasm ABI. The Mio VM itself has no bridge
-   to JavaScript: every host MMA function is a stub that fails, so user code can only write stdout. */
+/* 经典 Worker 宿主：为单次请求运行独立的 Go/Wasm（Web 参考 VM）实例。
+   由 Go 配套的 wasm_exec.js 提供 js/wasm ABI；Mio VM 本身不向 JS 暴露桥接，
+   所有宿主 MMA 函数均为安全失败的桩实现，用户代码仅可输出 stdout。 */
 'use strict';
 let execute = null;
 

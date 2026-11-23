@@ -3,18 +3,34 @@
 // are preserved by every collection, wherever the target places its safepoints.
 yobu "kiso/array";
 yobu "kiso/string";
-kata Pair { left: []int64; right: string; }
+kata Pair {
+    left: []int64;
+    right: string;
+}
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
 waza alloc_heavy(n: int64) -> []int64 {
-    kaku last = array.make[int64](1, 0); kaku i = 0;
-    aida (i < n) { last = array.make[int64](16384, i); i = i + 1; }
+    kaku last = array.make[int64](1, 0);
+    kaku i = 0;
+    aida (i < n) {
+        last = array.make[int64](16384, i);
+        i = i + 1;
+    }
     kaesu last;
 }
 waza combine(a: []int64, b: []int64, c: []int64, s: string) -> int64 { kaesu a[0] + b[16383] + c[0] + len(string.to_bytes(s)); }
 waza make(v: int64) -> []int64 { kaesu array.make[int64](4, v); }
-waza label(v: int64) -> string { alloc_heavy(2); kaesu string.concat("p", "q"); }
-kaku total = 0; kaku i = 0;
+waza label(v: int64) -> string {
+    alloc_heavy(2);
+    kaesu string.concat("p", "q");
+}
+kaku total = 0;
+kaku i = 0;
 aida (i < 400) {
     // make(i) is a pending operand while alloc_heavy collects; label() collects while three arrays are pending
     total = total + combine(make(i), alloc_heavy(3), make(1), label(i));
@@ -25,13 +41,28 @@ aida (i < 400) {
 chant(total);
 check(total == 79800 + 400 * 5, "operand roots");
 // values carried around a loop back-edge with no other reference
-kaku carried = make(7); kaku spins = 0;
-aida (spins < 3000) { kaku x = array.make[int64](2048, spins); carried[1] = carried[1] + x[0] - spins; spins = spins + 1; }
+kaku carried = make(7);
+kaku spins = 0;
+aida (spins < 3000) {
+    kaku x = array.make[int64](2048, spins);
+    carried[1] = carried[1] + x[0] - spins;
+    spins = spins + 1;
+}
 check(carried[0] == 7 && carried[1] == 7, "loop carried");
 // indirect calls keep their callee and argument roots
 kaku fns: []((int64) -> []int64) = [make, make];
-kaku acc = 0; i = 0;
-aida (i < 200) { kaku f = fns[i - (i / 2) * 2]; acc = acc + combine(f(i), alloc_heavy(1), f(2), "xy"); i = i + 1; }
+kaku acc = 0;
+i = 0;
+aida (i < 200) {
+    kaku f = fns[i - (i / 2) * 2];
+    acc = acc + combine(f(i), alloc_heavy(1), f(2), "xy");
+    i = i + 1;
+}
 chant(acc);
 check(acc == 19900 + 200 * 4, "indirect call roots");
-moshi (failures == 0) { chant("safepoint_roots: ok"); } sore { chant("safepoint_roots: FAIL"); chant(failures); }
+moshi (failures == 0) {
+    chant("safepoint_roots: ok");
+} sore {
+    chant("safepoint_roots: FAIL");
+    chant(failures);
+}

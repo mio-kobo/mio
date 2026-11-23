@@ -22,6 +22,8 @@ const (
 	KindUnit     Kind = "unit"
 	KindArray    Kind = "array"
 	KindResource Kind = "resource"
+	KindCPtr     Kind = "cptr"
+	KindUint64   Kind = "uint64"
 )
 
 // IsInteger 判断类型是否为整数

@@ -5,13 +5,12 @@ yobu "selfhost/parser";
 yobu "selfhost/resolver";
 yobu "kiso/convert";
 
-// Ownership validation for the explicit transfer expression `yuzuru name` (docs/concurrency.md). This is the self-hosted
-// twin of internal/typecheck/ownership.go and must report the same codes at the same spans:
-//   E0701 invalid operand   E0702 use after transfer   E0703 double transfer   E0704 use of a live alias of a transferred graph
-// The pass is flow sensitive and conservative; programs that never write `yuzuru` are not analysed at all.
-// A yuzuru expression is a PrefixExpression (kind 12) whose operator is the Yuzuru token (51); its only child is the operand.
+// 显式所有权转移表达式 `yuzuru name` 的流敏感检查（参见 docs/concurrency.md）。
+// 本模块是 internal/typecheck/ownership.go 的自举孪生实现，必须在相同位置报告完全一致的错误码：
+//   E0701 非法操作数  E0702 转移后使用  E0703 重复转移  E0704 使用已转移图的活跃别名
+// 若程序未使用 `yuzuru` 则直接跳过分析；yuzuru 在 AST 中表现为运算符 51 的 PrefixExpression（kind 12）。
 
-// One alias-and-move state per program point, indexed by symbol id. `dead` marks an unreachable point.
+// 单个程序点上的别名与转移状态，按符号 ID 索引；dead=1 表示不可达程序点
 kata OwnState {
     dead: []int64;
     escaped: []int64;
@@ -46,11 +45,13 @@ kata OwnFunction {
 }
 
 waza own_new(count: int64) -> OwnState {
-    kaesu OwnState { dead: [0], escaped: array.make[int64](count, 0), moved: array.make[int64](count, -1), via: array.make[int64](count, -1), group: array.make[int64](count, -1) };
+    kaesu OwnState {
+        dead: [0], escaped: array.make[int64](count, 0), moved: array.make[int64](count, -1), via: array.make[int64](count, -1), group: array.make[int64](count, -1) };
 }
 
 waza own_clone(state: OwnState) -> OwnState {
-    kaesu OwnState { dead: array.clone(state.dead), escaped: array.clone(state.escaped), moved: array.clone(state.moved), via: array.clone(state.via), group: array.clone(state.group) };
+    kaesu OwnState {
+        dead: array.clone(state.dead), escaped: array.clone(state.escaped), moved: array.clone(state.moved), via: array.clone(state.via), group: array.clone(state.group) };
 }
 
 waza own_dead_state(count: int64) -> OwnState {
@@ -84,7 +85,10 @@ waza own_merge(state: OwnState, symbols: []int64) -> unit {
         index = index + 1;
     }
     index = 0;
-    aida (index < len(symbols)) { state.group[symbols[index]] = representative; index = index + 1; }
+    aida (index < len(symbols)) {
+        state.group[symbols[index]] = representative;
+        index = index + 1;
+    }
     moshi (involved[representative] == 1) { state.group[representative] = representative; }
 }
 
@@ -121,7 +125,10 @@ waza own_join(states: []OwnState, count: int64) -> OwnState {
                 kaku symbol = 0;
                 aida (symbol < count) {
                     moshi (state.escaped[symbol] == 1) { out.escaped[symbol] = 1; }
-                    moshi (out.moved[symbol] < 0 && state.moved[symbol] >= 0) { out.moved[symbol] = state.moved[symbol]; out.via[symbol] = state.via[symbol]; }
+                    moshi (out.moved[symbol] < 0 && state.moved[symbol] >= 0) {
+                        out.moved[symbol] = state.moved[symbol];
+                        out.via[symbol] = state.via[symbol];
+                    }
                     moshi (state.group[symbol] >= 0) { own_merge(out, [symbol, state.group[symbol]]); }
                     symbol = symbol + 1;
                 }
@@ -170,7 +177,12 @@ waza own_report(pass: OwnPass, code: string, node_id: int64, detail: string) -> 
     kaku span = node_at(pass.env, pass.file_id, node_id).span;
     kaku key = string.concat(code, string.concat(":", string.concat(convert.format_int(span.start.line), string.concat(":", convert.format_int(span.start.column)))));
     kaku index = 0;
-    aida (index < len(pass.reported)) { moshi (pass.reported[index] == key) { kaesu; } index = index + 1; }
+    aida (index < len(pass.reported)) {
+        moshi (pass.reported[index] == key) {
+            kaesu;
+        }
+        index = index + 1;
+    }
     array.push(pass.reported, key);
     add_type_error(pass.env, TypeErrorKind.OwnershipError(), code, pass.file_id, node_id, 0, 0, detail);
 }
@@ -206,29 +218,50 @@ waza scan_note(scan: OwnScan, file_id: int64, node_id: int64, in_function: bool,
 waza scan_expression(scan: OwnScan, file_id: int64, node_id: int64, in_function: bool, literal_depth: int64, own: []int64) -> unit {
     kaku node = node_at(scan.env, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
-    moshi (kind == 4) { scan_note(scan, file_id, node_id, in_function, literal_depth, own); kaesu; }
-    moshi (own_is_transfer(node)) { scan.uses_transfer[0] = 1; scan_expression(scan, file_id, node.children[0], in_function, literal_depth, own); kaesu; }
+    moshi (kind == 4) {
+        scan_note(scan, file_id, node_id, in_function, literal_depth, own);
+        kaesu;
+    }
+    moshi (own_is_transfer(node)) {
+        scan.uses_transfer[0] = 1;
+        scan_expression(scan, file_id, node.children[0], in_function, literal_depth, own);
+        kaesu;
+    }
     moshi (kind == 33) {
         kaku inner = array.make[int64](len(scan.reached), 0);
         kaku index = 0;
-        aida (index < node.integer) { kaku symbol = binding_of(scan.env, file_id, node.children[index]); moshi (symbol >= 0) { inner[symbol] = 1; } index = index + 1; }
+        aida (index < node.integer) {
+            kaku symbol = binding_of(scan.env, file_id, node.children[index]);
+            moshi (symbol >= 0) {
+                inner[symbol] = 1;
+            }
+            index = index + 1;
+        }
         scan_block(scan, file_id, node.children[node.integer + 1], hai, literal_depth + 1, inner);
         kaesu;
     }
     kaku index = 0;
-    aida (index < len(own_expression_children(node))) { scan_expression(scan, file_id, own_expression_children(node)[index], in_function, literal_depth, own); index = index + 1; }
+    aida (index < len(own_expression_children(node))) {
+        scan_expression(scan, file_id, own_expression_children(node)[index], in_function, literal_depth, own);
+        index = index + 1;
+    }
 }
 
 // The sub-expressions of an expression node (function literal bodies are not entered).
 waza own_expression_children(node: parser.Node) -> []int64 {
     kaku kind = parser.node_kind_code(node.kind);
-    moshi (kind == 11 || kind == 12 || kind == 13 || kind == 22 || kind == 24 || kind == 25 || kind == 26 || kind == 27 || kind == 29) { kaesu node.children; }
+    moshi (kind == 11 || kind == 12 || kind == 13 || kind == 22 || kind == 24 || kind == 25 || kind == 26 || kind == 27 || kind == 29) {
+        kaesu node.children;
+    }
     moshi (kind == 23) { kaesu [node.children[0]]; }
     moshi (kind == 28) {
         // children = type arguments (node.integer of them) followed by FieldValue nodes whose single child is the value
         kaku values: []int64 = [];
         kaku at = node.integer;
-        aida (at < len(node.children)) { array.push(values, node.children[at]); at = at + 1; }
+        aida (at < len(node.children)) {
+            array.push(values, node.children[at]);
+            at = at + 1;
+        }
         kaesu values;
     }
     kaku none: []int64 = [];
@@ -238,7 +271,10 @@ waza own_expression_children(node: parser.Node) -> []int64 {
 waza scan_block(scan: OwnScan, file_id: int64, block_id: int64, in_function: bool, literal_depth: int64, own: []int64) -> unit {
     kaku block = node_at(scan.env, file_id, block_id);
     kaku index = 0;
-    aida (index < len(block.children)) { scan_statement(scan, file_id, block.children[index], in_function, literal_depth, own); index = index + 1; }
+    aida (index < len(block.children)) {
+        scan_statement(scan, file_id, block.children[index], in_function, literal_depth, own);
+        index = index + 1;
+    }
 }
 
 waza scan_statement(scan: OwnScan, file_id: int64, node_id: int64, in_function: bool, literal_depth: int64, own: []int64) -> unit {
@@ -257,14 +293,20 @@ waza scan_statement(scan: OwnScan, file_id: int64, node_id: int64, in_function: 
     }
     moshi (kind == 16 || kind == 3) {
         kaku index = 0;
-        aida (index < len(node.children)) { scan_expression(scan, file_id, node.children[index], in_function, literal_depth, own); index = index + 1; }
+        aida (index < len(node.children)) {
+            scan_expression(scan, file_id, node.children[index], in_function, literal_depth, own);
+            index = index + 1;
+        }
         kaesu;
     }
     moshi (kind == 31) {
         moshi (len(node.children) > 0) { scan_expression(scan, file_id, node.children[0], in_function, literal_depth, own); }
         kaesu;
     }
-    moshi (kind == 17) { scan_block(scan, file_id, node_id, in_function, literal_depth, own); kaesu; }
+    moshi (kind == 17) {
+        scan_block(scan, file_id, node_id, in_function, literal_depth, own);
+        kaesu;
+    }
     moshi (kind == 18) {
         scan_expression(scan, file_id, node.children[0], in_function, literal_depth, own);
         scan_block(scan, file_id, node.children[1], in_function, literal_depth, own);
@@ -282,7 +324,13 @@ waza scan_statement(scan: OwnScan, file_id: int64, node_id: int64, in_function: 
         aida (arm < len(node.children)) {
             kaku arm_node = node_at(scan.env, file_id, node.children[arm]);
             kaku binding = 0;
-            aida (binding < arm_node.integer) { kaku symbol = binding_of(scan.env, file_id, arm_node.children[binding]); moshi (symbol >= 0) { own[symbol] = 1; } binding = binding + 1; }
+            aida (binding < arm_node.integer) {
+                kaku symbol = binding_of(scan.env, file_id, arm_node.children[binding]);
+                moshi (symbol >= 0) {
+                    own[symbol] = 1;
+                }
+                binding = binding + 1;
+            }
             scan_block(scan, file_id, arm_node.children[arm_node.integer], in_function, literal_depth, own);
             arm = arm + 1;
         }
@@ -292,7 +340,13 @@ waza scan_statement(scan: OwnScan, file_id: int64, node_id: int64, in_function: 
         kaku inner = array.make[int64](len(scan.reached), 0);
         kaku first = node.integer;
         kaku index = 0;
-        aida (index < node.operator) { kaku symbol = binding_of(scan.env, file_id, node.children[first + index]); moshi (symbol >= 0) { inner[symbol] = 1; } index = index + 1; }
+        aida (index < node.operator) {
+            kaku symbol = binding_of(scan.env, file_id, node.children[first + index]);
+            moshi (symbol >= 0) {
+                inner[symbol] = 1;
+            }
+            index = index + 1;
+        }
         scan_block(scan, file_id, node.children[len(node.children) - 1], hai, literal_depth + 1, inner);
     }
 }
@@ -322,17 +376,38 @@ waza own_transfer(pass: OwnPass, function: OwnFunction, node_id: int64, state: O
     kaku operand_id = node.children[0];
     kaku operand = node_at(pass.env, pass.file_id, operand_id);
     kaku symbol = binding_of(pass.env, pass.file_id, operand_id);
-    moshi (symbol < 0) { own_report(pass, "E0701", node_id, "yuzuru operand is not a declared variable"); kaesu; }
-    kaku kind = own_symbol_kind(pass, symbol);
-    moshi (kind == 1) { own_report(pass, "E0701", node_id, "a parameter is a reference from the caller and cannot be transferred"); kaesu; }
-    moshi (kind == 3) { own_report(pass, "E0701", node_id, "a constant cannot be transferred"); kaesu; }
-    moshi (kind != 0 && kind != 2) { own_report(pass, "E0701", node_id, "yuzuru operand is not a variable"); kaesu; }
-    moshi (kind == 2) {
-        moshi (pass.reached[symbol] == 1) { own_report(pass, "E0701", node_id, "a top-level variable that functions reference cannot be transferred"); kaesu; }
-    } sore {
-        moshi (function.declared[symbol] == 0) { own_report(pass, "E0701", node_id, "the variable is not declared in the current function"); kaesu; }
+    moshi (symbol < 0) {
+        own_report(pass, "E0701", node_id, "yuzuru operand is not a declared variable");
+        kaesu;
     }
-    moshi (pass.captured[symbol] == 1) { own_report(pass, "E0701", node_id, "a variable captured by a closure cannot be transferred"); kaesu; }
+    kaku kind = own_symbol_kind(pass, symbol);
+    moshi (kind == 1) {
+        own_report(pass, "E0701", node_id, "a parameter is a reference from the caller and cannot be transferred");
+        kaesu;
+    }
+    moshi (kind == 3) {
+        own_report(pass, "E0701", node_id, "a constant cannot be transferred");
+        kaesu;
+    }
+    moshi (kind != 0 && kind != 2) {
+        own_report(pass, "E0701", node_id, "yuzuru operand is not a variable");
+        kaesu;
+    }
+    moshi (kind == 2) {
+        moshi (pass.reached[symbol] == 1) {
+            own_report(pass, "E0701", node_id, "a top-level variable that functions reference cannot be transferred");
+            kaesu;
+        }
+    } sore {
+        moshi (function.declared[symbol] == 0) {
+            own_report(pass, "E0701", node_id, "the variable is not declared in the current function");
+            kaesu;
+        }
+    }
+    moshi (pass.captured[symbol] == 1) {
+        own_report(pass, "E0701", node_id, "a variable captured by a closure cannot be transferred");
+        kaesu;
+    }
     // a graph reachable from a global, or handed to code the analysis cannot see, may be reachable from elsewhere
     kaku reach = 0;
     aida (reach < len(state.group)) {
@@ -344,12 +419,18 @@ waza own_transfer(pass: OwnPass, function: OwnFunction, node_id: int64, state: O
         }
         reach = reach + 1;
     }
-    moshi (state.moved[symbol] >= 0 && state.dead[0] == 0) { own_report(pass, "E0703", node_id, string.concat(operand.text, " was already transferred")); kaesu; }
+    moshi (state.moved[symbol] >= 0 && state.dead[0] == 0) {
+        own_report(pass, "E0703", node_id, string.concat(operand.text, " was already transferred"));
+        kaesu;
+    }
     kaku group = state.group[symbol];
     moshi (group >= 0) {
         kaku member = 0;
         aida (member < len(state.group)) {
-            moshi (state.group[member] == group && member != symbol) { state.moved[member] = node_id; state.via[member] = symbol; }
+            moshi (state.group[member] == group && member != symbol) {
+                state.moved[member] = node_id;
+                state.via[member] = symbol;
+            }
             member = member + 1;
         }
     }
@@ -375,7 +456,10 @@ waza own_expression(pass: OwnPass, function: OwnFunction, node_id: int64, state:
     kaku node = node_at(pass.env, pass.file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
     moshi (kind == 4) { kaesu own_use(pass, function, node_id, state); }
-    moshi (own_is_transfer(node)) { own_transfer(pass, function, node_id, state); kaesu none; }
+    moshi (own_is_transfer(node)) {
+        own_transfer(pass, function, node_id, state);
+        kaesu none;
+    }
     moshi (kind == 33) {
         // Creating a closure mentions every captured variable now; its body is analysed as its own function.
         kaku sources: []int64 = [];
@@ -393,7 +477,10 @@ waza own_expression(pass: OwnPass, function: OwnFunction, node_id: int64, state:
         array.append_all(all, own_expression(pass, function, node.children[0], state));
         kaku args: []int64 = [];
         kaku index = 1;
-        aida (index < len(node.children)) { array.append_all(args, own_expression(pass, function, node.children[index], state)); index = index + 1; }
+        aida (index < len(node.children)) {
+            array.append_all(args, own_expression(pass, function, node.children[index], state));
+            index = index + 1;
+        }
         moshi (own_escaping_call(pass, node)) { own_escape(state, args); }
         own_merge(state, args);
         moshi (!own_ref_bearing(pass, node_id, -1)) { kaesu none; }
@@ -403,7 +490,10 @@ waza own_expression(pass: OwnPass, function: OwnFunction, node_id: int64, state:
     kaku out: []int64 = [];
     kaku children = own_expression_children(node);
     kaku index = 0;
-    aida (index < len(children)) { array.append_all(out, own_expression(pass, function, children[index], state)); index = index + 1; }
+    aida (index < len(children)) {
+        array.append_all(out, own_expression(pass, function, children[index], state));
+        index = index + 1;
+    }
     // a scalar (or string) value cannot alias heap state, whatever it was computed from
     moshi (!own_ref_bearing(pass, node_id, -1)) { kaesu none; }
     kaesu out;
@@ -413,7 +503,10 @@ waza own_expression(pass: OwnPass, function: OwnFunction, node_id: int64, state:
 waza own_literal_mentions(pass: OwnPass, function: OwnFunction, block_id: int64, state: OwnState, sources: []int64) -> unit {
     kaku block = node_at(pass.env, pass.file_id, block_id);
     kaku index = 0;
-    aida (index < len(block.children)) { own_mention_statement(pass, function, block.children[index], state, sources); index = index + 1; }
+    aida (index < len(block.children)) {
+        own_mention_statement(pass, function, block.children[index], state, sources);
+        index = index + 1;
+    }
 }
 
 waza own_mention_expression(pass: OwnPass, function: OwnFunction, node_id: int64, state: OwnState, sources: []int64) -> unit {
@@ -426,24 +519,47 @@ waza own_mention_expression(pass: OwnPass, function: OwnFunction, node_id: int64
         }
         kaesu;
     }
-    moshi (kind == 33) { own_literal_mentions(pass, function, node.children[node.integer + 1], state, sources); kaesu; }
-    moshi (own_is_transfer(node)) { own_mention_expression(pass, function, node.children[0], state, sources); kaesu; }
+    moshi (kind == 33) {
+        own_literal_mentions(pass, function, node.children[node.integer + 1], state, sources);
+        kaesu;
+    }
+    moshi (own_is_transfer(node)) {
+        own_mention_expression(pass, function, node.children[0], state, sources);
+        kaesu;
+    }
     kaku children = own_expression_children(node);
     kaku index = 0;
-    aida (index < len(children)) { own_mention_expression(pass, function, children[index], state, sources); index = index + 1; }
+    aida (index < len(children)) {
+        own_mention_expression(pass, function, children[index], state, sources);
+        index = index + 1;
+    }
 }
 
 waza own_mention_statement(pass: OwnPass, function: OwnFunction, node_id: int64, state: OwnState, sources: []int64) -> unit {
     kaku node = node_at(pass.env, pass.file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
-    moshi (kind == 14) { own_mention_expression(pass, function, node.children[len(node.children) - 1], state, sources); kaesu; }
-    moshi (kind == 15 || kind == 31) { moshi (len(node.children) > 0) { own_mention_expression(pass, function, node.children[0], state, sources); } kaesu; }
-    moshi (kind == 16 || kind == 3) {
-        kaku index = 0;
-        aida (index < len(node.children)) { own_mention_expression(pass, function, node.children[index], state, sources); index = index + 1; }
+    moshi (kind == 14) {
+        own_mention_expression(pass, function, node.children[len(node.children) - 1], state, sources);
         kaesu;
     }
-    moshi (kind == 17) { own_literal_mentions(pass, function, node_id, state, sources); kaesu; }
+    moshi (kind == 15 || kind == 31) {
+        moshi (len(node.children) > 0) {
+            own_mention_expression(pass, function, node.children[0], state, sources);
+        }
+        kaesu;
+    }
+    moshi (kind == 16 || kind == 3) {
+        kaku index = 0;
+        aida (index < len(node.children)) {
+            own_mention_expression(pass, function, node.children[index], state, sources);
+            index = index + 1;
+        }
+        kaesu;
+    }
+    moshi (kind == 17) {
+        own_literal_mentions(pass, function, node_id, state, sources);
+        kaesu;
+    }
     moshi (kind == 18 || kind == 19) {
         own_mention_expression(pass, function, node.children[0], state, sources);
         own_literal_mentions(pass, function, node.children[1], state, sources);
@@ -465,7 +581,10 @@ waza own_block(pass: OwnPass, function: OwnFunction, block_id: int64, state: Own
     kaku block = node_at(pass.env, pass.file_id, block_id);
     kaku current = state;
     kaku index = 0;
-    aida (index < len(block.children)) { current = own_statement(pass, function, block.children[index], current); index = index + 1; }
+    aida (index < len(block.children)) {
+        current = own_statement(pass, function, block.children[index], current);
+        index = index + 1;
+    }
     kaesu current;
 }
 
@@ -497,7 +616,10 @@ waza own_statement(pass: OwnPass, function: OwnFunction, node_id: int64, state: 
         own_merge(state, both);
         kaesu state;
     }
-    moshi (kind == 3) { own_expression(pass, function, node.children[0], state); kaesu state; }
+    moshi (kind == 3) {
+        own_expression(pass, function, node.children[0], state);
+        kaesu state;
+    }
     moshi (kind == 31) {
         kaku returned: []int64 = [];
         moshi (len(node.children) > 0) { returned = own_expression(pass, function, node.children[0], state); }
@@ -586,7 +708,8 @@ waza own_function_statement(pass: OwnPass, node: parser.Node) -> unit {
 // (a function statement puts its type parameters before them; a function literal starts with its parameters).
 waza own_function(pass: OwnPass, first: int64, parameter_count: int64, children: []int64, body_id: int64) -> unit {
     kaku count = len(pass.env.resolved.symbols);
-    kaku function = OwnFunction { declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [0], rec_params: array.with_capacity[int64](0), rec_result: array.with_capacity[int64](0), rec_pairs: array.with_capacity[int64](0) };
+    kaku function = OwnFunction {
+        declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [0], rec_params: array.with_capacity[int64](0), rec_result: array.with_capacity[int64](0), rec_pairs: array.with_capacity[int64](0) };
     kaku index = 0;
     aida (index < parameter_count) {
         kaku symbol = binding_of(pass.env, pass.file_id, children[first + index]);
@@ -602,7 +725,10 @@ waza own_function(pass: OwnPass, first: int64, parameter_count: int64, children:
 waza own_callee_symbol(pass: OwnPass, node: parser.Node) -> int64 {
     kaku callee_id = node.children[0];
     kaku callee = node_at(pass.env, pass.file_id, callee_id);
-    moshi (parser.node_kind_code(callee.kind) == 23) { callee_id = callee.children[0]; callee = node_at(pass.env, pass.file_id, callee_id); }
+    moshi (parser.node_kind_code(callee.kind) == 23) {
+        callee_id = callee.children[0];
+        callee = node_at(pass.env, pass.file_id, callee_id);
+    }
     moshi (parser.node_kind_code(callee.kind) != 4) { kaesu -2; }
     kaesu binding_of(pass.env, pass.file_id, callee_id);
 }
@@ -622,7 +748,12 @@ waza own_summary_exists(pass: OwnPass, symbol: int64) -> bool {
 
 waza own_escaping_call(pass: OwnPass, node: parser.Node) -> bool {
     kaku index = 1;
-    aida (index < len(node.children)) { moshi (own_is_function_type(pass, node.children[index])) { kaesu hai; } index = index + 1; }
+    aida (index < len(node.children)) {
+        moshi (own_is_function_type(pass, node.children[index])) {
+            kaesu hai;
+        }
+        index = index + 1;
+    }
     kaku callee = own_callee_symbol(pass, node);
     moshi (callee == -2) { kaesu iie; }
     moshi (callee == -1) { kaesu hai; }
@@ -639,7 +770,12 @@ waza own_escape(state: OwnState, symbols: []int64) -> unit {
         state.escaped[symbol] = 1;
         moshi (state.group[symbol] >= 0) {
             kaku member = 0;
-            aida (member < len(state.group)) { moshi (state.group[member] == state.group[symbol]) { state.escaped[member] = 1; } member = member + 1; }
+            aida (member < len(state.group)) {
+                moshi (state.group[member] == state.group[symbol]) {
+                    state.escaped[member] = 1;
+                }
+                member = member + 1;
+            }
         }
         index = index + 1;
     }
@@ -649,7 +785,10 @@ waza own_apply_call(pass: OwnPass, function: OwnFunction, node_id: int64, node: 
     kaku none: []int64 = [];
     kaku per_argument: [][]int64 = [];
     kaku index = 1;
-    aida (index < len(node.children)) { array.push(per_argument, own_expression(pass, function, node.children[index], state)); index = index + 1; }
+    aida (index < len(node.children)) {
+        array.push(per_argument, own_expression(pass, function, node.children[index], state));
+        index = index + 1;
+    }
     kaku group = 0;
     aida (group < len(pass.sum_linked[callee])) {
         kaku linked: []int64 = [];
@@ -687,7 +826,10 @@ waza own_observe(function: OwnFunction, state: OwnState, returned: []int64) -> u
         kaku j = i + 1;
         aida (j < count) {
             kaku q = function.rec_params[j];
-            moshi (state.group[p] >= 0 && state.group[p] == state.group[q]) { array.push(function.rec_pairs, i); array.push(function.rec_pairs, j); }
+            moshi (state.group[p] >= 0 && state.group[p] == state.group[q]) {
+                array.push(function.rec_pairs, i);
+                array.push(function.rec_pairs, j);
+            }
             j = j + 1;
         }
         i = i + 1;
@@ -698,13 +840,20 @@ waza own_summarize(pass: OwnPass, symbol: int64) -> unit {
     pass.sum_state[symbol] = 1;
     kaku node = node_at(pass.env, pass.file_id, pass.fn_node[symbol]);
     kaku body_id = node.children[len(node.children) - 1];
-    moshi (!own_probe_block(pass, body_id)) { pass.sum_state[symbol] = 2; kaesu; }
+    moshi (!own_probe_block(pass, body_id)) {
+        pass.sum_state[symbol] = 2;
+        kaesu;
+    }
     kaku count = len(pass.env.resolved.symbols);
-    kaku function = OwnFunction { declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [1], rec_params: array.with_capacity[int64](4), rec_result: array.with_capacity[int64](4), rec_pairs: array.with_capacity[int64](4) };
+    kaku function = OwnFunction {
+        declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [1], rec_params: array.with_capacity[int64](4), rec_result: array.with_capacity[int64](4), rec_pairs: array.with_capacity[int64](4) };
     kaku index = 0;
     aida (index < node.operator) {
         kaku parameter = binding_of(pass.env, pass.file_id, node.children[node.integer + index]);
-        moshi (parameter < 0) { pass.sum_state[symbol] = 2; kaesu; }
+        moshi (parameter < 0) {
+            pass.sum_state[symbol] = 2;
+            kaesu;
+        }
         function.params[parameter] = 1;
         array.push(function.rec_params, parameter);
         array.push(function.rec_result, 0);
@@ -718,7 +867,10 @@ waza own_summarize(pass: OwnPass, symbol: int64) -> unit {
     kaku parameters = len(function.rec_params);
     kaku parent: []int64 = [];
     index = 0;
-    aida (index < parameters) { array.push(parent, index); index = index + 1; }
+    aida (index < parameters) {
+        array.push(parent, index);
+        index = index + 1;
+    }
     kaku pair = 0;
     aida (pair < len(function.rec_pairs)) {
         kaku a = function.rec_pairs[pair];
@@ -730,7 +882,12 @@ waza own_summarize(pass: OwnPass, symbol: int64) -> unit {
     }
     kaku result: []int64 = [];
     index = 0;
-    aida (index < parameters) { moshi (function.rec_result[index] == 1) { array.push(result, index); } index = index + 1; }
+    aida (index < parameters) {
+        moshi (function.rec_result[index] == 1) {
+            array.push(result, index);
+        }
+        index = index + 1;
+    }
     kaku linked: [][]int64 = [];
     kaku root = 0;
     aida (root < parameters) {
@@ -768,18 +925,33 @@ waza own_probe_expression(pass: OwnPass, node_id: int64) -> bool {
             moshi (callee_kind == 0 || callee_kind == 1 || callee_kind == 2) { kaesu iie; }
         }
         kaku argument = 1;
-        aida (argument < len(node.children)) { moshi (own_is_function_type(pass, node.children[argument])) { kaesu iie; } argument = argument + 1; }
+        aida (argument < len(node.children)) {
+            moshi (own_is_function_type(pass, node.children[argument])) {
+                kaesu iie;
+            }
+            argument = argument + 1;
+        }
     }
     kaku children = own_expression_children(node);
     kaku index = 0;
-    aida (index < len(children)) { moshi (!own_probe_expression(pass, children[index])) { kaesu iie; } index = index + 1; }
+    aida (index < len(children)) {
+        moshi (!own_probe_expression(pass, children[index])) {
+            kaesu iie;
+        }
+        index = index + 1;
+    }
     kaesu hai;
 }
 
 waza own_probe_block(pass: OwnPass, block_id: int64) -> bool {
     kaku block = node_at(pass.env, pass.file_id, block_id);
     kaku index = 0;
-    aida (index < len(block.children)) { moshi (!own_probe_statement(pass, block.children[index])) { kaesu iie; } index = index + 1; }
+    aida (index < len(block.children)) {
+        moshi (!own_probe_statement(pass, block.children[index])) {
+            kaesu iie;
+        }
+        index = index + 1;
+    }
     kaesu hai;
 }
 
@@ -790,7 +962,11 @@ waza own_probe_statement(pass: OwnPass, node_id: int64) -> bool {
         kaku index = 0;
         kaku start = 0;
         aida (index < len(node.children)) {
-            moshi (!(kind == 14 && index < len(node.children) - 1)) { moshi (!own_probe_expression(pass, node.children[index])) { kaesu iie; } }
+            moshi (!(kind == 14 && index < len(node.children) - 1)) {
+                moshi (!own_probe_expression(pass, node.children[index])) {
+                    kaesu iie;
+                }
+            }
             index = index + 1;
         }
         kaesu hai;
@@ -825,7 +1001,8 @@ waza own_check_file(pass: OwnPass) -> unit {
     kaku env = pass.env;
     kaku root = node_at(env, pass.file_id, env.resolved.files[pass.file_id].root);
     kaku count = len(env.resolved.symbols);
-    kaku top = OwnFunction { declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [0], rec_params: array.with_capacity[int64](0), rec_result: array.with_capacity[int64](0), rec_pairs: array.with_capacity[int64](0) };
+    kaku top = OwnFunction {
+        declared: array.make[int64](count, 0), params: array.make[int64](count, 0), breaks: array.with_capacity[[]OwnState](2), continues: array.with_capacity[[]OwnState](2), rec_on: [0], rec_params: array.with_capacity[int64](0), rec_result: array.with_capacity[int64](0), rec_pairs: array.with_capacity[int64](0) };
     kaku state = own_new(count);
     kaku index = 0;
     aida (index < len(root.children)) {
@@ -855,10 +1032,18 @@ waza check_ownership(env: TypeEnvironment) -> unit {
             moshi (kind == 32) {
                 kaku inner = array.make[int64](count, 0);
                 kaku at = 0;
-                aida (at < statement.operator) { kaku symbol = binding_of(env, file_id, statement.children[statement.integer + at]); moshi (symbol >= 0) { inner[symbol] = 1; } at = at + 1; }
+                aida (at < statement.operator) {
+                    kaku symbol = binding_of(env, file_id, statement.children[statement.integer + at]);
+                    moshi (symbol >= 0) {
+                        inner[symbol] = 1;
+                    }
+                    at = at + 1;
+                }
                 scan_block(scan, file_id, statement.children[len(statement.children) - 1], hai, 0, inner);
             } sore {
-                moshi (kind != 34 && kind != 36 && kind != 1 && kind != 2) { scan_statement(scan, file_id, root.children[index], iie, 0, top); }
+                moshi (kind != 34 && kind != 36 && kind != 1 && kind != 2) {
+                    scan_statement(scan, file_id, root.children[index], iie, 0, top);
+                }
             }
             index = index + 1;
         }
@@ -867,7 +1052,8 @@ waza check_ownership(env: TypeEnvironment) -> unit {
     moshi (scan.uses_transfer[0] == 0) { kaesu; }
     file_id = 0;
     aida (file_id < len(env.resolved.files)) {
-        kaku pass = OwnPass { env: env, file_id: file_id, reached: scan.reached, captured: scan.captured, reported: array.with_capacity[string](4), fn_node: array.make[int64](count, -1), sum_state: array.make[int64](count, 0), sum_result: array.make[[]int64](count, []), sum_linked: array.make[[][]int64](count, []), quiet: [0] };
+        kaku pass = OwnPass {
+            env: env, file_id: file_id, reached: scan.reached, captured: scan.captured, reported: array.with_capacity[string](4), fn_node: array.make[int64](count, -1), sum_state: array.make[int64](count, 0), sum_result: array.make[[]int64](count, []), sum_linked: array.make[[][]int64](count, []), quiet: [0] };
         kaku root_node = node_at(env, file_id, env.resolved.files[file_id].root);
         kaku at = 0;
         aida (at < len(root_node.children)) {

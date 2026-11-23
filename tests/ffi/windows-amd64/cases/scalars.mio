@@ -1,0 +1,36 @@
+waza add(a: int32, b: int32) -> int32 = c "mio_ffi_fixture.dll" "mio_c_add";
+waza mix(a: int64, b: float64, c: int32, d: float32) -> int64 = c "mio_ffi_fixture.dll" "mio_c_mix";
+waza double(a: float64, b: float64) -> float64 = c "mio_ffi_fixture.dll" "mio_c_double";
+waza single(a: float32, b: float32) -> float32 = c "mio_ffi_fixture.dll" "mio_c_float";
+waza many(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64) -> int32 = c "mio_ffi_fixture.dll" "mio_c_many";
+waza stack(a: int64, b: float64, c: int32, d: float32, e: float64, f: float32, g: int16, h: uint32) -> float64 = c "mio_ffi_fixture.dll" "mio_c_stack";
+waza mio_c_no_args() -> int32 = c "mio_ffi_fixture.dll";
+waza void_call() -> unit = c "mio_ffi_fixture.dll" "mio_c_void";
+waza calls() -> int32 = c "mio_ffi_fixture.dll" "mio_c_calls";
+waza frame() -> int32 = c "mio_ffi_fixture.dll" "mio_c_frame";
+waza narrow_i8(x: int8) -> int8 = c "mio_ffi_fixture.dll" "mio_c_i8";
+waza narrow_u8(x: uint8) -> uint8 = c "mio_ffi_fixture.dll" "mio_c_u8";
+waza narrow_i16(x: int16) -> int16 = c "mio_ffi_fixture.dll" "mio_c_i16";
+waza narrow_u16(x: uint16) -> uint16 = c "mio_ffi_fixture.dll" "mio_c_u16";
+waza narrow_i32(x: int32) -> int32 = c "mio_ffi_fixture.dll" "mio_c_i32";
+waza narrow_u32(x: uint32) -> uint32 = c "mio_ffi_fixture.dll" "mio_c_u32";
+waza nested(n: int64) -> int64 {
+    moshi (n == 0) { kaesu int64(mio_c_no_args()); }
+    kaesu n + int64(frame()) + nested(n - 1);
+}
+chant(mio_c_no_args());
+chant(add(20, 22));
+chant(mix(10, 2.0, 3, float32(4.0)));
+chant(double(1.5, 2.25) == 5.25);
+chant(single(float32(1.25), float32(2.5)) == float32(3.75));
+chant(many(1, 2, 3, 4, 5, 6, 7));
+chant(stack(1, 2.0, 3, float32(4.0), 5.0, float32(6.0), 7, 8) == 204.0);
+void_call(); void_call(); chant(calls());
+chant(frame()); chant(100 + int64(frame()));
+chant(nested(3));
+chant(int64(narrow_i8(-128)));
+chant(int64(narrow_u8(255)));
+chant(int64(narrow_i16(-32768)));
+chant(int64(narrow_u16(65535)));
+chant(int64(narrow_i32(-2147483648)));
+chant(int64(narrow_u32(4294967295)));

@@ -10,7 +10,9 @@ yobu "kiso/aot/lower/types";
 teisu sha256_native_name = "sha256_compress_native_block";
 
 waza sha256_native_call(code: arm64.Assembler, analysis: types.TypeAnalysis, entries: []int64, target: mochi.Function) -> bool {
-    moshi (old_sweep_enabled(code) || target.name != sha256_native_name || target.parameter_count != 5 || target.returns_value) { kaesu iie; }
+    moshi (old_sweep_enabled(code) || target.name != sha256_native_name || target.parameter_count != 5 || target.returns_value) {
+        kaesu iie;
+    }
     moshi (len(entries) < 5) { kaesu iie; }
     kaku i = len(entries) - 5;
     aida (i < len(entries)) {
@@ -21,15 +23,21 @@ waza sha256_native_call(code: arm64.Assembler, analysis: types.TypeAnalysis, ent
 }
 
 waza emit_sha256_native_call(code: arm64.Assembler) -> unit {
-    emit(code, arm64.sub_imm_x(20, 20, 40, iie)); emit(code, arm64.add_x(8, 19, 20));
-    emit(code, arm64.ldp_x(0, 1, 8, 0)); emit(code, arm64.ldr_x(2, 8, 16));
+    emit(code, arm64.sub_imm_x(20, 20, 40, iie));
+    emit(code, arm64.add_x(8, 19, 20));
+    emit(code, arm64.ldp_x(0, 1, 8, 0));
+    emit(code, arm64.ldr_x(2, 8, 16));
     arm64.assembler_bl(code, "rt_sha256_compress");
 }
 
 waza simd(code: arm64.Assembler, word: int64) -> unit { emit(code, arm64.Instruction { word: uint32(word), error: mu }); }
 // INS Vd.S[lane], Wn / UMOV Wd, Vn.S[lane]
-waza ins_s(code: arm64.Assembler, vd: int64, lane: int64, wn: int64) -> unit { simd(code, 1308630016 + (lane * 8 + 4) * 65536 + wn * 32 + vd); }
-waza umov_s(code: arm64.Assembler, wd: int64, vn: int64, lane: int64) -> unit { simd(code, 234896384 + (lane * 8 + 4) * 65536 + vn * 32 + wd); }
+waza ins_s(code: arm64.Assembler, vd: int64, lane: int64, wn: int64) -> unit {
+    simd(code, 1308630016 + (lane * 8 + 4) * 65536 + wn * 32 + vd);
+}
+waza umov_s(code: arm64.Assembler, wd: int64, vn: int64, lane: int64) -> unit {
+    simd(code, 234896384 + (lane * 8 + 4) * 65536 + vn * 32 + wd);
+}
 waza add_4s(code: arm64.Assembler, vd: int64, vn: int64, vm: int64) -> unit { simd(code, 1319142400 + vm * 65536 + vn * 32 + vd); }
 waza mov_16b(code: arm64.Assembler, vd: int64, vn: int64) -> unit { simd(code, 1319115776 + vn * 65536 + vn * 32 + vd); }
 waza sha256h(code: arm64.Assembler, qd: int64, qn: int64, vm: int64) -> unit { simd(code, 1577074688 + vm * 65536 + qn * 32 + qd); }
@@ -40,42 +48,65 @@ waza sha256su1(code: arm64.Assembler, vd: int64, vn: int64, vm: int64) -> unit {
 // x<reg> array descriptor -> x<storage> first element address; minimum length checked.
 waza sha256_native_array(code: arm64.Assembler, reg: int64, minimum: int64, storage: int64) -> unit {
     arm64.assembler_cbz_x(code, reg, "runtime_error");
-    emit(code, arm64.ldr_x(9, reg, 8)); emit(code, arm64.cmp_imm_x(9, minimum, iie)); arm64.assembler_b_cond(code, 3, "runtime_error");
-    emit(code, arm64.ldrb_w(9, reg, 1)); emit(code, arm64.cmp_imm_x(9, 8, iie)); arm64.assembler_b_cond(code, 1, "runtime_error");
-    emit(code, arm64.ldr_x(storage, reg, 40)); emit(code, arm64.add_imm_x(storage, storage, 32, iie));
+    emit(code, arm64.ldr_x(9, reg, 8));
+    emit(code, arm64.cmp_imm_x(9, minimum, iie));
+    arm64.assembler_b_cond(code, 3, "runtime_error");
+    emit(code, arm64.ldrb_w(9, reg, 1));
+    emit(code, arm64.cmp_imm_x(9, 8, iie));
+    arm64.assembler_b_cond(code, 1, "runtime_error");
+    emit(code, arm64.ldr_x(storage, reg, 40));
+    emit(code, arm64.add_imm_x(storage, storage, 32, iie));
 }
 
 // Four consecutive 64-bit elements (low 32 bits each, little-endian) at x<base> + 8 * first into Vd.4S.
 waza sha256_native_load(code: arm64.Assembler, vd: int64, base: int64, first: int64) -> unit {
     kaku lane = 0;
-    aida (lane < 4) { emit(code, arm64.ldr_w(9, base, (first + lane) * 8)); ins_s(code, vd, lane, 9); lane = lane + 1; }
+    aida (lane < 4) {
+        emit(code, arm64.ldr_w(9, base, (first + lane) * 8));
+        ins_s(code, vd, lane, 9);
+        lane = lane + 1;
+    }
 }
 
 // x0 state, x1 words, x2 k; uses x9-x12, v16-v27.
 waza emit_sha256_native_routine(code: arm64.Assembler) -> unit {
     arm64.assembler_label(code, "rt_sha256_compress");
-    sha256_native_array(code, 0, 8, 10); sha256_native_array(code, 1, 16, 11); sha256_native_array(code, 2, 64, 12);
-    sha256_native_load(code, 16, 10, 0); sha256_native_load(code, 17, 10, 4);
-    sha256_native_load(code, 20, 11, 0); sha256_native_load(code, 21, 11, 4); sha256_native_load(code, 22, 11, 8); sha256_native_load(code, 23, 11, 12);
-    mov_16b(code, 24, 16); mov_16b(code, 25, 17);
+    sha256_native_array(code, 0, 8, 10);
+    sha256_native_array(code, 1, 16, 11);
+    sha256_native_array(code, 2, 64, 12);
+    sha256_native_load(code, 16, 10, 0);
+    sha256_native_load(code, 17, 10, 4);
+    sha256_native_load(code, 20, 11, 0);
+    sha256_native_load(code, 21, 11, 4);
+    sha256_native_load(code, 22, 11, 8);
+    sha256_native_load(code, 23, 11, 12);
+    mov_16b(code, 24, 16);
+    mov_16b(code, 25, 17);
     kaku group = 0;
     aida (group < 16) {
         kaku m0 = 20 + group - (group / 4) * 4;
         sha256_native_load(code, 26, 12, group * 4);
         add_4s(code, 26, m0, 26);
         moshi (group < 12) {
-            kaku m1 = 20 + (group + 1) - ((group + 1) / 4) * 4; kaku m2 = 20 + (group + 2) - ((group + 2) / 4) * 4; kaku m3 = 20 + (group + 3) - ((group + 3) / 4) * 4;
-            sha256su0(code, m0, m1); sha256su1(code, m0, m2, m3);
+            kaku m1 = 20 + (group + 1) - ((group + 1) / 4) * 4;
+            kaku m2 = 20 + (group + 2) - ((group + 2) / 4) * 4;
+            kaku m3 = 20 + (group + 3) - ((group + 3) / 4) * 4;
+            sha256su0(code, m0, m1);
+            sha256su1(code, m0, m2, m3);
         }
         mov_16b(code, 27, 16);
-        sha256h(code, 16, 17, 26); sha256h2(code, 17, 27, 26);
+        sha256h(code, 16, 17, 26);
+        sha256h2(code, 17, 27, 26);
         group = group + 1;
     }
-    add_4s(code, 16, 16, 24); add_4s(code, 17, 17, 25);
+    add_4s(code, 16, 16, 24);
+    add_4s(code, 17, 17, 25);
     kaku lane = 0;
     aida (lane < 4) {
-        umov_s(code, 9, 16, lane); emit(code, arm64.str_x(9, 10, lane * 8));
-        umov_s(code, 9, 17, lane); emit(code, arm64.str_x(9, 10, (lane + 4) * 8));
+        umov_s(code, 9, 16, lane);
+        emit(code, arm64.str_x(9, 10, lane * 8));
+        umov_s(code, 9, 17, lane);
+        emit(code, arm64.str_x(9, 10, (lane + 4) * 8));
         lane = lane + 1;
     }
     emit(code, arm64.ret());

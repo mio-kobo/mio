@@ -2,22 +2,43 @@ yobu "kiso/array";
 // Explicit internal startup bindings; the builder replaces these four stubs
 // by the native Runtime bridge. Worker bodies below use normal Mio codegen.
 // No Root/TLS/registry calls or manually constructed layout/frame vectors.
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-koukai kata Node {value:int64;items:[]int64;}
-kaku a=0;kaku b=0;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+koukai kata Node {
+    value: int64;
+    items: []int64;
+}
+kaku a = 0;
+kaku b = 0;
 waza first() -> unit {
-    kaku keep=Node {value:100,items:[20,30]};kaku i=0;
-    aida(i<100){kaku noise=Node {value:i,items:[i,i+1]};a=a+keep.value+keep.items[0]+noise.items[0]-i;i=i+1;}
+    kaku keep = Node {
+        value: 100, items: [20, 30] };
+    kaku i = 0;
+    aida (i<100) {
+        kaku noise = Node {
+            value: i, items: [i, i + 1] };
+        a = a + keep.value + keep.items[0] + noise.items[0] - i;
+        i = i + 1;
+    }
 }
 waza second() -> unit {
-    kaku keep=Node {value:200,items:[40,50]};kaku i=0;
-    aida(i<100){kaku noise=Node {value:i,items:[i,i+1]};b=b+keep.value+keep.items[0]+noise.items[0]-i;i=i+1;}
+    kaku keep = Node {
+        value: 200, items: [40, 50] };
+    kaku i = 0;
+    aida (i<100) {
+        kaku noise = Node {
+            value: i, items: [i, i + 1] };
+        b = b + keep.value + keep.items[0] + noise.items[0] - i;
+        i = i + 1;
+    }
 }
-kaku one=rt_start(first);kaku two=rt_start(second);
-kaku joined_one=rt_join(one);kaku joined_two=rt_join(two);
-moshi(joined_one!=0 || joined_two!=0){chant(-1);}
-chant(a);chant(b);
+kaku one = rt_start(first);
+kaku two = rt_start(second);
+kaku joined_one = rt_join(one);
+kaku joined_two = rt_join(two);
+moshi (joined_one != 0 || joined_two != 0) { chant(-1); }
+chant(a);
+chant(b);
 chant(rt_collect(1));

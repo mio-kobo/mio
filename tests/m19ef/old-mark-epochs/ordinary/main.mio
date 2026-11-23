@@ -1,55 +1,162 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;}
-kata Graph {slots:[]Node?;numbers:[]int64;}
-kaku shared:Graph?=mu;kaku control=0;kaku ready_a=0;kaku ready_b=0;kaku done_a=0;kaku done_b=0;kaku failures=0;kaku generation=0;
-waza work(id:int64) -> unit {
- moshi(id==0){ready_a=1;}sore{ready_b=1;}
- aida(control==0){kaku waited=rt_wait(100000);}
- kaku g=shared;moshi(g==mu){failures=1;kaesu;}
- kaku i=id;aida(i<128){g.slots[i]=Node {value:generation*1000+i};g.numbers[i]=generation*1000+i;kaku observed=rt_collect(5);i=i+2;}
- moshi(id==0){done_a=1;}sore{done_b=1;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node { value: int64; }
+kata Graph {
+    slots: []Node?;
+    numbers: []int64;
 }
-waza first() -> unit {work(0);}
-waza second() -> unit {work(1);}
+kaku shared: Graph?= mu;
+kaku control = 0;
+kaku ready_a = 0;
+kaku ready_b = 0;
+kaku done_a = 0;
+kaku done_b = 0;
+kaku failures = 0;
+kaku generation = 0;
+waza work(id: int64) -> unit {
+    moshi (id == 0) {
+        ready_a = 1;
+    } sore {
+        ready_b = 1;
+    }
+    aida (control == 0) { kaku waited = rt_wait(100000); }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 1;
+        kaesu;
+    }
+    kaku i = id;
+    aida (i<128) {
+        g.slots[i] = Node {
+            value: generation * 1000 + i };
+        g.numbers[i] = generation * 1000 + i;
+        kaku observed = rt_collect(5);
+        i = i + 2;
+    }
+    moshi (id == 0) {
+        done_a = 1;
+    } sore {
+        done_b = 1;
+    }
+}
+waza first() -> unit { work(0); }
+waza second() -> unit { work(1); }
 waza prepare() -> unit {
- kaku g=Graph {slots:array.with_capacity[Node?](128),numbers:array.make[int64](128,0)};
- kaku i=0;aida(i<128){array.push(g.slots,Node {value:i});i=i+1;}shared=g;
+    kaku g = Graph { slots: array.with_capacity[Node?](128), numbers: array.make[int64](128, 0) };
+    kaku i = 0;
+    aida (i<128) {
+        array.push(g.slots, Node {
+                value: i });
+        i = i + 1;
+    }
+    shared = g;
 }
 waza dead_witness() -> unit {
- kaku dead=Node {value:99999};kaku i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}moshi(dead.value!=99999){failures=2;}
+    kaku dead = Node {
+        value: 99999 };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) {
+        failures = 2;
+    }
 }
 waza frontier() -> []Node? {
- kaku g=shared;moshi(g==mu){kaesu [];}
- kaku roots=array.with_capacity[Node?](128);array.append_all(roots,g.slots);kaesu roots;
+    kaku g = shared;
+    moshi (g == mu) {
+        kaesu [];
+    }
+    kaku roots = array.with_capacity[Node?](128);
+    array.append_all(roots, g.slots);
+    kaesu roots;
 }
-waza cycle(epoch:int64) -> unit {
- control=0;ready_a=0;ready_b=0;done_a=0;done_b=0;generation=epoch;
- kaku a=rt_start(first);kaku b=rt_start(second);aida(ready_a+ready_b<2){kaku waited=rt_wait(100000);}
- dead_witness();kaku roots=frontier();kaku started=rt_collect(2);
- moshi(started!=0 || rt_collect(4)!=2 || rt_collect(17)!=epoch || rt_collect(18)!=epoch){failures=3;}
- // The Young frontier has128 distinct real Old references and the configured
- // primary queue has32 slots: Init must exercise real full-queue compensation.
- moshi(rt_collect(15)==0){failures=4;}
- control=1;kaku i=0;aida(i<100){kaku occupied=rt_collect(0);kaku observed=rt_collect(5);i=i+1;}
- aida(done_a+done_b<2 && failures==0){kaku occupied=rt_collect(0);kaku waited=rt_wait(100000);}
- kaku ja=rt_join(a);kaku jb=rt_join(b);moshi(ja+jb!=0){failures=5;}
- kaku g=shared;moshi(g==mu){failures=6;kaesu;}
- i=0;aida(i<128){kaku n=g.slots[i];moshi(n==mu){failures=7;}sore{moshi(n.value!=epoch*1000+i || g.numbers[i]!=epoch*1000+i){failures=8;}}i=i+1;}
- moshi(epoch==1 || epoch==4 || epoch==7){
-  // Real compatibility Major cancels/joins active mark. The NEXT epoch must
-  // recover from any queued/in-flight/deferred state without unsafe reuse.
-  kaku occupied=rt_collect(1);moshi(occupied==0 || rt_collect(4)!=6){failures=9;}
- }sore{
-  kaku marked=rt_collect(3);moshi(marked<130 || rt_collect(6)<1 || rt_collect(4)!=4 || rt_collect(16)!=0){failures=10;}
- }
- moshi(rt_collect(19)!=epoch || rt_collect(14)!=0 || len(roots)!=128){failures=11;}
+waza cycle(epoch: int64) -> unit {
+    control = 0;
+    ready_a = 0;
+    ready_b = 0;
+    done_a = 0;
+    done_b = 0;
+    generation = epoch;
+    kaku a = rt_start(first);
+    kaku b = rt_start(second);
+    aida (ready_a + ready_b<2) {
+        kaku waited = rt_wait(100000);
+    }
+    dead_witness();
+    kaku roots = frontier();
+    kaku started = rt_collect(2);
+    moshi (started != 0 || rt_collect(4) != 2 || rt_collect(17) != epoch || rt_collect(18) != epoch) { failures = 3; }
+    // The Young frontier has128 distinct real Old references and the configured
+    // primary queue has32 slots: Init must exercise real full-queue compensation.
+    moshi (rt_collect(15) == 0) { failures = 4; }
+    control = 1;
+    kaku i = 0;
+    aida (i<100) {
+        kaku occupied = rt_collect(0);
+        kaku observed = rt_collect(5);
+        i = i + 1;
+    }
+    aida (done_a + done_b<2 && failures == 0) {
+        kaku occupied = rt_collect(0);
+        kaku waited = rt_wait(100000);
+    }
+    kaku ja = rt_join(a);
+    kaku jb = rt_join(b);
+    moshi (ja + jb != 0) {
+        failures = 5;
+    }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 6;
+        kaesu;
+    }
+    i = 0;
+    aida (i<128) {
+        kaku n = g.slots[i];
+        moshi (n == mu) {
+            failures = 7;
+        } sore {
+            moshi (n.value != epoch * 1000 + i || g.numbers[i] != epoch * 1000 + i) {
+                failures = 8;
+            }
+        }
+        i = i + 1;
+    }
+    moshi (epoch == 1 || epoch == 4 || epoch == 7) {
+        // Real compatibility Major cancels/joins active mark. The NEXT epoch must
+        // recover from any queued/in-flight/deferred state without unsafe reuse.
+        kaku occupied = rt_collect(1);
+        moshi (occupied == 0 || rt_collect(4) != 6) {
+            failures = 9;
+        }
+    } sore {
+        kaku marked = rt_collect(3);
+        moshi (marked<130 || rt_collect(6)<1 || rt_collect(4) != 4 || rt_collect(16) != 0) {
+            failures = 10;
+        }
+    }
+    moshi (rt_collect(19) != epoch || rt_collect(14) != 0 || len(roots) != 128) { failures = 11; }
 }
 waza run() -> unit {
- prepare();kaku i=1;aida(i<=8 && failures==0){cycle(i);i=i+1;}
- chant(failures);chant(i);chant(rt_collect(4));chant(rt_collect(17));chant(rt_collect(18));chant(rt_collect(19));chant(rt_collect(16));shared=mu;
+    prepare();
+    kaku i = 1;
+    aida (i <= 8 && failures == 0) {
+        cycle(i);
+        i = i + 1;
+    }
+    chant(failures);
+    chant(i);
+    chant(rt_collect(4));
+    chant(rt_collect(17));
+    chant(rt_collect(18));
+    chant(rt_collect(19));
+    chant(rt_collect(16));
+    shared = mu;
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

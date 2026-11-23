@@ -5,10 +5,32 @@ yobu "kiso/os";
 // Captures the actual unsigned result of the SAME production pipeline used by
 // the CLI. No signature stripping, foreign compiler or replacement codegen.
 waza main() -> unit {
- kaku a=os.arguments();moshi(len(a)!=6){os.exit(64);kaesu;}
- kaku result=pipeline.build_source(a[1],a[2],a[3]);moshi(result.error!=""){chant(result.error);os.exit(65);kaesu;}
- kaku signed=sign.adhoc(result.bytes);moshi(signed.error!=""){chant(signed.error);os.exit(66);kaesu;}
- kaku u=fs.write_all(a[4],result.bytes);moshi(u.error!=mu){os.exit(67);kaesu;}
- kaku s=fs.write_all(a[5],signed.bytes);moshi(s.error!=mu){os.exit(68);kaesu;}
+    kaku a = os.arguments();
+    moshi (len(a) != 6) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku result = pipeline.build_source(a[1], a[2], a[3]);
+    moshi (result.error != "") {
+        chant(result.error);
+        os.exit(65);
+        kaesu;
+    }
+    kaku signed = sign.adhoc(result.bytes);
+    moshi (signed.error != "") {
+        chant(signed.error);
+        os.exit(66);
+        kaesu;
+    }
+    kaku u = fs.write_all(a[4], result.bytes);
+    moshi (u.error != mu) {
+        os.exit(67);
+        kaesu;
+    }
+    kaku s = fs.write_all(a[5], signed.bytes);
+    moshi (s.error != mu) {
+        os.exit(68);
+        kaesu;
+    }
 }
 main();

@@ -1,164 +1,895 @@
-// E5 experimental implementation, native gates NOT_ACCEPTED. Preserve base control512B ABI.
-// Full-mode extension: lock512,waiter520,head528,pending536,claimed544,
-// swept552,bytes560,quarantine568,quarantineCount576,unmapError584,
-// handle592,nativeError600,done608,joined616,identity624,first632,last640,
-// starts648,joins656,seq664,overlap672,overlapFirst680,overlapLast688,
-// worldResumed696,epoch704,state712,error720,version728,attempts736,
-// unmaps744,losReclaims752. Full queue begins1024.
-koukai teisu sweep_claim_bit=17592186044416;
-koukai teisu sweep_account_operation=206;
-koukai teisu sweep_unmap_operation=207;
-waza sweep_fail(f:ir.Function,r:int64) -> unit {
- ir.put(f,ir.address,26,0,0,720);tconstant(f,27,0);array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:25,left:26,right:r,immediate:0,name:"",arguments:[27],order:acq_rel,failure_order:acquire});tconstant(f,27,4);ir.put(f,ir.release_store,0,0,27,712);
+// 并发清扫（Concurrent Sweep）扩展实现，严格保留基础 512B 控制块 ABI。
+// 512..759 为清扫阶段状态与统计字段（lock512, waiter520, head528, pending536, claimed544,
+// swept552, bytes560, quarantine568..unmapError584, handle592..losReclaims752），1024 起为完整工作队列。
+koukai teisu sweep_claim_bit = 17592186044416;
+koukai teisu sweep_account_operation = 206;
+koukai teisu sweep_unmap_operation = 207;
+waza sweep_fail(f: ir.Function, r: int64) -> unit {
+    ir.put(f, ir.address, 26, 0, 0, 720);
+    tconstant(f, 27, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 25, left: 26, right: r, immediate: 0, name: "", arguments: [27], order: acq_rel, failure_order: acquire });
+    tconstant(f, 27, 4);
+    ir.put(f, ir.release_store, 0, 0, 27, 712);
 }
-waza sweep_add(f:ir.Function,off:int64,r:int64) -> unit {ir.put(f,ir.load,28,0,0,off);ir.put(f,ir.add,28,28,r,0);ir.put(f,ir.release_store,0,0,28,off);}
+waza sweep_add(f: ir.Function, off: int64, r: int64) -> unit {
+    ir.put(f, ir.load, 28, 0, 0, off);
+    ir.put(f, ir.add, 28, 28, r, 0);
+    ir.put(f, ir.release_store, 0, 0, 28, off);
+}
 waza sweep_lock_program() -> ir.Function {
- // ctrl,ownerToken (1 collector; context pointer Mutator),mutatorWaiter.
- kaku f=ir.function("gc_sweep_lock");ir.branch(f,ir.zero,1,"invalid");ir.branch(f,ir.zero,2,"deadline");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,520);
- ir.branch(f,ir.label,0,"deadline");old_deadline(f,20,30000000000,"invalid");ir.put(f,ir.address,10,0,0,512);tconstant(f,11,0);
- ir.branch(f,ir.label,0,"try");ir.branch(f,ir.nonzero,2,"acquire");ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,4,"cancelled");ir.put(f,ir.acquire_load,5,0,0,520);ir.branch(f,ir.nonzero,5,"clock");
- ir.branch(f,ir.label,0,"acquire");ir.put(f,ir.acquire_load,12,0,0,512);ir.put(f,ir.equal,13,12,1,0);ir.branch(f,ir.nonzero,13,"owned");array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:12,left:10,right:1,immediate:0,name:"",arguments:[11],order:acq_rel,failure_order:acquire});ir.branch(f,ir.zero,12,"owned");ir.put(f,ir.address,14,0,0,848);tconstant(f,15,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:16,left:14,right:15,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});
- ir.branch(f,ir.label,0,"clock");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"try");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);sweep_fail(f,5);treturn(f,4);
- ir.branch(f,ir.label,0,"cancelled");treturn(f,1);
- ir.branch(f,ir.label,0,"owned");ir.branch(f,ir.zero,2,"done");tconstant(f,5,0);ir.put(f,ir.release_store,0,0,5,520);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    // ctrl,ownerToken (1 collector; context pointer Mutator),mutatorWaiter.
+    kaku f = ir.function("gc_sweep_lock");
+    ir.branch(f, ir.zero, 1, "invalid");
+    ir.branch(f, ir.zero, 2, "deadline");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 520);
+    ir.branch(f, ir.label, 0, "deadline");
+    old_deadline(f, 20, 30000000000, "invalid");
+    ir.put(f, ir.address, 10, 0, 0, 512);
+    tconstant(f, 11, 0);
+    ir.branch(f, ir.label, 0, "try");
+    ir.branch(f, ir.nonzero, 2, "acquire");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 4, "cancelled");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 520);
+    ir.branch(f, ir.nonzero, 5, "clock");
+    ir.branch(f, ir.label, 0, "acquire");
+    ir.put(f, ir.acquire_load, 12, 0, 0, 512);
+    ir.put(f, ir.equal, 13, 12, 1, 0);
+    ir.branch(f, ir.nonzero, 13, "owned");
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 12, left: 10, right: 1, immediate: 0, name: "", arguments: [11], order: acq_rel, failure_order: acquire });
+    ir.branch(f, ir.zero, 12, "owned");
+    ir.put(f, ir.address, 14, 0, 0, 848);
+    tconstant(f, 15, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 16, left: 14, right: 15, immediate: 0, name: "", arguments: [], order: acq_rel, failure_order: relaxed });
+    ir.branch(f, ir.label, 0, "clock");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "try");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "cancelled");
+    treturn(f, 1);
+    ir.branch(f, ir.label, 0, "owned");
+    ir.branch(f, ir.zero, 2, "done");
+    tconstant(f, 5, 0);
+    ir.put(f, ir.release_store, 0, 0, 5, 520);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza sweep_unlock_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_unlock");ir.put(f,ir.acquire_load,5,0,0,512);ir.branch(f,ir.zero,5,"done");ir.put(f,ir.equal,6,5,1,0);ir.branch(f,ir.zero,6,"invalid");tconstant(f,5,0);ir.put(f,ir.release_store,0,0,5,512);ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    kaku f = ir.function("gc_sweep_unlock");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 512);
+    ir.branch(f, ir.zero, 5, "done");
+    ir.put(f, ir.equal, 6, 5, 1, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    tconstant(f, 5, 0);
+    ir.put(f, ir.release_store, 0, 0, 5, 512);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
 waza sweep_side_program() -> ir.Function {
- // Called only with exact still-owned header; no arbitrary-pointer probing.
- kaku f=ir.function("gc_sweep_side");ir.put(f,ir.load,10,0,0,128);ir.put(f,ir.address,11,10,0,metadata_bytes);ir.put(f,ir.load,12,10,0,8);ir.put(f,ir.less_unsigned,5,1,11,0);ir.branch(f,ir.nonzero,5,"los");ir.put(f,ir.less_unsigned,5,1,12,0);ir.branch(f,ir.zero,5,"los");ir.put(f,ir.subtract,13,1,11,0);ir.put(f,ir.add,13,13,12,0);ir.put(f,ir.result,0,13,0,0);ir.branch(f,ir.label,0,"los");tconstant(f,13,16);ir.put(f,ir.subtract,13,1,13,0);ir.put(f,ir.result,0,13,0,0);kaesu f;
+    // Called only with exact still-owned header; no arbitrary-pointer probing.
+    kaku f = ir.function("gc_sweep_side");
+    ir.put(f, ir.load, 10, 0, 0, 128);
+    ir.put(f, ir.address, 11, 10, 0, metadata_bytes);
+    ir.put(f, ir.load, 12, 10, 0, 8);
+    ir.put(f, ir.less_unsigned, 5, 1, 11, 0);
+    ir.branch(f, ir.nonzero, 5, "los");
+    ir.put(f, ir.less_unsigned, 5, 1, 12, 0);
+    ir.branch(f, ir.zero, 5, "los");
+    ir.put(f, ir.subtract, 13, 1, 11, 0);
+    ir.put(f, ir.add, 13, 13, 12, 0);
+    ir.put(f, ir.result, 0, 13, 0, 0);
+    ir.branch(f, ir.label, 0, "los");
+    tconstant(f, 13, 16);
+    ir.put(f, ir.subtract, 13, 1, 13, 0);
+    ir.put(f, ir.result, 0, 13, 0, 0);
+    kaesu f;
 }
 waza sweep_inspect_program() -> ir.Function {
- // Interpose old_inspect only for new stopped-world claim mode4.
- kaku f=ir.function("gc_old_inspect");tcheck(f,3,4,"claim");ir.invoke_function(f,"gc_old_inspect_base",5,[0,1,2,3]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"claim");ir.put(f,ir.load,10,1,0,0);ir.branch(f,ir.zero,10,"done");old_bit(f,10,11,old_generation_bit);ir.branch(f,ir.zero,11,"done");old_bit(f,10,11,old_color_bit);ir.branch(f,ir.nonzero,11,"done");old_bit(f,10,11,sweep_claim_bit);ir.branch(f,ir.nonzero,11,"invalid");
- ir.put(f,ir.load,12,1,0,8);ir.put(f,ir.less_unsigned,13,2,12,0);ir.branch(f,ir.nonzero,13,"invalid");tconstant(f,11,sweep_claim_bit);ir.put(f,ir.add,10,10,11,0);ir.put(f,ir.release_store,0,1,10,0);ir.invoke_function(f,"gc_sweep_side",14,[0,1]);ir.put(f,ir.load,15,0,0,528);ir.put(f,ir.store,0,14,15,0);ir.put(f,ir.store,0,0,1,528);tconstant(f,15,1);sweep_add(f,536,15);sweep_add(f,544,15);
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    // Interpose old_inspect only for new stopped-world claim mode4.
+    kaku f = ir.function("gc_old_inspect");
+    tcheck(f, 3, 4, "claim");
+    ir.invoke_function(f, "gc_old_inspect_base", 5, [0, 1, 2, 3]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "claim");
+    ir.put(f, ir.load, 10, 1, 0, 0);
+    ir.branch(f, ir.zero, 10, "done");
+    old_bit(f, 10, 11, old_generation_bit);
+    ir.branch(f, ir.zero, 11, "done");
+    old_bit(f, 10, 11, old_color_bit);
+    ir.branch(f, ir.nonzero, 11, "done");
+    old_bit(f, 10, 11, sweep_claim_bit);
+    ir.branch(f, ir.nonzero, 11, "invalid");
+    ir.put(f, ir.load, 12, 1, 0, 8);
+    ir.put(f, ir.less_unsigned, 13, 2, 12, 0);
+    ir.branch(f, ir.nonzero, 13, "invalid");
+    tconstant(f, 11, sweep_claim_bit);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.put(f, ir.release_store, 0, 1, 10, 0);
+    ir.invoke_function(f, "gc_sweep_side", 14, [0, 1]);
+    ir.put(f, ir.load, 15, 0, 0, 528);
+    ir.put(f, ir.store, 0, 14, 15, 0);
+    ir.put(f, ir.store, 0, 0, 1, 528);
+    tconstant(f, 15, 1);
+    sweep_add(f, 536, 15);
+    sweep_add(f, 544, 15);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
 waza sweep_remembered_program() -> ir.Function {
- // STW removes each claimed dead member before allocator may reuse/unmap it.
- kaku f=ir.function("gc_sweep_remembered");ir.put(f,ir.load,10,0,0,128);ir.put(f,ir.address,11,10,0,remembered_head);tconstant(f,20,0);ir.put(f,ir.load,21,10,0,1144);
- ir.branch(f,ir.label,0,"next");ir.put(f,ir.load,12,11,0,0);ir.branch(f,ir.zero,12,"done");ir.put(f,ir.less_unsigned,5,20,21,0);ir.branch(f,ir.zero,5,"invalid");tconstant(f,5,1);ir.put(f,ir.add,20,20,5,0);ir.invoke_function(f,"gc_sweep_side",13,[0,12]);ir.put(f,ir.address,13,13,0,8);ir.put(f,ir.load,14,12,0,0);old_bit(f,14,15,sweep_claim_bit);ir.branch(f,ir.zero,15,"keep");old_bit(f,14,16,1099511627776);ir.branch(f,ir.zero,16,"invalid");ir.put(f,ir.load,15,13,0,0);ir.put(f,ir.store,0,11,15,0);tconstant(f,15,0);ir.put(f,ir.store,0,13,15,0);tconstant(f,15,1099511627776);ir.put(f,ir.subtract,14,14,15,0);ir.put(f,ir.release_store,0,12,14,0);ir.put(f,ir.load,15,10,0,1144);tconstant(f,16,1);ir.put(f,ir.subtract,15,15,16,0);ir.put(f,ir.store,0,10,15,1144);ir.branch(f,ir.jump,0,"next");ir.branch(f,ir.label,0,"keep");ir.put(f,ir.copy,11,13,0,0);ir.branch(f,ir.jump,0,"next");ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    // STW removes each claimed dead member before allocator may reuse/unmap it.
+    kaku f = ir.function("gc_sweep_remembered");
+    ir.put(f, ir.load, 10, 0, 0, 128);
+    ir.put(f, ir.address, 11, 10, 0, remembered_head);
+    tconstant(f, 20, 0);
+    ir.put(f, ir.load, 21, 10, 0, 1144);
+    ir.branch(f, ir.label, 0, "next");
+    ir.put(f, ir.load, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "done");
+    ir.put(f, ir.less_unsigned, 5, 20, 21, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.add, 20, 20, 5, 0);
+    ir.invoke_function(f, "gc_sweep_side", 13, [0, 12]);
+    ir.put(f, ir.address, 13, 13, 0, 8);
+    ir.put(f, ir.load, 14, 12, 0, 0);
+    old_bit(f, 14, 15, sweep_claim_bit);
+    ir.branch(f, ir.zero, 15, "keep");
+    old_bit(f, 14, 16, 1099511627776);
+    ir.branch(f, ir.zero, 16, "invalid");
+    ir.put(f, ir.load, 15, 13, 0, 0);
+    ir.put(f, ir.store, 0, 11, 15, 0);
+    tconstant(f, 15, 0);
+    ir.put(f, ir.store, 0, 13, 15, 0);
+    tconstant(f, 15, 1099511627776);
+    ir.put(f, ir.subtract, 14, 14, 15, 0);
+    ir.put(f, ir.release_store, 0, 12, 14, 0);
+    ir.put(f, ir.load, 15, 10, 0, 1144);
+    tconstant(f, 16, 1);
+    ir.put(f, ir.subtract, 15, 15, 16, 0);
+    ir.put(f, ir.store, 0, 10, 15, 1144);
+    ir.branch(f, ir.jump, 0, "next");
+    ir.branch(f, ir.label, 0, "keep");
+    ir.put(f, ir.copy, 11, 13, 0, 0);
+    ir.branch(f, ir.jump, 0, "next");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
 waza sweep_step_program() -> ir.Function {
- // Exclusive sweep lock held. Pop cached task before releasing storage. No
- // coalescing and no concurrent whole-heap layout walk; task links live in side.
- kaku f=ir.function("gc_sweep_step");ir.put(f,ir.load,10,0,0,128);ir.put(f,ir.load,11,0,0,528);ir.branch(f,ir.zero,11,"empty");ir.put(f,ir.acquire_load,12,11,0,0);old_bit(f,12,13,sweep_claim_bit);ir.branch(f,ir.zero,13,"invalid");old_bit(f,12,13,old_generation_bit);ir.branch(f,ir.zero,13,"invalid");old_bit(f,12,13,old_color_bit);ir.branch(f,ir.nonzero,13,"invalid");
- ir.invoke_function(f,"gc_sweep_side",14,[0,11]);ir.put(f,ir.load,15,14,0,0);ir.put(f,ir.load,16,11,0,8);tconstant(f,17,31);ir.put(f,ir.add,16,16,17,0);tconstant(f,17,16);ir.put(f,ir.divide_unsigned,16,16,17,0);ir.put(f,ir.multiply,16,16,17,0);tconstant(f,17,32);ir.put(f,ir.less_unsigned,5,16,17,0);ir.branch(f,ir.nonzero,5,"invalid");
- ir.put(f,ir.address,17,10,0,metadata_bytes);ir.put(f,ir.less_unsigned,5,11,17,0);ir.branch(f,ir.nonzero,5,"los");ir.put(f,ir.load,18,10,0,8);ir.put(f,ir.less_unsigned,5,11,18,0);ir.branch(f,ir.zero,5,"los");
- // Publish an exact >=32B span using the existing 32 size-class free bins.
- tconstant(f,17,16);ir.put(f,ir.subtract,18,16,17,0);ir.put(f,ir.store,0,11,18,8);tconstant(f,17,0);ir.put(f,ir.release_store,0,11,17,0);ir.put(f,ir.store,0,14,17,0);ir.put(f,ir.load,17,0,0,704);ir.put(f,ir.store,0,14,17,8);tconstant(f,17,16);ir.put(f,ir.divide_unsigned,18,16,17,0);tconstant(f,17,31);ir.put(f,ir.less_unsigned,19,17,18,0);ir.branch(f,ir.zero,19,"bin");ir.put(f,ir.copy,18,17,0,0);ir.branch(f,ir.label,0,"bin");tconstant(f,17,8);ir.put(f,ir.multiply,18,18,17,0);ir.put(f,ir.address,19,10,0,24);ir.put(f,ir.add,19,19,18,0);ir.put(f,ir.load,18,19,0,0);ir.put(f,ir.store,0,11,18,16);ir.put(f,ir.store,0,19,11,0);ir.branch(f,ir.jump,0,"account");
- // Locate the owned LOS link BEFORE unmap, cache every value needed afterward.
- ir.branch(f,ir.label,0,"los");tconstant(f,17,32);ir.put(f,ir.subtract,21,11,17,0);ir.put(f,ir.address,22,10,0,los_head);ir.put(f,ir.load,23,10,0,los_count);tconstant(f,24,0);
- ir.branch(f,ir.label,0,"find_los");ir.put(f,ir.load,17,22,0,0);ir.branch(f,ir.zero,17,"invalid");ir.put(f,ir.equal,18,17,21,0);ir.branch(f,ir.nonzero,18,"unmap");ir.put(f,ir.less_unsigned,18,24,23,0);ir.branch(f,ir.zero,18,"invalid");tconstant(f,18,1);ir.put(f,ir.add,24,24,18,0);ir.put(f,ir.copy,22,17,0,0);ir.branch(f,ir.jump,0,"find_los");
- ir.branch(f,ir.label,0,"unmap");ir.put(f,ir.load,23,21,0,0);ir.put(f,ir.load,24,21,0,8);tconstant(f,18,1);sweep_add(f,736,18);ir.call(f,sweep_unmap_operation,5,[21,24]);ir.branch(f,ir.nonzero,5,"quarantine");
- // No loads/stores through21/11/14 after actual successful unmap.
- ir.put(f,ir.store,0,22,23,0);ir.put(f,ir.load,17,10,0,2720);ir.put(f,ir.subtract,17,17,24,0);ir.put(f,ir.store,0,10,17,2720);ir.put(f,ir.load,17,10,0,los_count);tconstant(f,18,1);ir.put(f,ir.subtract,17,17,18,0);ir.put(f,ir.store,0,10,17,los_count);ir.put(f,ir.load,17,10,0,los_bytes);ir.put(f,ir.subtract,17,17,16,0);ir.put(f,ir.store,0,10,17,los_bytes);ir.put(f,ir.load,17,10,0,los_reclaimed);ir.put(f,ir.add,17,17,16,0);ir.put(f,ir.store,0,10,17,los_reclaimed);sweep_add(f,744,18);sweep_add(f,752,18);
- ir.branch(f,ir.label,0,"account");ir.put(f,ir.load,17,10,0,304);ir.put(f,ir.subtract,17,17,16,0);ir.put(f,ir.store,0,10,17,304);ir.put(f,ir.load,17,10,0,1120);ir.put(f,ir.subtract,17,17,16,0);ir.put(f,ir.store,0,10,17,1120);ir.put(f,ir.load,17,10,0,888);ir.put(f,ir.add,17,17,16,0);ir.put(f,ir.store,0,10,17,888);sweep_add(f,560,16);tconstant(f,18,1);sweep_add(f,552,18);ir.put(f,ir.store,0,0,15,528);ir.put(f,ir.load,17,0,0,536);ir.put(f,ir.subtract,17,17,18,0);ir.put(f,ir.release_store,0,0,17,536);ir.call(f,sweep_account_operation,5,[10]);ir.branch(f,ir.nonzero,5,"failed");treturn(f,0);
- ir.branch(f,ir.label,0,"quarantine");ir.put(f,ir.release_store,0,0,5,584);ir.put(f,ir.load,17,0,0,568);ir.put(f,ir.store,0,14,17,0);ir.put(f,ir.store,0,0,11,568);tconstant(f,18,1);sweep_add(f,576,18);ir.put(f,ir.store,0,0,15,528);ir.put(f,ir.load,17,0,0,536);ir.put(f,ir.subtract,17,17,18,0);ir.put(f,ir.release_store,0,0,17,536);treturn(f,0);
- ir.branch(f,ir.label,0,"empty");treturn(f,1);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // Exclusive sweep lock held. Pop cached task before releasing storage. No
+    // coalescing and no concurrent whole-heap layout walk; task links live in side.
+    kaku f = ir.function("gc_sweep_step");
+    ir.put(f, ir.load, 10, 0, 0, 128);
+    ir.put(f, ir.load, 11, 0, 0, 528);
+    ir.branch(f, ir.zero, 11, "empty");
+    ir.put(f, ir.acquire_load, 12, 11, 0, 0);
+    old_bit(f, 12, 13, sweep_claim_bit);
+    ir.branch(f, ir.zero, 13, "invalid");
+    old_bit(f, 12, 13, old_generation_bit);
+    ir.branch(f, ir.zero, 13, "invalid");
+    old_bit(f, 12, 13, old_color_bit);
+    ir.branch(f, ir.nonzero, 13, "invalid");
+    ir.invoke_function(f, "gc_sweep_side", 14, [0, 11]);
+    ir.put(f, ir.load, 15, 14, 0, 0);
+    ir.put(f, ir.load, 16, 11, 0, 8);
+    tconstant(f, 17, 31);
+    ir.put(f, ir.add, 16, 16, 17, 0);
+    tconstant(f, 17, 16);
+    ir.put(f, ir.divide_unsigned, 16, 16, 17, 0);
+    ir.put(f, ir.multiply, 16, 16, 17, 0);
+    tconstant(f, 17, 32);
+    ir.put(f, ir.less_unsigned, 5, 16, 17, 0);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.address, 17, 10, 0, metadata_bytes);
+    ir.put(f, ir.less_unsigned, 5, 11, 17, 0);
+    ir.branch(f, ir.nonzero, 5, "los");
+    ir.put(f, ir.load, 18, 10, 0, 8);
+    ir.put(f, ir.less_unsigned, 5, 11, 18, 0);
+    ir.branch(f, ir.zero, 5, "los");
+    // Publish an exact >=32B span using the existing 32 size-class free bins.
+    tconstant(f, 17, 16);
+    ir.put(f, ir.subtract, 18, 16, 17, 0);
+    ir.put(f, ir.store, 0, 11, 18, 8);
+    tconstant(f, 17, 0);
+    ir.put(f, ir.release_store, 0, 11, 17, 0);
+    ir.put(f, ir.store, 0, 14, 17, 0);
+    ir.put(f, ir.load, 17, 0, 0, 704);
+    ir.put(f, ir.store, 0, 14, 17, 8);
+    tconstant(f, 17, 16);
+    ir.put(f, ir.divide_unsigned, 18, 16, 17, 0);
+    tconstant(f, 17, 31);
+    ir.put(f, ir.less_unsigned, 19, 17, 18, 0);
+    ir.branch(f, ir.zero, 19, "bin");
+    ir.put(f, ir.copy, 18, 17, 0, 0);
+    ir.branch(f, ir.label, 0, "bin");
+    tconstant(f, 17, 8);
+    ir.put(f, ir.multiply, 18, 18, 17, 0);
+    ir.put(f, ir.address, 19, 10, 0, 24);
+    ir.put(f, ir.add, 19, 19, 18, 0);
+    ir.put(f, ir.load, 18, 19, 0, 0);
+    ir.put(f, ir.store, 0, 11, 18, 16);
+    ir.put(f, ir.store, 0, 19, 11, 0);
+    ir.branch(f, ir.jump, 0, "account");
+    // Locate the owned LOS link BEFORE unmap, cache every value needed afterward.
+    ir.branch(f, ir.label, 0, "los");
+    tconstant(f, 17, 32);
+    ir.put(f, ir.subtract, 21, 11, 17, 0);
+    ir.put(f, ir.address, 22, 10, 0, los_head);
+    ir.put(f, ir.load, 23, 10, 0, los_count);
+    tconstant(f, 24, 0);
+    ir.branch(f, ir.label, 0, "find_los");
+    ir.put(f, ir.load, 17, 22, 0, 0);
+    ir.branch(f, ir.zero, 17, "invalid");
+    ir.put(f, ir.equal, 18, 17, 21, 0);
+    ir.branch(f, ir.nonzero, 18, "unmap");
+    ir.put(f, ir.less_unsigned, 18, 24, 23, 0);
+    ir.branch(f, ir.zero, 18, "invalid");
+    tconstant(f, 18, 1);
+    ir.put(f, ir.add, 24, 24, 18, 0);
+    ir.put(f, ir.copy, 22, 17, 0, 0);
+    ir.branch(f, ir.jump, 0, "find_los");
+    ir.branch(f, ir.label, 0, "unmap");
+    ir.put(f, ir.load, 23, 21, 0, 0);
+    ir.put(f, ir.load, 24, 21, 0, 8);
+    tconstant(f, 18, 1);
+    sweep_add(f, 736, 18);
+    ir.call(f, sweep_unmap_operation, 5, [21, 24]);
+    ir.branch(f, ir.nonzero, 5, "quarantine");
+    // No loads/stores through21/11/14 after actual successful unmap.
+    ir.put(f, ir.store, 0, 22, 23, 0);
+    ir.put(f, ir.load, 17, 10, 0, 2720);
+    ir.put(f, ir.subtract, 17, 17, 24, 0);
+    ir.put(f, ir.store, 0, 10, 17, 2720);
+    ir.put(f, ir.load, 17, 10, 0, los_count);
+    tconstant(f, 18, 1);
+    ir.put(f, ir.subtract, 17, 17, 18, 0);
+    ir.put(f, ir.store, 0, 10, 17, los_count);
+    ir.put(f, ir.load, 17, 10, 0, los_bytes);
+    ir.put(f, ir.subtract, 17, 17, 16, 0);
+    ir.put(f, ir.store, 0, 10, 17, los_bytes);
+    ir.put(f, ir.load, 17, 10, 0, los_reclaimed);
+    ir.put(f, ir.add, 17, 17, 16, 0);
+    ir.put(f, ir.store, 0, 10, 17, los_reclaimed);
+    sweep_add(f, 744, 18);
+    sweep_add(f, 752, 18);
+    ir.branch(f, ir.label, 0, "account");
+    ir.put(f, ir.load, 17, 10, 0, 304);
+    ir.put(f, ir.subtract, 17, 17, 16, 0);
+    ir.put(f, ir.store, 0, 10, 17, 304);
+    ir.put(f, ir.load, 17, 10, 0, 1120);
+    ir.put(f, ir.subtract, 17, 17, 16, 0);
+    ir.put(f, ir.store, 0, 10, 17, 1120);
+    ir.put(f, ir.load, 17, 10, 0, 888);
+    ir.put(f, ir.add, 17, 17, 16, 0);
+    ir.put(f, ir.store, 0, 10, 17, 888);
+    sweep_add(f, 560, 16);
+    tconstant(f, 18, 1);
+    sweep_add(f, 552, 18);
+    ir.put(f, ir.store, 0, 0, 15, 528);
+    ir.put(f, ir.load, 17, 0, 0, 536);
+    ir.put(f, ir.subtract, 17, 17, 18, 0);
+    ir.put(f, ir.release_store, 0, 0, 17, 536);
+    ir.call(f, sweep_account_operation, 5, [10]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "quarantine");
+    ir.put(f, ir.release_store, 0, 0, 5, 584);
+    ir.put(f, ir.load, 17, 0, 0, 568);
+    ir.put(f, ir.store, 0, 14, 17, 0);
+    ir.put(f, ir.store, 0, 0, 11, 568);
+    tconstant(f, 18, 1);
+    sweep_add(f, 576, 18);
+    ir.put(f, ir.store, 0, 0, 15, 528);
+    ir.put(f, ir.load, 17, 0, 0, 536);
+    ir.put(f, ir.subtract, 17, 17, 18, 0);
+    ir.put(f, ir.release_store, 0, 0, 17, 536);
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "empty");
+    treturn(f, 1);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_worker_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_worker");ir.put(f,ir.load,31,0,0,248);ir.put(f,ir.imports,0,31,0,0);ir.put(f,ir.load,5,0,0,728);tconstant(f,6,1);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,5,0,0,112);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.load,6,0,0,704);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.call(f,thread_identity,5,[]);ir.put(f,ir.release_store,0,0,5,624);old_deadline(f,20,30000000000,"invalid");
- ir.branch(f,ir.label,0,"resume");ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,4,"done");ir.put(f,ir.acquire_load,5,0,0,696);ir.branch(f,ir.nonzero,5,"begin");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"resume");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"begin");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.load,6,0,0,632);ir.branch(f,ir.nonzero,6,"first_set");ir.put(f,ir.release_store,0,0,5,632);ir.branch(f,ir.label,0,"first_set");
- ir.branch(f,ir.label,0,"take");ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,4,"done");tconstant(f,1,1);tconstant(f,2,0);ir.invoke_function(f,"gc_sweep_lock",5,[0,1,2]);tcheck(f,5,1,"done");ir.branch(f,ir.nonzero,5,"failed");
- // Cancellation can win immediately AFTER lock acquisition. No reclamation
- // begins unless state still belongs to this exact running sweep epoch.
- ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,4,"unlock_done");ir.put(f,ir.load,5,0,0,528);ir.branch(f,ir.zero,5,"unlock_complete");tconstant(f,5,1);sweep_add(f,664,5);tconstant(f,22,256);ir.put(f,ir.load,23,0,0,736);tconstant(f,24,8);ir.put(f,ir.add,23,23,24,0);
- // Bound each allocator-lock turn by256 real objects AND8 LOS syscalls.
- // Amortize lock/clock work for small ordinary spans without expanding the
- // legacy LOS release quantum. Odd seq spans only nonempty actual work;
- // cancellation is acquired between individual objects. No sleeps/test delay.
- ir.branch(f,ir.label,0,"batch");ir.invoke_function(f,"gc_sweep_step",21,[0]);ir.branch(f,ir.nonzero,21,"batch_end");tconstant(f,5,1);ir.put(f,ir.subtract,22,22,5,0);ir.branch(f,ir.zero,22,"batch_end");ir.put(f,ir.load,24,0,0,736);ir.put(f,ir.less_unsigned,24,24,23,0);ir.branch(f,ir.zero,24,"batch_end");ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,4,"batch_end");ir.put(f,ir.load,5,0,0,528);ir.branch(f,ir.nonzero,5,"batch");
- ir.branch(f,ir.label,0,"batch_end");tconstant(f,5,1);sweep_add(f,664,5);ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"unlock_invalid");ir.put(f,ir.release_store,0,0,5,640);tconstant(f,1,1);ir.invoke_function(f,"gc_sweep_unlock",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");tcheck(f,21,1,"complete");ir.branch(f,ir.nonzero,21,"step_failed");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"take");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"unlock_complete");tconstant(f,1,1);ir.invoke_function(f,"gc_sweep_unlock",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.jump,0,"complete");
- ir.branch(f,ir.label,0,"unlock_invalid");tconstant(f,5,4);sweep_fail(f,5);ir.branch(f,ir.label,0,"unlock_done");tconstant(f,1,1);ir.invoke_function(f,"gc_sweep_unlock",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.jump,0,"done");
- ir.branch(f,ir.label,0,"step_failed");ir.put(f,ir.copy,5,21,0,0);ir.branch(f,ir.jump,0,"failed");ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.branch(f,ir.jump,0,"done");
- ir.branch(f,ir.label,0,"complete");tconstant(f,5,3);ir.put(f,ir.release_store,0,0,5,712);
- ir.branch(f,ir.label,0,"done");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,608);treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_sweep_worker");
+    ir.put(f, ir.load, 31, 0, 0, 248);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
+    ir.put(f, ir.load, 5, 0, 0, 728);
+    tconstant(f, 6, 1);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 5, 0, 0, 112);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 704);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.call(f, thread_identity, 5, []);
+    ir.put(f, ir.release_store, 0, 0, 5, 624);
+    old_deadline(f, 20, 30000000000, "invalid");
+    ir.branch(f, ir.label, 0, "resume");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 4, "done");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 696);
+    ir.branch(f, ir.nonzero, 5, "begin");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "resume");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "begin");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 632);
+    ir.branch(f, ir.nonzero, 6, "first_set");
+    ir.put(f, ir.release_store, 0, 0, 5, 632);
+    ir.branch(f, ir.label, 0, "first_set");
+    ir.branch(f, ir.label, 0, "take");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 4, "done");
+    tconstant(f, 1, 1);
+    tconstant(f, 2, 0);
+    ir.invoke_function(f, "gc_sweep_lock", 5, [0, 1, 2]);
+    tcheck(f, 5, 1, "done");
+    ir.branch(f, ir.nonzero, 5, "failed");
+    // Cancellation can win immediately AFTER lock acquisition. No reclamation
+    // begins unless state still belongs to this exact running sweep epoch.
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 4, "unlock_done");
+    ir.put(f, ir.load, 5, 0, 0, 528);
+    ir.branch(f, ir.zero, 5, "unlock_complete");
+    tconstant(f, 5, 1);
+    sweep_add(f, 664, 5);
+    tconstant(f, 22, 256);
+    ir.put(f, ir.load, 23, 0, 0, 736);
+    tconstant(f, 24, 8);
+    ir.put(f, ir.add, 23, 23, 24, 0);
+    // Bound each allocator-lock turn by256 real objects AND8 LOS syscalls.
+    // Amortize lock/clock work for small ordinary spans without expanding the
+    // legacy LOS release quantum. Odd seq spans only nonempty actual work;
+    // cancellation is acquired between individual objects. No sleeps/test delay.
+    ir.branch(f, ir.label, 0, "batch");
+    ir.invoke_function(f, "gc_sweep_step", 21, [0]);
+    ir.branch(f, ir.nonzero, 21, "batch_end");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.subtract, 22, 22, 5, 0);
+    ir.branch(f, ir.zero, 22, "batch_end");
+    ir.put(f, ir.load, 24, 0, 0, 736);
+    ir.put(f, ir.less_unsigned, 24, 24, 23, 0);
+    ir.branch(f, ir.zero, 24, "batch_end");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 4, "batch_end");
+    ir.put(f, ir.load, 5, 0, 0, 528);
+    ir.branch(f, ir.nonzero, 5, "batch");
+    ir.branch(f, ir.label, 0, "batch_end");
+    tconstant(f, 5, 1);
+    sweep_add(f, 664, 5);
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "unlock_invalid");
+    ir.put(f, ir.release_store, 0, 0, 5, 640);
+    tconstant(f, 1, 1);
+    ir.invoke_function(f, "gc_sweep_unlock", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tcheck(f, 21, 1, "complete");
+    ir.branch(f, ir.nonzero, 21, "step_failed");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "take");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "unlock_complete");
+    tconstant(f, 1, 1);
+    ir.invoke_function(f, "gc_sweep_unlock", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.jump, 0, "complete");
+    ir.branch(f, ir.label, 0, "unlock_invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    ir.branch(f, ir.label, 0, "unlock_done");
+    tconstant(f, 1, 1);
+    ir.invoke_function(f, "gc_sweep_unlock", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "step_failed");
+    ir.put(f, ir.copy, 5, 21, 0, 0);
+    ir.branch(f, ir.jump, 0, "failed");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "complete");
+    tconstant(f, 5, 3);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.branch(f, ir.label, 0, "done");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 608);
+    treturn(f, 0);
+    kaesu f;
 }
 waza sweep_join_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_join");ir.put(f,ir.acquire_load,5,0,0,616);ir.branch(f,ir.nonzero,5,"done");ir.put(f,ir.load,10,0,0,592);ir.branch(f,ir.zero,10,"done");old_deadline(f,20,10000000000,"invalid");
- ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,5,0,0,608);ir.branch(f,ir.nonzero,5,"join");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"wait");ir.branch(f,ir.jump,0,"invalid");ir.branch(f,ir.label,0,"join");tconstant(f,11,0);ir.call(f,thread_join,5,[10,11]);ir.branch(f,ir.nonzero,5,"failed");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,616);sweep_add(f,656,5);
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_sweep_join");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 616);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.put(f, ir.load, 10, 0, 0, 592);
+    ir.branch(f, ir.zero, 10, "done");
+    old_deadline(f, 20, 10000000000, "invalid");
+    ir.branch(f, ir.label, 0, "wait");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 608);
+    ir.branch(f, ir.nonzero, 5, "join");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "wait");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "join");
+    tconstant(f, 11, 0);
+    ir.call(f, thread_join, 5, [10, 11]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 616);
+    sweep_add(f, 656, 5);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_clear_claims_program() -> ir.Function {
- // ctrl,head. Exact intrusive links remain valid until each node is released.
- kaku f=ir.function("gc_sweep_clear_claims");ir.put(f,ir.copy,10,1,0,0);ir.put(f,ir.load,20,0,0,544);tconstant(f,21,0);
- ir.branch(f,ir.label,0,"next");ir.branch(f,ir.zero,10,"done");ir.put(f,ir.less_unsigned,5,21,20,0);ir.branch(f,ir.zero,5,"invalid");tconstant(f,5,1);ir.put(f,ir.add,21,21,5,0);ir.invoke_function(f,"gc_sweep_side",11,[0,10]);ir.put(f,ir.load,12,11,0,0);ir.put(f,ir.acquire_load,13,10,0,0);old_bit(f,13,14,sweep_claim_bit);ir.branch(f,ir.zero,14,"invalid");tconstant(f,14,sweep_claim_bit);ir.put(f,ir.subtract,13,13,14,0);ir.put(f,ir.release_store,0,10,13,0);tconstant(f,14,0);ir.put(f,ir.store,0,11,14,0);ir.put(f,ir.copy,10,12,0,0);ir.branch(f,ir.jump,0,"next");ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    // ctrl,head. Exact intrusive links remain valid until each node is released.
+    kaku f = ir.function("gc_sweep_clear_claims");
+    ir.put(f, ir.copy, 10, 1, 0, 0);
+    ir.put(f, ir.load, 20, 0, 0, 544);
+    tconstant(f, 21, 0);
+    ir.branch(f, ir.label, 0, "next");
+    ir.branch(f, ir.zero, 10, "done");
+    ir.put(f, ir.less_unsigned, 5, 21, 20, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.add, 21, 21, 5, 0);
+    ir.invoke_function(f, "gc_sweep_side", 11, [0, 10]);
+    ir.put(f, ir.load, 12, 11, 0, 0);
+    ir.put(f, ir.acquire_load, 13, 10, 0, 0);
+    old_bit(f, 13, 14, sweep_claim_bit);
+    ir.branch(f, ir.zero, 14, "invalid");
+    tconstant(f, 14, sweep_claim_bit);
+    ir.put(f, ir.subtract, 13, 13, 14, 0);
+    ir.put(f, ir.release_store, 0, 10, 13, 0);
+    tconstant(f, 14, 0);
+    ir.put(f, ir.store, 0, 11, 14, 0);
+    ir.put(f, ir.copy, 10, 12, 0, 0);
+    ir.branch(f, ir.jump, 0, "next");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
 waza sweep_abort_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_abort_join");ir.put(f,ir.acquire_load,5,0,0,712);tcheck(f,5,3,"join");ir.branch(f,ir.zero,5,"done");tconstant(f,5,4);ir.put(f,ir.release_store,0,0,5,712);ir.branch(f,ir.label,0,"join");ir.invoke_function(f,"gc_sweep_join",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,1,0,0,528);ir.invoke_function(f,"gc_sweep_clear_claims",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,1,0,0,568);ir.invoke_function(f,"gc_sweep_clear_claims",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,10,0,0,536);ir.put(f,ir.load,11,0,0,576);ir.put(f,ir.add,10,10,11,0);sweep_add(f,760,10);tconstant(f,5,0);ir.put(f,ir.store,0,0,5,528);ir.put(f,ir.store,0,0,5,536);ir.put(f,ir.store,0,0,5,568);ir.put(f,ir.store,0,0,5,576);
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_sweep_abort_join");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tcheck(f, 5, 3, "join");
+    ir.branch(f, ir.zero, 5, "done");
+    tconstant(f, 5, 4);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.branch(f, ir.label, 0, "join");
+    ir.invoke_function(f, "gc_sweep_join", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 1, 0, 0, 528);
+    ir.invoke_function(f, "gc_sweep_clear_claims", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 1, 0, 0, 568);
+    ir.invoke_function(f, "gc_sweep_clear_claims", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 10, 0, 0, 536);
+    ir.put(f, ir.load, 11, 0, 0, 576);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    sweep_add(f, 760, 10);
+    tconstant(f, 5, 0);
+    ir.put(f, ir.store, 0, 0, 5, 528);
+    ir.put(f, ir.store, 0, 0, 5, 536);
+    ir.put(f, ir.store, 0, 0, 5, 568);
+    ir.put(f, ir.store, 0, 0, 5, 576);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_prepare_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_prepare");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_ready);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.acquire_load,5,0,0,280);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.load,5,0,0,592);ir.branch(f,ir.zero,5,"reset");ir.put(f,ir.acquire_load,5,0,0,616);ir.branch(f,ir.zero,5,"invalid");
- ir.branch(f,ir.label,0,"reset");tconstant(f,5,0);kaku offsets=[528,536,544,552,560,568,576,584,592,600,608,616,624,632,640,664,672,680,688,696,720,736,744,752,760,768,776,808,816,824,832,848];kaku i=0;aida(i<len(offsets)){ir.put(f,ir.store,0,0,5,offsets[i]);i=i+1;}tconstant(f,5,1);ir.put(f,ir.store,0,0,5,728);ir.put(f,ir.release_store,0,0,5,712);ir.put(f,ir.load,5,0,0,112);ir.put(f,ir.store,0,0,5,704);tconstant(f,1,4);ir.invoke_function(f,"gc_old_walk",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.invoke_function(f,"gc_sweep_remembered",5,[0]);ir.branch(f,ir.nonzero,5,"failed");treturn(f,0);
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_sweep_prepare");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_ready);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 280);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.load, 5, 0, 0, 592);
+    ir.branch(f, ir.zero, 5, "reset");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 616);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.branch(f, ir.label, 0, "reset");
+    tconstant(f, 5, 0);
+    kaku offsets = [528, 536, 544, 552, 560, 568, 576, 584, 592, 600, 608, 616, 624, 632, 640, 664, 672, 680, 688, 696, 720, 736, 744, 752, 760, 768, 776, 808, 816, 824, 832, 848];
+    kaku i = 0;
+    aida (i<len(offsets)) {
+        ir.put(f, ir.store, 0, 0, 5, offsets[i]);
+        i = i + 1;
+    }
+    tconstant(f, 5, 1);
+    ir.put(f, ir.store, 0, 0, 5, 728);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.put(f, ir.load, 5, 0, 0, 112);
+    ir.put(f, ir.store, 0, 0, 5, 704);
+    tconstant(f, 1, 4);
+    ir.invoke_function(f, "gc_old_walk", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.invoke_function(f, "gc_sweep_remembered", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_launch_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_launch");ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,1);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,5,0,0,728);tconstant(f,6,1);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,5,0,0,112);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.load,6,0,0,704);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,5,0,0,592);ir.branch(f,ir.nonzero,5,"invalid");ir.put(f,ir.acquire_load,5,0,0,608);ir.branch(f,ir.nonzero,5,"invalid");ir.put(f,ir.acquire_load,5,0,0,616);ir.branch(f,ir.nonzero,5,"invalid");ir.put(f,ir.address,1,0,0,592);ir.function_pointer(f,"gc_sweep_worker",2);ir.put(f,ir.address,3,0,0,600);tconstant(f,5,2);ir.put(f,ir.release_store,0,0,5,712);ir.invoke_function(f,"platform_thread_start",5,[1,2,0,3]);ir.branch(f,ir.nonzero,5,"failed");tconstant(f,5,1);sweep_add(f,648,5);treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_sweep_launch");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 1);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 5, 0, 0, 728);
+    tconstant(f, 6, 1);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 5, 0, 0, 112);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 704);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 5, 0, 0, 592);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 608);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 616);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.address, 1, 0, 0, 592);
+    ir.function_pointer(f, "gc_sweep_worker", 2);
+    ir.put(f, ir.address, 3, 0, 0, 600);
+    tconstant(f, 5, 2);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.invoke_function(f, "platform_thread_start", 5, [1, 2, 0, 3]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tconstant(f, 5, 1);
+    sweep_add(f, 648, 5);
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_resumed_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_world_resumed");ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,2);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,696);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_sweep_world_resumed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 2);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 696);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza sweep_observe_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_observe");ir.put(f,ir.acquire_load,10,0,0,664);old_bit(f,10,11,1);ir.branch(f,ir.zero,11,"done");ir.invoke_function(f,"platform_now",12,[]);ir.branch(f,ir.zero,12,"invalid");ir.put(f,ir.acquire_load,11,0,0,664);ir.put(f,ir.equal,11,11,10,0);ir.branch(f,ir.zero,11,"done");ir.put(f,ir.address,11,0,0,672);tconstant(f,13,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:14,left:11,right:13,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});ir.branch(f,ir.nonzero,14,"last");ir.put(f,ir.release_store,0,0,12,680);ir.branch(f,ir.label,0,"last");ir.put(f,ir.release_store,0,0,12,688);
- ir.branch(f,ir.label,0,"done");ir.put(f,ir.acquire_load,5,0,0,672);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);sweep_fail(f,5);treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_sweep_observe");
+    ir.put(f, ir.acquire_load, 10, 0, 0, 664);
+    old_bit(f, 10, 11, 1);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.invoke_function(f, "platform_now", 12, []);
+    ir.branch(f, ir.zero, 12, "invalid");
+    ir.put(f, ir.acquire_load, 11, 0, 0, 664);
+    ir.put(f, ir.equal, 11, 11, 10, 0);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.address, 11, 0, 0, 672);
+    tconstant(f, 13, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 14, left: 11, right: 13, immediate: 0, name: "", arguments: [], order: acq_rel, failure_order: relaxed });
+    ir.branch(f, ir.nonzero, 14, "last");
+    ir.put(f, ir.release_store, 0, 0, 12, 680);
+    ir.branch(f, ir.label, 0, "last");
+    ir.put(f, ir.release_store, 0, 0, 12, 688);
+    ir.branch(f, ir.label, 0, "done");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 672);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    treturn(f, 0);
+    kaesu f;
 }
 waza sweep_finish_program() -> ir.Function {
- // ctx,Mutator token. Caller keeps STW registry ownership, but releases the
- // heap/sweep lock so the independent collector can finish remaining tasks.
- kaku f=ir.function("gc_sweep_finish");ir.invoke_function(f,"gc_sweep_unlock",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.invoke_function(f,"gc_sweep_join",10,[0]);tconstant(f,2,1);ir.invoke_function(f,"gc_sweep_lock",5,[0,1,2]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.nonzero,10,"join_failed");ir.put(f,ir.acquire_load,5,0,0,720);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"join_failed");ir.put(f,ir.copy,5,10,0,0);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // ctx,Mutator token. Caller keeps STW registry ownership, but releases the
+    // heap/sweep lock so the independent collector can finish remaining tasks.
+    kaku f = ir.function("gc_sweep_finish");
+    ir.invoke_function(f, "gc_sweep_unlock", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.invoke_function(f, "gc_sweep_join", 10, [0]);
+    tconstant(f, 2, 1);
+    ir.invoke_function(f, "gc_sweep_lock", 5, [0, 1, 2]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.nonzero, 10, "join_failed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 720);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "join_failed");
+    ir.put(f, ir.copy, 5, 10, 0, 0);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_retry_program() -> ir.Function {
- // Caller owns stopped heap+lock; a prior real join is mandatory. Original
- // addresses/charges were retained on failed OS release. No fabricated retry.
- kaku f=ir.function("gc_sweep_retry");ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,3);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.invoke_function(f,"gc_sweep_join",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,10,0,0,568);ir.branch(f,ir.zero,10,"done");ir.put(f,ir.store,0,0,10,528);ir.put(f,ir.load,10,0,0,576);ir.put(f,ir.store,0,0,10,536);tconstant(f,5,0);kaku offsets=[568,576,592,600,608,616,696];kaku i=0;aida(i<len(offsets)){ir.put(f,ir.store,0,0,5,offsets[i]);i=i+1;}tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,712);ir.invoke_function(f,"gc_sweep_launch",5,[0]);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");sweep_fail(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // Caller owns stopped heap+lock; a prior real join is mandatory. Original
+    // addresses/charges were retained on failed OS release. No fabricated retry.
+    kaku f = ir.function("gc_sweep_retry");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 3);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.invoke_function(f, "gc_sweep_join", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 10, 0, 0, 568);
+    ir.branch(f, ir.zero, 10, "done");
+    ir.put(f, ir.store, 0, 0, 10, 528);
+    ir.put(f, ir.load, 10, 0, 0, 576);
+    ir.put(f, ir.store, 0, 0, 10, 536);
+    tconstant(f, 5, 0);
+    kaku offsets = [568, 576, 592, 600, 608, 616, 696];
+    kaku i = 0;
+    aida (i<len(offsets)) {
+        ir.put(f, ir.store, 0, 0, 5, offsets[i]);
+        i = i + 1;
+    }
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.invoke_function(f, "gc_sweep_launch", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    sweep_fail(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
-waza sweep_heap_enter_program(control_link_offset:int64) -> ir.Function {
- kaku f=ir.function("gc_heap_enter");ir.invoke_function(f,"gc_heap_enter_base",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,10,0,0,control_link_offset);ir.branch(f,ir.zero,10,"done");ir.put(f,ir.acquire_load,10,10,0,0);ir.branch(f,ir.zero,10,"done");tconstant(f,2,1);ir.invoke_function(f,"gc_sweep_lock",5,[10,0,2]);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+waza sweep_heap_enter_program(control_link_offset: int64) -> ir.Function {
+    kaku f = ir.function("gc_heap_enter");
+    ir.invoke_function(f, "gc_heap_enter_base", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 10, 0, 0, control_link_offset);
+    ir.branch(f, ir.zero, 10, "done");
+    ir.put(f, ir.acquire_load, 10, 10, 0, 0);
+    ir.branch(f, ir.zero, 10, "done");
+    tconstant(f, 2, 1);
+    ir.invoke_function(f, "gc_sweep_lock", 5, [10, 0, 2]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
-waza sweep_end_epoch_program(control_link_offset:int64) -> ir.Function {
- kaku f=ir.function("gc_end");ir.put(f,ir.load,10,0,0,control_link_offset);ir.branch(f,ir.zero,10,"delegate");ir.put(f,ir.acquire_load,10,10,0,0);ir.branch(f,ir.zero,10,"delegate");ir.invoke_function(f,"gc_sweep_unlock",5,[10,0]);ir.branch(f,ir.nonzero,5,"failed");
- ir.branch(f,ir.label,0,"delegate");ir.invoke_function(f,"gc_end_mark_base",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.zero,10,"failed");ir.invoke_function(f,"gc_sweep_world_resumed",5,[10]);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+waza sweep_end_epoch_program(control_link_offset: int64) -> ir.Function {
+    kaku f = ir.function("gc_end");
+    ir.put(f, ir.load, 10, 0, 0, control_link_offset);
+    ir.branch(f, ir.zero, 10, "delegate");
+    ir.put(f, ir.acquire_load, 10, 10, 0, 0);
+    ir.branch(f, ir.zero, 10, "delegate");
+    ir.invoke_function(f, "gc_sweep_unlock", 5, [10, 0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.label, 0, "delegate");
+    ir.invoke_function(f, "gc_end_mark_base", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.zero, 10, "failed");
+    ir.invoke_function(f, "gc_sweep_world_resumed", 5, [10]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_old_prepare_program() -> ir.Function {
- kaku f=ir.function("gc_old_prepare");ir.invoke_function(f,"gc_sweep_abort_join",6,[0]);ir.branch(f,ir.nonzero,6,"failed");ir.invoke_function(f,"gc_old_prepare_mark_base",6,[0,1,2,3,4,5]);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,6,0,0);kaesu f;
+    kaku f = ir.function("gc_old_prepare");
+    ir.invoke_function(f, "gc_sweep_abort_join", 6, [0]);
+    ir.branch(f, ir.nonzero, 6, "failed");
+    ir.invoke_function(f, "gc_old_prepare_mark_base", 6, [0, 1, 2, 3, 4, 5]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 6, 0, 0);
+    kaesu f;
 }
 waza sweep_old_remark_program() -> ir.Function {
- kaku f=ir.function("gc_old_remark");ir.invoke_function(f,"gc_old_remark_mark_base",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.invoke_function(f,"gc_sweep_prepare",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.invoke_function(f,"gc_sweep_launch",5,[0]);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_remark");
+    ir.invoke_function(f, "gc_old_remark_mark_base", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.invoke_function(f, "gc_sweep_prepare", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.invoke_function(f, "gc_sweep_launch", 5, [0]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_old_abort_program() -> ir.Function {
- kaku f=ir.function("gc_old_abort_join");ir.invoke_function(f,"gc_old_abort_mark_join",10,[0]);ir.invoke_function(f,"gc_sweep_abort_join",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.copy,5,10,0,0);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_abort_join");
+    ir.invoke_function(f, "gc_old_abort_mark_join", 10, [0]);
+    ir.invoke_function(f, "gc_sweep_abort_join", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.copy, 5, 10, 0, 0);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
-koukai waza concurrent_sweep_program(functions:[]ir.Function,control_link_offset:int64,owned_context_bytes:int64) -> []ir.Function {
- kaku result:[]ir.Function=[];moshi(control_link_offset<thread_context_bytes || owned_context_bytes<8 || control_link_offset>owned_context_bytes-8 || control_link_offset-(control_link_offset/8)*8!=0){kaesu result;}
- kaku names=["gc_old_inspect","gc_old_prepare","gc_old_remark","gc_old_abort_join","gc_heap_enter","gc_end","gc_old_note_minor","gc_old_promoted","gc_old_cancel"];
- kaku bases=["gc_old_inspect_base","gc_old_prepare_mark_base","gc_old_remark_mark_base","gc_old_abort_mark_join","gc_heap_enter_base","gc_end_mark_base","gc_old_note_minor_mark_base","gc_old_promoted_mark_base","gc_old_cancel_mark_base"];
- kaku found=0;kaku i=0;aida(i<len(functions)){kaku f=functions[i];kaku j=0;kaku which=-1;aida(j<len(names)){moshi(f.name==names[j]){which=j;}j=j+1;}moshi(which<0){array.push(result,f);}sore{array.push(result,ir.Function {name:bases[which],steps:f.steps});found=found+1;}i=i+1;}moshi(found!=len(names)){kaku invalid:[]ir.Function=[];kaesu invalid;}
- array.append_all(result,[sweep_lock_program(),sweep_unlock_program(),sweep_side_program(),sweep_inspect_program(),sweep_remembered_program(),sweep_step_program(),sweep_worker_program(),sweep_join_program(),sweep_clear_claims_program(),sweep_abort_program(),sweep_prepare_program(),sweep_launch_program(),sweep_resumed_program(),sweep_observe_program(),sweep_finish_program(),sweep_retry_program(),sweep_heap_enter_program(control_link_offset),sweep_end_epoch_program(control_link_offset),sweep_old_prepare_program(),sweep_old_remark_program(),sweep_old_abort_program(),sweep_minor_note_program(),sweep_promotion_note_program(),sweep_reused_program(),sweep_cancel_old_program()]);kaesu result;
+koukai waza concurrent_sweep_program(functions: []ir.Function, control_link_offset: int64, owned_context_bytes: int64) -> []ir.Function {
+    kaku result: []ir.Function = [];
+    moshi (control_link_offset<thread_context_bytes || owned_context_bytes<8 || control_link_offset>owned_context_bytes - 8 || control_link_offset - (control_link_offset / 8) * 8 != 0) {
+        kaesu result;
+    }
+    kaku names = ["gc_old_inspect", "gc_old_prepare", "gc_old_remark", "gc_old_abort_join", "gc_heap_enter", "gc_end", "gc_old_note_minor", "gc_old_promoted", "gc_old_cancel"];
+    kaku bases = ["gc_old_inspect_base", "gc_old_prepare_mark_base", "gc_old_remark_mark_base", "gc_old_abort_mark_join", "gc_heap_enter_base", "gc_end_mark_base", "gc_old_note_minor_mark_base", "gc_old_promoted_mark_base", "gc_old_cancel_mark_base"];
+    kaku found = 0;
+    kaku i = 0;
+    aida (i<len(functions)) {
+        kaku f = functions[i];
+        kaku j = 0;
+        kaku which = -1;
+        aida (j<len(names)) {
+            moshi (f.name == names[j]) {
+                which = j;
+            }
+            j = j + 1;
+        }
+        moshi (which<0) {
+            array.push(result, f);
+        } sore {
+            array.push(result, ir.Function {
+                    name: bases[which], steps: f.steps });
+            found = found + 1;
+        }
+        i = i + 1;
+    }
+    moshi (found != len(names)) {
+        kaku invalid: []ir.Function = [];
+        kaesu invalid;
+    }
+    array.append_all(result, [sweep_lock_program(), sweep_unlock_program(), sweep_side_program(), sweep_inspect_program(), sweep_remembered_program(), sweep_step_program(), sweep_worker_program(), sweep_join_program(), sweep_clear_claims_program(), sweep_abort_program(), sweep_prepare_program(), sweep_launch_program(), sweep_resumed_program(), sweep_observe_program(), sweep_finish_program(), sweep_retry_program(), sweep_heap_enter_program(control_link_offset), sweep_end_epoch_program(control_link_offset), sweep_old_prepare_program(), sweep_old_remark_program(), sweep_old_abort_program(), sweep_minor_note_program(), sweep_promotion_note_program(), sweep_reused_program(), sweep_cancel_old_program()]);
+    kaesu result;
 }
 
 // Actual collection/promotion hooks; final totals alone cannot prove they
 // occurred while Sweep was running. A Mutator must own the same allocator lock.
 waza sweep_minor_note_program() -> ir.Function {
- kaku f=ir.function("gc_old_note_minor");ir.invoke_function(f,"gc_old_note_minor_mark_base",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,2);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");ir.put(f,ir.acquire_load,6,0,0,512);ir.branch(f,ir.zero,6,"invalid");tcheck(f,6,1,"invalid");tconstant(f,5,1);sweep_add(f,768,5);ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);sweep_fail(f,5);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_note_minor");
+    ir.invoke_function(f, "gc_old_note_minor_mark_base", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 2);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 512);
+    ir.branch(f, ir.zero, 6, "invalid");
+    tcheck(f, 6, 1, "invalid");
+    tconstant(f, 5, 1);
+    sweep_add(f, 768, 5);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza sweep_promotion_note_program() -> ir.Function {
- kaku f=ir.function("gc_old_promoted");ir.invoke_function(f,"gc_old_promoted_mark_base",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,2);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");ir.put(f,ir.acquire_load,6,0,0,512);ir.branch(f,ir.zero,6,"invalid");tcheck(f,6,1,"invalid");ir.branch(f,ir.zero,1,"invalid");tconstant(f,6,16);ir.put(f,ir.subtract,10,1,6,0);ir.put(f,ir.acquire_load,10,10,0,0);old_bit(f,10,11,sweep_claim_bit);ir.branch(f,ir.nonzero,11,"invalid");old_bit(f,10,11,old_generation_bit);ir.branch(f,ir.zero,11,"invalid");tconstant(f,5,1);sweep_add(f,776,5);ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);sweep_fail(f,5);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_promoted");
+    ir.invoke_function(f, "gc_old_promoted_mark_base", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 2);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 512);
+    ir.branch(f, ir.zero, 6, "invalid");
+    tcheck(f, 6, 1, "invalid");
+    ir.branch(f, ir.zero, 1, "invalid");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.subtract, 10, 1, 6, 0);
+    ir.put(f, ir.acquire_load, 10, 10, 0, 0);
+    old_bit(f, 10, 11, sweep_claim_bit);
+    ir.branch(f, ir.nonzero, 11, "invalid");
+    old_bit(f, 10, 11, old_generation_bit);
+    ir.branch(f, ir.zero, 11, "invalid");
+    tconstant(f, 5, 1);
+    sweep_add(f, 776, 5);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 
 // Called only from the actual native allocator free-bin take, before the new
 // object header overwrites the free span. side.rememberedNext is unused on a
 // free header and records this exact Sweep epoch; gen_register clears it.
 waza sweep_reused_program() -> ir.Function {
- kaku f=ir.function("gc_sweep_reused");ir.put(f,ir.acquire_load,5,0,0,512);ir.branch(f,ir.zero,5,"invalid");tcheck(f,5,1,"invalid");ir.put(f,ir.acquire_load,10,1,0,0);ir.branch(f,ir.nonzero,10,"invalid");ir.invoke_function(f,"gc_sweep_side",10,[0,1]);ir.put(f,ir.load,11,10,0,8);ir.put(f,ir.load,12,0,0,704);ir.branch(f,ir.zero,12,"done");ir.put(f,ir.equal,13,11,12,0);ir.branch(f,ir.zero,13,"done");tconstant(f,5,1);sweep_add(f,816,5);ir.put(f,ir.acquire_load,5,0,0,712);tconstant(f,6,2);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");tconstant(f,5,1);sweep_add(f,808,5);ir.put(f,ir.load,5,0,0,824);ir.branch(f,ir.nonzero,5,"done");ir.put(f,ir.release_store,0,0,1,824);ir.put(f,ir.release_store,0,0,12,832);ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);sweep_fail(f,5);treturn(f,4);kaesu f;
+    kaku f = ir.function("gc_sweep_reused");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 512);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tcheck(f, 5, 1, "invalid");
+    ir.put(f, ir.acquire_load, 10, 1, 0, 0);
+    ir.branch(f, ir.nonzero, 10, "invalid");
+    ir.invoke_function(f, "gc_sweep_side", 10, [0, 1]);
+    ir.put(f, ir.load, 11, 10, 0, 8);
+    ir.put(f, ir.load, 12, 0, 0, 704);
+    ir.branch(f, ir.zero, 12, "done");
+    ir.put(f, ir.equal, 13, 11, 12, 0);
+    ir.branch(f, ir.zero, 13, "done");
+    tconstant(f, 5, 1);
+    sweep_add(f, 816, 5);
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    tconstant(f, 6, 2);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    tconstant(f, 5, 1);
+    sweep_add(f, 808, 5);
+    ir.put(f, ir.load, 5, 0, 0, 824);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.put(f, ir.release_store, 0, 0, 1, 824);
+    ir.put(f, ir.release_store, 0, 0, 12, 832);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    sweep_fail(f, 5);
+    treturn(f, 4);
+    kaesu f;
 }
 
 waza sweep_cancel_old_program() -> ir.Function {
- kaku f=ir.function("gc_old_cancel");ir.invoke_function(f,"gc_old_cancel_mark_base",5,[0]);ir.put(f,ir.acquire_load,5,0,0,712);ir.branch(f,ir.zero,5,"done");tcheck(f,5,3,"done");tcheck(f,5,4,"done");tconstant(f,5,4);ir.put(f,ir.release_store,0,0,5,712);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_cancel");
+    ir.invoke_function(f, "gc_old_cancel_mark_base", 5, [0]);
+    ir.put(f, ir.acquire_load, 5, 0, 0, 712);
+    ir.branch(f, ir.zero, 5, "done");
+    tcheck(f, 5, 3, "done");
+    tcheck(f, 5, 4, "done");
+    tconstant(f, 5, 4);
+    ir.put(f, ir.release_store, 0, 0, 5, 712);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }

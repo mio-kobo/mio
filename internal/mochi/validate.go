@@ -2,10 +2,12 @@ package mochi
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"Mio/internal/code"
 	"Mio/internal/compiler"
+	"Mio/internal/ffi"
 	"Mio/internal/value"
 )
 
@@ -64,6 +66,14 @@ func validateVersion(bytecode *compiler.Bytecode, version uint16) error {
 	}
 	for index := range bytecode.Functions {
 		function := &bytecode.Functions[index]
+		if strings.HasPrefix(function.Name, ffi.Prefix) {
+			if err := ffi.Validate(function.Name, function.ParameterCount, function.ReturnsValue); err != nil {
+				return err
+			}
+			if len(function.Instructions) != 0 || len(function.Captures) != 0 || function.LocalCount != function.ParameterCount {
+				return fmt.Errorf("E_FFI_PROTOTYPE invalid C stub layout")
+			}
+		}
 		if function.ID != index {
 			return fmt.Errorf("function %d has non-canonical FunctionID %d", index, function.ID)
 		}

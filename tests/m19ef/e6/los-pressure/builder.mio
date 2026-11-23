@@ -6,14 +6,55 @@ yobu "kiso/aot/sign";
 yobu "kiso/os";
 yobu "kiso/fs";
 yobu "kiso/convert";
-waza main()->unit {
- kaku a=os.arguments();moshi(len(a)!=6){os.exit(64);kaesu;}
- kaku cap=convert.parse_int(a[5]);moshi(cap==mu){os.exit(64);kaesu;}
- kaku f=frontend.compile_source(a[1],a[2],a[3]);moshi(f.error!=""){chant(f.error);os.exit(65);kaesu;}
- kaku decoded=mochi.decode(f.bytes);kaku file=decoded.value;moshi(file==mu){os.exit(66);kaesu;}
- kaku result=lower.compile_with_observation(file,cap,iie);kaku problem=result.error;moshi(problem!=mu){chant(lower.error_code(problem));chant(lower.error_detail(problem));os.exit(67);kaesu;}
- kaku image=macho.executable(macho.ImageSpec {words:result.words,constants:result.constants,globals:result.globals,patches:result.patches});moshi(image.error!=mu){os.exit(68);kaesu;}
- kaku signed=sign.adhoc(image.bytes);moshi(signed.error!=""){os.exit(69);kaesu;}
- kaku wrote=fs.write_all(a[4],signed.bytes);moshi(wrote.error!=mu){os.exit(70);kaesu;}moshi(os.chmod(a[4],493)!=0){os.exit(71);}
+waza main() -> unit {
+    kaku a = os.arguments();
+    moshi (len(a) != 6) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku cap = convert.parse_int(a[5]);
+    moshi (cap == mu) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku f = frontend.compile_source(a[1], a[2], a[3]);
+    moshi (f.error != "") {
+        chant(f.error);
+        os.exit(65);
+        kaesu;
+    }
+    kaku decoded = mochi.decode(f.bytes);
+    kaku file = decoded.value;
+    moshi (file == mu) {
+        os.exit(66);
+        kaesu;
+    }
+    kaku result = lower.compile_with_observation(file, cap, iie);
+    kaku problem = result.error;
+    moshi (problem != mu) {
+        chant(lower.error_code(problem));
+        chant(lower.error_detail(problem));
+        os.exit(67);
+        kaesu;
+    }
+    kaku image = macho.executable(macho.ImageSpec {
+            words: result.words, constants: result.constants, globals: result.globals, patches: result.patches });
+    moshi (image.error != mu) {
+        os.exit(68);
+        kaesu;
+    }
+    kaku signed = sign.adhoc(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(69);
+        kaesu;
+    }
+    kaku wrote = fs.write_all(a[4], signed.bytes);
+    moshi (wrote.error != mu) {
+        os.exit(70);
+        kaesu;
+    }
+    moshi (os.chmod(a[4], 493) != 0) {
+        os.exit(71);
+    }
 }
 main();

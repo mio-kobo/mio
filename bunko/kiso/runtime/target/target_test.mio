@@ -3,14 +3,19 @@ yobu "kiso/runtime/gc";
 waza test_mock_contract_and_capability_fail_closed() -> unit {
     kaku mock = descriptor("mock", "virtual", "semantic-v1");
     testing.expect(concurrent_error(mock) != "", "mock cannot claim executable collector");
-    mock = TargetInfo {os:"mock",arch:"virtual",abi:"semantic-v1",pointer_bits:64,little_endian:hai,
-        page_size_query:hai,atomic64:hai,threads:hai,tls:hai,park_wake:hai,monotonic_clock:hai,
-        virtual_memory:hai,precise_roots:hai,stack_alignment:16,concurrent_collector:iie,executable:iie};
+    mock = TargetInfo { os: "mock", arch: "virtual", abi: "semantic-v1", pointer_bits: 64, little_endian: hai,
+        page_size_query: hai, atomic64: hai, threads: hai, tls: hai, park_wake: hai, monotonic_clock: hai,
+        virtual_memory: hai, precise_roots: hai, stack_alignment: 16, concurrent_collector: iie, executable: iie };
     kaku at = gc.atomic_load;
     aida (at <= gc.condition_destroy) {
-        kaku order = gc.relaxed; moshi (at == gc.fence) { order = gc.seq_cst; }
-        kaku op = gc.RuntimeOp {kind:at,address:0,value:1,expected:2,result:3,status:4,order:order,failure_order:gc.relaxed,alignment:8,epoch:0};
-        testing.expect(operation_error(mock, op) == "", "mock accepts semantic protocol without emitting CPU instructions"); at = at + 1;
+        kaku order = gc.relaxed;
+        moshi (at == gc.fence) {
+            order = gc.seq_cst;
+        }
+        kaku op = gc.RuntimeOp {
+            kind: at, address: 0, value: 1, expected: 2, result: 3, status: 4, order: order, failure_order: gc.relaxed, alignment: 8, epoch: 0 };
+        testing.expect(operation_error(mock, op) == "", "mock accepts semantic protocol without emitting CPU instructions");
+        at = at + 1;
     }
     testing.expect(concurrent_error(mock) != "", "semantic mock still cannot execute");
     kaku linux = descriptor("linux", "amd64", "sysv");

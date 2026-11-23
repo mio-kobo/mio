@@ -49,6 +49,16 @@ PROGRAMS = {
     "gc_lifecycle": b"913200\n",
     "channel_lifecycle": b"2000\nhai\n9\nhai\n1\n",
     "socket_gc_progress": b"20000\n107\nhai\n20000\nhai\nhai\n20000\n1\nhai\n20000\n1\nhai\n",
+    # Heap-exclusion classification: Epoch-free scalar/read opcodes beside Epoch-owning mutations (docs/darwin-thread-heap-exclusion-design.md)
+    "heap_epochs": b"hai\nhai\nhai\nhai\n4266394162\n",
+    # Bounded epoch retention: long straight-line allocation runs on four threads, compared with the sequential result
+    "epoch_retention": b"hai\nhai\nhai\nhai\n108827160\n",
+    # Heap-access audit regressions (array growth/read and transfer, captured cell references, nullable boxing, nested initialization)
+    "heap_invariants": b"hai\nhai\nhai\nhai\n310242027\n",
+    "alloc_lock": b"hai\nhai\nhai\nhai\nhai\n1349806440710\n",
+    # Small-workload variant of alloc_lock with managed fields, enums and in-place mutation: the program of the Darwin lock-stress image (design doc section 12)
+    "alloc_lock_stress": b"hai\nhai\nhai\nhai\nhai\n3047825\n",
+    "alloc_lock_wait": b"hai\nhai\nhai\n",
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
@@ -57,7 +67,7 @@ HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repe
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
 NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",
             "reject_escape_global": "E0701"}
-STRESS_SKIPPED = {"reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
+STRESS_SKIPPED = {"alloc_lock", "reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
 
 
 def main():

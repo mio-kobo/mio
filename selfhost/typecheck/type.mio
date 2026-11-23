@@ -25,6 +25,8 @@ koukai sentaku TypeKind {
     Named;
     Function;
     TypeParameter;
+    CPtr;
+    Uint64;
 }
 
 koukai kata TypeInfo {
@@ -221,6 +223,8 @@ koukai waza type_kind_code(kind: TypeKind) -> int64 {
         baai Named { kaesu 17; }
         baai Function { kaesu 18; }
         baai TypeParameter { kaesu 19; }
+        baai CPtr { kaesu 20; }
+        baai Uint64 { kaesu 21; }
     }
     kaesu 0;
 }
@@ -258,25 +262,40 @@ waza type_key(kind: TypeKind, name: string, element: int64, key: int64, value: i
     string.write_string(builder, ":");
     string.write_string(builder, convert.format_int(value));
     kaku index = 0;
-    aida (index < len(parameters)) { string.write_string(builder, ":p"); string.write_string(builder, convert.format_int(parameters[index])); index = index + 1; }
+    aida (index < len(parameters)) {
+        string.write_string(builder, ":p");
+        string.write_string(builder, convert.format_int(parameters[index]));
+        index = index + 1;
+    }
     string.write_string(builder, ":r");
     string.write_string(builder, convert.format_int(result));
     index = 0;
-    aida (index < len(arguments)) { string.write_string(builder, ":a"); string.write_string(builder, convert.format_int(arguments[index])); index = index + 1; }
+    aida (index < len(arguments)) {
+        string.write_string(builder, ":a");
+        string.write_string(builder, convert.format_int(arguments[index]));
+        index = index + 1;
+    }
     kaesu string.builder_string(builder);
 }
 
 koukai teisu type_bucket_count = 8191;
 
 waza identity_bucket(identity: string) -> int64 {
-    kaku bytes = string.to_bytes(identity); kaku hash = 0; kaku at = 0;
-    aida (at < len(bytes)) { hash = hash * 31 + int64(bytes[at]); hash = hash - (hash / type_bucket_count) * type_bucket_count; at = at + 1; }
+    kaku bytes = string.to_bytes(identity);
+    kaku hash = 0;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        hash = hash * 31 + int64(bytes[at]);
+        hash = hash - (hash / type_bucket_count) * type_bucket_count;
+        at = at + 1;
+    }
     kaesu hash;
 }
 
 // The interned type with exactly this identity, or -1.
 koukai waza find_interned(result: TypeCheckResult, identity: string) -> int64 {
-    kaku entry = result.type_buckets[identity_bucket(identity)]; kaku found = -1;
+    kaku entry = result.type_buckets[identity_bucket(identity)];
+    kaku found = -1;
     aida (entry >= 0) {
         moshi (result.types[entry].identity == identity) { found = entry; }
         entry = result.type_next[entry];
@@ -292,8 +311,10 @@ waza intern_type(result: TypeCheckResult, kind: TypeKind, name: string, element:
     moshi (found >= 0) { kaesu found; }
     kaku bucket = identity_bucket(identity);
     kaku id = len(result.types);
-    array.push(result.type_next, result.type_buckets[bucket]); result.type_buckets[bucket] = id;
-    array.push(result.types, TypeInfo { kind: kind, name: name, element: element, key: key, value: value, parameters: array.clone(parameters), result: return_type, arguments: array.clone(arguments), identity: identity });
+    array.push(result.type_next, result.type_buckets[bucket]);
+    result.type_buckets[bucket] = id;
+    array.push(result.types, TypeInfo {
+            kind: kind, name: name, element: element, key: key, value: value, parameters: array.clone(parameters), result: return_type, arguments: array.clone(arguments), identity: identity });
     kaesu id;
 }
 
@@ -372,13 +393,14 @@ koukai waza type_name(result: TypeCheckResult, id: int64) -> string {
     moshi (id < 0 || id >= len(result.types)) { kaesu "invalid"; }
     kaku info = result.types[id];
     kaku code = type_kind_code(info.kind);
-    moshi (code <= 14 || code == 19) { kaesu info.name; }
+    moshi (code <= 14 || code == 19 || code == 20 || code == 21) { kaesu info.name; }
     moshi (code == 15) { kaesu string.concat("[]", type_name(result, info.element)); }
     moshi (code == 16) { kaesu string.concat(type_name(result, info.element), "?"); }
     moshi (code == 17) {
         moshi (len(info.arguments) == 0) { kaesu info.name; }
         kaku builder = string.new_builder();
-        string.write_string(builder, info.name); string.write_string(builder, "<");
+        string.write_string(builder, info.name);
+        string.write_string(builder, "<");
         kaku index = 0;
         aida (index < len(info.arguments)) {
             moshi (index > 0) { string.write_string(builder, ", "); }
@@ -389,13 +411,16 @@ koukai waza type_name(result: TypeCheckResult, id: int64) -> string {
         kaesu string.builder_string(builder);
     }
     moshi (code == 18) {
-        kaku builder = string.new_builder(); string.write_string(builder, "(");
+        kaku builder = string.new_builder();
+        string.write_string(builder, "(");
         kaku index = 0;
         aida (index < len(info.parameters)) {
             moshi (index > 0) { string.write_string(builder, ", "); }
-            string.write_string(builder, type_name(result, info.parameters[index])); index = index + 1;
+            string.write_string(builder, type_name(result, info.parameters[index]));
+            index = index + 1;
         }
-        string.write_string(builder, ") -> "); string.write_string(builder, type_name(result, info.result));
+        string.write_string(builder, ") -> ");
+        string.write_string(builder, type_name(result, info.result));
         kaesu string.builder_string(builder);
     }
     kaesu "invalid";

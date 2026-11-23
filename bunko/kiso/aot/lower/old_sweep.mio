@@ -1,36 +1,151 @@
 // E5 experimental Darwin/AArch64 CPU/OS adaptation, native gates NOT_ACCEPTED.
-koukai teisu concurrent_old_root_words=3306;
-waza old_sweep_enabled(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"old_sweep_enabled")>=0;}
-waza old_mapping_size(c:arm64.Assembler) -> int64 {moshi(old_sweep_enabled(c)){kaesu 263168;}kaesu old_mapping_bytes;}
-waza old_queue_start(c:arm64.Assembler) -> int64 {moshi(old_sweep_enabled(c)){kaesu 1024;}kaesu 512;}
-waza emit_sweep_dispatch(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
- // Called inside old_collect_dispatch's owned64B scratch, with ctrl0/mode9.
- kaku modes=[20,21,22,23,24,26,27,28,29,32,33,34,41,42,43,44,45];kaku offsets=[712,552,536,576,560,648,656,720,584,752,744,544,768,776,808,816,672];kaku i=0;
- aida(i<len(modes)){kaku next=string.concat("sweep_query_next_",convert.format_int(modes[i]));emit(c,arm64.cmp_imm_x(9,modes[i],iie));arm64.assembler_b_cond(c,1,next);emit(c,arm64.add_imm_x(9,0,offsets[i],iie));emit(c,arm64.ldar_x(0,9));old_result(c,0);arm64.assembler_label(c,next);i=i+1;}
- // Heap metrics acquire the actual stopped heap and shared sweep lock.
- kaku heap_modes=[35,36,37,38,39,40];kaku heap_offsets=[gc.los_count,gc.los_bytes,gc.los_reclaimed,2720,304,1120];i=0;
- aida(i<len(heap_modes)){kaku next=string.concat("sweep_heap_query_next_",convert.format_int(heap_modes[i]));emit(c,arm64.cmp_imm_x(9,heap_modes[i],iie));arm64.assembler_b_cond(c,1,next);wr_poll(c,p,first,"gc_heap_enter");emit(c,arm64.ldr_x(9,23,heap_offsets[i]));emit(c,arm64.str_x(9,31,32));wr_current(c,p,first);wr_call(c,"gc_end");emit(c,arm64.ldr_x(0,31,32));old_result(c,0);arm64.assembler_label(c,next);i=i+1;}
- emit(c,arm64.cmp_imm_x(9,25,iie));arm64.assembler_b_cond(c,1,"sweep_query_not_observe");wr_imports(c,p,first);arm64.assembler_bl(c,"attached_gc_sweep_observe");old_result(c,0);arm64.assembler_label(c,"sweep_query_not_observe");
- emit(c,arm64.cmp_imm_x(9,30,iie));arm64.assembler_b_cond(c,0,"sweep_query_finish");emit(c,arm64.cmp_imm_x(9,31,iie));arm64.assembler_b_cond(c,1,"sweep_queries_done");
- arm64.assembler_label(c,"sweep_query_finish");wr_poll(c,p,first,"gc_heap_enter");wr_current(c,p,first);emit(c,arm64.str_x(0,31,0));move_x(c,1,0);old_control(c,p,first,0);wr_imports(c,p,first);emit(c,arm64.ldr_x(9,31,24));emit(c,arm64.cmp_imm_x(9,31,iie));arm64.assembler_b_cond(c,0,"sweep_do_retry");wr_call(c,"gc_sweep_finish");old_control(c,p,first,9);emit(c,arm64.ldr_x(9,9,552));emit(c,arm64.str_x(9,31,32));arm64.assembler_b(c,"sweep_query_resume");
- arm64.assembler_label(c,"sweep_do_retry");wr_call(c,"gc_sweep_retry");emit(c,arm64.str_x(31,31,32));arm64.assembler_label(c,"sweep_query_resume");wr_current(c,p,first);wr_call(c,"gc_end");emit(c,arm64.ldr_x(0,31,32));old_result(c,0);
- arm64.assembler_label(c,"sweep_queries_done");emit(c,arm64.ldr_x(9,31,24));
+koukai teisu concurrent_old_root_words = 3306;
+waza old_sweep_enabled(c: arm64.Assembler) -> bool { kaesu arm64.assembler_label_word(c, "old_sweep_enabled") >= 0; }
+waza old_mapping_size(c: arm64.Assembler) -> int64 {
+    moshi (old_sweep_enabled(c)) {
+        kaesu 263168;
+    }
+    kaesu old_mapping_bytes;
 }
-waza emit_sweep_adapter(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
- attached_save(c,"sweep_bin_reused");move_x(c,1,13);old_control(c,p,first,0);arm64.assembler_cbz_x(c,0,"sweep_bin_no_state");wr_imports(c,p,first);wr_call(c,"gc_sweep_reused");arm64.assembler_label(c,"sweep_bin_no_state");attached_restore(c);
- // Neutral reclaim owns lock/charges; adapter reports the real public OS result.
- stw_bridge_enter(c,"worker_sweep_account");move_x(c,23,0);arm64.assembler_bl(c,"memory_sample");wr_num(c,0,0);stw_bridge_leave(c);
- stw_bridge_enter(c,"worker_sweep_unmap");
- moshi(arm64.assembler_label_word(c,"sweep_unmap_fault_enabled")>=0){
-  move_x(c,19,0);move_x(c,20,1);old_control(c,p,first,9);emit(c,arm64.ldr_x(10,9,784));arm64.assembler_cbnz_x(c,10,"sweep_unmap_real");wr_num(c,10,1);emit(c,arm64.str_x(10,9,784));emit(c,arm64.add_imm_x(0,19,1,iie));
-  arm64.assembler_label(c,"sweep_unmap_real");
- }
- wr_num(c,16,73);emit(c,arm64.svc(128));arm64.assembler_b_cond(c,2,"sweep_unmap_return");wr_num(c,0,0);arm64.assembler_label(c,"sweep_unmap_return");stw_bridge_leave(c);
- // Report to separately owned stack. Never overwrite a control that still has
- // a live native owner when failure cleanup could not join.
- attached_save(c,"sweep_control_report");old_control(c,p,first,14);arm64.assembler_cbz_x(c,14,"sweep_report_no_state");emit(c,arm64.sub_imm_x(31,31,256,iie));wr_num(c,9,1330406979);emit(c,arm64.str_x(9,31,0));wr_num(c,9,3);emit(c,arm64.str_x(9,31,8));
- kaku offsets=[712,720,544,552,536,576,560,624,632,640,648,656,608,616,664,672,680,688,704,584,736,744,752,760,768,776,808,816,824,832];kaku i=0;aida(i<len(offsets)){emit(c,arm64.add_imm_x(9,14,offsets[i],iie));emit(c,arm64.ldar_x(9,9));emit(c,arm64.str_x(9,31,(i+2)*8));i=i+1;}
- wr_num(c,0,2);emit(c,arm64.add_imm_x(1,31,0,iie));wr_num(c,2,256);wr_num(c,16,4);emit(c,arm64.svc(128));emit(c,arm64.add_imm_x(31,31,256,iie));arm64.assembler_label(c,"sweep_report_no_state");attached_restore(c);
+waza old_queue_start(c: arm64.Assembler) -> int64 {
+    moshi (old_sweep_enabled(c)) {
+        kaesu 1024;
+    }
+    kaesu 512;
+}
+waza emit_sweep_dispatch(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> unit {
+    // Called inside old_collect_dispatch's owned64B scratch, with ctrl0/mode9.
+    kaku modes = [20, 21, 22, 23, 24, 26, 27, 28, 29, 32, 33, 34, 41, 42, 43, 44, 45];
+    kaku offsets = [712, 552, 536, 576, 560, 648, 656, 720, 584, 752, 744, 544, 768, 776, 808, 816, 672];
+    kaku i = 0;
+    aida (i<len(modes)) {
+        kaku next = string.concat("sweep_query_next_", convert.format_int(modes[i]));
+        emit(c, arm64.cmp_imm_x(9, modes[i], iie));
+        arm64.assembler_b_cond(c, 1, next);
+        emit(c, arm64.add_imm_x(9, 0, offsets[i], iie));
+        emit(c, arm64.ldar_x(0, 9));
+        old_result(c, 0);
+        arm64.assembler_label(c, next);
+        i = i + 1;
+    }
+    // Heap metrics acquire the actual stopped heap and shared sweep lock.
+    kaku heap_modes = [35, 36, 37, 38, 39, 40];
+    kaku heap_offsets = [gc.los_count, gc.los_bytes, gc.los_reclaimed, 2720, 304, 1120];
+    i = 0;
+    aida (i<len(heap_modes)) {
+        kaku next = string.concat("sweep_heap_query_next_", convert.format_int(heap_modes[i]));
+        emit(c, arm64.cmp_imm_x(9, heap_modes[i], iie));
+        arm64.assembler_b_cond(c, 1, next);
+        wr_poll(c, p, first, "gc_heap_enter");
+        emit(c, arm64.ldr_x(9, 23, heap_offsets[i]));
+        emit(c, arm64.str_x(9, 31, 32));
+        wr_current(c, p, first);
+        wr_call(c, "gc_end");
+        emit(c, arm64.ldr_x(0, 31, 32));
+        old_result(c, 0);
+        arm64.assembler_label(c, next);
+        i = i + 1;
+    }
+    emit(c, arm64.cmp_imm_x(9, 25, iie));
+    arm64.assembler_b_cond(c, 1, "sweep_query_not_observe");
+    wr_imports(c, p, first);
+    arm64.assembler_bl(c, "attached_gc_sweep_observe");
+    old_result(c, 0);
+    arm64.assembler_label(c, "sweep_query_not_observe");
+    emit(c, arm64.cmp_imm_x(9, 30, iie));
+    arm64.assembler_b_cond(c, 0, "sweep_query_finish");
+    emit(c, arm64.cmp_imm_x(9, 31, iie));
+    arm64.assembler_b_cond(c, 1, "sweep_queries_done");
+    arm64.assembler_label(c, "sweep_query_finish");
+    wr_poll(c, p, first, "gc_heap_enter");
+    wr_current(c, p, first);
+    emit(c, arm64.str_x(0, 31, 0));
+    move_x(c, 1, 0);
+    old_control(c, p, first, 0);
+    wr_imports(c, p, first);
+    emit(c, arm64.ldr_x(9, 31, 24));
+    emit(c, arm64.cmp_imm_x(9, 31, iie));
+    arm64.assembler_b_cond(c, 0, "sweep_do_retry");
+    wr_call(c, "gc_sweep_finish");
+    old_control(c, p, first, 9);
+    emit(c, arm64.ldr_x(9, 9, 552));
+    emit(c, arm64.str_x(9, 31, 32));
+    arm64.assembler_b(c, "sweep_query_resume");
+    arm64.assembler_label(c, "sweep_do_retry");
+    wr_call(c, "gc_sweep_retry");
+    emit(c, arm64.str_x(31, 31, 32));
+    arm64.assembler_label(c, "sweep_query_resume");
+    wr_current(c, p, first);
+    wr_call(c, "gc_end");
+    emit(c, arm64.ldr_x(0, 31, 32));
+    old_result(c, 0);
+    arm64.assembler_label(c, "sweep_queries_done");
+    emit(c, arm64.ldr_x(9, 31, 24));
+}
+waza emit_sweep_adapter(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> unit {
+    attached_save(c, "sweep_bin_reused");
+    move_x(c, 1, 13);
+    old_control(c, p, first, 0);
+    arm64.assembler_cbz_x(c, 0, "sweep_bin_no_state");
+    wr_imports(c, p, first);
+    wr_call(c, "gc_sweep_reused");
+    arm64.assembler_label(c, "sweep_bin_no_state");
+    attached_restore(c);
+    // Neutral reclaim owns lock/charges; adapter reports the real public OS result.
+    stw_bridge_enter(c, "worker_sweep_account");
+    move_x(c, 23, 0);
+    arm64.assembler_bl(c, "memory_sample");
+    wr_num(c, 0, 0);
+    stw_bridge_leave(c);
+    stw_bridge_enter(c, "worker_sweep_unmap");
+    moshi (arm64.assembler_label_word(c, "sweep_unmap_fault_enabled") >= 0) {
+        move_x(c, 19, 0);
+        move_x(c, 20, 1);
+        old_control(c, p, first, 9);
+        emit(c, arm64.ldr_x(10, 9, 784));
+        arm64.assembler_cbnz_x(c, 10, "sweep_unmap_real");
+        wr_num(c, 10, 1);
+        emit(c, arm64.str_x(10, 9, 784));
+        emit(c, arm64.add_imm_x(0, 19, 1, iie));
+        arm64.assembler_label(c, "sweep_unmap_real");
+    }
+    wr_num(c, 16, 73);
+    emit(c, arm64.svc(128));
+    arm64.assembler_b_cond(c, 2, "sweep_unmap_return");
+    wr_num(c, 0, 0);
+    arm64.assembler_label(c, "sweep_unmap_return");
+    stw_bridge_leave(c);
+    // Report to separately owned stack. Never overwrite a control that still has
+    // a live native owner when failure cleanup could not join.
+    attached_save(c, "sweep_control_report");
+    old_control(c, p, first, 14);
+    arm64.assembler_cbz_x(c, 14, "sweep_report_no_state");
+    emit(c, arm64.sub_imm_x(31, 31, 256, iie));
+    wr_num(c, 9, 1330406979);
+    emit(c, arm64.str_x(9, 31, 0));
+    wr_num(c, 9, 3);
+    emit(c, arm64.str_x(9, 31, 8));
+    kaku offsets = [712, 720, 544, 552, 536, 576, 560, 624, 632, 640, 648, 656, 608, 616, 664, 672, 680, 688, 704, 584, 736, 744, 752, 760, 768, 776, 808, 816, 824, 832];
+    kaku i = 0;
+    aida (i<len(offsets)) {
+        emit(c, arm64.add_imm_x(9, 14, offsets[i], iie));
+        emit(c, arm64.ldar_x(9, 9));
+        emit(c, arm64.str_x(9, 31, (i + 2) * 8));
+        i = i + 1;
+    }
+    wr_num(c, 0, 2);
+    emit(c, arm64.add_imm_x(1, 31, 0, iie));
+    wr_num(c, 2, 256);
+    wr_num(c, 16, 4);
+    emit(c, arm64.svc(128));
+    emit(c, arm64.add_imm_x(31, 31, 256, iie));
+    arm64.assembler_label(c, "sweep_report_no_state");
+    attached_restore(c);
 }
 
-waza worker_import_slots(c:arm64.Assembler) -> int64 {moshi(old_sweep_enabled(c)){kaesu 30;}kaesu 28;}
+waza worker_import_slots(c: arm64.Assembler) -> int64 {
+    moshi (old_sweep_enabled(c)) {
+        kaesu 30;
+    }
+    kaesu 28;
+}

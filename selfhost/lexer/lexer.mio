@@ -41,7 +41,10 @@ waza at_eof(scanner: Scanner) -> bool {
 }
 
 waza advance(scanner: Scanner) -> unit {
-    moshi(!progress.checkpoint(scanner.work)){scanner.offset[0]=len(scanner.source);kaesu;}
+    moshi (!progress.checkpoint(scanner.work)) {
+        scanner.offset[0] = len(scanner.source);
+        kaesu;
+    }
     moshi (at_eof(scanner)) { kaesu; }
     kaku value = current(scanner);
     scanner.offset[0] = scanner.offset[0] + 1;
@@ -78,16 +81,16 @@ waza source_text(source: []uint8, start: int64, end: int64) -> string {
 waza add_error(scanner: Scanner, kind: ErrorKind, at: Position, start: int64, end: int64) -> unit {
     moshi (len(scanner.errors) == 0) {
         array.push(scanner.errors, LexError {
-            kind: kind,
-            position: at,
-            raw: copy_bytes(scanner.source, start, end)
-        });
+                kind: kind,
+                position: at,
+                raw: copy_bytes(scanner.source, start, end)
+            });
     }
 }
 
 waza is_letter(value: uint8) -> bool {
     kaesu (value >= uint8(97) && value <= uint8(122)) ||
-        (value >= uint8(65) && value <= uint8(90)) || value == uint8(95);
+    (value >= uint8(65) && value <= uint8(90)) || value == uint8(95);
 }
 
 waza is_digit(value: uint8) -> bool {
@@ -96,7 +99,7 @@ waza is_digit(value: uint8) -> bool {
 
 waza is_hex(value: uint8) -> bool {
     kaesu is_digit(value) || (value >= uint8(97) && value <= uint8(102)) ||
-        (value >= uint8(65) && value <= uint8(70));
+    (value >= uint8(65) && value <= uint8(70));
 }
 
 waza hex_value(value: uint8) -> int64 {
@@ -164,7 +167,8 @@ waza skip_space_and_comments(scanner: Scanner) -> bool {
 waza read_identifier(scanner: Scanner, start: Position, version: int64) -> Token {
     aida (is_letter(current(scanner)) || is_digit(current(scanner))) { advance(scanner); }
     kaku literal = source_text(scanner.source, start.offset, scanner.offset[0]);
-    kaesu Token { kind: keyword_kind(literal, version), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    kaesu Token {
+        kind: keyword_kind(literal, version), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
 }
 
 waza read_number(scanner: Scanner, start: Position) -> Token {
@@ -208,7 +212,8 @@ waza read_number(scanner: Scanner, start: Position) -> Token {
         kind = TokenKind.Illegal();
         add_error(scanner, ErrorKind.InvalidNumber(), start, start.offset, scanner.offset[0]);
     }
-    kaesu Token { kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    kaesu Token {
+        kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
 }
 
 waza read_string(scanner: Scanner, start: Position) -> Token {
@@ -260,7 +265,8 @@ waza read_string(scanner: Scanner, start: Position) -> Token {
     kaku kind = TokenKind.String();
     moshi (!valid) { kind = TokenKind.Illegal(); }
     moshi (!at_eof(scanner)) { advance(scanner); }
-    kaesu Token { kind: kind, literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    kaesu Token {
+        kind: kind, literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
 }
 
 waza parse_escape(scanner: Scanner, content_start: int64, content_end: int64) -> int64? {
@@ -320,7 +326,8 @@ waza read_rune(scanner: Scanner, start: Position) -> Token {
             kaku raw_end = scanner.offset[0];
             kaku literal = source_text(scanner.source, start.offset, raw_end);
             advance(scanner);
-            kaesu Token { kind: TokenKind.Illegal(), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+            kaesu Token {
+                kind: TokenKind.Illegal(), literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
         }
         moshi (!escaped && current(scanner) == uint8(39)) { nukeru; }
         moshi (!escaped && current(scanner) == uint8(92)) {
@@ -333,7 +340,8 @@ waza read_rune(scanner: Scanner, start: Position) -> Token {
     }
     moshi (at_eof(scanner)) {
         add_error(scanner, ErrorKind.UnterminatedRune(), start, start.offset, scanner.offset[0]);
-        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+        kaesu Token {
+            kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
     }
     kaku content_end = scanner.offset[0];
     kaku code: int64? = mu;
@@ -372,20 +380,26 @@ waza read_rune(scanner: Scanner, start: Position) -> Token {
         }
         add_error(scanner, kind, where, start.offset, raw_end);
         advance(scanner);
-        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, raw_end), raw: copy_bytes(scanner.source, start.offset, raw_end), start: start, end: position(scanner) };
+        kaesu Token {
+            kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, raw_end), raw: copy_bytes(scanner.source, start.offset, raw_end), start: start, end: position(scanner) };
     }
     kaku encoded = utf8.encode_rune(rune(scalar));
     kaku literal = string.from_utf8(encoded);
     kaku text = "";
     moshi (literal != mu) { text = literal; }
     advance(scanner);
-    kaesu Token { kind: TokenKind.Rune(), literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    kaesu Token {
+        kind: TokenKind.Rune(), literal: text, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
 }
 
 waza simple_token(scanner: Scanner, kind: TokenKind, literal: string, start: Position, width: int64) -> Token {
     kaku count = 0;
-    aida (count < width) { advance(scanner); count = count + 1; }
-    kaesu Token { kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+    aida (count < width) {
+        advance(scanner);
+        count = count + 1;
+    }
+    kaesu Token {
+        kind: kind, literal: literal, raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
 }
 
 waza next_token(scanner: Scanner, version: int64) -> Token {
@@ -393,7 +407,8 @@ waza next_token(scanner: Scanner, version: int64) -> Token {
     kaku start = position(scanner);
     moshi (!comments_ok) {
         start = scanner.error_start[0];
-        kaesu Token { kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
+        kaesu Token {
+            kind: TokenKind.Illegal(), literal: source_text(scanner.source, start.offset, scanner.offset[0]), raw: copy_bytes(scanner.source, start.offset, scanner.offset[0]), start: start, end: position(scanner) };
     }
     moshi (at_eof(scanner)) { kaesu simple_token(scanner, TokenKind.EOF(), "", start, 0); }
     kaku value = current(scanner);
@@ -432,8 +447,8 @@ waza next_token(scanner: Scanner, version: int64) -> Token {
     kaesu simple_token(scanner, TokenKind.Illegal(), source_text(scanner.source, start.offset, end), start, 1);
 }
 
-koukai waza lex_version(source: []uint8, version: int64) -> LexResult {kaesu lex_version_with_progress(source,version,progress.context());}
-koukai waza lex_with_progress(source: []uint8, work: progress.Context) -> LexResult {kaesu lex_version_with_progress(source,6,work);}
+koukai waza lex_version(source: []uint8, version: int64) -> LexResult { kaesu lex_version_with_progress(source, version, progress.context()); }
+koukai waza lex_with_progress(source: []uint8, work: progress.Context) -> LexResult { kaesu lex_version_with_progress(source, 6, work); }
 koukai waza lex_version_with_progress(source: []uint8, version: int64, work: progress.Context) -> LexResult {
     kaku tokens = array.with_capacity[Token](64);
     kaku errors = array.with_capacity[LexError](1);
@@ -452,15 +467,18 @@ koukai waza lex_version_with_progress(source: []uint8, version: int64, work: pro
     }
     kaku invalid = 0;
     aida (invalid < len(source)) {
-        moshi(!progress.checkpoint(scanner.work)){scanner.offset[0]=len(source);nukeru;}
+        moshi (!progress.checkpoint(scanner.work)) {
+            scanner.offset[0] = len(source);
+            nukeru;
+        }
         kaku decoded = utf8.decode_one(source, invalid);
         moshi (!decoded.valid) {
             aida (scanner.offset[0] < invalid) { advance(scanner); }
             array.push(errors, LexError {
-                kind: ErrorKind.InvalidUTF8(),
-                position: position(scanner),
-                raw: copy_bytes(source, invalid, invalid + 1)
-            });
+                    kind: ErrorKind.InvalidUTF8(),
+                    position: position(scanner),
+                    raw: copy_bytes(source, invalid, invalid + 1)
+                });
             kaesu LexResult { tokens: tokens, errors: errors };
         }
         invalid = invalid + decoded.width;

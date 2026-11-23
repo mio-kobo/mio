@@ -1,27 +1,57 @@
 yobu "kiso/array";
 yobu "kiso/string";
-kata Row { id: int64; name: string; tags: []string; parent_index: int64; }
+kata Row {
+    id: int64;
+    name: string;
+    tags: []string;
+    parent_index: int64;
+}
 waza build(n: int64) -> []Row {
-    kaku rows: []Row = []; kaku i = 0;
+    kaku rows: []Row = [];
+    kaku i = 0;
     aida (i < n) {
-        kaku parent = 0; moshi (i > 0) { parent = i / 2; }
+        kaku parent = 0;
+        moshi (i > 0) {
+            parent = i / 2;
+        }
         array.push(rows, Row { id: i, name: string.concat("row-", string.concat("x", "y")), tags: ["a", "b"], parent_index: parent });
         i = i + 1;
     }
     kaesu rows;
 }
 waza depth(rows: []Row, at: int64) -> int64 {
-    kaku d = 0; kaku cur = at;
-    aida (cur > 0) { cur = rows[cur].parent_index; d = d + 1; }
+    kaku d = 0;
+    kaku cur = at;
+    aida (cur > 0) {
+        cur = rows[cur].parent_index;
+        d = d + 1;
+    }
     kaesu d;
 }
-waza counter(start: int64) -> () -> int64 { kaku n = start; kaesu waza () -> int64 { n = n + 1; kaesu n; }; }
-kaku rows = build(30000); kaku tick = counter(100);
-kaku churn = 0; kaku i = 0;
+waza counter(start: int64) -> () -> int64 {
+    kaku n = start;
+    kaesu waza () -> int64 {
+        n = n + 1;
+        kaesu n;
+    };
+}
+kaku rows = build(30000);
+kaku tick = counter(100);
+kaku churn = 0;
+kaku i = 0;
 aida (i < 300000) {
-    kaku junk = array.make[int64](2000, 1); churn = churn + junk[1999]; tick();
+    kaku junk = array.make[int64](2000, 1);
+    churn = churn + junk[1999];
+    tick();
     i = i + 1;
 }
-kaku total = 0; kaku j = 0;
-aida (j < len(rows)) { total = total + depth(rows, j) + len(rows[j].tags); j = j + 1; }
-chant(churn); chant(total); chant(tick()); chant(rows[29999].name);
+kaku total = 0;
+kaku j = 0;
+aida (j < len(rows)) {
+    total = total + depth(rows, j) + len(rows[j].tags);
+    j = j + 1;
+}
+chant(churn);
+chant(total);
+chant(tick());
+chant(rows[29999].name);

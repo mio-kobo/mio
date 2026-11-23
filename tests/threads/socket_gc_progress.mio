@@ -57,8 +57,8 @@ waza write_worker(client: tcp.Connection, ready: thread.Channel<int64>) -> () ->
         kaku total = 0; kaku round = 0;
         thread.send[int64](ready, 1);
         aida (round < 400) {
-            kaku result = tcp.write(client, chunk, 0, 65536);
-            moshi (result.error != mu) { kaesu -1; }
+            kaku result = tcp.write_all(client, chunk, 0, 65536);
+            moshi (result.error != mu) { tcp.close(client); kaesu -1; }
             total = total + result.count;
             round = round + 1;
         }
@@ -124,7 +124,7 @@ waza flood(port: int64) -> bool {
     kaku drained = 0;
     aida (drained < 400 * 65536) {
         kaku result = tcp.read(server, sink, 0, 65536);
-        moshi (result.error != mu) { kaesu iie; }
+        moshi (result.error != mu || result.count == 0) { kaesu iie; }
         drained = drained + result.count;
     }
     chant(thread.join(worker) == 400 * 65536);

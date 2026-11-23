@@ -1,37 +1,98 @@
 yobu "kiso/array";
 // Ordinary source; compiler-generated roots only. Native-word bridge stubs.
-kata Node { value:int64; next:Node?; }
-kata Holder { nodes:[]Node; }
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(id:int64) -> int64 {kaesu 0;}
-waza rt_wait(duration:int64) -> int64 {kaesu 0;}
-waza rt_collect(kind:int64) -> int64 {kaesu 0;}
-kaku dead:Holder?=mu;
-kaku live:Holder?=mu;
+kata Node {
+    value: int64;
+    next: Node?;
+}
+kata Holder { nodes: []Node; }
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(id: int64) -> int64 { kaesu 0; }
+waza rt_wait(duration: int64) -> int64 { kaesu 0; }
+waza rt_collect(kind: int64) -> int64 { kaesu 0; }
+kaku dead: Holder?= mu;
+kaku live: Holder?= mu;
 waza populate() -> unit {
- kaku garbage:[]Node=[];array.reserve(garbage,400000);kaku i=0;aida(i<400000){array.push(garbage,Node {value:i,next:mu});i=i+1;}dead=Holder {nodes:garbage};
- kaku keep:[]Node=[];i=0;aida(i<64){array.push(keep,Node {value:1000+i,next:mu});i=i+1;}live=Holder {nodes:keep};
+    kaku garbage: []Node = [];
+    array.reserve(garbage, 400000);
+    kaku i = 0;
+    aida (i<400000) {
+        array.push(garbage, Node {
+                value: i, next: mu });
+        i = i + 1;
+    }
+    dead = Holder {
+        nodes: garbage };
+    kaku keep: []Node = [];
+    i = 0;
+    aida (i<64) {
+        array.push(keep, Node {
+                value: 1000 + i, next: mu });
+        i = i + 1;
+    }
+    live = Holder {
+        nodes: keep };
 }
-waza run(id:int64,signal:[]int64) -> unit {
- aida(signal[0]==0){rt_wait(100000);}
- kaku graph=live;moshi(graph==mu){signal[7]=1;kaesu;}
- kaku progress=0;kaku observed=0;
- aida(signal[1]==0){
-  kaku before=rt_collect(25);kaku index=(progress*2+id)-((progress*2+id)/64)*64;kaku node=graph.nodes[index];moshi(node.value<1000){signal[7]=2;}
-  kaku after=rt_collect(25);moshi(after>before){observed=observed+1;}
-  progress=progress+1;
-  moshi(progress==1){kaku minor=0;aida(minor<8){graph.nodes[index]=Node {value:1000+index,next:graph.nodes[index]};rt_collect(0);minor=minor+1;}}
-  moshi(progress-(progress/16)*16==0){graph.nodes[index]=Node {value:1000+index,next:node};}
-  moshi(progress-(progress/50)*50==0){rt_collect(0);}
-  signal[2+id]=progress;signal[4+id]=observed;
- }
+waza run(id: int64, signal: []int64) -> unit {
+    aida (signal[0] == 0) { rt_wait(100000); }
+    kaku graph = live;
+    moshi (graph == mu) {
+        signal[7] = 1;
+        kaesu;
+    }
+    kaku progress = 0;
+    kaku observed = 0;
+    aida (signal[1] == 0) {
+        kaku before = rt_collect(25);
+        kaku index = (progress * 2 + id) - ((progress * 2 + id) / 64) * 64;
+        kaku node = graph.nodes[index];
+        moshi (node.value<1000) {
+            signal[7] = 2;
+        }
+        kaku after = rt_collect(25);
+        moshi (after>before) {
+            observed = observed + 1;
+        }
+        progress = progress + 1;
+        moshi (progress == 1) {
+            kaku minor = 0;
+            aida (minor<8) {
+                graph.nodes[index] = Node {
+                    value: 1000 + index, next: graph.nodes[index] };
+                rt_collect(0);
+                minor = minor + 1;
+            }
+        }
+        moshi (progress - (progress / 16) * 16 == 0) { graph.nodes[index] = Node { value: 1000 + index, next: node }; }
+        moshi (progress - (progress / 50) * 50 == 0) { rt_collect(0); }
+        signal[2 + id] = progress;
+        signal[4 + id] = observed;
+    }
 }
-waza prepare_dead() -> unit {populate();kaku promote=0;aida(promote<8){rt_collect(0);promote=promote+1;}dead=mu;}
+waza prepare_dead() -> unit {
+    populate();
+    kaku promote = 0;
+    aida (promote<8) {
+        rt_collect(0);
+        promote = promote + 1;
+    }
+    dead = mu;
+}
 waza exercise() -> unit {
- kaku signal:[]int64=[0,0,0,0,0,0,0,0];prepare_dead();
- kaku a=rt_start(waza() -> unit {run(0,signal);});kaku b=rt_start(waza() -> unit {run(1,signal);});
- chant(rt_collect(2));aida(rt_collect(7)<60 && rt_collect(4)==2){rt_wait(10000);}
- chant(rt_collect(3));signal[0]=1;chant(rt_collect(20));
- signal[1]=1;
+    kaku signal: []int64 = [0, 0, 0, 0, 0, 0, 0, 0];
+    prepare_dead();
+    kaku a = rt_start(waza () -> unit {
+            run(0, signal);
+        });
+    kaku b = rt_start(waza () -> unit {
+            run(1, signal);
+        });
+    chant(rt_collect(2));
+    aida (rt_collect(7)<60 && rt_collect(4) == 2) {
+        rt_wait(10000);
+    }
+    chant(rt_collect(3));
+    signal[0] = 1;
+    chant(rt_collect(20));
+    signal[1] = 1;
 }
 exercise();

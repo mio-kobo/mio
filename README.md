@@ -11,7 +11,6 @@
 <h1 align="center">Mio</h1>
 
 <p align="center"><strong>A small core, a wide world of mathematics and programs.</strong></p>
-<p align="center"><em>Minimal Core · Modular Bunko · Pay for What You Use</em></p>
 
 <p align="center">
   <a href="https://github.com/mio-kobo/mio/releases">Releases</a>
@@ -21,9 +20,9 @@
   · <a href="https://mio.kaelexvp.cc">Documentation</a>
 </p>
 
-**Mio** is a statically and strongly typed programming language with keywords written in romanized Japanese. It emphasizes explicit numeric semantics, a compact language core, and the **Bunko** standard library, which is imported as needed.
+**Mio** is a statically typed language with romanized Japanese keywords. It focuses on explicit numeric semantics, a small core, and the **Bunko** standard library—imported only as needed.
 
-> **Status (`v2.2.0` in development):** Mio 2.2 is currently under active development and will succeed `v2.1.*` as the next stable release, expanding native ahead-of-time (AOT) compilation to **six platforms** alongside native concurrency and event-loop primitives.
+> **`v2.2.0` (in development):** Succeeding `v2.1.*`, Mio 2.2 expands native AOT compilation to six platforms and adds native concurrency and event-loop primitives.
 
 ```mio
 yobu "kiso/math";
@@ -37,57 +36,57 @@ chant(area);
 chant(math.sqrt(area));
 ```
 
-## Language and toolchain
+## Features
 
-- **Static type system:** Fixed-width integers, floating-point numbers, generics, nullable types, structs, enums, and closures.
-- **Native AOT across six platforms:** Mach-O (`darwin-arm64`, `darwin-amd64`), static ELF (`linux-amd64`, `linux-arm64`), and PE32+ (`windows-amd64`, `windows-arm64`).
-- **Mochi VM & WebAssembly:** Compact **Mochi** bytecode runs in the reference VM and in the browser playground.
-- **Precise GC:** Shadow Frame root tracking, a dedicated managed arena, and cross-page object allocation (generational GC on `darwin-arm64`; precise mark-and-sweep on other targets), conforming to [Runtime ABI contract RA-1](docs/runtime-abi.md).
-- **Modular Bunko standard library:** Import `kiso/` modules on demand with `yobu` without paying for unused runtime features.
-- **Localized CLI:** Supports 39 locales with BCP 47 fallback rules, adaptive help themes (`--lang`, `--theme`, `NO_COLOR`), and stable machine-readable output. See [docs/i18n.md](docs/i18n.md).
+- **Type system:** Fixed-width integers, floats, generics, nullable types, structs, enums, and closures.
+- **Native AOT (6 targets):** Mach-O (`darwin-arm64`, `darwin-amd64`), static ELF (`linux-amd64`, `linux-arm64`), and PE32+ (`windows-amd64`, `windows-arm64`).
+- **Mochi VM & WebAssembly:** Compact bytecode for the reference VM and the browser playground.
+- **Precise GC:** Shadow Frame root tracking, a dedicated managed arena, and cross-page allocation (generational GC on `darwin-arm64`; precise mark-and-sweep elsewhere), following [Runtime ABI contract RA-1](docs/runtime-abi.md).
+- **Modular Bunko library:** Import `kiso/` modules on demand via `yobu` without pulling in unused runtime features.
+- **Localized CLI:** 39 locales with BCP 47 fallback, adaptive help themes (`--lang`, `--theme`, `NO_COLOR`), and stable machine-readable output. See [docs/i18n.md](docs/i18n.md).
 
 ## Getting started
 
-### Distributions: Full vs. Core
+### Full vs. Core
 
-Mio ships in two variants, both containing integrated developer commands (`run`, `build`, `test`, `lsp`):
+Both distributions ship the `run`, `build`, `test`, and `lsp` commands:
 
-- **Full (`mio`):** A single self-contained executable (`mio.exe` on Windows) with the complete Bunko standard library embedded.
-- **Core (`mio-core`):** A smaller compiler binary without embedded Bunko, using an external Bunko tree via `--bunko-root` or `MIO_BUNKO`.
+- **Full (`mio`):** Self-contained binary (`mio.exe` on Windows) with the Bunko standard library embedded.
+- **Core (`mio-core`):** Smaller compiler binary without embedded Bunko. Point it to an external Bunko tree via `--bunko-root` or `MIO_BUNKO`.
 
 ### Installation
 
 #### macOS / Linux (Homebrew)
 
 ```bash
-# Install Full edition
+# Full edition
 brew install mio-kobo/mio/mio
 
-# Or install Core edition
+# Core edition
 brew install mio-kobo/mio/mio-core
 ```
 
 #### Debian / Ubuntu (APT)
 
-1. Download the archive signing key and verify its fingerprint via an independent trusted channel:
+1. Download the signing key and verify its fingerprint:
 
 ```bash
 curl -fsSLo mio-archive-keyring.gpg \
-  https://mio-kobo.github.io/mio-apt/mio-archive-keyring.gpg
+  [https://mio-kobo.github.io/mio-apt/mio-archive-keyring.gpg](https://mio-kobo.github.io/mio-apt/mio-archive-keyring.gpg)
 
 gpg --show-keys --with-fingerprint mio-archive-keyring.gpg
 ```
 
-2. Add the repository and install Mio:
+2. Add the repository and install:
 
 ```bash
 sudo install -m 644 -D mio-archive-keyring.gpg /etc/apt/keyrings/mio.gpg
 
-printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/mio.gpg] https://mio-kobo.github.io/mio-apt stable main' \
+printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/mio.gpg] [https://mio-kobo.github.io/mio-apt](https://mio-kobo.github.io/mio-apt) stable main' \
   | sudo tee /etc/apt/sources.list.d/mio.list
 
 sudo apt update
-sudo apt install mio       # Full edition (or `sudo apt install mio-core` for Core)
+sudo apt install mio       # or `mio-core` for the Core edition
 mio version
 ```
 
@@ -100,18 +99,18 @@ sudo apt update && sudo apt install --only-upgrade mio
 #### Windows (Chocolatey)
 
 ```powershell
-# Install Full edition
+# Full edition
 choco install mio
 
-# Or install Core edition
+# Core edition
 choco install mio-core
 ```
 
-#### Prebuilt Binaries & Source
+#### Prebuilt binaries & source
 
-Standalone archives for all six targets are also available on [GitHub Releases](https://github.com/mio-kobo/mio/releases) and run without Go, Python, or an external toolchain.
+Standalone archives for all six targets are on [GitHub Releases](https://github.com/mio-kobo/mio/releases). They require no Go, Python, or external toolchain.
 
-> **macOS binary note:** Standalone pre-release builds from GitHub Releases use ad-hoc signing and are not notarized; you may need to allow the binary in System Settings if Gatekeeper restricts it. For building from source, see [Testing](docs/testing.md).
+> **macOS note:** Pre-release builds on GitHub Releases are ad-hoc signed and not notarized. If Gatekeeper blocks the binary, allow it in System Settings. For building from source, see [Testing](docs/testing.md).
 
 ### Quick run
 
@@ -120,9 +119,31 @@ mio run hello.mio
 mio test
 ```
 
-## Platform support and roadmap
+### Formatting and imports
 
-Mio 2.2 validates native compiler builds, self-hosting fixed point, Runtime ABI, GC correctness, blocking & nonblocking TCP, and the Bunko standard library across all six native targets in CI.
+The native `mio fmt` command uses four spaces per indentation level and
+preserves literal spelling and comments. It refuses malformed source.
+By default it also organizes `yobu` declarations using local package
+exports, adding unique matches and retaining imports whose use or side
+effects cannot be ruled out.
+
+```sh
+mio fmt file.mio
+mio fmt .
+mio fmt --check .
+mio fmt --diff .
+mio fmt --stdin --stdin-filepath path/to/file.mio
+```
+
+`--check` returns 1 when changes are needed and 2 when formatting fails.
+`--diff` prints a unified diff without writing files. Use
+`--no-organize-imports` to format whitespace only and `--bunko-root`
+to select an installed library tree. In VS Code the Mio language
+server supplies import completion and the standard Organize Imports action.
+
+## Platform support
+
+Mio 2.2 validates compiler builds, self-hosting fixed points, Runtime ABI, GC, blocking/nonblocking TCP, and Bunko across all six native targets in CI.
 
 | Target | Core AOT, GC & Bunko | Blocking & Nonblocking TCP | Reactor / Event Loop | Native Threads & Channels |
 | :--- | :---: | :---: | :---: | :---: |
@@ -133,23 +154,24 @@ Mio 2.2 validates native compiler builds, self-hosting fixed point, Runtime ABI,
 | `windows-amd64` | ✅ Validated | ✅ Validated | 🚧 Planned | 🚧 Planned |
 | `windows-arm64` | ✅ Validated | ✅ Validated | 🚧 Planned | 🚧 Planned |
 
-*Unsupported concurrency or reactor features fail closed at compile time or runtime without silent single-thread fallbacks. For the full 15-feature CI parity matrix and backlog, see the [Six-Platform Parity Matrix](docs/parity/README.md) and [Bunko Test Matrix](tests/bunko-matrix/bunko-test-matrix.md).*
+*Unsupported concurrency or reactor features fail closed at compile time or runtime rather than falling back to a single thread. See the [Six-Platform Parity Matrix](docs/parity/README.md) and [Bunko Test Matrix](tests/bunko-matrix/bunko-test-matrix.md) for the full 15-feature CI matrix.*
 
-### Additional targets & upcoming work
+### Roadmap
 
-- **Web / browser playground:** Runs Mochi bytecode in the WebAssembly reference VM, verified in CI for bytecode compatibility with the native CLI.
-- **Concurrency & Reactor parity:** Extending native multithreading, synchronization, and channels to `linux-arm64`, `darwin-amd64`, and Windows, and completing the Windows Reactor backend.
-- **GC enhancements:** High / Balanced / Low GC modes and concurrent GC.
+- **Web playground:** Mochi bytecode runs in the WebAssembly reference VM and is checked in CI for compatibility with the native CLI.
+- **Concurrency & Reactor parity:** Extending native threads, synchronization, and channels to `linux-arm64`, `darwin-amd64`, and Windows, plus completing the Windows Reactor backend.
+- **GC improvements:** High / Balanced / Low GC modes and concurrent GC.
 
 ## Documentation & Mascots
 
-The [official Mio documentation site](https://mio.kaelexvp.cc) hosts the language tutorial, Bunko API reference, CLI manual, and runtime specifications.
+Language tutorials, the Bunko API reference, the CLI manual, and runtime specs live on the [Mio documentation site](https://mio.kaelexvp.cc).
 
-**Mio and Mochi** are also the project's mascots: **Mio** is the girl pictured at the top, and **Mochi** is the little companion in her arms—sharing a name with Mio's bytecode execution system.
+**Mio** (the girl at the top) and **Mochi** (in her arms, sharing a name with the bytecode VM) are the project's mascots.
 
-## Contributing, security, and license
+## Contributing, security & license
 
-- See [Contributing](CONTRIBUTING.md) for the contribution workflow and [Testing](docs/testing.md) for the native-first test process.
-- Please use [Security Policy](SECURITY.md) for private security reports and [Code of Conduct](CODE_OF_CONDUCT.md) for community expectations.
+- Workflow and native-first testing: [Contributing](CONTRIBUTING.md), [Testing](docs/testing.md)
+- Vulnerability reports: [Security Policy](SECURITY.md)
+- Community guidelines: [Code of Conduct](CODE_OF_CONDUCT.md)
 
-Mio source code is licensed under the [MIT License](LICENSE). The Mio and Mochi illustrations in [`assets/mascot/`](assets/mascot/) **are not covered by the code's MIT License**; their copyright and usage terms are separate.
+Mio's source code is under the [MIT License](LICENSE). The Mio and Mochi illustrations in [`assets/mascot/`](assets/mascot/) are **not covered by the MIT License** and have separate copyright and usage terms.

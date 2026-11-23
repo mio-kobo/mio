@@ -1,22 +1,55 @@
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;}
-kata Box<T> {value:T;}
-sentaku Packet<T> {Data(T);Empty;}
-kaku result_a=0;kaku result_b=0;
-waza many(a:Node,b:Node,c:Node,d:Node,e:Node,f:Node,g:Node,h:Node,i:Node,j:Node) -> int64 {
-    a=Node {value:11};j=Node {value:20};kaku occupied=rt_collect(1);
-    kaesu a.value+b.value+c.value+d.value+e.value+f.value+g.value+h.value+i.value+j.value;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kata Node { value: int64; }
+kata Box<T> { value: T; }
+sentaku Packet<T> {
+    Data(T);
+    Empty;
+}
+kaku result_a = 0;
+kaku result_b = 0;
+waza many(a: Node, b: Node, c: Node, d: Node, e: Node, f: Node, g: Node, h: Node, i: Node, j: Node) -> int64 {
+    a = Node {
+        value: 11 };
+    j = Node {
+        value: 20 };
+    kaku occupied = rt_collect(1);
+    kaesu a.value + b.value + c.value + d.value + e.value + f.value + g.value + h.value + i.value + j.value;
 }
 waza round() -> int64 {
-    kaku packet=Packet.Data[Box<Node>](Box[Node] {value:Node {value:9}});
-    kaku sum=many(Node {value:1},Node {value:2},Node {value:3},Node {value:4},Node {value:5},Node {value:6},Node {value:7},Node {value:8},Node {value:9},Node {value:10});
-    awase(packet){baai Data(box){kaesu sum+box.value.value;}baai Empty{kaesu -1;}}
+    kaku packet = Packet.Data[Box<Node>](Box[Node] { value: Node { value: 9 } });
+    kaku sum = many(Node {
+            value: 1 }, Node {
+            value: 2 }, Node {
+            value: 3 }, Node {
+            value: 4 }, Node {
+            value: 5 }, Node {
+            value: 6 }, Node {
+            value: 7 }, Node {
+            value: 8 }, Node {
+            value: 9 }, Node {
+            value: 10 });
+    awase (packet) {
+        baai Data(box) {
+            kaesu sum + box.value.value;
+        }
+        baai Empty {
+            kaesu -1;
+        }
+    }
 }
-waza first() -> unit {result_a=round();}
-waza second() -> unit {result_b=round();}
-kaku a=rt_start(first);kaku b=rt_start(second);
-aida(result_a==0 || result_b==0){kaku occupied=rt_collect(1);kaku waited=rt_wait(1000000);}
-kaku ja=rt_join(a);kaku jb=rt_join(b);chant(result_a);chant(result_b);chant(rt_collect(1));
+waza first() -> unit { result_a = round(); }
+waza second() -> unit { result_b = round(); }
+kaku a = rt_start(first);
+kaku b = rt_start(second);
+aida (result_a == 0 || result_b == 0) {
+    kaku occupied = rt_collect(1);
+    kaku waited = rt_wait(1000000);
+}
+kaku ja = rt_join(a);
+kaku jb = rt_join(b);
+chant(result_a);
+chant(result_b);
+chant(rt_collect(1));

@@ -274,6 +274,9 @@ type FunctionStatement struct {
 	Body        *BlockStatement
 	Exported    bool
 	Native      bool
+	CDLL        string
+	CSymbol     string
+	CABI        bool
 	Test        bool
 	Intrinsic   string
 	Range       Span
