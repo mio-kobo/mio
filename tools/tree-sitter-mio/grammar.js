@@ -47,8 +47,9 @@ module.exports = grammar({
   word: ($) => $.identifier,
 
   // yuzuru is fully reserved (decision D-3): it is never accepted where an identifier is expected, in any parse state.
+  // hidouki and matsu (language version 0.7, asynchronous functions) are reserved the same way.
   reserved: {
-    global: () => ['yuzuru'],
+    global: () => ['yuzuru', 'hidouki', 'matsu'],
   },
 
   supertypes: ($) => [$._statement, $._expression, $._type],
@@ -94,8 +95,10 @@ module.exports = grammar({
       ';',
     ),
 
+    // Modifier order is `koukai hidouki waza`; hidouki must be followed directly by waza.
     function_declaration: ($) => seq(
       optional('koukai'),
+      optional('hidouki'),
       'waza',
       field('name', $.identifier),
       optional(field('type_parameters', $.type_parameters)),
@@ -265,6 +268,7 @@ module.exports = grammar({
       $.parenthesized_expression,
       $.unary_expression,
       $.transfer_expression,
+      $.await_expression,
       $.binary_expression,
       $.call_expression,
       $.index_expression,
@@ -282,6 +286,10 @@ module.exports = grammar({
     // `yuzuru name`: explicit ownership transfer. The operand is exactly one variable name (decision D-1); yuzuru is a
     // fully reserved keyword (D-3), so it can never be an identifier.
     transfer_expression: ($) => seq('yuzuru', field('operand', $.identifier)),
+
+    // `matsu operand`: await. It binds like a unary operator (`matsu f() + 1` is `(matsu f()) + 1`); it is only legal inside a hidouki
+    // function, which the compiler (not this grammar) checks.
+    await_expression: ($) => prec(PREC.prefix, seq('matsu', field('operand', $._expression))),
 
     binary_expression: ($) => choice(
       ...[

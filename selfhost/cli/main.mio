@@ -301,6 +301,10 @@ waza run() -> unit {
     // run/exec start the image on this machine, so it must be built for the host; --target defaults to the host.
     moshi (target != host && (command == "run" || command == "exec")) { fail(error_message("E_TARGET", i18n.key_err_host_target, host), 2); kaesu; }
     moshi (entry == "" || output == "") { fail(error_message("E_OPTIONS", i18n.key_err_empty_paths, ""), 2); kaesu; }
+    // hidouki / matsu are recognised on every target, but only linux-amd64 has the native task runtime: refuse (never block) elsewhere.
+    moshi (target != "linux-amd64" && (command == "build" || command == "run") && frontend.async_requested(".", entry, bunko)) {
+        fail(error_message("E0805", i18n.key_err_async_target, target), 2); kaesu;
+    }
     moshi(command=="check"){
         kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
         moshi (analysis_failed(analyzed, entry, opts, i18n.text(language, i18n.key_err_analysis))) { os.exit(1); kaesu; }

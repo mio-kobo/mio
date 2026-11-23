@@ -1,6 +1,7 @@
 package incremental
 
 import (
+	"Mio/internal/asynclower"
 	"fmt"
 	"sync"
 
@@ -314,6 +315,10 @@ func parseAndResolve(source string) (*ast.Program, *resolver.Resolver, error) {
 	}
 	if err := l.Err(); err != nil {
 		return nil, nil, err
+	}
+	program, lowerErrors := asynclower.Lower(program)
+	if len(lowerErrors) != 0 {
+		return nil, nil, lowerErrors[0]
 	}
 	if err := constant.Fold(program); err != nil {
 		return nil, nil, err

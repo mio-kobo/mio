@@ -59,6 +59,7 @@ func New(l *lexer.Lexer) *Parser {
 	p.registerPrefix(token.Minus, p.parsePrefixExpression)
 	p.registerPrefix(token.Bang, p.parsePrefixExpression)
 	p.registerPrefix(token.Yuzuru, p.parseTransferExpression)
+	p.registerPrefix(token.Matsu, p.parseAwaitExpression)
 	p.registerPrefix(token.LParen, p.parseGroupedExpression)
 	p.registerPrefix(token.LBracket, p.parseArrayLiteral)
 
@@ -260,6 +261,9 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 	case token.Function:
 		return p.parseFunctionStatement()
 
+	case token.Hidouki:
+		return p.parseAsyncFunctionStatement()
+
 	case token.Return:
 		return p.parseReturnStatement()
 
@@ -325,6 +329,13 @@ func (p *Parser) parseExportStatement() (ast.Statement, error) {
 			declaration.Exported = true
 		}
 		return declaration, err
+	case token.Hidouki:
+		p.nextToken()
+		declaration, err := p.parseAsyncFunctionStatement()
+		if err == nil {
+			declaration.Exported = true
+		}
+		return declaration, err
 	case token.Struct:
 		p.nextToken()
 		declaration, err := p.parseStructStatement()
@@ -340,7 +351,7 @@ func (p *Parser) parseExportStatement() (ast.Statement, error) {
 		}
 		return declaration, err
 	default:
-		return nil, p.expected("teisu, waza, kata or sentaku", " after koukai", p.peekToken)
+		return nil, p.expected("teisu, waza, hidouki, kata or sentaku", " after koukai", p.peekToken)
 	}
 }
 
@@ -800,6 +811,38 @@ func (p *Parser) parseTransferExpression() (ast.Expression, error) {
 		Operand: operand,
 		Range:   ast.Span{Start: keyword.Start, End: operand.Range.End},
 	}, nil
+}
+
+// parseAwaitExpression parses `matsu operand`. The operand binds like a unary operator, so `matsu f() + 1` is `(matsu f()) + 1`
+// and `matsu a.b(x)` awaits the whole call.
+func (p *Parser) parseAwaitExpression() (ast.Expression, error) {
+	keyword := p.curToken
+	p.nextToken()
+	operand, err := p.parseExpression(precPrefix)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.AwaitExpression{
+		Operand: operand,
+		Range:   ast.Span{Start: keyword.Start, End: operand.Span().End},
+	}, nil
+}
+
+// parseAsyncFunctionStatement parses `hidouki waza ...` (modifier order: `koukai hidouki waza`). hidouki must be followed
+// directly by waza.
+func (p *Parser) parseAsyncFunctionStatement() (*ast.FunctionStatement, error) {
+	keyword := p.curToken
+	if p.peekToken.Type != token.Function {
+		return nil, p.expected("waza", " after hidouki", p.peekToken)
+	}
+	p.nextToken()
+	declaration, err := p.parseFunctionStatement()
+	if err != nil {
+		return nil, err
+	}
+	declaration.Async = true
+	declaration.Range.Start = keyword.Start
+	return declaration, nil
 }
 
 func (p *Parser) transferOperandError(keyword token.Token) error {

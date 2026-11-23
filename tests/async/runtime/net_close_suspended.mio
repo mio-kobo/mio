@@ -1,0 +1,101 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/async/net";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+waza listen_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 16);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+waza describe(failure: tcp_async.AsyncError?) -> int64 {
+    moshi (failure == mu) { kaesu 0; }
+    awase (failure) {
+        baai Closed { kaesu 2; }
+        baai ConnectionReset { kaesu 5; }
+        baai InvalidArgument { kaesu 1; }
+        baai TimedOut { kaesu 3; }
+        baai ConnectionRefused { kaesu 4; }
+        baai AddressInUse { kaesu 6; }
+        baai PermissionDenied { kaesu 7; }
+        baai Other(message) { kaesu 9; }
+    }
+    kaesu 9;
+}
+
+hidouki waza reader(connection: tcp_async.AsyncConnection) -> int64 {
+    kaku buffer = array.make[uint8](4, uint8(0));
+    kaku got = matsu net.read(connection, buffer, 0, 4);
+    // 100 = the read was interrupted by a local close: Closed (2) is reported, nothing was read
+    kaesu describe(got.error) * 100 + got.count;
+}
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x; }
+
+// Closes the connection while the reader is suspended on it: the reader must wake up (not hang) and observe the closure.
+hidouki waza closer(connection: tcp_async.AsyncConnection) -> int64 {
+    kaku spin = matsu leaf(1);
+    kaku closed = matsu net.close(connection);
+    kaesu describe(closed.error);
+}
+
+// The peer closes: a pending read completes with eof and count 0.
+hidouki waza peer_reader(connection: tcp_async.AsyncConnection) -> int64 {
+    kaku buffer = array.make[uint8](4, uint8(0));
+    kaku got = matsu net.read(connection, buffer, 0, 4);
+    moshi (got.eof) { kaesu 1000 + got.count; }
+    kaesu got.count;
+}
+
+hidouki waza peer_closer(connection: tcp_async.AsyncConnection) -> int64 {
+    kaku spin = matsu leaf(1);
+    kaku closed = matsu net.close(connection);
+    kaesu describe(closed.error);
+}
+
+hidouki waza main() -> int64 {
+    kaku bound = listen_free(23000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu 1; }
+    kaku listener = maybe;
+    kaku first = tcp_async.connect(loopback(bound.port));
+    kaku a_maybe = first.connection;
+    kaku accepted_a = matsu net.accept(listener);
+    kaku second = tcp_async.connect(loopback(bound.port));
+    kaku b_maybe = second.connection;
+    kaku accepted_b = matsu net.accept(listener);
+    moshi (a_maybe == mu) { kaesu 1; }
+    moshi (b_maybe == mu) { kaesu 1; }
+    kaku sa_maybe = accepted_a.connection;
+    kaku sb_maybe = accepted_b.connection;
+    moshi (sa_maybe == mu) { kaesu 1; }
+    moshi (sb_maybe == mu) { kaesu 1; }
+    kaku client_a = a_maybe;
+    kaku client_b = b_maybe;
+    kaku server_a = sa_maybe;
+    kaku server_b = sb_maybe;
+    // local close while suspended: reader waits on client_a, the closer closes client_a
+    kaku local: []async.Task<int64> = [reader(client_a), closer(client_a)];
+    kaku local_results = matsu async.join_all(local);
+    chant(local_results[0]);
+    chant(local_results[1]);
+    // peer close while suspended: reader waits on client_b, the peer (server_b) closes
+    kaku remote: []async.Task<int64> = [peer_reader(client_b), peer_closer(server_b)];
+    kaku remote_results = matsu async.join_all(remote);
+    chant(remote_results[0]);
+    chant(remote_results[1]);
+    kaesu 0;
+}
+
+main();

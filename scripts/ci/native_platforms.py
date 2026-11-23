@@ -64,7 +64,8 @@ TCP_PACKAGE = "bunko/kiso/net/tcp"
 # Packages whose native primitives exist only on some targets (the other targets reject the program at build time or
 # report the operation unsupported). On every other target the package is reported NOT_RUN -- never PASS -- and is not a
 # required check; it becomes required there only when that target's backend lands (see docs/async-networking.md).
-TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",)}
+TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",),
+                       "bunko/kiso/async": ("linux-amd64",), "bunko/kiso/async/net": ("linux-amd64",)}
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
@@ -646,6 +647,37 @@ def reactor_checks(report, cli, target, work):
     report.check(name, "PASS" if code == 0 and executed else "FAIL", "native",
                  "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
                  note="real %s over loopback sockets: repeated stress, --gc-stress, 1000-connection idle-efficiency load, EINTR" % ("kqueue" if target.startswith("darwin") else "epoll"))
+
+
+def async_checks(report, cli, target, work):
+    """hidouki / matsu. The syntax and the type rules are universal: every target's CLI must accept a program that uses them (check). The native task
+    runtime exists on linux-amd64 only: there, real compiled programs run (normal and --gc-stress, repeated, real loopback sockets). On every other
+    target the CLI must reject building such a program with the explicit capability diagnostic E0805 and must not write an executable."""
+    program = ROOT / "tests/async/runtime/nested.mio"
+    if target == "linux-amd64":
+        Path(work).mkdir(parents=True, exist_ok=True)
+        output = Path(work) / "async-evidence.json"
+        code, out, err, seconds = run(report, "linux-async", [sys.executable, ROOT / "tests/async/run.py", "--mio", str(cli), "--output", str(output)], timeout=3600)
+        executed = "execution: NOT_RUN" not in out + err
+        report.check("linux-async", "PASS" if code == 0 and executed else "FAIL", "native",
+                     "" if code == 0 and executed else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
+                     note="real compiled hidouki / matsu programs, normal and --gc-stress, repeated; epoll reactor over loopback sockets")
+        return
+    accepted = ROOT / "tests/async/frontend/accept_basic.mio"
+    code, out, err, seconds = run(report, "async-frontend-" + target, [cli, "check", "--target=" + target, accepted], timeout=600)
+    report.check("async-frontend-accepted", "PASS" if code == 0 else "FAIL", "native",
+                 "" if code == 0 else "exit %s: %s" % (code, brief(err or out)), seconds=round(seconds, 1),
+                 note="the syntax and the async type rules are accepted on every target")
+    image = Path(work) / ("async-must-not-exist" + (".exe" if is_windows(target) else ""))
+    Path(work).mkdir(parents=True, exist_ok=True)
+    if image.exists():
+        image.unlink()
+    code, out, err, seconds = run(report, "async-capability-" + target, [cli, "build", "--target=" + target, program, "-o", image], timeout=600)
+    text = out + err
+    rejected = code not in (0, None) and "E0805" in text and not image.exists()
+    report.check("async-capability-rejection", "PASS" if rejected else "FAIL", "native",
+                 "" if rejected else "exit %s, E0805 %s, image written %s: %s" % (code, "E0805" in text, image.exists(), brief(err or out)),
+                 seconds=round(seconds, 1), note="no native async runtime on %s: building a hidouki / matsu program is rejected with E0805 and no executable is produced" % target)
 
 
 def thread_checks(report, cli, target, work):
@@ -1349,9 +1381,11 @@ def linux(args, target="linux-amd64"):
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")
         reactor_checks(report, cli, target, work)
+        async_checks(report, cli, target, work / "async")
         return finish(report, cli)
     thread_checks(report, cli, target, work / "threads")
     reactor_checks(report, cli, target, work)
+    async_checks(report, cli, target, work / "async")
     formatter_checks(report, cli, work / "formatter")
     chain = work / "runtime-chain"
     chain.mkdir(exist_ok=True)
@@ -1463,6 +1497,7 @@ def follower(args, target):
         native_mio_test(report, cli, skips_allowed=target != "darwin-arm64", target=target)
         thread_checks(report, cli, target, work / "threads")
         reactor_checks(report, cli, target, work)
+        async_checks(report, cli, target, work / "async")
         if target == "windows-amd64":
             windows_tcp_wildcard(report, cli, work)
             windows_ffi_checks(report, cli)

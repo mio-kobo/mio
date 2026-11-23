@@ -1,5 +1,5 @@
 if exists("b:current_syntax") | finish | endif
-syn keyword mioKeyword kaku waza teisu kata sentaku koukai yuzuru
+syn keyword mioKeyword kaku waza teisu kata sentaku koukai yuzuru hidouki matsu
 syn keyword mioControl moshi sore aida awase baai kaesu nukeru tsuzuku
 syn keyword mioImport yobu
 syn keyword mioConstant hai iie mu

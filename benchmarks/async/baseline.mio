@@ -1,0 +1,45 @@
+yobu "kiso/os";
+
+// Synchronous baselines: the cost floor the async numbers are compared with. Built by the baseline compiler (before hidouki/matsu existed)
+// and by the current compiler; the executables must be byte-identical.
+
+kata Box { value: int64; }
+
+waza add_one(x: int64) -> int64 { kaesu x + 1; }
+
+waza run(mode: string, n: int64) -> unit {
+    kaku started = os.monotonic_ms();
+    kaku total = 0;
+    kaku i = 0;
+    moshi (mode == "call") {
+        aida (i < n) { total = total + add_one(i); i = i + 1; }
+    }
+    moshi (mode == "closure_call") {
+        kaku f = waza (x: int64) -> int64 { kaesu x + 1; };
+        aida (i < n) { total = total + f(i); i = i + 1; }
+    }
+    moshi (mode == "closure_create") {
+        aida (i < n) { kaku c = waza () -> int64 { kaesu i; }; total = total + 1; i = i + 1; }
+    }
+    // five small allocations per iteration: about what one task (TaskCore, state, waiters, message, result, ...) allocates
+    moshi (mode == "alloc5") {
+        aida (i < n) {
+            kaku a: []int64 = [i, 0];
+            kaku b: []int64 = [0];
+            kaku c = Box { value: i };
+            kaku d: []Box = [];
+            kaku e: []int64 = [1, 2];
+            total = total + a[0] + b[0] + c.value + len(d) + e[1];
+            i = i + 1;
+        }
+    }
+    chant(mode);
+    chant(n);
+    chant(os.monotonic_ms() - started);
+}
+
+kaku mode = os.argument(1);
+moshi (mode != mu) {
+    kaku selected = mode;
+    run(selected, 2000000);
+}

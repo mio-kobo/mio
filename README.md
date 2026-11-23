@@ -170,6 +170,7 @@ Language tutorials, the Bunko API reference, the CLI manual, and runtime specs l
 
 ## Contributing, security & license
 
+- Asynchronous functions (`hidouki` / `matsu`, Linux AMD64 runtime): [docs/async-await.md](docs/async-await.md)
 - Workflow and native-first testing: [Contributing](CONTRIBUTING.md), [Testing](docs/testing.md)
 - Vulnerability reports: [Security Policy](SECURITY.md)
 - Community guidelines: [Code of Conduct](CODE_OF_CONDUCT.md)

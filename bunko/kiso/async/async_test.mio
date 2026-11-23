@@ -1,0 +1,164 @@
+yobu "kiso/async";
+yobu "kiso/testing";
+
+// The runtime package cannot use hidouki / matsu on itself, so these tests write the lowered (continuation) form by hand.
+
+waza constant(value: int64) -> async.Task<int64> {
+    kaesu async.spawn(waza(self: async.Task<int64>) -> unit {
+        async.complete[int64](self, value);
+        kaesu;
+    });
+}
+
+waza add_one(source: async.Task<int64>) -> async.Task<int64> {
+    kaesu async.spawn(waza(self: async.Task<int64>) -> unit {
+        async.then(self.core, source.core, waza() -> unit {
+            async.check(source.core);
+            kaku value = source.result[0];
+            async.complete[int64](self, value + 1);
+            kaesu;
+        });
+        kaesu;
+    });
+}
+
+waza test_block_on_completes() -> unit {
+    testing.expect(async.block_on(constant(41)) == 41, "block_on returns the task result");
+}
+
+waza test_cold_task_starts_when_awaited() -> unit {
+    kaku exec = async.new_executor();
+    kaku task = constant(1);
+    testing.expect(!async.is_attached(task), "a new task is cold");
+    testing.expect(async.started_tasks(exec) == 0, "nothing started yet");
+    async.attach(exec, task);
+    async.drain(exec);
+    testing.expect(async.is_done(task), "the attached task completes when the executor drains");
+}
+
+waza test_await_chain() -> unit {
+    kaku task = add_one(add_one(add_one(constant(0))));
+    testing.expect(async.block_on(task) == 3, "three chained awaits compose");
+}
+
+waza test_join2() -> unit {
+    kaku pair = async.block_on(async.join2(constant(2), constant(5)));
+    testing.expect(pair.first == 2 && pair.second == 5, "join2 keeps both results");
+}
+
+waza test_join_all_order() -> unit {
+    kaku tasks: []async.Task<int64> = [constant(7), constant(8), constant(9)];
+    kaku values = async.block_on(async.join_all(tasks));
+    testing.expect(len(values) == 3 && values[0] == 7 && values[1] == 8 && values[2] == 9, "join_all preserves input order");
+}
+
+waza test_failure_state() -> unit {
+    kaku task = async.spawn(waza(self: async.Task<int64>) -> unit {
+        async.fail[int64](self, "boom");
+        kaesu;
+    });
+    kaku exec = async.new_executor();
+    async.attach(exec, task);
+    async.drain(exec);
+    testing.expect(async.is_failed(task) && async.failure_message(task) == "boom", "a failed task records its message");
+}
+
+waza test_missing_return_fails() -> unit {
+    kaku task = async.spawn(waza(self: async.Task<int64>) -> unit {
+        async.fail_missing_return[int64](self);
+        kaesu;
+    });
+    kaku exec = async.new_executor();
+    async.attach(exec, task);
+    async.drain(exec);
+    testing.expect(async.is_failed(task), "falling off a value task fails it");
+}
+
+waza test_executor_queue_and_counters() -> unit {
+    kaku exec = async.new_executor();
+    kaku ran: []int64 = [0];
+    testing.expect(async.pending_count(exec) == 0, "a new executor has nothing queued");
+    async.enqueue(exec, waza() -> unit { ran[0] = ran[0] + 1; });
+    async.enqueue(exec, waza() -> unit { ran[0] = ran[0] + 10; });
+    testing.expect(async.pending_count(exec) == 2, "enqueue adds ready steps");
+    testing.expect(async.steps_run(exec) == 0, "no step has run yet");
+    testing.expect(async.run_one(exec), "run_one runs the oldest step");
+    testing.expect(ran[0] == 1 && async.steps_run(exec) == 1 && async.pending_count(exec) == 1, "FIFO order and the step counter");
+    testing.expect(async.run_one(exec) && ran[0] == 11, "the second step runs next");
+    testing.expect(!async.run_one(exec), "run_one reports an empty executor");
+    testing.expect(async.poller_sleeps(exec) == 0 && async.io_wakeups(exec) == 0, "an executor without a poller never sleeps");
+}
+
+waza test_task_state_executor_and_take() -> unit {
+    kaku exec = async.new_executor();
+    kaku task = constant(9);
+    testing.expect(async.state_of(task) == 0, "a new task is created");
+    async.attach_core(exec, task.core);
+    testing.expect(async.state_of(task) == 1, "attach_core makes it ready");
+    kaku other = async.new_executor();
+    async.enqueue(async.executor_of(task), waza() -> unit { });
+    testing.expect(async.pending_count(exec) >= 1 && async.pending_count(other) == 0, "executor_of returns the task's executor");
+    async.drain(exec);
+    testing.expect(async.state_of(task) == 4 && async.take(task) == 9, "a completed task is state 4 and take returns its value");
+}
+
+waza test_park_resume_and_unpark() -> unit {
+    kaku states: []int64 = [-1, -1, -1];
+    kaku task = async.spawn(waza(self: async.Task<int64>) -> unit {
+        kaku resume = async.park(self.core, waza() -> unit {
+            states[1] = async.state_of(self);
+            async.complete[int64](self, 5);
+            kaesu;
+        });
+        states[0] = async.state_of(self);
+        async.enqueue(async.executor_of(self), resume);
+        kaesu;
+    });
+    testing.expect(async.block_on(task) == 5, "a parked task continues when its resume continuation is enqueued");
+    testing.expect(states[0] == 3, "park leaves the task suspended");
+    testing.expect(states[1] == 2, "the resume continuation runs the task");
+    kaku back = async.spawn(waza(self: async.Task<int64>) -> unit {
+        kaku resume = async.park(self.core, waza() -> unit { kaesu; });
+        states[2] = async.state_of(self);
+        async.unpark(self.core);
+        states[2] = states[2] * 10 + async.state_of(self);
+        async.complete[int64](self, 0);
+        kaesu;
+    });
+    async.block_on(back);
+    testing.expect(states[2] == 32, "unpark returns a parked task to running");
+}
+
+waza test_again_and_push_thunk() -> unit {
+    kaku cell: []() -> unit = [];
+    kaku count: []int64 = [0];
+    kaku task = async.spawn(waza(self: async.Task<int64>) -> unit {
+        async.push_thunk(cell, waza() -> unit {
+            count[0] = count[0] + 1;
+            moshi (count[0] < 200) {
+                async.again(self.core, cell[0]);
+                kaesu;
+            }
+            async.complete[int64](self, count[0]);
+            kaesu;
+        });
+        async.again(self.core, cell[0]);
+        kaesu;
+    });
+    testing.expect(async.block_on(task) == 200, "a loop through again/push_thunk runs 200 times without growing the stack");
+}
+
+waza test_step_runs_inline_then_queues() -> unit {
+    kaku exec = async.new_executor();
+    kaku order: []int64 = [0];
+    async.step(exec, waza() -> unit { order[0] = order[0] * 10 + 1; });
+    testing.expect(order[0] == 1 && async.pending_count(exec) == 0, "step runs the continuation inline");
+}
+
+waza test_resume_of_ignores_non_suspended() -> unit {
+    kaku ran: []int64 = [0];
+    kaku task = constant(1);
+    kaku resume = async.resume_of(task.core, waza() -> unit { ran[0] = 1; });
+    resume();
+    testing.expect(ran[0] == 0, "a continuation of a task that is not suspended does nothing");
+}

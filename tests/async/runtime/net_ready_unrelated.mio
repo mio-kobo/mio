@@ -1,0 +1,78 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/async/net";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+waza listen_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 16);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+kaku log: []int64 = [];
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x; }
+
+// Suspended on a socket that has no data yet: this task must not stop anything else from running.
+hidouki waza reader(connection: tcp_async.AsyncConnection) -> int64 {
+    array.push(log, 1);
+    kaku buffer = array.make[uint8](8, uint8(0));
+    kaku got = matsu net.read(connection, buffer, 0, 8);
+    array.push(log, 2);
+    kaesu got.count;
+}
+
+// Unrelated ready work: 500 awaits of its own. It finishes before the data is sent.
+hidouki waza busy() -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < 500) { total = total + matsu leaf(1); i = i + 1; }
+    array.push(log, 3);
+    kaesu total;
+}
+
+// Sends only after the busy task is finished (it awaits it first), so the reader is provably suspended meanwhile.
+hidouki waza sender(connection: tcp_async.AsyncConnection, gate: async.Task<int64>) -> int64 {
+    kaku done = matsu gate;
+    array.push(log, 4);
+    kaku data: []uint8 = [uint8(9), uint8(8), uint8(7)];
+    kaku wrote = matsu net.write_all(connection, data, 0, 3);
+    kaesu wrote.count;
+}
+
+hidouki waza main() -> int64 {
+    kaku bound = listen_free(21000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu 1; }
+    kaku listener = maybe;
+    kaku connected = tcp_async.connect(loopback(bound.port));
+    kaku client_maybe = connected.connection;
+    moshi (client_maybe == mu) { chant("connect failed"); kaesu 1; }
+    kaku client = client_maybe;
+    // the connect is nonblocking: finish it and accept on the server side through the executor
+    kaku accepted = matsu net.accept(listener);
+    kaku server_maybe = accepted.connection;
+    moshi (server_maybe == mu) { chant("accept failed"); kaesu 1; }
+    kaku server = server_maybe;
+    kaku busy_task = busy();
+    kaku tasks: []async.Task<int64> = [reader(server), busy_task, sender(client, busy_task)];
+    kaku results = matsu async.join_all(tasks);
+    kaku i = 0;
+    aida (i < len(log)) { chant(log[i]); i = i + 1; }
+    chant(results[0]);
+    chant(results[1]);
+    chant(results[2]);
+    kaesu 0;
+}
+
+main();

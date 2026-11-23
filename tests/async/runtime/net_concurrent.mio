@@ -1,0 +1,100 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/async/net";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza listen_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 64);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+kaku chosen_port = [0];
+
+// One server-side connection: echo `rounds` messages of 4 bytes, doubling every byte (so the echo proves the data went through the server).
+hidouki waza handler(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku served = 0;
+    kaku buffer = array.make[uint8](4, uint8(0));
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku got = matsu net.read(connection, buffer, 0, 4);
+        moshi (got.count != 4) { kaesu -1; }
+        kaku i = 0;
+        aida (i < 4) { buffer[i] = buffer[i] + buffer[i]; i = i + 1; }
+        kaku wrote = matsu net.write_all(connection, buffer, 0, 4);
+        served = served + wrote.count;
+        r = r + 1;
+    }
+    kaku closed = matsu net.close(connection);
+    kaesu served;
+}
+
+hidouki waza server(listener: tcp_async.AsyncListener, clients: int64, rounds: int64) -> int64 {
+    kaku handlers: []async.Task<int64> = [];
+    kaku accepted = 0;
+    aida (accepted < clients) {
+        kaku result = matsu net.accept(listener);
+        kaku maybe = result.connection;
+        moshi (maybe == mu) { kaesu -1; }
+        kaku connection = maybe;
+        array.push(handlers, handler(connection, rounds));
+        accepted = accepted + 1;
+    }
+    kaku served = matsu async.join_all(handlers);
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < len(served)) { total = total + served[i]; i = i + 1; }
+    kaesu total;
+}
+
+hidouki waza client(id: int64, rounds: int64) -> int64 {
+    kaku connected = matsu net.connect(loopback(chosen_port[0]));
+    kaku maybe = connected.connection;
+    moshi (maybe == mu) { kaesu -1; }
+    kaku connection = maybe;
+    kaku sum = 0;
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku message: []uint8 = [uint8(id), uint8(r), uint8(id + r), uint8(7)];
+        kaku wrote = matsu net.write_all(connection, message, 0, 4);
+        kaku reply = array.make[uint8](4, uint8(0));
+        kaku got = matsu net.read(connection, reply, 0, 4);
+        moshi (got.count != 4) { kaesu -2; }
+        moshi (reply[0] != message[0] + message[0] || reply[3] != uint8(14)) { kaesu -3; }
+        sum = sum + int64(reply[2]);
+        r = r + 1;
+    }
+    kaku closed = matsu net.close(connection);
+    kaesu sum;
+}
+
+hidouki waza main() -> int64 {
+    kaku bound = listen_free(20000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu 1; }
+    kaku listener = maybe;
+    chosen_port[0] = bound.port;
+    kaku tasks: []async.Task<int64> = [server(listener, 8, 5)];
+    kaku id = 0;
+    aida (id < 8) { array.push(tasks, client(id, 5)); id = id + 1; }
+    kaku results = matsu async.join_all(tasks);
+    kaku closed = matsu net.close_listener(listener);
+    chant(results[0]);
+    kaku sum = 0;
+    id = 1;
+    aida (id < 9) { sum = sum + results[id]; id = id + 1; }
+    chant(sum);
+    kaesu 0;
+}
+
+main();

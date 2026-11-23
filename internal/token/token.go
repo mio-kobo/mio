@@ -70,10 +70,12 @@ const ( // 未来启用关键字 Token
 	Match    Type = "MATCH"
 	Case     Type = "CASE"
 
-	Import Type = "IMPORT"
-	Export Type = "EXPORT"
-	Const  Type = "CONST"
-	Yuzuru Type = "YUZURU"
+	Import  Type = "IMPORT"
+	Export  Type = "EXPORT"
+	Const   Type = "CONST"
+	Yuzuru  Type = "YUZURU"
+	Hidouki Type = "HIDOUKI"
+	Matsu   Type = "MATSU"
 )
 
 const (
@@ -104,10 +106,12 @@ const (
 	V04
 	V05
 	V06
+	V07
 )
 
-// CurrentVersion is the language version every front-end consumer uses. V06 reserves the ownership-transfer keyword yuzuru.
-const CurrentVersion = V06
+// CurrentVersion is the language version every front-end consumer uses. V06 reserves the ownership-transfer keyword yuzuru;
+// V07 reserves the asynchronous keywords hidouki (async function declaration) and matsu (await).
+const CurrentVersion = V07
 
 // 定义关键字表
 var keywordsV01 = map[string]Type{
@@ -149,6 +153,11 @@ var keywordsV06 = map[string]Type{
 	"yuzuru": Yuzuru,
 }
 
+var keywordsV07 = map[string]Type{
+	"hidouki": Hidouki,
+	"matsu":   Matsu,
+}
+
 func LookupIdent(
 	literal string,
 	version LanguageVersion,
@@ -184,6 +193,11 @@ func LookupIdent(
 			return tok
 		}
 	}
+	if version >= V07 {
+		if tok, ok := keywordsV07[literal]; ok {
+			return tok
+		}
+	}
 
 	return Ident
 
@@ -207,6 +221,9 @@ func Keywords(version LanguageVersion) []string {
 	}
 	if version >= V06 {
 		tables = append(tables, keywordsV06)
+	}
+	if version >= V07 {
+		tables = append(tables, keywordsV07)
 	}
 	keywords := make([]string, 0, len(tables)*4)
 	for _, table := range tables {

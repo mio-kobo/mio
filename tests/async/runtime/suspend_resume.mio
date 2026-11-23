@@ -1,0 +1,44 @@
+yobu "kiso/array";
+yobu "kiso/async";
+
+kaku log: []int64 = [];
+
+// A gate is a task that has started and parked itself: it is suspended until someone completes it.
+waza new_gate() -> async.Task<int64> {
+    kaesu async.spawn(waza (self: async.Task<int64>) -> unit {
+        array.push(log, 50);
+        kaesu;
+    });
+}
+
+hidouki waza waiter(gate: async.Task<int64>, id: int64) -> int64 {
+    array.push(log, 100 + id);
+    kaku v = matsu gate;
+    array.push(log, 200 + id);
+    kaesu v + id;
+}
+
+hidouki waza leaf() -> int64 { kaesu 0; }
+
+// Yields once (awaits a cold task) so the gate has started and parked before it is opened.
+hidouki waza controller(gate: async.Task<int64>) -> int64 {
+    array.push(log, 1);
+    kaku yielded = matsu leaf();
+    async.complete(gate, 7);
+    array.push(log, 2);
+    kaesu 0;
+}
+
+hidouki waza main() -> int64 {
+    kaku gate = new_gate();
+    kaku tasks: []async.Task<int64> = [waiter(gate, 1), waiter(gate, 2), controller(gate), waiter(gate, 3)];
+    kaku results = matsu async.join_all(tasks);
+    kaku i = 0;
+    aida (i < len(log)) { chant(log[i]); i = i + 1; }
+    i = 0;
+    aida (i < len(results)) { chant(results[i]); i = i + 1; }
+    chant(async.state_of(gate));
+    kaesu 0;
+}
+
+main();

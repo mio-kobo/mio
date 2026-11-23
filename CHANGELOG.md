@@ -4,6 +4,16 @@
 
 # Changelog
 
+## 2.3.0 — Unreleased
+
+- **Asynchronous functions (`hidouki` / `matsu`):** language version 0.7 reserves two keywords in the Go reference and the self-hosted frontend (`koukai hidouki waza f() -> T { ... }`, `matsu operand`). Calling an async function returns a task; `matsu` awaits it. The compilers lower async code to ordinary closures over the new `kiso/async` library, so suspended tasks are plain managed objects traced by the existing collector. New diagnostics E0801–E0805. See [docs/async-await.md](docs/async-await.md).
+- **Linux AMD64 only:** `kiso/async` (cold tasks, single-threaded FIFO executor) and `kiso/async/net` (epoll-backed TCP through the existing `kiso/reactor`) are implemented and validated natively on Linux AMD64. Every other target recognises the syntax and fails `mio build`/`mio run` with E0805 instead of generating blocking code.
+- Programs that do not use the new keywords keep their exact meaning and their native output. `hidouki` and `matsu` are now reserved words.
+- Fixed a code generator bug: a closure could be matched to a same-numbered closure of an imported package (symptom: "variable has no allocated slot").
+- The Linux ARM64 and Windows ARM64 bootstrap compilers now build the Mochi module in a function of its own, so the sources and the checked packages can be collected before the machine-code lowering starts. Their image heap (1 GiB) was nearly exhausted when compiling the CLI; the output images are unchanged.
+- Asking whether a program needs the async runtime (the E0805 gate on targets other than linux-amd64, for `mio build`, `run` and `test`) now only parses the import graph instead of running a second complete front end, which keeps the ARM64 self-built CLIs inside their fixed heap.
+- Native CI checks the async capability boundary on every target: `linux-async` (real programs) on linux-amd64, `async-frontend-accepted` and `async-capability-rejection` (E0805, no executable) elsewhere.
+
 ## 2.1.2 — Unreleased
 
 - **Localized CLI:** every help page, option description, friendly error, warning and human-readable test result is available in 39 locales. Catalogs use BCP 47 tags, normalize POSIX forms such as `zh_CN.UTF-8`, fall back from region to language and finally to `en-US`, and never contact a network service at runtime.

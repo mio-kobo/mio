@@ -113,6 +113,12 @@ type TransferExpression struct {
 	Range   Span
 }
 
+// matsu 等待表达式：Operand 必须求值为任务（Task）。在 asynclower 降级之前以显式节点保存。
+type AwaitExpression struct {
+	Operand Expression
+	Range   Span
+}
+
 // hai / iie 布尔字面量
 type BooleanLiteral struct {
 	Value bool
@@ -279,7 +285,9 @@ type FunctionStatement struct {
 	CABI        bool
 	Test        bool
 	Intrinsic   string
-	Range       Span
+	// Async marks a hidouki declaration; Range then starts at the hidouki (or koukai) keyword.
+	Async bool
+	Range Span
 }
 
 // FunctionLiteral 表示匿名函数表达式
@@ -392,6 +400,10 @@ func (n *StructLiteral) Span() Span { return n.Range }
 func (n *EnumLiteral) expressionNode() {}
 
 func (n *EnumLiteral) Span() Span { return n.Range }
+
+func (n *AwaitExpression) expressionNode() {}
+
+func (n *AwaitExpression) Span() Span { return n.Range }
 
 func (n *FunctionLiteral) expressionNode() {}
 

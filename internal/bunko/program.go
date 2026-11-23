@@ -1,6 +1,7 @@
 package bunko
 
 import (
+	"Mio/internal/asynclower"
 	"fmt"
 	"io/fs"
 	"os"
@@ -401,6 +402,10 @@ func parseSources(sources []Source) (*ast.Program, []string, error) {
 		}
 		if err := lex.Err(); err != nil {
 			return nil, nil, err
+		}
+		program, lowerErrors := asynclower.Lower(program)
+		if len(lowerErrors) != 0 {
+			return nil, nil, lowerErrors[0]
 		}
 		combined.Statements = append(combined.Statements, program.Statements...)
 		for range program.Statements {

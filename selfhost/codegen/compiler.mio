@@ -298,7 +298,8 @@ waza closure_symbol(state: CompilerState, file_id: int64, node_id: int64) -> int
     kaku index = 0;
     aida (index < len(state.resolved.symbols)) {
         kaku symbol = state.resolved.symbols[index];
-        moshi (symbol.declaration.file_id == file_id && symbol.declaration.node_id == node_id && symbol.name == "$closure") { kaesu index; }
+        // Symbols of imported packages are listed too and use the same (file, node) numbering: the closure must belong to this package.
+        moshi (symbol.declaration.file_id == file_id && symbol.declaration.node_id == node_id && symbol.name == "$closure" && symbol.package_path == state.resolved.package_path) { kaesu index; }
         index = index + 1;
     }
     kaesu -1;

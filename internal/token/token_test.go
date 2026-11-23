@@ -67,7 +67,7 @@ func TestYuzuruKeywordVersioning(t *testing.T) {
 	if got := LookupIdent("yuzuru", V06); got != Yuzuru {
 		t.Fatalf("V06 must reserve yuzuru, got %s", got)
 	}
-	if CurrentVersion != V06 {
+	if CurrentVersion < V06 {
 		t.Fatalf("current language version must reserve yuzuru")
 	}
 	found := false
@@ -83,5 +83,36 @@ func TestYuzuruKeywordVersioning(t *testing.T) {
 		if k == "yuzuru" {
 			t.Fatal("V05 keyword list must not include yuzuru")
 		}
+	}
+}
+
+func TestAsyncKeywordVersioning(t *testing.T) {
+	for _, word := range []string{"hidouki", "matsu"} {
+		if got := LookupIdent(word, V06); got != Ident {
+			t.Fatalf("V06 must keep %s an identifier, got %s", word, got)
+		}
+	}
+	if got := LookupIdent("hidouki", V07); got != Hidouki {
+		t.Fatalf("V07 must reserve hidouki, got %s", got)
+	}
+	if got := LookupIdent("matsu", V07); got != Matsu {
+		t.Fatalf("V07 must reserve matsu, got %s", got)
+	}
+	for _, word := range []string{"hidoukis", "Matsu", "matsu_", "hidou", "_matsu", "matsuri"} {
+		if got := LookupIdent(word, CurrentVersion); got != Ident {
+			t.Fatalf("%q must stay an identifier, got %s", word, got)
+		}
+	}
+	if CurrentVersion != V07 {
+		t.Fatalf("current language version must reserve the async keywords")
+	}
+	found := 0
+	for _, k := range Keywords(CurrentVersion) {
+		if k == "hidouki" || k == "matsu" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatal("completion keyword list is missing the async keywords")
 	}
 }

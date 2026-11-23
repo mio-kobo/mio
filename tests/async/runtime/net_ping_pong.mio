@@ -1,0 +1,92 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/async/net";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+waza listen_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 16);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+// Every round trip waits for the peer through epoll: the read is issued before the byte exists (EAGAIN), and the wake-up comes from the
+// reactor. 200 round trips exercise repeated readiness notifications on both sockets, with each side suspended in turn.
+hidouki waza ping(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku value = 1;
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku out: []uint8 = [uint8(value)];
+        kaku wrote = matsu net.write_all(connection, out, 0, 1);
+        kaku back = array.make[uint8](1, uint8(0));
+        kaku got = matsu net.read(connection, back, 0, 1);
+        moshi (got.count != 1) { kaesu -1; }
+        value = int64(back[0]);
+        r = r + 1;
+    }
+    kaesu value;
+}
+
+hidouki waza pong(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku r = 0;
+    kaku last = 0;
+    aida (r < rounds) {
+        kaku inbox = array.make[uint8](1, uint8(0));
+        kaku got = matsu net.read(connection, inbox, 0, 1);
+        moshi (got.count != 1) { kaesu -1; }
+        last = int64(inbox[0]);
+        kaku out: []uint8 = [uint8((last + 1) - ((last + 1) / 200) * 200)];
+        kaku wrote = matsu net.write_all(connection, out, 0, 1);
+        r = r + 1;
+    }
+    kaesu last;
+}
+
+waza run() -> unit {
+    kaku bound = listen_free(22000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu; }
+    kaku listener = maybe;
+    kaku exec = async.new_executor();
+    kaku driver = async.spawn(waza (self: async.Task<int64>) -> unit {
+        async.complete(self, 0);
+        kaesu;
+    });
+    kaku connected = tcp_async.connect(loopback(bound.port));
+    kaku client_maybe = connected.connection;
+    moshi (client_maybe == mu) { chant("connect failed"); kaesu; }
+    kaku client = client_maybe;
+    kaku setup = async_setup(listener, client);
+    async.attach(exec, setup);
+    aida (!async.is_done(setup)) {
+        moshi (!async.run_one(exec)) { chant("deadlock"); kaesu; }
+    }
+    kaku results = async.take(setup);
+    chant(results[0]);
+    chant(results[1]);
+    chant(async.poller_sleeps(exec) >= 200);
+    chant(async.io_wakeups(exec) >= 200);
+    chant(net.pending_waits(exec));
+    chant(async.pending_count(exec));
+}
+
+hidouki waza async_setup(listener: tcp_async.AsyncListener, client: tcp_async.AsyncConnection) -> []int64 {
+    kaku accepted = matsu net.accept(listener);
+    kaku server_maybe = accepted.connection;
+    moshi (server_maybe == mu) { kaesu [-1, -1]; }
+    kaku server = server_maybe;
+    kaku tasks: []async.Task<int64> = [ping(client, 200), pong(server, 200)];
+    kaku both = matsu async.join_all(tasks);
+    kaesu both;
+}
+
+run();

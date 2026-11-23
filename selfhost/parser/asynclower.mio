@@ -1,0 +1,875 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+yobu "selfhost/lexer";
+
+// hidouki / matsu lowering (the self-hosted twin of internal/asynclower; the two must produce identical programs).
+//
+// `hidouki waza f(p) -> T { body }` becomes a synchronous function returning `async.Task<T>` whose body is
+// `async.spawn[T](waza (__mio_self: async.Task<T>) -> unit { ... })`. Every `matsu e` is hoisted out of its expression (evaluation order
+// preserved, `e` evaluated exactly once) and the rest of the function after it becomes a continuation closure passed to `async.then`.
+// Branches and loops that contain a suspension point are converted so that the statements after them live in a continuation closure
+// too; loops become a self-referencing closure re-entered through `async.again`. The frame of a suspended task is therefore a chain of
+// ordinary heap closures, traced precisely by the existing collector.
+
+teisu async_runtime_package = "kiso/async";
+teisu async_os_package = "kiso/os";
+
+kata AsyncState {
+    arena: AstArena;
+    errors: []ParseError;
+    counter: []int64;
+    names: []string;
+    result: []int64;
+}
+
+// Continuation: kind 0 = the function body ended (fail the task), 1 = call the thunk `name`, 2 = loop back edge through the cell `name`.
+kata Cont {
+    kind: int64;
+    name: string;
+}
+
+kata LoopCtx {
+    active: bool;
+    name: string;
+    exit: Cont;
+}
+
+kata NormExpr {
+    pre: []int64;
+    expr: int64;
+}
+
+kata NormSeq {
+    pre: []int64;
+    exprs: []int64;
+}
+
+waza ast_kind(state: AsyncState, id: int64) -> int64 { kaesu node_kind_code(state.arena.nodes[id].kind); }
+
+waza async_error(state: AsyncState, kind: ParseErrorKind, id: int64) -> unit {
+    array.push(state.errors, ParseError { kind: kind, position: state.arena.nodes[id].span.start, expected: -1, actual: -1 });
+}
+
+waza fresh(state: AsyncState, prefix: string) -> string {
+    state.counter[0] = state.counter[0] + 1;
+    kaesu string.concat(prefix, convert.format_int(state.counter[0]));
+}
+
+// ---------------------------------------------------------------- node builders
+
+waza list1(a: int64) -> []int64 { kaku out = empty_children(1); array.push(out, a); kaesu out; }
+waza list2(a: int64, b: int64) -> []int64 { kaku out = empty_children(2); array.push(out, a); array.push(out, b); kaesu out; }
+
+waza mk(state: AsyncState, kind: NodeKind, text: string, integer: int64, flag: bool, operator: int64, children: []int64, span: SourceSpan) -> int64 {
+    kaesu add_node(state.arena, kind, text, "", integer, flag, operator, children, span);
+}
+
+waza mk_ident(state: AsyncState, name: string, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.Identifier(), name, 0, iie, 0, empty_children(0), span);
+}
+
+waza mk_field(state: AsyncState, left: int64, name: string, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.FieldExpression(), name, 0, iie, 0, list1(left), span);
+}
+
+waza mk_call(state: AsyncState, fn: int64, args: []int64, span: SourceSpan) -> int64 {
+    kaku children = empty_children(len(args) + 1);
+    array.push(children, fn);
+    array.append_all(children, args);
+    kaesu mk(state, NodeKind.CallExpression(), "", len(args), iie, 0, children, span);
+}
+
+waza mk_type_name(state: AsyncState, name: string, args: []int64, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.TypeName(), name, 0, iie, 0, args, span);
+}
+
+waza mk_unit_type(state: AsyncState, span: SourceSpan) -> int64 { kaesu mk_type_name(state, "unit", empty_children(0), span); }
+
+// A private copy of a type annotation: every use of the result type in generated code owns its node (the checker records facts per node).
+waza clone_type(state: AsyncState, id: int64) -> int64 {
+    kaku node = state.arena.nodes[id];
+    kaku children = empty_children(len(node.children));
+    kaku index = 0;
+    aida (index < len(node.children)) { array.push(children, clone_type(state, node.children[index])); index = index + 1; }
+    kaesu add_node(state.arena, node.kind, node.text, node.extra, node.integer, node.flag, node.operator, children, node.span);
+}
+
+waza mk_task_type(state: AsyncState, result: int64) -> int64 {
+    kaesu mk_type_name(state, "async.Task", list1(clone_type(state, result)), state.arena.nodes[result].span);
+}
+
+// () -> unit
+waza mk_thunk_type(state: AsyncState, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.FunctionType(), "", 0, iie, 0, list1(mk_unit_type(state, span)), span);
+}
+
+// async.name[type_args](args)
+waza mk_runtime_call(state: AsyncState, name: string, type_args: []int64, args: []int64, span: SourceSpan) -> int64 {
+    kaku fn = mk_field(state, mk_ident(state, "async", span), name, span);
+    moshi (len(type_args) != 0) {
+        kaku apply = empty_children(len(type_args) + 1);
+        array.push(apply, fn);
+        array.append_all(apply, type_args);
+        fn = mk(state, NodeKind.TypeApplyExpression(), "", len(type_args), iie, 0, apply, span);
+    }
+    kaesu mk_call(state, fn, args, span);
+}
+
+waza mk_expr_stmt(state: AsyncState, expression: int64, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.ExpressionStatement(), "", 0, iie, 0, list1(expression), span);
+}
+
+waza mk_runtime_stmt(state: AsyncState, name: string, args: []int64, span: SourceSpan) -> int64 {
+    kaesu mk_expr_stmt(state, mk_runtime_call(state, name, empty_children(0), args, span), span);
+}
+
+// kaku name = value;  (declared < 0: no annotation)
+waza mk_let(state: AsyncState, name: string, declared: int64, value: int64, span: SourceSpan) -> int64 {
+    kaku children = empty_children(2);
+    kaku typed = 0;
+    moshi (declared >= 0) { array.push(children, declared); typed = 1; }
+    array.push(children, value);
+    kaesu mk(state, NodeKind.LetStatement(), name, typed, iie, 0, children, span);
+}
+
+waza mk_assign(state: AsyncState, name: string, value: int64, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.AssignStatement(), name, 0, iie, 0, list1(value), span);
+}
+
+waza mk_block(state: AsyncState, statements: []int64, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.BlockStatement(), "", 0, iie, 0, statements, span);
+}
+
+waza mk_return(state: AsyncState, span: SourceSpan) -> int64 {
+    kaesu mk(state, NodeKind.ReturnStatement(), "", 0, iie, 0, empty_children(0), span);
+}
+
+waza mk_if(state: AsyncState, condition: int64, consequence: int64, alternative: int64, span: SourceSpan) -> int64 {
+    kaku children = empty_children(3);
+    array.push(children, condition);
+    array.push(children, consequence);
+    moshi (alternative >= 0) { array.push(children, alternative); }
+    kaesu mk(state, NodeKind.IfStatement(), "", 0, iie, 0, children, span);
+}
+
+waza mk_thunk(state: AsyncState, statements: []int64, span: SourceSpan) -> int64 {
+    kaku children = empty_children(2);
+    array.push(children, mk_unit_type(state, span));
+    array.push(children, mk_block(state, statements, span));
+    kaesu mk(state, NodeKind.FunctionLiteral(), "", 0, iie, 0, children, span);
+}
+
+waza mk_call_thunk(state: AsyncState, name: string, span: SourceSpan) -> int64 {
+    kaesu mk_expr_stmt(state, mk_call(state, mk_ident(state, name, span), empty_children(0), span), span);
+}
+
+waza with_children(state: AsyncState, id: int64, children: []int64) -> int64 {
+    kaku node = state.arena.nodes[id];
+    kaesu add_node(state.arena, node.kind, node.text, node.extra, node.integer, node.flag, node.operator, children, node.span);
+}
+
+// ---------------------------------------------------------------- queries
+
+// Whether the node or a descendant is a matsu (function literals are their own context and are not entered).
+waza has_await(state: AsyncState, id: int64) -> bool {
+    kaku kind = ast_kind(state, id);
+    moshi (kind == 47) { kaesu hai; }
+    moshi (kind == 33) { kaesu iie; }
+    kaku children = state.arena.nodes[id].children;
+    kaku index = 0;
+    aida (index < len(children)) {
+        moshi (has_await(state, children[index])) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+waza touches_control(state: AsyncState, id: int64) -> bool {
+    kaku kind = ast_kind(state, id);
+    moshi (kind == 31 || kind == 20 || kind == 21) { kaesu hai; }
+    moshi (kind == 33) { kaesu iie; }
+    kaku children = state.arena.nodes[id].children;
+    kaku index = 0;
+    aida (index < len(children)) {
+        moshi (touches_control(state, children[index])) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+waza is_literal(state: AsyncState, id: int64) -> bool {
+    kaku kind = ast_kind(state, id);
+    kaesu kind == 5 || kind == 6 || kind == 7 || kind == 8 || kind == 9 || kind == 10;
+}
+
+// ---------------------------------------------------------------- validation
+
+waza sort_errors(errors: []ParseError) -> unit {
+    kaku i = 1;
+    aida (i < len(errors)) {
+        kaku j = i;
+        aida (j > 0 && errors[j - 1].position.offset > errors[j].position.offset) {
+            kaku held = errors[j];
+            errors[j] = errors[j - 1];
+            errors[j - 1] = held;
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+}
+
+waza uses_async(arena: AstArena) -> bool {
+    kaku index = 0;
+    aida (index < len(arena.nodes)) {
+        kaku kind = node_kind_code(arena.nodes[index].kind);
+        moshi (kind == 46 || kind == 47) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+waza check_placement(state: AsyncState, id: int64, in_async: bool) -> unit {
+    kaku kind = ast_kind(state, id);
+    moshi (kind == 47 && !in_async) { async_error(state, ParseErrorKind.AwaitOutsideAsync(), id); }
+    moshi (kind == 46 || kind == 32) {
+        // A nested declaration: hidouki is only valid at the top level.
+        moshi (kind == 46) { async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id); }
+    }
+    kaku inner = in_async;
+    moshi (kind == 33) { inner = iie; }
+    kaku children = state.arena.nodes[id].children;
+    kaku index = 0;
+    aida (index < len(children)) {
+        check_placement(state, children[index], inner);
+        index = index + 1;
+    }
+}
+
+waza return_type_of(state: AsyncState, id: int64) -> int64 {
+    kaku node = state.arena.nodes[id];
+    kaku base = node.integer + node.operator;
+    moshi (len(node.children) == base + 2) { kaesu node.children[base]; }
+    kaesu -1;
+}
+
+waza validate_declaration(state: AsyncState, id: int64) -> unit {
+    kaku node = state.arena.nodes[id];
+    kaku ret = return_type_of(state, id);
+    moshi (node.extra != "") {
+        async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id);
+    } sore {
+        moshi (ret < 0) {
+            async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id);
+        } sore {
+            kaku ret_node = state.arena.nodes[ret];
+            moshi (node_kind_code(ret_node.kind) == 39 && ret_node.text == "unit") {
+                async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id);
+            }
+        }
+    }
+    moshi (node.text == "main") {
+        kaku valid = node.operator == 0 && node.integer == 0 && ret >= 0;
+        moshi (valid) {
+            kaku ret_node = state.arena.nodes[ret];
+            valid = node_kind_code(ret_node.kind) == 39 && ret_node.text == "int64";
+        }
+        moshi (!valid) { async_error(state, ParseErrorKind.InvalidAsyncEntrypoint(), id); }
+    }
+}
+
+// The generated code addresses the runtime through the package name `async`; no function, parameter or kaku in the file may take it.
+waza check_reserved(state: AsyncState, id: int64) -> unit {
+    kaku node = state.arena.nodes[id];
+    kaku kind = node_kind_code(node.kind);
+    moshi (kind == 14 && node.text == "async") { async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id); }
+    kaku children = node.children;
+    kaku index = 0;
+    aida (index < len(children)) {
+        check_reserved(state, children[index]);
+        index = index + 1;
+    }
+}
+
+waza check_reserved_declaration(state: AsyncState, id: int64) -> unit {
+    kaku node = state.arena.nodes[id];
+    moshi (node.text == "async") { async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id); }
+    kaku index = 0;
+    aida (index < node.operator) {
+        kaku parameter_id = node.children[node.integer + index];
+        moshi (state.arena.nodes[parameter_id].text == "async") { async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), parameter_id); }
+        index = index + 1;
+    }
+    kaku body = node.children[len(node.children) - 1];
+    check_reserved(state, body);
+}
+
+// ---------------------------------------------------------------- normalization: hoist awaits out of expressions
+
+waza normalize_list(state: AsyncState, list: []int64) -> []int64 {
+    kaku out = empty_children(len(list));
+    kaku index = 0;
+    aida (index < len(list)) {
+        array.append_all(out, normalize_statement(state, list[index]));
+        index = index + 1;
+    }
+    kaesu out;
+}
+
+waza normalize_block(state: AsyncState, block: int64) -> int64 {
+    kaku node = state.arena.nodes[block];
+    kaesu mk_block(state, normalize_list(state, node.children), node.span);
+}
+
+waza spill(state: AsyncState, expression: int64) -> NormExpr {
+    moshi (is_literal(state, expression)) { kaesu NormExpr { pre: empty_children(0), expr: expression }; }
+    kaku name = fresh(state, "__mio_s");
+    kaku span = state.arena.nodes[expression].span;
+    kaesu NormExpr { pre: list1(mk_let(state, name, -1, expression, span)), expr: mk_ident(state, name, span) };
+}
+
+// Evaluates the expressions left to right: when a later one suspends, the earlier ones are evaluated first into temporaries.
+waza normalize_sequence(state: AsyncState, list: []int64) -> NormSeq {
+    kaku last = -1;
+    kaku index = 0;
+    aida (index < len(list)) {
+        moshi (has_await(state, list[index])) { last = index; }
+        index = index + 1;
+    }
+    kaku pre = empty_children(4);
+    kaku exprs = empty_children(len(list));
+    index = 0;
+    aida (index < len(list)) {
+        kaku part = normalize_expression(state, list[index]);
+        array.append_all(pre, part.pre);
+        kaku value = part.expr;
+        moshi (index < last) {
+            kaku spilled = spill(state, value);
+            array.append_all(pre, spilled.pre);
+            value = spilled.expr;
+        }
+        array.push(exprs, value);
+        index = index + 1;
+    }
+    kaesu NormSeq { pre: pre, exprs: exprs };
+}
+
+waza normalize_expression(state: AsyncState, id: int64) -> NormExpr {
+    moshi (id < 0 || !has_await(state, id)) { kaesu NormExpr { pre: empty_children(0), expr: id }; }
+    kaku node = state.arena.nodes[id];
+    kaku kind = node_kind_code(node.kind);
+    moshi (kind == 47) {
+        kaku inner = normalize_expression(state, node.children[0]);
+        kaku operand_span = state.arena.nodes[node.children[0]].span;
+        kaku task = fresh(state, "__mio_t");
+        kaku value = fresh(state, "__mio_v");
+        kaku pre = inner.pre;
+        array.push(pre, mk_let(state, task, -1, inner.expr, node.span));
+        kaku wait = mk(state, NodeKind.AwaitExpression(), "", 0, iie, node.operator, list1(mk_ident(state, task, operand_span)), node.span);
+        array.push(pre, mk_let(state, value, -1, wait, node.span));
+        kaesu NormExpr { pre: pre, expr: mk_ident(state, value, node.span) };
+    }
+    moshi (kind == 13 || kind == 12 || kind == 27) {
+        kaku inner = normalize_expression(state, node.children[0]);
+        kaesu NormExpr { pre: inner.pre, expr: with_children(state, id, list1(inner.expr)) };
+    }
+    moshi (kind == 11) {
+        kaku operator = node.operator;
+        moshi ((operator == 20 || operator == 21) && has_await(state, node.children[1])) {
+            // a && matsu b  ==>  kaku s = a; moshi (s) { s = matsu b }
+            kaku left = normalize_expression(state, node.children[0]);
+            kaku name = fresh(state, "__mio_s");
+            kaku pre = left.pre;
+            array.push(pre, mk_let(state, name, -1, left.expr, node.span));
+            kaku guard = mk_ident(state, name, node.span);
+            moshi (operator == 21) {
+                guard = mk(state, NodeKind.PrefixExpression(), "", 0, iie, 12, list1(mk_ident(state, name, node.span)), node.span);
+            }
+            kaku assign = mk_assign(state, name, node.children[1], node.span);
+            array.push(pre, mk_if(state, guard, mk_block(state, normalize_statement(state, assign), node.span), -1, node.span));
+            kaesu NormExpr { pre: pre, expr: mk_ident(state, name, node.span) };
+        }
+        kaku parts = normalize_sequence(state, node.children);
+        kaesu NormExpr { pre: parts.pre, expr: with_children(state, id, parts.exprs) };
+    }
+    moshi (kind == 22) {
+        // The callee is hoisted only if it contains matsu itself and is never spilled.
+        kaku callee = normalize_expression(state, node.children[0]);
+        kaku arguments = empty_children(len(node.children));
+        kaku index = 1;
+        aida (index < len(node.children)) { array.push(arguments, node.children[index]); index = index + 1; }
+        kaku parts = normalize_sequence(state, arguments);
+        kaku pre = callee.pre;
+        array.append_all(pre, parts.pre);
+        kaku children = empty_children(len(node.children));
+        array.push(children, callee.expr);
+        array.append_all(children, parts.exprs);
+        kaesu NormExpr { pre: pre, expr: with_children(state, id, children) };
+    }
+    moshi (kind == 23) {
+        kaku inner = normalize_expression(state, node.children[0]);
+        kaku children = empty_children(len(node.children));
+        array.push(children, inner.expr);
+        kaku index = 1;
+        aida (index < len(node.children)) { array.push(children, node.children[index]); index = index + 1; }
+        kaesu NormExpr { pre: inner.pre, expr: with_children(state, id, children) };
+    }
+    moshi (kind == 24) {
+        // numeric conversion: children[0] is the type name identifier, the rest are the arguments
+        kaku arguments = empty_children(len(node.children));
+        kaku index = 1;
+        aida (index < len(node.children)) { array.push(arguments, node.children[index]); index = index + 1; }
+        kaku parts = normalize_sequence(state, arguments);
+        kaku children = empty_children(len(node.children));
+        array.push(children, node.children[0]);
+        array.append_all(children, parts.exprs);
+        kaesu NormExpr { pre: parts.pre, expr: with_children(state, id, children) };
+    }
+    moshi (kind == 25 || kind == 26) {
+        kaku parts = normalize_sequence(state, node.children);
+        kaesu NormExpr { pre: parts.pre, expr: with_children(state, id, parts.exprs) };
+    }
+    moshi (kind == 28) {
+        // struct literal: type arguments first (node.integer of them), then FieldValue nodes whose single child is the value
+        kaku values = empty_children(len(node.children));
+        kaku index = node.integer;
+        aida (index < len(node.children)) {
+            array.push(values, state.arena.nodes[node.children[index]].children[0]);
+            index = index + 1;
+        }
+        kaku parts = normalize_sequence(state, values);
+        kaku children = empty_children(len(node.children));
+        index = 0;
+        aida (index < node.integer) { array.push(children, node.children[index]); index = index + 1; }
+        index = node.integer;
+        aida (index < len(node.children)) {
+            array.push(children, with_children(state, node.children[index], list1(parts.exprs[index - node.integer])));
+            index = index + 1;
+        }
+        kaesu NormExpr { pre: parts.pre, expr: with_children(state, id, children) };
+    }
+    kaesu NormExpr { pre: empty_children(0), expr: id };
+}
+
+waza append_pre(pre: []int64, statement: int64) -> []int64 {
+    array.push(pre, statement);
+    kaesu pre;
+}
+
+waza normalize_statement(state: AsyncState, id: int64) -> []int64 {
+    moshi (!has_await(state, id)) { kaesu list1(id); }
+    kaku node = state.arena.nodes[id];
+    kaku kind = node_kind_code(node.kind);
+    moshi (kind == 3 || kind == 15) {
+        kaku part = normalize_expression(state, node.children[0]);
+        kaesu append_pre(part.pre, with_children(state, id, list1(part.expr)));
+    }
+    moshi (kind == 14) {
+        kaku value_index = len(node.children) - 1;
+        kaku part = normalize_expression(state, node.children[value_index]);
+        kaku children = empty_children(2);
+        moshi (value_index == 1) { array.push(children, node.children[0]); }
+        array.push(children, part.expr);
+        kaesu append_pre(part.pre, with_children(state, id, children));
+    }
+    moshi (kind == 16) {
+        kaku target = state.arena.nodes[node.children[0]];
+        kaku items = empty_children(3);
+        array.push(items, target.children[0]);
+        array.push(items, target.children[1]);
+        array.push(items, node.children[1]);
+        kaku parts = normalize_sequence(state, items);
+        kaku rebuilt = with_children(state, node.children[0], list2(parts.exprs[0], parts.exprs[1]));
+        kaesu append_pre(parts.pre, with_children(state, id, list2(rebuilt, parts.exprs[2])));
+    }
+    moshi (kind == 31) {
+        kaku part = normalize_expression(state, node.children[0]);
+        kaesu append_pre(part.pre, with_children(state, id, list1(part.expr)));
+    }
+    moshi (kind == 18) {
+        kaku part = normalize_expression(state, node.children[0]);
+        kaku children = empty_children(3);
+        array.push(children, part.expr);
+        array.push(children, normalize_block(state, node.children[1]));
+        moshi (len(node.children) == 3) { array.push(children, normalize_block(state, node.children[2])); }
+        kaesu append_pre(part.pre, with_children(state, id, children));
+    }
+    moshi (kind == 19) {
+        kaku condition = node.children[0];
+        moshi (has_await(state, condition)) {
+            // aida (c) { b }  ==>  aida (hai) { pre; moshi (!c') { nukeru; } b }
+            kaku part = normalize_expression(state, condition);
+            kaku span = state.arena.nodes[condition].span;
+            kaku grouped = mk(state, NodeKind.GroupedExpression(), "", 0, iie, 0, list1(part.expr), span);
+            kaku negated = mk(state, NodeKind.PrefixExpression(), "", 0, iie, 12, list1(grouped), span);
+            kaku leave = mk(state, NodeKind.BreakStatement(), "", 0, iie, 0, empty_children(0), span);
+            kaku exit = mk_if(state, negated, mk_block(state, list1(leave), span), -1, span);
+            kaku body = part.pre;
+            array.push(body, exit);
+            array.append_all(body, normalize_list(state, state.arena.nodes[node.children[1]].children));
+            kaku always = mk(state, NodeKind.BooleanLiteral(), "hai", 0, hai, 0, empty_children(0), span);
+            kaesu list1(with_children(state, id, list2(always, mk_block(state, body, state.arena.nodes[node.children[1]].span))));
+        }
+        kaesu list1(with_children(state, id, list2(condition, normalize_block(state, node.children[1]))));
+    }
+    moshi (kind == 38) {
+        kaku part = normalize_expression(state, node.children[0]);
+        kaku children = empty_children(len(node.children));
+        array.push(children, part.expr);
+        kaku index = 1;
+        aida (index < len(node.children)) {
+            kaku arm = state.arena.nodes[node.children[index]];
+            kaku arm_children = empty_children(len(arm.children));
+            kaku k = 0;
+            aida (k < len(arm.children) - 1) { array.push(arm_children, arm.children[k]); k = k + 1; }
+            array.push(arm_children, normalize_block(state, arm.children[len(arm.children) - 1]));
+            array.push(children, with_children(state, node.children[index], arm_children));
+            index = index + 1;
+        }
+        kaesu append_pre(part.pre, with_children(state, id, children));
+    }
+    kaesu list1(id);
+}
+
+// ---------------------------------------------------------------- continuation-passing conversion
+
+// `kaku v = matsu t;` where t is a temporary: the normalized form of a suspension point.
+waza await_step_task(state: AsyncState, id: int64) -> int64 {
+    kaku node = state.arena.nodes[id];
+    moshi (node_kind_code(node.kind) != 14) { kaesu -1; }
+    kaku value = node.children[len(node.children) - 1];
+    moshi (ast_kind(state, value) != 47) { kaesu -1; }
+    kaku operand = state.arena.nodes[value].children[0];
+    moshi (ast_kind(state, operand) != 4) { kaesu -1; }
+    kaesu operand;
+}
+
+waza emit_cont(state: AsyncState, k: Cont, span: SourceSpan) -> []int64 {
+    moshi (k.kind == 0) {
+        kaesu list1(mk_expr_stmt(state, mk_runtime_call(state, "fail_missing_return", list1(clone_type(state, state.result[0])), list1(mk_ident(state, "__mio_self", span)), span), span));
+    }
+    moshi (k.kind == 1) { kaesu list1(mk_call_thunk(state, k.name, span)); }
+    kaku zero = mk(state, NodeKind.IntegerLiteral(), "0", 0, iie, 0, empty_children(0), span);
+    kaku entry = mk(state, NodeKind.IndexExpression(), "", 0, iie, 0, list2(mk_ident(state, k.name, span), zero), span);
+    kaesu list1(mk_runtime_stmt(state, "again", list2(mk_field(state, mk_ident(state, "__mio_self", span), "core", span), entry), span));
+}
+
+waza cps(state: AsyncState, list: []int64, k: Cont, lc: LoopCtx, span: SourceSpan) -> []int64 {
+    kaku out = empty_children(len(list) + 2);
+    kaku i = 0;
+    aida (i < len(list)) {
+        kaku id = list[i];
+        kaku node = state.arena.nodes[id];
+        kaku rest = empty_children(len(list));
+        kaku r = i + 1;
+        aida (r < len(list)) { array.push(rest, list[r]); r = r + 1; }
+        kaku task = await_step_task(state, id);
+        moshi (task >= 0) {
+            kaku task_node = state.arena.nodes[task];
+            // async.then(__mio_self.core, t.core, waza () -> unit { async.check(t.core); kaku v = t.result[0]; rest })
+            kaku zero = mk(state, NodeKind.IntegerLiteral(), "0", 0, iie, 0, empty_children(0), node.span);
+            kaku read = mk(state, NodeKind.IndexExpression(), "", 0, iie, 0, list2(mk_field(state, mk_ident(state, task_node.text, task_node.span), "result", node.span), zero), node.span);
+            kaku inner = empty_children(4);
+            array.push(inner, mk_runtime_stmt(state, "check", list1(mk_field(state, mk_ident(state, task_node.text, task_node.span), "core", task_node.span)), node.span));
+            array.push(inner, mk_let(state, node.text, -1, read, node.span));
+            array.append_all(inner, cps(state, rest, k, lc, span));
+            kaku args = empty_children(3);
+            array.push(args, mk_field(state, mk_ident(state, "__mio_self", node.span), "core", node.span));
+            array.push(args, mk_field(state, mk_ident(state, task_node.text, task_node.span), "core", task_node.span));
+            array.push(args, mk_thunk(state, inner, node.span));
+            array.push(out, mk_runtime_stmt(state, "then", args, node.span));
+            kaesu out;
+        }
+        kaku kind = node_kind_code(node.kind);
+        moshi (!has_await(state, id)) {
+            array.append_all(out, rewrite_sync(state, id, lc, 0));
+        } sore {
+            moshi (kind == 18) {
+                kaku split = continuation(state, rest, k, lc, node.span);
+                array.append_all(out, split.pre);
+                kaku then_block = state.arena.nodes[node.children[1]];
+                kaku consequence = mk_block(state, cps(state, then_block.children, split.cont, lc, node.span), then_block.span);
+                kaku alternative = -1;
+                moshi (len(node.children) == 3) {
+                    kaku else_block = state.arena.nodes[node.children[2]];
+                    alternative = mk_block(state, cps(state, else_block.children, split.cont, lc, node.span), else_block.span);
+                } sore {
+                    alternative = mk_block(state, emit_cont(state, split.cont, node.span), node.span);
+                }
+                array.push(out, mk_if(state, node.children[0], consequence, alternative, node.span));
+                kaesu out;
+            }
+            moshi (kind == 38) {
+                kaku split = continuation(state, rest, k, lc, node.span);
+                array.append_all(out, split.pre);
+                kaku children = empty_children(len(node.children));
+                array.push(children, node.children[0]);
+                kaku index = 1;
+                aida (index < len(node.children)) {
+                    kaku arm = state.arena.nodes[node.children[index]];
+                    kaku arm_children = empty_children(len(arm.children));
+                    kaku c = 0;
+                    aida (c < len(arm.children) - 1) { array.push(arm_children, arm.children[c]); c = c + 1; }
+                    kaku body = state.arena.nodes[arm.children[len(arm.children) - 1]];
+                    array.push(arm_children, mk_block(state, cps(state, body.children, split.cont, lc, arm.span), body.span));
+                    array.push(children, with_children(state, node.children[index], arm_children));
+                    index = index + 1;
+                }
+                array.push(out, with_children(state, id, children));
+                kaesu out;
+            }
+            moshi (kind == 19) {
+                array.append_all(out, lower_loop(state, id, rest, k, lc));
+                kaesu out;
+            }
+            array.push(out, id);
+        }
+        i = i + 1;
+    }
+    array.append_all(out, emit_cont(state, k, span));
+    kaesu out;
+}
+
+kata Split {
+    pre: []int64;
+    cont: Cont;
+}
+
+// The statements after a branching statement become a closure `__mio_kN` declared before the branch; when nothing follows the outer
+// continuation is used directly.
+waza continuation(state: AsyncState, rest: []int64, k: Cont, lc: LoopCtx, span: SourceSpan) -> Split {
+    moshi (len(rest) == 0) { kaesu Split { pre: empty_children(0), cont: k }; }
+    kaku name = fresh(state, "__mio_k");
+    kaku body = cps(state, rest, k, lc, span);
+    kaku declaration = mk_let(state, name, -1, mk_thunk(state, body, span), span);
+    kaesu Split { pre: list1(declaration), cont: Cont { kind: 1, name: name } };
+}
+
+waza lower_loop(state: AsyncState, id: int64, rest: []int64, k: Cont, outer: LoopCtx) -> []int64 {
+    kaku node = state.arena.nodes[id];
+    kaku span = node.span;
+    kaku name = fresh(state, "__mio_l");
+    kaku out = empty_children(8);
+    kaku split = continuation(state, rest, k, outer, span);
+    array.append_all(out, split.pre);
+    // kaku __mio_lN: []() -> unit = [];  the cell lets the body closure refer to itself.
+    kaku cell_type = mk(state, NodeKind.ArrayType(), "", 0, iie, 0, list1(mk_thunk_type(state, span)), span);
+    kaku empty = mk(state, NodeKind.ArrayLiteral(), "", 0, iie, 0, empty_children(0), span);
+    array.push(out, mk_let(state, name, cell_type, empty, span));
+    kaku inner = LoopCtx { active: hai, name: name, exit: split.cont };
+    kaku body_block = state.arena.nodes[node.children[1]];
+    kaku body = cps(state, body_block.children, Cont { kind: 2, name: name }, inner, span);
+    kaku guard = mk_if(state, node.children[0], mk_block(state, body, body_block.span), mk_block(state, emit_cont(state, split.cont, span), span), span);
+    kaku body_name = fresh(state, "__mio_k");
+    array.push(out, mk_let(state, body_name, -1, mk_thunk(state, list1(guard), span), span));
+    array.push(out, mk_runtime_stmt(state, "push_thunk", list2(mk_ident(state, name, span), mk_ident(state, body_name, span)), span));
+    array.append_all(out, emit_cont(state, Cont { kind: 2, name: name }, span));
+    kaesu out;
+}
+
+// Rewrites the statements of a suspension-free statement that leave the async body: kaesu completes the task and returns from the current
+// closure; nukeru / tsuzuku that target a lowered loop jump through its closures. Function literals are not entered.
+waza rewrite_sync(state: AsyncState, id: int64, lc: LoopCtx, while_depth: int64) -> []int64 {
+    kaku node = state.arena.nodes[id];
+    kaku kind = node_kind_code(node.kind);
+    moshi (kind == 31) {
+        moshi (len(node.children) == 0) {
+            async_error(state, ParseErrorKind.InvalidAsyncDeclaration(), id);
+            kaesu list1(id);
+        }
+        kaku out = empty_children(2);
+        array.push(out, mk_expr_stmt(state, mk_runtime_call(state, "complete", list1(clone_type(state, state.result[0])), list2(mk_ident(state, "__mio_self", node.span), node.children[0]), node.span), node.span));
+        array.push(out, mk_return(state, node.span));
+        kaesu out;
+    }
+    moshi (kind == 20 && lc.active && while_depth == 0) {
+        kaku out = empty_children(4);
+        array.append_all(out, emit_cont(state, lc.exit, node.span));
+        array.push(out, mk_return(state, node.span));
+        kaesu out;
+    }
+    moshi (kind == 21 && lc.active && while_depth == 0) {
+        kaku out = empty_children(4);
+        array.append_all(out, emit_cont(state, Cont { kind: 2, name: lc.name }, node.span));
+        array.push(out, mk_return(state, node.span));
+        kaesu out;
+    }
+    moshi (!touches_control(state, id)) { kaesu list1(id); }
+    moshi (kind == 18) {
+        kaku children = empty_children(3);
+        array.push(children, node.children[0]);
+        array.push(children, rewrite_block(state, node.children[1], lc, while_depth));
+        moshi (len(node.children) == 3) { array.push(children, rewrite_block(state, node.children[2], lc, while_depth)); }
+        kaesu list1(with_children(state, id, children));
+    }
+    moshi (kind == 19) {
+        kaesu list1(with_children(state, id, list2(node.children[0], rewrite_block(state, node.children[1], lc, while_depth + 1))));
+    }
+    moshi (kind == 38) {
+        kaku children = empty_children(len(node.children));
+        array.push(children, node.children[0]);
+        kaku index = 1;
+        aida (index < len(node.children)) {
+            kaku arm = state.arena.nodes[node.children[index]];
+            kaku arm_children = empty_children(len(arm.children));
+            kaku c = 0;
+            aida (c < len(arm.children) - 1) { array.push(arm_children, arm.children[c]); c = c + 1; }
+            array.push(arm_children, rewrite_block(state, arm.children[len(arm.children) - 1], lc, while_depth));
+            array.push(children, with_children(state, node.children[index], arm_children));
+            index = index + 1;
+        }
+        kaesu list1(with_children(state, id, children));
+    }
+    kaesu list1(id);
+}
+
+waza rewrite_block(state: AsyncState, block: int64, lc: LoopCtx, while_depth: int64) -> int64 {
+    kaku node = state.arena.nodes[block];
+    kaku out = empty_children(len(node.children));
+    kaku index = 0;
+    aida (index < len(node.children)) {
+        array.append_all(out, rewrite_sync(state, node.children[index], lc, while_depth));
+        index = index + 1;
+    }
+    kaesu mk_block(state, out, node.span);
+}
+
+// ---------------------------------------------------------------- function and program
+
+waza lower_function(state: AsyncState, id: int64) -> int64 {
+    kaku node = state.arena.nodes[id];
+    state.counter[0] = 0;
+    kaku ret = return_type_of(state, id);
+    state.result[0] = ret;
+    kaku body = node.children[len(node.children) - 1];
+    kaku body_node = state.arena.nodes[body];
+    kaku span = node.span;
+    kaku none = LoopCtx { active: iie, name: "", exit: Cont { kind: 0, name: "" } };
+    kaku statements = cps(state, normalize_list(state, body_node.children), Cont { kind: 0, name: "" }, none, span);
+    kaku self_children = list1(mk_task_type(state, ret));
+    kaku self_parameter = mk(state, NodeKind.Parameter(), "__mio_self", 1, iie, 0, self_children, span);
+    kaku literal_children = empty_children(3);
+    array.push(literal_children, self_parameter);
+    array.push(literal_children, mk_unit_type(state, span));
+    array.push(literal_children, mk_block(state, statements, body_node.span));
+    kaku literal = mk(state, NodeKind.FunctionLiteral(), "", 1, iie, 0, literal_children, body_node.span);
+    kaku spawn = mk_runtime_call(state, "spawn", list1(clone_type(state, ret)), list1(literal), body_node.span);
+    kaku return_statement = mk(state, NodeKind.ReturnStatement(), "", 0, iie, 0, list1(spawn), body_node.span);
+    kaku children = empty_children(len(node.children));
+    kaku index = 0;
+    aida (index < node.integer + node.operator) { array.push(children, node.children[index]); index = index + 1; }
+    array.push(children, mk_task_type(state, ret));
+    array.push(children, mk_block(state, list1(return_statement), body_node.span));
+    kaesu add_node(state.arena, NodeKind.FunctionStatement(), node.text, "", node.integer, node.flag, node.operator, children, node.span);
+}
+
+waza contains_name(names: []string, name: string) -> bool {
+    kaku index = 0;
+    aida (index < len(names)) {
+        moshi (names[index] == name) { kaesu hai; }
+        index = index + 1;
+    }
+    kaesu iie;
+}
+
+// `main();` at top level: the call node when it is a call of `main` without arguments, else -1.
+waza entry_call(state: AsyncState, id: int64) -> int64 {
+    moshi (ast_kind(state, id) != 3) { kaesu -1; }
+    kaku call = state.arena.nodes[id].children[0];
+    kaku node = state.arena.nodes[call];
+    moshi (node_kind_code(node.kind) != 22 || len(node.children) != 1) { kaesu -1; }
+    kaku callee = state.arena.nodes[node.children[0]];
+    moshi (node_kind_code(callee.kind) == 4 && callee.text == "main") { kaesu call; }
+    kaesu -1;
+}
+
+// Returns the program with every async function and await lowered; programs without hidouki or matsu come back unchanged. When lowering
+// reports errors the original tree is kept and the errors are appended (sorted by position) to result.errors.
+koukai waza lower_async(parsed: ParseResult) -> ParseResult {
+    moshi (parsed.root < 0 || len(parsed.errors) != 0 || !uses_async(parsed.ast)) { kaesu parsed; }
+    kaku state = AsyncState { arena: parsed.ast, errors: array.with_capacity[ParseError](2), counter: [0], names: array.with_capacity[string](4), result: [-1] };
+    kaku root = parsed.ast.nodes[parsed.root];
+    kaku index = 0;
+    aida (index < len(root.children)) {
+        kaku node = state.arena.nodes[root.children[index]];
+        moshi (node_kind_code(node.kind) == 46) { array.push(state.names, node.text); }
+        index = index + 1;
+    }
+    index = 0;
+    aida (index < len(root.children)) {
+        kaku id = root.children[index];
+        kaku kind = ast_kind(state, id);
+        moshi (kind == 46) {
+            validate_declaration(state, id);
+            check_placement(state, state.arena.nodes[id].children[len(state.arena.nodes[id].children) - 1], hai);
+            check_reserved_declaration(state, id);
+        } sore {
+            moshi (kind == 32) {
+                kaku node = state.arena.nodes[id];
+                check_placement(state, node.children[len(node.children) - 1], iie);
+                check_reserved_declaration(state, id);
+            } sore {
+                check_placement(state, id, iie);
+                check_reserved(state, id);
+            }
+        }
+        index = index + 1;
+    }
+    moshi (len(state.errors) != 0) {
+        sort_errors(state.errors);
+        kaku merged = array.with_capacity[ParseError](len(state.errors));
+        array.append_all(merged, state.errors);
+        kaesu ParseResult { ast: parsed.ast, root: parsed.root, tokens: parsed.tokens, errors: merged };
+    }
+    kaku statements = empty_children(len(root.children) + 2);
+    kaku imported = iie;
+    kaku os_imported = iie;
+    kaku has_entry = iie;
+    index = 0;
+    aida (index < len(root.children)) {
+        kaku node = state.arena.nodes[root.children[index]];
+        moshi (node_kind_code(node.kind) == 1) {
+            moshi (node.text == async_runtime_package) { imported = hai; }
+            moshi (node.text == async_os_package) { os_imported = hai; }
+        }
+        moshi (contains_name(state.names, "main") && entry_call(state, root.children[index]) >= 0) { has_entry = hai; }
+        index = index + 1;
+    }
+    kaku zero = SourceSpan { start: root.span.start, end: root.span.start };
+    moshi (!imported) {
+        array.push(statements, add_node(state.arena, NodeKind.ImportStatement(), async_runtime_package, "async", 0, iie, 0, empty_children(0), zero));
+    }
+    moshi (has_entry && !os_imported) {
+        array.push(statements, add_node(state.arena, NodeKind.ImportStatement(), async_os_package, "os", 0, iie, 0, empty_children(0), zero));
+    }
+    index = 0;
+    aida (index < len(root.children)) {
+        kaku id = root.children[index];
+        kaku kind = ast_kind(state, id);
+        moshi (kind == 46) {
+            array.push(statements, lower_function(state, id));
+        } sore {
+            kaku call = -1;
+            moshi (contains_name(state.names, "main")) { call = entry_call(state, id); }
+            moshi (call >= 0) {
+                // main(); ==> os.exit(async.block_on(main()));
+                kaku span = state.arena.nodes[id].span;
+                kaku drive = mk_runtime_call(state, "block_on", empty_children(0), list1(call), span);
+                kaku exit_fn = mk_field(state, mk_ident(state, "os", span), "exit", span);
+                array.push(statements, mk_expr_stmt(state, mk_call(state, exit_fn, list1(drive), span), span));
+            } sore {
+                array.push(statements, id);
+            }
+        }
+        index = index + 1;
+    }
+    moshi (len(state.errors) != 0) {
+        sort_errors(state.errors);
+        kaku late = array.with_capacity[ParseError](len(state.errors));
+        array.append_all(late, state.errors);
+        kaesu ParseResult { ast: parsed.ast, root: parsed.root, tokens: parsed.tokens, errors: late };
+    }
+    kaku lowered = Node { kind: root.kind, text: root.text, extra: root.extra, integer: root.integer, flag: root.flag, operator: root.operator, children: statements, span: root.span };
+    state.arena.nodes[parsed.root] = lowered;
+    kaesu ParseResult { ast: state.arena, root: parsed.root, tokens: parsed.tokens, errors: parsed.errors };
+}

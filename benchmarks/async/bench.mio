@@ -1,0 +1,317 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/async/net";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+yobu "kiso/reactor";
+yobu "kiso/string";
+
+// Native async benchmarks (Linux AMD64). One mode per process: `bench <mode> [size]`; prints `mode work elapsed_ms`.
+// Timings use os.monotonic_ms(); every mode is sized to run long enough for that resolution. No pass/fail threshold: the runner
+// (run.py) executes each mode several times and reports medians; nothing here asserts on timing.
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+waza listen_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 128);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+waza report(mode: string, work: int64, started: int64) -> unit {
+    chant(mode);
+    chant(work);
+    chant(os.monotonic_ms() - started);
+}
+
+waza size_arg(default_size: int64) -> int64 {
+    kaku text = os.argument(2);
+    moshi (text == mu) { kaesu default_size; }
+    kaku value = 0;
+    kaku bytes = string.to_bytes(text);
+    kaku i = 0;
+    aida (i < len(bytes)) { value = value * 10 + int64(bytes[i] - uint8(48)); i = i + 1; }
+    kaesu value;
+}
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x; }
+
+hidouki waza chain(n: int64) -> int64 {
+    moshi (n == 0) { kaesu 0; }
+    kaku below = matsu chain(n - 1);
+    kaesu below + 1;
+}
+
+// ---- completed-task await overhead: await one already finished task N times (fast path, inline)
+hidouki waza await_completed(n: int64) -> int64 {
+    kaku done = leaf(1);
+    kaku first = matsu done;
+    kaku started = os.monotonic_ms();
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) { total = total + matsu done; i = i + 1; }
+    report("await_completed", n, started);
+    kaesu total + first;
+}
+
+// ---- nested async calls: chains of depth 100 repeated n/100 times
+hidouki waza nested(n: int64) -> int64 {
+    kaku started = os.monotonic_ms();
+    kaku total = 0;
+    kaku r = 0;
+    aida (r < n / 100) { total = total + matsu chain(100); r = r + 1; }
+    report("nested_calls", n, started);
+    kaesu total;
+}
+
+// ---- cold task create + start + complete + resume of the awaiter, n times
+hidouki waza spawn_await(n: int64) -> int64 {
+    kaku started = os.monotonic_ms();
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) { total = total + matsu leaf(i); i = i + 1; }
+    report("task_throughput", n, started);
+    kaesu total;
+}
+
+// ---- cost split: construction only (no executor), scheduling only (attach + run_one, no await/resume)
+waza construct_only(n: int64) -> unit {
+    kaku started = os.monotonic_ms();
+    kaku i = 0;
+    kaku keep = 0;
+    aida (i < n) { kaku t = leaf(i); keep = keep + async.state_of(t); i = i + 1; }
+    report("construct_only", n, started);
+}
+
+waza schedule_only(n: int64) -> unit {
+    kaku exec = async.new_executor();
+    kaku tasks: []async.Task<int64> = [];
+    kaku i = 0;
+    aida (i < n) { array.push(tasks, leaf(i)); i = i + 1; }
+    kaku started = os.monotonic_ms();
+    i = 0;
+    aida (i < n) { async.attach(exec, tasks[i]); i = i + 1; }
+    async.drain(exec);
+    report("schedule_only", n, started);
+}
+
+// ---- many suspended tasks: k waiters parked on one gate, then resumed together
+waza new_gate() -> async.Task<int64> {
+    kaesu async.spawn(waza (self: async.Task<int64>) -> unit { kaesu; });
+}
+
+hidouki waza waiter(gate: async.Task<int64>) -> int64 { kaku v = matsu gate; kaesu v; }
+
+hidouki waza opener(gate: async.Task<int64>) -> int64 {
+    kaku yielded = matsu leaf(0);
+    async.complete(gate, 1);
+    kaesu 0;
+}
+
+hidouki waza suspended_many(k: int64) -> int64 {
+    kaku gate = new_gate();
+    kaku tasks: []async.Task<int64> = [];
+    kaku i = 0;
+    aida (i < k) { array.push(tasks, waiter(gate)); i = i + 1; }
+    array.push(tasks, opener(gate));
+    kaku started = os.monotonic_ms();
+    kaku results = matsu async.join_all(tasks);
+    report("suspend_resume_many", k, started);
+    kaesu len(results);
+}
+
+// ---- GC overhead: the same allocation churn with and without k suspended tasks alive
+kata Cell { value: int64; next: Cell?; }
+
+waza churn(rounds: int64) -> int64 {
+    kaku total = 0;
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku head: Cell? = mu;
+        kaku i = 0;
+        aida (i < 50) { head = Cell { value: i, next: head }; i = i + 1; }
+        total = total + 1;
+        r = r + 1;
+    }
+    kaesu total;
+}
+
+hidouki waza holder(gate: async.Task<int64>, seed: int64) -> int64 {
+    kaku local: []int64 = [seed, seed + 1, seed + 2, seed + 3];
+    kaku v = matsu gate;
+    kaesu local[0] + v;
+}
+
+hidouki waza churner(gate: async.Task<int64>, rounds: int64, label: string) -> int64 {
+    kaku yielded = matsu leaf(0);
+    kaku started = os.monotonic_ms();
+    kaku done = churn(rounds);
+    report(label, rounds, started);
+    async.complete(gate, 1);
+    kaesu done;
+}
+
+hidouki waza gc_overhead(k: int64) -> int64 {
+    kaku gate = new_gate();
+    kaku tasks: []async.Task<int64> = [];
+    kaku i = 0;
+    aida (i < k) { array.push(tasks, holder(gate, i)); i = i + 1; }
+    array.push(tasks, churner(gate, 200000, "gc_churn_with_suspended"));
+    kaku results = matsu async.join_all(tasks);
+    kaesu len(results);
+}
+
+hidouki waza gc_baseline(k: int64) -> int64 {
+    kaku gate = new_gate();
+    kaku tasks: []async.Task<int64> = [];
+    array.push(tasks, churner(gate, 200000, "gc_churn_baseline"));
+    kaku results = matsu async.join_all(tasks);
+    kaesu len(results);
+}
+
+// ---- reactor: one non-blocking epoll_wait (no events) per iteration = the syscall cost; then round-trip latency
+waza reactor_poll_cost(n: int64) -> unit {
+    kaku opened = reactor.open();
+    kaku maybe = opened.reactor;
+    moshi (maybe == mu) { chant("no reactor"); kaesu; }
+    kaku r = maybe;
+    kaku started = os.monotonic_ms();
+    kaku i = 0;
+    aida (i < n) { reactor.poll(r, 0, 8); i = i + 1; }
+    report("epoll_wait_nonblocking", n, started);
+    reactor.close(r);
+}
+
+hidouki waza ping(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku started = os.monotonic_ms();
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku out: []uint8 = [uint8(1)];
+        kaku wrote = matsu net.write_all(connection, out, 0, 1);
+        kaku back = array.make[uint8](1, uint8(0));
+        kaku got = matsu net.read(connection, back, 0, 1);
+        r = r + 1;
+    }
+    report("reactor_round_trip", rounds, started);
+    kaesu rounds;
+}
+
+hidouki waza pong(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku inbox = array.make[uint8](1, uint8(0));
+        kaku got = matsu net.read(connection, inbox, 0, 1);
+        kaku wrote = matsu net.write_all(connection, inbox, 0, 1);
+        r = r + 1;
+    }
+    kaesu rounds;
+}
+
+hidouki waza latency(rounds: int64) -> int64 {
+    kaku bound = listen_free(24000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu 1; }
+    kaku listener = maybe;
+    kaku connected = tcp_async.connect(loopback(bound.port));
+    kaku client_maybe = connected.connection;
+    moshi (client_maybe == mu) { kaesu 1; }
+    kaku client = client_maybe;
+    kaku accepted = matsu net.accept(listener);
+    kaku server_maybe = accepted.connection;
+    moshi (server_maybe == mu) { kaesu 1; }
+    kaku server = server_maybe;
+    kaku tasks: []async.Task<int64> = [ping(client, rounds), pong(server, rounds)];
+    kaku results = matsu async.join_all(tasks);
+    kaesu len(results);
+}
+
+// ---- concurrent TCP: c clients each doing `rounds` 64-byte echoes against one server
+hidouki waza echo_handler(connection: tcp_async.AsyncConnection, rounds: int64) -> int64 {
+    kaku buffer = array.make[uint8](64, uint8(0));
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku got = matsu net.read(connection, buffer, 0, 64);
+        kaku wrote = matsu net.write_all(connection, buffer, 0, got.count);
+        r = r + 1;
+    }
+    kaku closed = matsu net.close(connection);
+    kaesu rounds;
+}
+
+hidouki waza echo_server(listener: tcp_async.AsyncListener, clients: int64, rounds: int64) -> int64 {
+    kaku handlers: []async.Task<int64> = [];
+    kaku accepted = 0;
+    aida (accepted < clients) {
+        kaku result = matsu net.accept(listener);
+        kaku maybe = result.connection;
+        moshi (maybe == mu) { kaesu -1; }
+        kaku connection = maybe;
+        array.push(handlers, echo_handler(connection, rounds));
+        accepted = accepted + 1;
+    }
+    kaku done = matsu async.join_all(handlers);
+    kaesu len(done);
+}
+
+hidouki waza echo_client(port: int64, rounds: int64) -> int64 {
+    kaku connected = matsu net.connect(loopback(port));
+    kaku maybe = connected.connection;
+    moshi (maybe == mu) { kaesu -1; }
+    kaku connection = maybe;
+    kaku message = array.make[uint8](64, uint8(7));
+    kaku reply = array.make[uint8](64, uint8(0));
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku wrote = matsu net.write_all(connection, message, 0, 64);
+        kaku got = matsu net.read(connection, reply, 0, 64);
+        r = r + 1;
+    }
+    kaku closed = matsu net.close(connection);
+    kaesu rounds;
+}
+
+hidouki waza tcp_concurrent(clients: int64) -> int64 {
+    kaku bound = listen_free(25000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { chant("no port"); kaesu 1; }
+    kaku listener = maybe;
+    kaku rounds = 100;
+    kaku tasks: []async.Task<int64> = [echo_server(listener, clients, rounds)];
+    kaku c = 0;
+    aida (c < clients) { array.push(tasks, echo_client(bound.port, rounds)); c = c + 1; }
+    kaku started = os.monotonic_ms();
+    kaku results = matsu async.join_all(tasks);
+    report("tcp_concurrent_echoes", clients * rounds, started);
+    kaesu len(results);
+}
+
+hidouki waza main() -> int64 {
+    kaku selected = os.argument(1);
+    moshi (selected == mu) { kaesu 2; }
+    // Narrowing does not survive a suspension point: bind the narrowed value to a non-nullable local first.
+    kaku mode = selected;
+    moshi (mode == "await_completed") { kaku r = matsu await_completed(size_arg(2000000)); kaesu 0; }
+    moshi (mode == "nested_calls") { kaku r = matsu nested(size_arg(300000)); kaesu 0; }
+    moshi (mode == "task_throughput") { kaku r = matsu spawn_await(size_arg(300000)); kaesu 0; }
+    moshi (mode == "construct_only") { construct_only(size_arg(500000)); kaesu 0; }
+    moshi (mode == "schedule_only") { schedule_only(size_arg(300000)); kaesu 0; }
+    moshi (mode == "suspend_resume_many") { kaku r = matsu suspended_many(size_arg(50000)); kaesu 0; }
+    moshi (mode == "gc_overhead") {
+        kaku a = matsu gc_baseline(0);
+        kaku b = matsu gc_overhead(size_arg(20000));
+        kaesu 0;
+    }
+    moshi (mode == "reactor_poll_cost") { reactor_poll_cost(size_arg(200000)); kaesu 0; }
+    moshi (mode == "reactor_round_trip") { kaku r = matsu latency(size_arg(20000)); kaesu 0; }
+    moshi (mode == "tcp_concurrent") { kaku r = matsu tcp_concurrent(size_arg(32)); kaesu 0; }
+    kaesu 3;
+}
+
+main();

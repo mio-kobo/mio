@@ -1,0 +1,33 @@
+yobu "kiso/async";
+
+// Falls off the end for x <= 0: the task can never produce its result, so it must fail deterministically.
+hidouki waza maybe(x: int64) -> int64 {
+    moshi (x > 0) { kaesu 1; }
+}
+
+waza stuck_task() -> async.Task<int64> {
+    kaesu async.spawn(waza (self: async.Task<int64>) -> unit {
+        async.fail(self, "boom");
+        kaesu;
+    });
+}
+
+kaku exec = async.new_executor();
+kaku ok = maybe(1);
+kaku bad = maybe(0);
+kaku boom = stuck_task();
+async.attach(exec, ok);
+async.attach(exec, bad);
+async.attach(exec, boom);
+chant(async.drain(exec) > 0);
+chant(async.state_of(ok));
+chant(async.state_of(bad));
+chant(async.failure_message(bad));
+chant(async.is_failed(boom));
+chant(async.failure_message(boom));
+// a finished task cannot be completed or failed again
+chant(async.complete(ok, 9));
+chant(async.fail(boom, "again"));
+chant(async.complete(boom, 9));
+chant(async.failure_message(boom));
+chant(async.take(ok));

@@ -61,7 +61,7 @@ var tokenCodes = map[token.Type]int{
 	token.Return: 35, token.True: 36, token.False: 37, token.Nil: 38, token.While: 39,
 	token.Break: 40, token.Continue: 41, token.Struct: 42, token.Enum: 43,
 	token.Match: 44, token.Case: 45, token.Import: 46, token.Export: 47,
-	token.Const: 48, token.Colon: 49, token.Arrow: 50, token.Yuzuru: 51,
+	token.Const: 48, token.Colon: 49, token.Arrow: 50, token.Yuzuru: 51, token.Hidouki: 52, token.Matsu: 53,
 }
 
 func repositoryRoot(t testing.TB) string {
@@ -73,7 +73,10 @@ func repositoryRoot(t testing.TB) string {
 	return root
 }
 
-func parserHarness(paths []string) string {
+func parserHarness(paths []string) string { return parserHarnessMode(paths, false) }
+
+// parserHarnessMode with lower = true emits the tree after the hidouki / matsu lowering instead of the raw parse tree.
+func parserHarnessMode(paths []string, lower bool) string {
 	var source strings.Builder
 	source.WriteString(`
 yobu "kiso/fs";
@@ -120,20 +123,24 @@ waza emit(result: ParseResult) -> unit {
 
 waza emit_path(path: string) -> unit {
     kaku loaded = fs.read_all(path);
-    emit(parse(loaded.data));
+    emit(PARSE_EXPRESSION);
 }
 `)
 	for _, path := range paths {
 		fmt.Fprintf(&source, "emit_path(%s);\n", strconv.Quote(path))
 	}
-	return source.String()
+	text := source.String()
+	if lower {
+		return strings.Replace(text, "PARSE_EXPRESSION", "lower_async(parse(loaded.data))", 1)
+	}
+	return strings.Replace(text, "PARSE_EXPRESSION", "parse(loaded.data)", 1)
 }
 
 func compileParserProgram(t testing.TB, harness string) (*miolang.Environment, *miolang.Program) {
 	t.Helper()
 	root := repositoryRoot(t)
 	directory := t.TempDir()
-	for _, name := range []string{"ast.mio", "cursor.mio", "expression.mio", "statement.mio", "types.mio"} {
+	for _, name := range []string{"ast.mio", "asynclower.mio", "cursor.mio", "expression.mio", "statement.mio", "types.mio"} {
 		content, err := os.ReadFile(filepath.Join(root, "selfhost", "parser", name))
 		if err != nil {
 			t.Fatal(err)
@@ -158,8 +165,12 @@ func compileParserProgram(t testing.TB, harness string) (*miolang.Environment, *
 }
 
 func runMioParser(t testing.TB, paths []string) ([]wireResult, int) {
+	return runMioParserMode(t, paths, false)
+}
+
+func runMioParserMode(t testing.TB, paths []string, lower bool) ([]wireResult, int) {
 	t.Helper()
-	environment, program := compileParserProgram(t, parserHarness(paths))
+	environment, program := compileParserProgram(t, parserHarnessMode(paths, lower))
 	var artifact bytes.Buffer
 	if err := program.Encode(&artifact); err != nil {
 		t.Fatal(err)
@@ -332,6 +343,11 @@ func normalizeExpression(expression ast.Expression, source string) *canonicalNod
 		result := node(12, value.Range, normalizeExpression(value.Operand, source))
 		result.operator = tokenCodes[token.Yuzuru]
 		return result
+	case *ast.AwaitExpression:
+		// matsu is an explicit AwaitExpression node (kind 47) in both frontends; the operator slot carries the Matsu token code.
+		result := node(47, value.Range, normalizeExpression(value.Operand, source))
+		result.operator = tokenCodes[token.Matsu]
+		return result
 	case *ast.PrefixExpression:
 		result := node(12, value.Range, normalizeExpression(value.Right, source))
 		result.operator = tokenCodes[value.Operator]
@@ -494,7 +510,11 @@ func normalizeStatement(statement ast.Statement, source string) *canonicalNode {
 			children = append(children, normalizeType(value.ReturnType))
 		}
 		children = append(children, normalizeStatement(value.Body, source))
-		result := node(32, value.Range, children...)
+		kind := 32
+		if value.Async {
+			kind = 46 // AsyncFunctionStatement: same layout as a function statement
+		}
+		result := node(kind, value.Range, children...)
 		result.text, result.integer, result.operator, result.flag = value.Name.Name, len(value.TypeParams), len(value.Parameters), value.Exported
 		return result
 	case *ast.StructStatement:
@@ -685,6 +705,17 @@ func TestMioParserDifferentialCorpus(t *testing.T) {
 		[]byte(`kaku a = yuzuru b.c;`), []byte(`kaku a = yuzuru b[0];`), []byte(`kaku a = yuzuru f();`), []byte(`kaku a = yuzuru (b);`),
 		[]byte(`kaku a = yuzuru 1;`), []byte(`kaku a = yuzuru;`), []byte(`kaku yuzuru = 1;`), []byte(`waza yuzuru() -> unit {}`),
 		[]byte(`kata P { yuzuru: int64; }`),
+		// hidouki / matsu: async declarations, await precedence, nesting and the rejected spellings
+		[]byte(`hidouki waza fetch_value() -> int64 { kaesu 42; }`),
+		[]byte(`koukai hidouki waza fetch_data(id: int64) -> Data { kaesu load(id); }`),
+		[]byte(`hidouki waza main() -> int64 { kaku value = matsu fetch_value(); kaesu value; }`),
+		[]byte(`hidouki waza f() -> int64 { kaesu matsu g(matsu h()) + (matsu k()) * -matsu m(); }`),
+		[]byte(`hidouki waza f<T>(x: T) -> T { kaku y = matsu a.b(x)[0].c; matsu g(); kaesu y; }`),
+		[]byte(`kaku matsuri = 1; kaku hidoukis = matsuri; kaku Matsu = hidoukis;`),
+		[]byte(`hidouki koukai waza f() -> int64 { kaesu 1; }`), []byte(`hidouki hidouki waza f() -> int64 { kaesu 1; }`),
+		[]byte(`hidouki kaku x = 1;`), []byte(`koukai hidouki kaku x = 1;`), []byte(`hidouki;`), []byte(`koukai hidouki;`),
+		[]byte(`matsu;`), []byte(`kaku x = matsu;`), []byte(`kaku hidouki = 1;`), []byte(`waza matsu() -> unit {}`),
+		[]byte(`hidouki waza (x: int64) -> int64 { kaesu x; }`), []byte(`kaku f = hidouki waza () -> int64 { kaesu 1; };`),
 	}
 	valid, invalid := compareCorpus(t, corpus)
 	t.Logf("定向语料：有效 %d，非法 %d", valid, invalid)

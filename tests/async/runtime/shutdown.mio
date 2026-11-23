@@ -1,0 +1,28 @@
+yobu "kiso/async";
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x; }
+hidouki waza chain(n: int64) -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) { total = total + matsu leaf(i); i = i + 1; }
+    kaesu total;
+}
+
+// The executor stops when the entry task is done and no required work remains.
+waza go() -> unit {
+    kaku exec = async.new_executor();
+    kaku main_task = chain(100);
+    async.attach(exec, main_task);
+    kaku steps = 0;
+    aida (!async.is_done(main_task)) {
+        moshi (!async.run_one(exec)) { chant(-1); kaesu; }
+        steps = steps + 1;
+    }
+    chant(async.take(main_task));
+    chant(async.pending_count(exec));
+    chant(async.drain(exec));
+    chant(async.run_one(exec));
+    chant(async.started_tasks(exec));
+}
+
+go();

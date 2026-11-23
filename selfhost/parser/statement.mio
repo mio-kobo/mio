@@ -27,6 +27,7 @@ waza parse_statement(state: ParserState) -> int64 {
     moshi (kind == 48) { kaesu parse_const_statement(state, iie, current_token(state).start); }
     moshi (kind == 31) { kaesu parse_let_statement(state); }
     moshi (kind == 32) { kaesu parse_function_statement(state, iie, current_token(state).start); }
+    moshi (kind == 52) { kaesu parse_async_function_statement(state, iie, current_token(state).start); }
     moshi (kind == 35) { kaesu parse_return_statement(state); }
     moshi (kind == 33) { kaesu parse_if_statement(state); }
     moshi (kind == 39) { kaesu parse_while_statement(state); }
@@ -57,10 +58,26 @@ waza parse_export_statement(state: ParserState) -> int64 {
     kaku kind = current_kind(state);
     moshi (kind == 48) { kaesu parse_const_statement(state, hai, start); }
     moshi (kind == 32) { kaesu parse_function_statement(state, hai, start); }
+    moshi (kind == 52) { kaesu parse_async_function_statement(state, hai, start); }
     moshi (kind == 42) { kaesu parse_struct_statement(state, hai, start); }
     moshi (kind == 43) { kaesu parse_enum_statement(state, hai, start); }
     add_parse_error(state, ParseErrorKind.ExpectedToken(), 32);
     kaesu -1;
+}
+
+// hidouki waza ...: the declaration has the layout of a function statement under the AsyncFunctionStatement kind. Modifier order is
+// `koukai hidouki waza`; hidouki must be followed directly by waza.
+waza parse_async_function_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {
+    advance(state);
+    moshi (current_kind(state) != 32) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 32); kaesu -1; }
+    kaku id = parse_function_statement(state, exported, start);
+    moshi (id < 0) { kaesu -1; }
+    kaku node = state.arena.nodes[id];
+    state.arena.nodes[id] = Node {
+        kind: NodeKind.AsyncFunctionStatement(), text: node.text, extra: node.extra, integer: node.integer, flag: node.flag,
+        operator: node.operator, children: node.children, span: node.span
+    };
+    kaesu id;
 }
 
 waza parse_const_statement(state: ParserState, exported: bool, start: lexer.Position) -> int64 {

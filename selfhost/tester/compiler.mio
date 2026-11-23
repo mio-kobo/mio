@@ -10,6 +10,9 @@ koukai kata TestPlan { bytes: []uint8; tests: []frontend.TestCase; error: string
 
 koukai waza plan(root: string, entry: string, bunko_root: string) -> TestPlan {
     kaku allow_c = pipeline.host_target() == "darwin-arm64" || pipeline.host_target() == "linux-amd64";
+    moshi (pipeline.host_target() != "linux-amd64" && frontend.tests_async_requested(root, entry, bunko_root)) {
+        kaesu TestPlan { bytes: [], tests: [], error: string.concat("E0805 native asynchronous execution (hidouki / matsu) is available only on linux-amd64; the target has no async runtime: ", pipeline.host_target()), entry: frontend.package_identity(root, entry), requested: entry, dispatch: [] };
+    }
     kaku compiled = frontend.compile_tests(root, entry, bunko_root, allow_c);
     kaku identity=frontend.package_identity(root,entry);
     kaku dispatch: []uint8 = [];

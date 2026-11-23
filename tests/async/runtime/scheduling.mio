@@ -1,0 +1,31 @@
+yobu "kiso/async";
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x * 3; }
+
+// Double scheduling is prevented: attaching a started or finished task again is a no-op, and a task body runs once.
+waza count_body_runs() -> unit {
+    kaku runs = [0];
+    kaku t = async.spawn(waza (self: async.Task<int64>) -> unit {
+        runs[0] = runs[0] + 1;
+        async.complete(self, 4);
+        kaesu;
+    });
+    kaku exec = async.new_executor();
+    async.attach(exec, t);
+    async.attach(exec, t);
+    chant(async.pending_count(exec));
+    async.drain(exec);
+    async.attach(exec, t);
+    chant(async.pending_count(exec));
+    chant(runs[0]);
+    chant(async.started_tasks(exec));
+    chant(async.take(t));
+}
+
+count_body_runs();
+
+// A new executor per block_on: a task finished on one executor can still be awaited (completed fast path) on another.
+hidouki waza reuse(t: async.Task<int64>) -> int64 { kaku v = matsu t; kaesu v + 1; }
+kaku shared = leaf(7);
+chant(async.block_on(shared));
+chant(async.block_on(reuse(shared)));

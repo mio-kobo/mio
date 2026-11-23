@@ -360,6 +360,8 @@ func captureBeforeFold(program *ast.Program, result *analysis) *capturedSource {
 			walk(n.Expr, fileKey)
 		case *ast.TransferExpression:
 			walk(n.Operand, fileKey)
+		case *ast.AwaitExpression:
+			walk(n.Operand, fileKey)
 		case *ast.PrefixExpression:
 			walk(n.Right, fileKey)
 		case *ast.CallExpression:

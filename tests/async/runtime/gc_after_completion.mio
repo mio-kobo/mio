@@ -1,0 +1,49 @@
+yobu "kiso/array";
+yobu "kiso/async";
+
+kata Payload { id: int64; data: []int64; }
+
+hidouki waza make(id: int64) -> Payload {
+    kaku data: []int64 = [];
+    kaku i = 0;
+    aida (i < 20) { array.push(data, id * 100 + i); i = i + 1; }
+    kaku pause = matsu pause_task();
+    kaesu Payload { id: id, data: data };
+}
+
+hidouki waza pause_task() -> int64 { kaesu 0; }
+
+waza garbage(rounds: int64) -> int64 {
+    kaku n = 0;
+    kaku r = 0;
+    aida (r < rounds) {
+        kaku scratch: []int64 = [r, r, r, r, r, r, r, r];
+        n = n + len(scratch);
+        r = r + 1;
+    }
+    kaesu n;
+}
+
+// Results of completed tasks stay reachable only through the finished tasks that the program keeps.
+hidouki waza main() -> int64 {
+    kaku finished: []async.Task<Payload> = [];
+    kaku i = 0;
+    aida (i < 40) {
+        kaku t = make(i);
+        kaku p = matsu t;
+        array.push(finished, t);
+        i = i + 1;
+    }
+    chant(garbage(20000));
+    kaku total = 0;
+    i = 0;
+    aida (i < len(finished)) {
+        kaku payload = async.take(finished[i]);
+        total = total + payload.id + payload.data[0] + payload.data[19];
+        i = i + 1;
+    }
+    chant(total);
+    kaesu 0;
+}
+
+main();

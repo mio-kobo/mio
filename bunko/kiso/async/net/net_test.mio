@@ -1,0 +1,137 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/os";
+yobu "kiso/testing";
+
+// Real epoll over real loopback sockets, one thread. The package cannot use hidouki on itself, so the lowered (continuation) form is
+// written by hand. Each step checks one task of this package; reads are issued before their bytes exist, so the task really suspends and is
+// woken by the reactor.
+
+waza loopback(port: int64) -> tcp.IPv4Address { kaesu tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port); }
+
+kata Bound { listener: tcp_async.AsyncListener?; port: int64; }
+
+waza bind_free(base: int64) -> Bound {
+    kaku port = base;
+    aida (port < base + 100) {
+        kaku attempt = tcp_async.listen(loopback(port), 16);
+        moshi (attempt.error == mu) { kaesu Bound { listener: attempt.listener, port: port }; }
+        port = port + 1;
+    }
+    kaesu Bound { listener: mu, port: -1 };
+}
+
+// flags[i] = 1 when step i observed the expected result.
+waza step_close(self: async.Task<int64>, flags: []int64, server: tcp_async.AsyncConnection, listener: tcp_async.AsyncListener) -> unit {
+    kaku closing = close(server);
+    async.then(self.core, closing.core, waza() -> unit {
+        async.check(closing.core);
+        moshi (closing.result[0].error == mu) { flags[6] = 1; }
+        kaku closing_listener = close_listener(listener);
+        async.then(self.core, closing_listener.core, waza() -> unit {
+            async.check(closing_listener.core);
+            moshi (closing_listener.result[0].error == mu) { flags[7] = 1; }
+            async.complete[int64](self, 0);
+            kaesu;
+        });
+        kaesu;
+    });
+}
+
+waza step_eof(self: async.Task<int64>, flags: []int64, client: tcp_async.AsyncConnection, server: tcp_async.AsyncConnection, listener: tcp_async.AsyncListener) -> unit {
+    kaku closing = close(client);
+    async.then(self.core, closing.core, waza() -> unit {
+        async.check(closing.core);
+        kaku inbox = array.make[uint8](1, uint8(0));
+        kaku reading = read(server, inbox, 0, 1);
+        async.then(self.core, reading.core, waza() -> unit {
+            async.check(reading.core);
+            moshi (reading.result[0].eof && reading.result[0].count == 0) { flags[5] = 1; }
+            step_close(self, flags, server, listener);
+            kaesu;
+        });
+        kaesu;
+    });
+}
+
+waza step_write_all(self: async.Task<int64>, flags: []int64, client: tcp_async.AsyncConnection, server: tcp_async.AsyncConnection, listener: tcp_async.AsyncListener) -> unit {
+    kaku out: []uint8 = [uint8(1), uint8(2), uint8(3), uint8(4)];
+    kaku writing = write_all(client, out, 0, 4);
+    async.then(self.core, writing.core, waza() -> unit {
+        async.check(writing.core);
+        moshi (writing.result[0].count == 4 && writing.result[0].error == mu) { flags[3] = 1; }
+        kaku inbox = array.make[uint8](4, uint8(0));
+        kaku reading = read(server, inbox, 0, 4);
+        async.then(self.core, reading.core, waza() -> unit {
+            async.check(reading.core);
+            moshi (reading.result[0].count == 4 && inbox[0] == uint8(1) && inbox[3] == uint8(4)) { flags[4] = 1; }
+            step_eof(self, flags, client, server, listener);
+            kaesu;
+        });
+        kaesu;
+    });
+}
+
+waza step_read_write(self: async.Task<int64>, flags: []int64, client: tcp_async.AsyncConnection, server: tcp_async.AsyncConnection, listener: tcp_async.AsyncListener) -> unit {
+    kaku inbox = array.make[uint8](1, uint8(0));
+    kaku out: []uint8 = [uint8(42)];
+    // the read is started first: nothing was written yet, so it suspends on the reactor until the write below runs
+    kaku both = async.join2(read(server, inbox, 0, 1), write(client, out, 0, 1));
+    async.then(self.core, both.core, waza() -> unit {
+        async.check(both.core);
+        kaku pair = both.result[0];
+        moshi (pair.first.count == 1 && inbox[0] == uint8(42) && pair.second.count == 1) { flags[2] = 1; }
+        step_write_all(self, flags, client, server, listener);
+        kaesu;
+    });
+}
+
+waza step_connect(self: async.Task<int64>, flags: []int64, listener: tcp_async.AsyncListener, port: int64) -> unit {
+    kaku both = async.join2(accept(listener), connect(loopback(port)));
+    async.then(self.core, both.core, waza() -> unit {
+        async.check(both.core);
+        kaku pair = both.result[0];
+        kaku server_maybe = pair.first.connection;
+        kaku client_maybe = pair.second.connection;
+        moshi (server_maybe == mu) { async.complete[int64](self, -1); kaesu; }
+        moshi (client_maybe == mu) { async.complete[int64](self, -1); kaesu; }
+        kaku server = server_maybe;
+        kaku client = client_maybe;
+        flags[0] = 1;
+        flags[1] = 1;
+        step_read_write(self, flags, client, server, listener);
+        kaesu;
+    });
+}
+
+waza test_async_tcp_over_epoll() -> unit {
+    kaku bound = bind_free(23000 + os.pid() - (os.pid() / 20000) * 20000);
+    kaku maybe = bound.listener;
+    moshi (maybe == mu) { testing.expect(iie, "a loopback port is free"); kaesu; }
+    kaku listener = maybe;
+    kaku flags: []int64 = [0, 0, 0, 0, 0, 0, 0, 0];
+    kaku port = bound.port;
+    kaku driver = async.spawn(waza(self: async.Task<int64>) -> unit {
+        step_connect(self, flags, listener, port);
+        kaesu;
+    });
+    kaku exec = async.new_executor();
+    async.attach(exec, driver);
+    aida (!async.is_done(driver)) {
+        testing.expect(async.run_one(exec), "the executor is never stuck while a task is pending");
+    }
+    testing.expect(!async.is_failed(driver), "the driver finishes without failing");
+    testing.expect(flags[0] == 1, "accept returns the connection");
+    testing.expect(flags[1] == 1, "connect returns the connection");
+    testing.expect(flags[2] == 1, "a read issued before the write suspends and is woken by the reactor");
+    testing.expect(flags[3] == 1, "write_all writes the whole range");
+    testing.expect(flags[4] == 1, "read returns the written bytes");
+    testing.expect(flags[5] == 1, "reading from a closed peer reports end of stream");
+    testing.expect(flags[6] == 1, "close finishes");
+    testing.expect(flags[7] == 1, "close_listener finishes");
+    testing.expect(pending_waits(exec) == 0, "no reactor wait outlives its task");
+    testing.expect(async.pending_count(exec) == 0, "nothing is left queued");
+    testing.expect(async.poller_sleeps(exec) >= 1 && async.io_wakeups(exec) >= 1, "the executor slept in epoll and was woken by readiness");
+}

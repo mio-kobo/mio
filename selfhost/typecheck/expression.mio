@@ -521,6 +521,13 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
         }
         moshi (symbol_id >= 0 && resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 12) { kaesu 0; }
         kaku left = check_expression(env, file_id, node.children[0]);
+        // `matsu e` is lowered to async.then(.., __mio_tN.core, ..) where __mio_tN holds e: reading `.core` of anything but a task is an
+        // await of a non-task (the operand identifier carries the span of e).
+        kaku operand = node_at(env, file_id, node.children[0]);
+        moshi (node.text == "core" && parser.node_kind_code(operand.kind) == 4 && string.has_prefix(operand.text, "__mio_t")) {
+            kaku is_task = left != 0 && type_kind_code(env.result.types[left].kind) == 17 && env.result.types[left].name == "kiso/async.Task";
+            moshi (!is_task) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0802", file_id, node.children[0], 0, left, "matsu requires a task value"); kaesu 0; }
+        }
         moshi (left == 0 || type_kind_code(env.result.types[left].kind) != 17) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text); kaesu 0; }
         kaku info = env.result.types[left]; kaku definition_index = struct_named(env, info.name);
         moshi (definition_index < 0) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text); kaesu 0; }

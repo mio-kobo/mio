@@ -1,0 +1,25 @@
+yobu "kiso/async";
+
+hidouki waza leaf(x: int64) -> int64 { kaesu x; }
+
+// Awaiting a task that already completed continues inline; a long run of such awaits must not grow the native stack.
+hidouki waza main() -> int64 {
+    kaku done = leaf(5);
+    kaku first = matsu done;
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < 300000) {
+        total = total + matsu done;
+        i = i + 1;
+    }
+    chant(first);
+    chant(total);
+    // fresh cold tasks: each is started by its await
+    kaku cold = 0;
+    i = 0;
+    aida (i < 20000) { cold = cold + matsu leaf(i); i = i + 1; }
+    chant(cold);
+    kaesu 0;
+}
+
+main();

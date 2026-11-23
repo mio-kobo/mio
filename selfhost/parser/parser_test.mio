@@ -59,3 +59,23 @@ waza test_integer_literal_preserves_exact_text() -> unit {
     testing.expect(magnitude.text == "9223372036854775808", "minimum magnitude text preserved");
     testing.expect(overflow.text == "9223372036854775809", "overflow text preserved");
 }
+
+waza test_async_declaration_and_await() -> unit {
+    kaku result = parse(string.to_bytes("koukai hidouki waza f(x: int64) -> int64 { kaesu matsu g(x) + 1; }"));
+    testing.expect(len(result.errors) == 0, "async syntax errors");
+    kaku program = result.ast.nodes[result.root];
+    testing.expect(len(program.children) == 1, "one declaration");
+    kaku declaration = result.ast.nodes[program.children[0]];
+    testing.expect(node_kind_code(declaration.kind) == 46, "async function kind");
+    testing.expect(declaration.flag, "export flag survives the async modifier");
+    kaku body = result.ast.nodes[declaration.children[len(declaration.children) - 1]];
+    kaku statement = result.ast.nodes[body.children[0]];
+    kaku sum = result.ast.nodes[statement.children[0]];
+    testing.expect(node_kind_code(sum.kind) == 11, "matsu binds tighter than +");
+    testing.expect(node_kind_code(result.ast.nodes[sum.children[0]].kind) == 47, "await expression kind");
+}
+
+waza test_async_modifier_order() -> unit {
+    kaku result = parse(string.to_bytes("hidouki koukai waza f() -> int64 { kaesu 1; }"));
+    testing.expect(len(result.errors) != 0, "koukai must precede hidouki");
+}

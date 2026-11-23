@@ -77,6 +77,7 @@ be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79
 | quality（i18n） | quick, full | `scripts/i18n/catalog.py check --check-generated` 与 `scripts/i18n/test_catalog.py`：39 个 locale 的 Key/占位符/UTF-8/ANSI/技术词/RTL/生成文件一致性，以及 CLI 文本 Key 引用覆盖 |
 | go-reference | quick, unit, full | 补充 Go/VM 回归；full 保留 VM 回归和 `go test` 全仓库（`Mio/selfhost/bootstrap` 除外，见下） |
 | go-bootstrap-reference | full（standalone） | `go test ./selfhost/bootstrap`：参考 VM 中的 Compiler A→B→C→D 自编译，Linux 约 56 分钟、macOS 更久；独立长时间模块，Full 用单独的 job 运行 |
+| async（Linux AMD64） | — | `python3 tests/async/frontend_parity.py --mio <mio>`（Go 与自举前端对独立期望的一致性）与 `python3 tests/async/run.py --mio <mio>`（16 个原生程序，普通与 `--gc-stress`）；见 [async-await.md](async-await.md) |
 | kiso/* | quick, unit, full | 每个已有 `*_test.mio` 包的原生测试；实际清单见各模块注册文件 |
 
 标准库已接入 aot/arm64、aot/lower、aot/lower/types、aot/macho、array、bytes、convert、crypto/sha256、encoding/binary、encoding/json、encoding/mochi、fs、io、math、net/tcp、os、path、regexp、regexp/unicode_data、runtime/cpu/aarch64、runtime/os/darwin、runtime/target、string、testing、utf8，以及单列的 gc。`all` 调度时仅声明 `required_checks=["native"]` 的 AOT 子包可通过 `covered_by` 委托父级递归检查，单独报告 SKIP 和委托原因；arm64、macho 的独立 oracle 必须运行。显式选择子模块仍运行自己的入口。

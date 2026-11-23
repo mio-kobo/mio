@@ -25,6 +25,10 @@
 ; Ownership transfer (language version 0.6): a fully reserved keyword, never an identifier.
 "yuzuru" @keyword.operator
 
+; Asynchronous functions (language version 0.7): hidouki declares an async function, matsu awaits a task.
+"hidouki" @keyword.function
+"matsu" @keyword.operator
+
 (boolean_literal) @constant.builtin
 (nil_literal) @constant.builtin
 

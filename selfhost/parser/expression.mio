@@ -114,6 +114,16 @@ waza parse_prefix(state: ParserState) -> int64 {
         kaesu add_node(state.arena, NodeKind.PrefixExpression(), "", "", 0, iie, kind, children, SourceSpan {
                 start: token.start, end: token_span(operand_token).end });
     }
+    moshi (kind == 53) {
+        // matsu operand: binds like a unary operator.
+        advance(state);
+        kaku operand = parse_expression(state, 7);
+        moshi (operand < 0) { kaesu -1; }
+        kaku children = empty_children(1);
+        array.push(children, operand);
+        kaesu add_node(state.arena, NodeKind.AwaitExpression(), "", "", 0, iie, kind, children, SourceSpan {
+                start: token.start, end: node_span(state, operand).end });
+    }
     moshi (kind == 9 || kind == 12) {
         advance(state);
         kaku right = parse_expression(state, 7);

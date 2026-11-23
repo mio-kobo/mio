@@ -51,3 +51,11 @@ waza test_runes_and_invalid_utf8() -> unit {
     testing.expect(error_kind_code(broken.errors[0].kind) == 0, "invalid UTF-8 kind");
     testing.expect(broken.errors[0].position.offset == 1, "invalid UTF-8 offset");
 }
+
+waza test_async_keywords() -> unit {
+    kaku result = lex(string.to_bytes("hidouki matsu hidoukix"));
+    testing.expect(len(result.errors) == 0, "async keyword errors");
+    expect_token(result.tokens[0], 52, "hidouki", 0, 7);
+    expect_token(result.tokens[1], 53, "matsu", 8, 13);
+    testing.expect(token_kind_code(result.tokens[2].kind) == 2, "a longer word stays an identifier");
+}

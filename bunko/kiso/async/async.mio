@@ -1,0 +1,319 @@
+yobu "kiso/array";
+yobu "kiso/math";
+yobu "kiso/string";
+
+// Cooperative tasks and a single-threaded executor (see docs/async-await.md).
+//
+// `hidouki waza f() -> T` is lowered by the compiler (selfhost/parser/asynclower.mio, internal/asynclower) into an ordinary function that
+// returns `Task<T>`; its body is a chain of continuation closures. Everything here is plain Mio with no package-level state: a task, its
+// result cell, its continuations and the executor are ordinary managed heap objects, so the collector traces a suspended task exactly
+// like any closure environment (no off-heap frames, no untracked roots).
+//
+// Task model: tasks are COLD. Calling an async function allocates a task and runs nothing. A task starts when it is first awaited by a
+// running task (`matsu`) or handed to `block_on`; at that moment it joins the awaiter's executor. Concurrency between sibling tasks is
+// expressed with `join2` / `join_all`, which start every child on the same executor, so a child that is waiting never blocks the others.
+//
+// Lifecycle: created(0) -> ready(1) -> running(2) -> suspended(3) -> ready(1) ... -> completed(4) | failed(5).
+
+koukai teisu created = 0;
+koukai teisu ready = 1;
+koukai teisu running = 2;
+koukai teisu suspended = 3;
+koukai teisu completed = 4;
+koukai teisu failed = 5;
+
+// Inline continuation depth beyond which a continuation of an already completed task goes through the ready queue instead of being called
+// directly, so a long run of completed awaits cannot grow the native stack.
+teisu inline_limit = 48;
+
+// The executor: a FIFO ready queue (head index in cells[0]), the inline depth (cells[1]), the number of tasks ever started (cells[2]) and
+// the number of steps executed (cells[3]), the number of times the executor slept in its poller (cells[4]) and the number of I/O waits the
+// poller woke (cells[5]).
+koukai kata Executor {
+    queue: []() -> unit;
+    cells: []int64;
+    pollers: []Poller;
+}
+
+// External event source of an executor (the Linux epoll reactor, installed by kiso/async/net). wait registers a one-shot readiness wait
+// on a handle (interest 1 = readable, 2 = writable) and runs `wake` through the ready queue when it fires; block sleeps in the kernel until
+// at least one registered wait fired and enqueues the woken continuations, returning false when no wait is registered (so there is
+// nothing left to wait for); cancel wakes every wait registered on a handle (used before closing it) and returns how many it woke;
+// pending is the number of registered waits that have not fired yet.
+koukai kata Poller {
+    wait: (resource, int64, () -> unit) -> bool;
+    block: () -> bool;
+    cancel: (resource) -> int64;
+    pending: () -> int64;
+}
+
+// The non-generic part of a task. state[0] lifecycle, state[1] how many times the body was started (at most once). exec: empty until
+// the task joins an executor, then the single executor. body: the start closure (a one-element cell so the closure can mention the task
+// it belongs to). Lowered code only ever touches `.core` and `.result`, so it never needs type inference through type parameters.
+koukai kata TaskCore {
+    id: int64;
+    state: []int64;
+    waiters: []() -> unit;
+    message: []string;
+    exec: []Executor;
+    body: []() -> unit;
+}
+
+// result: empty until the task completes, then the single result value.
+koukai kata Task<T> {
+    core: TaskCore;
+    result: []T;
+}
+
+koukai waza new_executor() -> Executor {
+    kaesu Executor { queue: array.with_capacity[() -> unit](16), cells: [0, 0, 0, 0, 0, 0], pollers: array.with_capacity[Poller](1) };
+}
+
+koukai waza pending_count(exec: Executor) -> int64 { kaesu len(exec.queue) - exec.cells[0]; }
+koukai waza started_tasks(exec: Executor) -> int64 { kaesu exec.cells[2]; }
+koukai waza steps_run(exec: Executor) -> int64 { kaesu exec.cells[3]; }
+koukai waza poller_sleeps(exec: Executor) -> int64 { kaesu exec.cells[4]; }
+koukai waza io_wakeups(exec: Executor) -> int64 { kaesu exec.cells[5]; }
+
+koukai waza enqueue(exec: Executor, step: () -> unit) -> unit { array.push(exec.queue, step); }
+
+// Drops the already executed prefix of the ready queue once it is at least half of it (and not tiny), so a task graph that always has
+// another step queued cannot keep every executed closure (and what it references) alive: amortized constant work per step.
+waza compact(exec: Executor) -> unit {
+    kaku head = exec.cells[0];
+    kaku length = len(exec.queue);
+    moshi (head < 256 || head * 2 < length) { kaesu; }
+    kaku live = length - head;
+    kaku index = 0;
+    aida (index < live) {
+        exec.queue[index] = exec.queue[head + index];
+        index = index + 1;
+    }
+    array.truncate(exec.queue, live);
+    exec.cells[0] = 0;
+}
+
+// Takes the oldest ready step; false when there is nothing left to run. With an empty queue the executor sleeps in its poller (when one
+// is installed and has registered waits) instead of spinning, then runs what woke. The queue is recycled once it has been drained.
+koukai waza run_one(exec: Executor) -> bool {
+    aida (hai) {
+        kaku head = exec.cells[0];
+        moshi (head < len(exec.queue)) {
+            kaku step = exec.queue[head];
+            exec.cells[0] = head + 1;
+            exec.cells[3] = exec.cells[3] + 1;
+            compact(exec);
+            step();
+            kaesu hai;
+        }
+        moshi (head > 0) { array.truncate(exec.queue, 0); exec.cells[0] = 0; }
+        moshi (len(exec.pollers) == 0) { kaesu iie; }
+        moshi (!exec.pollers[0].block()) { kaesu iie; }
+    }
+    kaesu iie;
+}
+
+// Runs ready steps until none remain. Returns the number of steps executed.
+koukai waza drain(exec: Executor) -> int64 {
+    kaku count = 0;
+    aida (run_one(exec)) { count = count + 1; }
+    kaesu count;
+}
+
+// Creates a cold task. `body` receives the task it must complete; it runs when the task is first awaited or driven.
+koukai waza spawn<T>(body: (Task<T>) -> unit) -> Task<T> {
+    kaku slots: []() -> unit = [];
+    kaku core = TaskCore {
+        id: 0,
+        state: [created, 0],
+        waiters: array.with_capacity[() -> unit](2),
+        message: [""],
+        exec: array.with_capacity[Executor](1),
+        body: slots
+    };
+    kaku task = Task[T] { core: core, result: array.with_capacity[T](1) };
+    kaku start = waza () -> unit {
+        moshi (core.state[0] != ready) { kaesu; }
+        core.state[0] = running;
+        core.state[1] = core.state[1] + 1;
+        body(task);
+        moshi (core.state[0] == running) { core.state[0] = suspended; }
+    };
+    array.push(slots, start);
+    kaesu task;
+}
+
+koukai waza state_of<T>(task: Task<T>) -> int64 { kaesu task.core.state[0]; }
+koukai waza is_done<T>(task: Task<T>) -> bool { kaesu task.core.state[0] >= completed; }
+koukai waza is_failed<T>(task: Task<T>) -> bool { kaesu task.core.state[0] == failed; }
+koukai waza failure_message<T>(task: Task<T>) -> string { kaesu task.core.message[0]; }
+koukai waza executor_of<T>(task: Task<T>) -> Executor { kaesu task.core.exec[0]; }
+koukai waza is_attached<T>(task: Task<T>) -> bool { kaesu len(task.core.exec) != 0; }
+
+// Joins `core` to `exec` and schedules its start if it has not started yet. Idempotent: a started or finished task is left alone, so a
+// task is never scheduled twice.
+koukai waza attach_core(exec: Executor, core: TaskCore) -> unit {
+    moshi (core.state[0] != created) { kaesu; }
+    array.push(core.exec, exec);
+    core.state[0] = ready;
+    exec.cells[2] = exec.cells[2] + 1;
+    enqueue(exec, core.body[0]);
+}
+
+koukai waza attach<T>(exec: Executor, task: Task<T>) -> unit { attach_core(exec, task.core); }
+
+waza release_waiters(exec: Executor, waiters: []() -> unit) -> unit {
+    kaku index = 0;
+    aida (index < len(waiters)) {
+        enqueue(exec, waiters[index]);
+        index = index + 1;
+    }
+    array.truncate(waiters, 0);
+}
+
+// Completes a running task exactly once. A second completion, or completing a finished task, is ignored and reported with false (double
+// completion is a bug in the caller, never a second wake-up).
+koukai waza complete<T>(task: Task<T>, value: T) -> bool {
+    kaku core = task.core;
+    kaku current = core.state[0];
+    moshi (current == completed || current == failed) { kaesu iie; }
+    array.push(task.result, value);
+    core.state[0] = completed;
+    moshi (len(core.exec) != 0) { release_waiters(core.exec[0], core.waiters); }
+    kaesu hai;
+}
+
+koukai waza fail<T>(task: Task<T>, message: string) -> bool {
+    kaku core = task.core;
+    kaku current = core.state[0];
+    moshi (current == completed || current == failed) { kaesu iie; }
+    core.message[0] = message;
+    core.state[0] = failed;
+    moshi (len(core.exec) != 0) { release_waiters(core.exec[0], core.waiters); }
+    kaesu hai;
+}
+
+// Lowering target of `matsu`: runs `next` once `awaited` is done. A done task continues inline (fast path) up to `inline_limit` nested
+// levels and through the ready queue beyond. Otherwise `awaited` joins the awaiter's executor (starting it when cold), the awaiting task is
+// suspended and `next` is registered as a continuation: the awaiting task's whole state is `next`, an ordinary closure.
+// A continuation wrapper that moves the task suspended -> running while `next` executes and back to suspended if `next` suspended it again.
+koukai waza resume_of(self: TaskCore, next: () -> unit) -> () -> unit {
+    kaesu waza () -> unit {
+        moshi (self.state[0] != suspended) { kaesu; }
+        self.state[0] = running;
+        next();
+        moshi (self.state[0] == running) { self.state[0] = suspended; }
+    };
+}
+
+// Suspends the running task and returns the continuation an I/O readiness wait must enqueue (it runs `next` on the executor).
+// The caller registers that continuation with its poller; when registration fails it calls unpark to leave the task running.
+koukai waza park(self: TaskCore, next: () -> unit) -> () -> unit {
+    kaku resume = resume_of(self, next);
+    self.state[0] = suspended;
+    kaesu resume;
+}
+
+koukai waza unpark(self: TaskCore) -> unit {
+    moshi (self.state[0] == suspended) { self.state[0] = running; }
+}
+
+koukai waza then(self: TaskCore, awaited: TaskCore, next: () -> unit) -> unit {
+    kaku exec = self.exec[0];
+    moshi (awaited.state[0] >= completed) {
+        step(exec, next);
+        kaesu;
+    }
+    attach_core(exec, awaited);
+    self.state[0] = suspended;
+    array.push(awaited.waiters, resume_of(self, next));
+}
+
+// Runs `next` now when the inline depth allows it, otherwise defers it to the ready queue (loop back edges and fast-path awaits).
+koukai waza step(exec: Executor, next: () -> unit) -> unit {
+    moshi (exec.cells[1] >= inline_limit) { enqueue(exec, next); kaesu; }
+    exec.cells[1] = exec.cells[1] + 1;
+    next();
+    exec.cells[1] = exec.cells[1] - 1;
+}
+
+// Loop back edge used by lowered loops: `self` supplies the executor.
+koukai waza again(self: TaskCore, next: () -> unit) -> unit { step(self.exec[0], next); }
+
+// Run by lowered code before it reads the result of an awaited task. Awaiting a failed task is a program error: Mio has no exception
+// mechanism, so the checked runtime failure (math.fail) reports the task's failure message on standard error and stops the program.
+koukai waza check(awaited: TaskCore) -> unit {
+    moshi (awaited.state[0] == failed) { math.fail(string.concat("matsu: awaited task failed: ", awaited.message[0])); }
+}
+
+koukai waza take<T>(task: Task<T>) -> T {
+    check(task.core);
+    kaesu task.result[0];
+}
+
+// Drives a new executor until `task` is done and returns its result. An executor with no ready work whose task is still pending is a
+// deadlock (nothing can ever wake it): reported with the checked runtime failure.
+koukai waza block_on<T>(task: Task<T>) -> T {
+    kaku exec = new_executor();
+    attach_core(exec, task.core);
+    aida (task.core.state[0] < completed) {
+        moshi (!run_one(exec)) { math.fail("async deadlock: the task is pending and no ready work remains"); }
+    }
+    kaesu take[T](task);
+}
+
+// Lowering helpers: loops store their body closure in a one-element cell so the closure can re-enter itself.
+koukai waza push_thunk(cell: []() -> unit, body: () -> unit) -> unit { array.push(cell, body); }
+
+// Reached when an async function body ends without kaesu: the task can never produce its result, so it fails deterministically.
+koukai waza fail_missing_return<T>(task: Task<T>) -> unit {
+    fail[T](task, "hidouki function ended without kaesu");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Combinators (hand-lowered continuation code: this package is not itself compiled with hidouki).
+
+koukai kata Pair<A, B> {
+    first: A;
+    second: B;
+}
+
+// A task that starts `a` and `b` on the executor it joins and completes with both results once both are done. Neither child blocks the
+// other: each child that waits only suspends itself.
+koukai waza join2<A, B>(a: Task<A>, b: Task<B>) -> Task<Pair<A, B>> {
+    kaesu spawn[Pair<A, B>](waza (self: Task<Pair<A, B>>) -> unit {
+        kaku exec = self.core.exec[0];
+        attach_core(exec, a.core);
+        attach_core(exec, b.core);
+        then(self.core, a.core, waza () -> unit {
+            then(self.core, b.core, waza () -> unit {
+                complete[Pair<A, B>](self, Pair[A, B] { first: take[A](a), second: take[B](b) });
+            });
+        });
+    });
+}
+
+// Starts every task and completes with their results in order.
+koukai waza join_all<T>(tasks: []Task<T>) -> Task<[]T> {
+    kaesu spawn[[]T](waza (self: Task<[]T>) -> unit {
+        kaku exec = self.core.exec[0];
+        kaku index = 0;
+        aida (index < len(tasks)) {
+            attach_core(exec, tasks[index].core);
+            index = index + 1;
+        }
+        kaku results: []T = [];
+        collect_next[T](self, tasks, 0, results);
+    });
+}
+
+waza collect_next<T>(self: Task<[]T>, tasks: []Task<T>, index: int64, results: []T) -> unit {
+    moshi (index >= len(tasks)) {
+        complete[[]T](self, results);
+        kaesu;
+    }
+    then(self.core, tasks[index].core, waza () -> unit {
+        array.push(results, take[T](tasks[index]));
+        collect_next[T](self, tasks, index + 1, results);
+    });
+}

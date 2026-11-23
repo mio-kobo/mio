@@ -1,0 +1,256 @@
+yobu "kiso/array";
+yobu "kiso/async";
+yobu "kiso/net/tcp";
+yobu "kiso/net/tcp_async";
+yobu "kiso/reactor";
+
+// Asynchronous TCP for the cooperative executor of kiso/async, on the existing Linux epoll reactor (kiso/reactor) and the nonblocking
+// sockets of kiso/net/tcp_async. Every function returns a cold task: awaiting it (`matsu`) runs the operation on the awaiter's executor.
+// An operation that cannot make progress yet (pending: EAGAIN / EINPROGRESS) registers a one-shot readiness wait with the reactor and
+// suspends only its own task; the executor keeps running every other ready task and sleeps in epoll_wait only when none is ready.
+//
+// Linux AMD64 only: elsewhere kiso/reactor reports Unsupported and these tasks fail with a message.
+//
+// Readiness is level-triggered and spurious wake-ups are allowed: after a wake-up the operation is retried, and it simply waits again if
+// it is still pending (so repeated or spurious readiness never loses or duplicates data). A reactor wait is one-shot: it is cancelled
+// (the slot released) as soon as its event is delivered, so no registration outlives its task.
+
+kata Wait {
+    operation: reactor.Operation;
+    handle: resource;
+    wake: () -> unit;
+}
+
+// Installs the reactor poller on an executor (once) and returns it.
+waza poller_of(exec: async.Executor) -> async.Poller? {
+    moshi (len(exec.pollers) != 0) { kaesu exec.pollers[0]; }
+    kaku opened = reactor.open();
+    kaku maybe = opened.reactor;
+    moshi (maybe == mu) { kaesu mu; }
+    kaku r = maybe;
+    kaku table: []Wait = [];
+    kaku poller = async.Poller {
+        wait: waza (handle: resource, interest: int64, wake: () -> unit) -> bool {
+            kaku submitted = reactor.submit(r, handle, interest);
+            kaku operation = submitted.operation;
+            moshi (operation == mu) { kaesu iie; }
+            array.push(table, Wait { operation: operation, handle: handle, wake: wake });
+            kaesu hai;
+        },
+        block: waza () -> bool {
+            aida (len(table) != 0) {
+                exec.cells[4] = exec.cells[4] + 1;
+                kaku polled = reactor.poll(r, -1, 64);
+                moshi (polled.error != mu) { kaesu iie; }
+                kaku woken = 0;
+                kaku e = 0;
+                aida (e < len(polled.events)) {
+                    kaku event = polled.events[e];
+                    moshi (reactor.current(r, event)) {
+                        kaku at = find_operation(table, event.operation);
+                        moshi (at >= 0) {
+                            kaku entry = table[at];
+                            reactor.cancel(r, entry.operation, entry.handle);
+                            remove_at(table, at);
+                            async.enqueue(exec, entry.wake);
+                            woken = woken + 1;
+                            exec.cells[5] = exec.cells[5] + 1;
+                        }
+                    }
+                    e = e + 1;
+                }
+                moshi (woken > 0) { kaesu hai; }
+            }
+            kaesu iie;
+        },
+        cancel: waza (handle: resource) -> int64 {
+            kaku woken = 0;
+            kaku at = 0;
+            aida (at < len(table)) {
+                kaku entry = table[at];
+                moshi (entry.handle == handle) {
+                    reactor.cancel(r, entry.operation, entry.handle);
+                    remove_at(table, at);
+                    async.enqueue(exec, entry.wake);
+                    woken = woken + 1;
+                } sore {
+                    at = at + 1;
+                }
+            }
+            kaesu woken;
+        },
+        pending: waza () -> int64 { kaesu len(table); }
+    };
+    array.push(exec.pollers, poller);
+    kaesu poller;
+}
+
+waza find_operation(table: []Wait, id: int64) -> int64 {
+    kaku at = 0;
+    aida (at < len(table)) {
+        moshi (table[at].operation.id == id) { kaesu at; }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+waza remove_at(table: []Wait, at: int64) -> unit {
+    kaku last = len(table) - 1;
+    table[at] = table[last];
+    array.truncate(table, last);
+}
+
+// Suspends `self` until `handle` is ready for `interest`, then runs `retry`. Returns false when the wait could not be registered.
+waza wait_ready<T>(self: async.Task<T>, handle: resource, interest: int64, retry: () -> unit) -> bool {
+    kaku maybe = poller_of(self.core.exec[0]);
+    moshi (maybe == mu) { kaesu iie; }
+    kaku poller = maybe;
+    kaku resume = async.park(self.core, retry);
+    moshi (!poller.wait(handle, interest, resume)) {
+        async.unpark(self.core);
+        kaesu iie;
+    }
+    kaesu hai;
+}
+
+// ---- read
+
+koukai waza read(connection: tcp_async.AsyncConnection, destination: []uint8, offset: int64, length: int64) -> async.Task<tcp_async.ReadResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.ReadResult>) -> unit {
+        read_step(self, connection, destination, offset, length);
+    });
+}
+
+waza read_step(self: async.Task<tcp_async.ReadResult>, connection: tcp_async.AsyncConnection, destination: []uint8, offset: int64, length: int64) -> unit {
+    kaku result = tcp_async.read(connection, destination, offset, length);
+    moshi (!result.pending) {
+        async.complete(self, result);
+        kaesu;
+    }
+    kaku retry = waza () -> unit { read_step(self, connection, destination, offset, length); };
+    moshi (!wait_ready(self, connection.handle, reactor.readable, retry)) {
+        async.fail(self, "reactor wait could not be registered");
+    }
+}
+
+// ---- write (one pass: writes what the socket accepts; use write_all for the whole buffer)
+
+koukai waza write(connection: tcp_async.AsyncConnection, source: []uint8, offset: int64, length: int64) -> async.Task<tcp_async.WriteResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.WriteResult>) -> unit {
+        write_step(self, connection, source, offset, length);
+    });
+}
+
+waza write_step(self: async.Task<tcp_async.WriteResult>, connection: tcp_async.AsyncConnection, source: []uint8, offset: int64, length: int64) -> unit {
+    kaku result = tcp_async.write(connection, source, offset, length);
+    moshi (!result.pending) {
+        async.complete(self, result);
+        kaesu;
+    }
+    kaku retry = waza () -> unit { write_step(self, connection, source, offset, length); };
+    moshi (!wait_ready(self, connection.handle, reactor.writable, retry)) {
+        async.fail(self, "reactor wait could not be registered");
+    }
+}
+
+// Writes the whole range, suspending whenever the socket buffer is full. count is the total written (less than length only on error).
+koukai waza write_all(connection: tcp_async.AsyncConnection, source: []uint8, offset: int64, length: int64) -> async.Task<tcp_async.WriteResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.WriteResult>) -> unit {
+        write_all_step(self, connection, source, offset, length, 0);
+    });
+}
+
+waza write_all_step(self: async.Task<tcp_async.WriteResult>, connection: tcp_async.AsyncConnection, source: []uint8, offset: int64, length: int64, done: int64) -> unit {
+    aida (done < length) {
+        kaku result = tcp_async.write(connection, source, offset + done, length - done);
+        done = done + result.count;
+        moshi (result.error != mu) {
+            async.complete(self, tcp_async.WriteResult { count: done, pending: iie, error: result.error });
+            kaesu;
+        }
+        moshi (result.pending) {
+            kaku resume_at = done;
+            kaku retry = waza () -> unit { write_all_step(self, connection, source, offset, length, resume_at); };
+            moshi (!wait_ready(self, connection.handle, reactor.writable, retry)) {
+                async.fail(self, "reactor wait could not be registered");
+            }
+            kaesu;
+        }
+    }
+    async.complete(self, tcp_async.WriteResult { count: done, pending: iie, error: mu });
+}
+
+// ---- accept
+
+koukai waza accept(listener: tcp_async.AsyncListener) -> async.Task<tcp_async.AcceptResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.AcceptResult>) -> unit {
+        accept_step(self, listener);
+    });
+}
+
+waza accept_step(self: async.Task<tcp_async.AcceptResult>, listener: tcp_async.AsyncListener) -> unit {
+    kaku result = tcp_async.accept(listener);
+    moshi (!result.pending) {
+        async.complete(self, result);
+        kaesu;
+    }
+    kaku retry = waza () -> unit { accept_step(self, listener); };
+    moshi (!wait_ready(self, listener.handle, reactor.readable, retry)) {
+        async.fail(self, "reactor wait could not be registered");
+    }
+}
+
+// ---- connect
+
+koukai waza connect(address: tcp.IPv4Address) -> async.Task<tcp_async.ConnectResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.ConnectResult>) -> unit {
+        kaku started = tcp_async.connect(address);
+        kaku maybe = started.connection;
+        moshi (!started.pending) {
+            async.complete(self, started);
+            kaesu;
+        }
+        moshi (maybe == mu) {
+            async.complete(self, started);
+            kaesu;
+        }
+        kaku connection = maybe;
+        connect_step(self, connection);
+    });
+}
+
+waza connect_step(self: async.Task<tcp_async.ConnectResult>, connection: tcp_async.AsyncConnection) -> unit {
+    kaku finished = tcp_async.finish_connect(connection);
+    moshi (!finished.pending) {
+        async.complete(self, tcp_async.ConnectResult { connection: connection, pending: iie, error: finished.error });
+        kaesu;
+    }
+    kaku retry = waza () -> unit { connect_step(self, connection); };
+    moshi (!wait_ready(self, connection.handle, reactor.writable, retry)) {
+        async.fail(self, "reactor wait could not be registered");
+    }
+}
+
+// ---- close
+
+// Wakes every task suspended on the connection (their retry sees the closed socket and reports Closed) and then closes it. A pending wait
+// on a closed descriptor would otherwise never fire: the kernel silently drops its registration.
+koukai waza close(connection: tcp_async.AsyncConnection) -> async.Task<tcp_async.UnitResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.UnitResult>) -> unit {
+        moshi (len(self.core.exec[0].pollers) != 0) { self.core.exec[0].pollers[0].cancel(connection.handle); }
+        async.complete(self, tcp_async.close(connection));
+    });
+}
+
+koukai waza close_listener(listener: tcp_async.AsyncListener) -> async.Task<tcp_async.UnitResult> {
+    kaesu async.spawn(waza (self: async.Task<tcp_async.UnitResult>) -> unit {
+        moshi (len(self.core.exec[0].pollers) != 0) { self.core.exec[0].pollers[0].cancel(listener.handle); }
+        async.complete(self, tcp_async.close_listener(listener));
+    });
+}
+
+// The number of reactor waits registered on the executor and not yet fired (0 once every task has finished or been woken).
+koukai waza pending_waits(exec: async.Executor) -> int64 {
+    moshi (len(exec.pollers) == 0) { kaesu 0; }
+    kaesu exec.pollers[0].pending();
+}

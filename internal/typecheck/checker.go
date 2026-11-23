@@ -2,6 +2,7 @@ package typecheck
 
 import (
 	"fmt"
+	"strings"
 
 	"Mio/internal/ast"
 	"Mio/internal/diagnostic"
@@ -229,6 +230,11 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 		left, err := c.checkExpression(n.Left)
 		if err != nil {
 			return KindInvalid, err
+		}
+		// `matsu e` is lowered to async.then(.., __mio_tN.core, ..) where __mio_tN holds e: reading `.core` of anything but a task is an
+		// await of a non-task (the operand identifier carries the span of e).
+		if id, isTemp := n.Left.(*ast.Identifier); isTemp && n.Name == "core" && strings.HasPrefix(id.Name, "__mio_t") && !isTaskKind(left) {
+			return KindInvalid, typeDiagnostic("E0802", "matsu 的操作数必须是任务（Task）", n.Left.Span(), "kiso/async.Task", left.String(), fmt.Errorf("matsu requires a task value, got %s", left))
 		}
 		if left.IsNullable() {
 			return KindInvalid, fmt.Errorf("nullable value %s must be narrowed before field access", left)
@@ -597,4 +603,10 @@ func integerKind(name string) Kind {
 	default:
 		return KindInvalid
 	}
+}
+
+// isTaskKind reports whether k is an instantiation of the asynchronous runtime's Task type.
+func isTaskKind(k Kind) bool {
+	name := k.String()
+	return strings.HasPrefix(name, "kiso/async.Task<") || strings.HasPrefix(name, "kiso/async::Task<")
 }

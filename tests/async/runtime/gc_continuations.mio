@@ -1,0 +1,33 @@
+yobu "kiso/array";
+yobu "kiso/async";
+
+waza churn(n: int64) -> int64 {
+    kaku keep: []int64 = [];
+    kaku i = 0;
+    aida (i < n) { array.push(keep, i); i = i + 1; }
+    kaesu len(keep);
+}
+
+hidouki waza leaf(x: int64) -> int64 {
+    kaku scratch: []int64 = [x, x + 1, x + 2];
+    kaesu scratch[0] + scratch[2] - scratch[1] + churn(50) - 49;
+}
+
+// A chain of awaits where every continuation closure holds live locals (arrays, strings) across the suspension point.
+hidouki waza chain(depth: int64) -> int64 {
+    moshi (depth == 0) { kaesu 1; }
+    kaku local: []int64 = [depth, depth * 2, depth * 3];
+    kaku below = matsu chain(depth - 1);
+    kaku mid = matsu leaf(depth);
+    kaesu below + local[0] + local[1] + local[2] - depth * 6 + mid - depth;
+}
+
+hidouki waza main() -> int64 {
+    kaku a = matsu chain(300);
+    kaku b = matsu chain(150);
+    chant(a);
+    chant(b);
+    kaesu 0;
+}
+
+main();

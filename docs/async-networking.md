@@ -1,6 +1,6 @@
 # Mio native asynchronous networking and M-task runtime — audit, contracts and phased plan
 
-Status: **Phase A (nonblocking TCP) and Phase B (epoll reactor) implemented on Linux AMD64; Phases C–E are plans.**
+Status: **Phase A (nonblocking TCP) and Phase B (epoll reactor) implemented on Linux AMD64; Phases C–E are plans.** Update: the language-level part of Phase C (`hidouki`/`matsu`, tasks, a cooperative executor and epoll-backed TCP tasks) is implemented on Linux AMD64 only — see [async-await.md](async-await.md); timers, kqueue and IOCP remain plans.
 Base: `Mio-2.2.0` at `4236836` (PRs #59 yuzuru ownership and #63 Linux thread primitives are merged in this base).
 Terminology used below: *Implemented* (in the tree), *Tested locally* (run on the stated host), *Validated by CI* (a green run of the
 named workflow), *Available on target X* (native execution evidence on X), *Experimental*, *Planned*.

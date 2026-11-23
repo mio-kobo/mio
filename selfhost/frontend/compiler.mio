@@ -37,6 +37,9 @@ kata PackageState {
     visiting: []string;
     failed: []bool;
     diagnostic: []string;
+    // [hai] while only the import graph is wanted (async_requested): sources are parsed and followed, never resolved or type checked,
+    // so asking costs a small part of a build and its data is collectable as soon as each package is read.
+    scan_only: []bool;
 }
 
 waza contains(values: []string, value: string) -> bool {
@@ -245,7 +248,7 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             moshi (source.error != mu) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IO read source: ", file_path); nukeru; }
             data = source.data;
         } }
-        kaku parsed = parser.parse_with_progress(data,state.work);
+        kaku parsed = parser.lower_async(parser.parse_with_progress(data,state.work));
         moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
         moshi (state.analysis_mode) { kaku file_id = len(files); moshi (parsed.root < 0) { file_id = -1; } array.push(state.sources, AnalysisSource { path: file_path, bytes: data, package_path: package_path, file_id: file_id }); }
         moshi (state.analysis_mode) {
@@ -254,6 +257,9 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
                 moshi (parser.parse_error_kind_code(problem.kind) == 0) { code = "E0001"; detail = "invalid source token"; }
                 moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
                 moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 10) { code = "E0801"; detail = "matsu is only valid inside a hidouki function"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 11) { code = "E0803"; detail = "invalid asynchronous function declaration"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 12) { code = "E0804"; detail = "an asynchronous entrypoint must be hidouki waza main() -> int64"; }
                 kaku end = problem.position; kaku ti = 0;
                 aida (ti < len(parsed.tokens)) { moshi (parsed.tokens[ti].start.offset == problem.position.offset) { end = parsed.tokens[ti].end; nukeru; } ti = ti + 1; }
                 array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: file_path, span: parser.SourceSpan { start: problem.position, end: end }, detail: detail }); pi = pi + 1;
@@ -263,6 +269,9 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             kaku problem = parsed.errors[0]; kaku code = "E_PARSE"; kaku detail = "invalid source syntax";
             moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
             moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
+            moshi (parser.parse_error_kind_code(problem.kind) == 10) { code = "E0801"; detail = "matsu is only valid inside a hidouki function"; }
+            moshi (parser.parse_error_kind_code(problem.kind) == 11) { code = "E0803"; detail = "invalid asynchronous function declaration"; }
+            moshi (parser.parse_error_kind_code(problem.kind) == 12) { code = "E0804"; detail = "an asynchronous entrypoint must be hidouki waza main() -> int64"; }
             state.failed[0] = hai; state.diagnostic[0] = diagnostic(code, file_path, problem.position.line, problem.position.column, detail); nukeru;
         }
         moshi (parsed.root < 0 || parsed.root >= len(parsed.ast.nodes)) { index = index + 1; tsuzuku; }
@@ -309,6 +318,11 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
         load_package(state, root, dependencies[index]);
         moshi (state.analysis_mode && state.failed[0] && !progress.cancelled(state.work)) { import_failure(state, files, dependencies[index], state.diagnostic[0]); state.failed[0] = iie; }
         index = index + 1;
+    }
+    moshi (state.scan_only[0]) {
+        moshi (!state.failed[0]) { array.push(state.paths, package_path); }
+        array.truncate(state.visiting, len(state.visiting) - 1);
+        kaesu;
     }
     moshi (!state.failed[0]) {
         kaku resolved_dependencies: []resolver.ResolvedPackage = [];
@@ -401,6 +415,25 @@ koukai waza compile_source(root: string, entry: string, bunko_root: string) -> F
     kaesu compile_source_target(root, entry, bunko_root, iie);
 }
 
+// Whether the program (with everything it imports) uses the asynchronous runtime package: hidouki / matsu inject an import of kiso/async,
+// and a hand-written import of it is a use of the same runtime. Callers gate this on the target (E0805).
+koukai waza async_requested(root: string, entry: string, bunko_root: string) -> bool {
+    kaku state = source_state(bunko_root, "");
+    state.scan_only[0] = hai;
+    load_package(state, root, entry);
+    moshi (state.failed[0]) { kaesu iie; }
+    kaesu contains(state.paths, "kiso/async");
+}
+
+// The same question for a package's test build (identity-scoped source state, as compile_tests uses).
+koukai waza tests_async_requested(root: string, entry: string, bunko_root: string) -> bool {
+    kaku state = source_state(bunko_root, package_identity(root, entry));
+    state.scan_only[0] = hai;
+    load_package(state, root, entry);
+    moshi (state.failed[0]) { kaesu iie; }
+    kaesu contains(state.paths, "kiso/async");
+}
+
 koukai waza compile_source_target(root: string, entry: string, bunko_root: string, allow_c: bool) -> FrontendResult {
     kaku state = source_state(bunko_root, "");
     kaesu compile_state(state, root, entry, allow_c);
@@ -449,7 +482,7 @@ waza source_state(bunko_root: string, test_entry: string) -> PackageState { kaes
 waza source_state_options(bunko_root: string, test_entry: string, overlays: []SourceOverlay, analysis_mode: bool) -> PackageState {kaesu source_state_progress(bunko_root,test_entry,overlays,analysis_mode,progress.context());}
 waza source_state_progress(bunko_root: string, test_entry: string, overlays: []SourceOverlay, analysis_mode: bool, work: progress.Context) -> PackageState {
     kaku embedded: []resources.File = []; moshi (bunko_root == "") { embedded = resources.files(); }
-    kaesu PackageState { work:work, overlays: overlays, analysis_mode: analysis_mode, sources: [], diagnostics: [], bunko_root: bunko_root, embedded: embedded, test_entry: test_entry, tests: [], paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""] };
+    kaesu PackageState { work:work, overlays: overlays, analysis_mode: analysis_mode, sources: [], diagnostics: [], bunko_root: bunko_root, embedded: embedded, test_entry: test_entry, tests: [], paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""], scan_only: [iie] };
 }
 
 // LSP analysis shares the source provider, parser, resolver and checker used by
