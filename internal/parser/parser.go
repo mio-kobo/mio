@@ -258,7 +258,11 @@ func (p *Parser) parseStatement() (ast.Statement, error) {
 		return p.parseLetStatement()
 
 	case token.Function:
-		return p.parseFunctionStatement()
+		declaration, err := p.parseFunctionStatement()
+		if err == nil && declaration.CExport != "" {
+			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
+		}
+		return declaration, err
 
 	case token.Return:
 		return p.parseReturnStatement()
@@ -1306,6 +1310,21 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 		}
 	}
 
+	// `export "symbol"` after the signature (public functions only, checked by the caller): a contextual word, because
+	// before it only `=` or `{` could follow a signature.
+	cExport := ""
+	if p.peekToken.Type == token.Ident && p.peekToken.Literal == "export" {
+		p.nextToken()
+		if p.peekToken.Type != token.String || !cabi.ValidSymbol(p.peekToken.Literal) || len(typeParams) != 0 || returnType == nil {
+			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
+		}
+		p.nextToken()
+		cExport = p.curToken.Literal
+		if p.peekToken.Type != token.LBrace {
+			return nil, p.expected("'{'", " after export symbol", p.peekToken)
+		}
+	}
+
 	if p.peekToken.Type == token.Assign {
 		p.nextToken()
 		if p.peekToken.Type != token.Ident || p.peekToken.Literal != "c" {
@@ -1368,6 +1387,7 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 		Parameters:  params,
 		ReturnType:  returnType,
 		Body:        body,
+		CExport:     cExport,
 		Range: ast.Span{
 			Start: start,
 			End:   body.Span().End,
