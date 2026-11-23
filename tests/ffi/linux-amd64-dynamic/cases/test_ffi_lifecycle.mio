@@ -1,0 +1,95 @@
+yobu "../ffi";
+yobu "../support";
+yobu "kiso/array";
+yobu "kiso/string";
+
+kaku run = support.begin("test_ffi_lifecycle");
+
+// use after unload is refused, never executed
+kaku lib = ffi.open(support.absolute("libmio_math.so"));
+kaku add = ffi.symbol(lib, "mio_add", "i:ii");
+support.expect(run, "works while loaded", ffi.call_i_ii(add, int32(1), int32(2)) == int32(3));
+support.expect(run, "is open", ffi.is_open(lib));
+support.expect(run, "close", ffi.close(lib) == "");
+support.expect(run, "is closed", !ffi.is_open(lib));
+support.expect(run, "call after unload returns zero", ffi.call_i_ii(add, int32(1), int32(2)) == int32(0));
+support.expect(run, "call after unload is refused", string.has_prefix(ffi.error(add), "E_FFI_CLOSED"));
+support.expect(run, "double close", string.has_prefix(ffi.close(lib), "E_FFI_CLOSED"));
+support.expect(run, "symbol after close", string.has_prefix(ffi.error(ffi.symbol(lib, "mio_add", "i:ii")), "E_FFI_CLOSED"));
+
+// reloading gives a new library; the old symbol stays dead
+kaku lib2 = ffi.open(support.absolute("libmio_math.so"));
+support.expect(run, "reload", !ffi.failed(lib2));
+support.expect(run, "old symbol stays refused", ffi.call_i_ii(add, int32(1), int32(2)) == int32(0));
+kaku add2 = ffi.symbol(lib2, "mio_add", "i:ii");
+support.expect(run, "new symbol works", ffi.call_i_ii(add2, int32(40), int32(2)) == int32(42));
+
+// repeated loads of the same file are reference counted by the system loader
+kaku first = ffi.open(support.absolute("libmio_math.so"));
+kaku second = ffi.open(support.absolute("libmio_math.so"));
+kaku sym_first = ffi.symbol(first, "mio_add", "i:ii");
+kaku sym_second = ffi.symbol(second, "mio_add", "i:ii");
+support.expect(run, "same file, same symbol address", sym_first.address == sym_second.address);
+support.expect(run, "close first", ffi.close(first) == "");
+support.expect(run, "first symbol refused", ffi.call_i_ii(sym_first, int32(1), int32(1)) == int32(0));
+support.expect(run, "second still loaded", ffi.call_i_ii(sym_second, int32(1), int32(1)) == int32(2));
+support.expect(run, "close second", ffi.close(second) == "");
+
+// resolving the same symbol repeatedly
+kaku stable = hai;
+kaku i = 0;
+aida (i < 10000) {
+    kaku again = ffi.symbol(lib2, "mio_add", "i:ii");
+    moshi (again.address != add2.address || ffi.error(again) != "") { stable = iie; }
+    i = i + 1;
+}
+support.expect(run, "10000 resolutions give one address", stable);
+support.expect(run, "hot calls", ffi.call_i_ii(add2, int32(100), int32(200)) == int32(300));
+
+// several different libraries at once, including one with a transitive system dependency (libz)
+kaku l_math = ffi.open(support.absolute("libmio_math.so"));
+kaku l_buffer = ffi.open(support.absolute("libmio_buffer.so"));
+kaku l_state = ffi.open(support.absolute("libmio_state.so"));
+kaku l_zlib = ffi.open(support.absolute("libmio_zlib.so"));
+support.expect(run, "four libraries open together", !ffi.failed(l_math) && !ffi.failed(l_buffer) && !ffi.failed(l_state) && !ffi.failed(l_zlib));
+kaku s_add = ffi.symbol(l_math, "mio_add", "i:ii");
+kaku s_len = ffi.symbol(l_buffer, "mio_buffer_length", "z:nz");
+kaku s_new = ffi.symbol(l_state, "mio_state_create", "p:");
+kaku s_inc = ffi.symbol(l_state, "mio_state_increment", "i:p");
+kaku s_del = ffi.symbol(l_state, "mio_state_destroy", "v:p");
+kaku s_crc = ffi.symbol(l_zlib, "mio_zlib_crc32", "u:nz");
+kaku handle = ffi.call_p_(s_new);
+support.expect(run, "interleaved calls", ffi.call_i_ii(s_add, int32(1), int32(2)) == int32(3) &&
+    ffi.call_z_nz(s_len, string.to_bytes("abc")) == uint64(3) && ffi.call_i_p(s_inc, handle) == int32(1) &&
+    ffi.call_u_nz(s_crc, string.to_bytes("123456789")) == uint32(3421780262));
+ffi.call_v_p(s_del, handle);
+// closing one library leaves the others working
+support.expect(run, "close buffer", ffi.close(l_buffer) == "");
+support.expect(run, "others survive", ffi.call_i_ii(s_add, int32(5), int32(6)) == int32(11));
+support.expect(run, "closed one is refused", ffi.call_z_nz(s_len, string.to_bytes("abc")) == uint64(0));
+support.expect(run, "close math", ffi.close(l_math) == "");
+support.expect(run, "close state", ffi.close(l_state) == "");
+support.expect(run, "close zlib", ffi.close(l_zlib) == "");
+
+// transitive dependency between two of our own libraries (outer -> inner via $ORIGIN)
+kaku outer = ffi.open(support.absolute("libmio_dep_outer.so"));
+support.expect(run, "outer opens and pulls in inner", !ffi.failed(outer));
+kaku value = ffi.symbol(outer, "mio_outer_value", "i:");
+support.expect(run, "call through the dependency", ffi.call_i_(value) == int32(42));
+support.expect(run, "close outer", ffi.close(outer) == "");
+
+// 1,000 load / resolve / call / unload cycles
+kaku cycles_ok = hai;
+kaku cycle = 0;
+aida (cycle < 1000) {
+    kaku c = ffi.open(support.absolute("libmio_math.so"));
+    moshi (ffi.failed(c)) { cycles_ok = iie; cycle = 1000; tsuzuku; }
+    kaku s = ffi.symbol(c, "mio_add", "i:ii");
+    moshi (ffi.call_i_ii(s, int32(cycle), int32(1)) != int32(cycle + 1)) { cycles_ok = iie; }
+    moshi (ffi.close(c) != "") { cycles_ok = iie; }
+    moshi (ffi.call_i_ii(s, int32(1), int32(1)) != int32(0)) { cycles_ok = iie; }
+    cycle = cycle + 1;
+}
+support.expect(run, "1000 load/unload cycles", cycles_ok);
+support.expect(run, "close lib2", ffi.close(lib2) == "");
+support.finish(run);

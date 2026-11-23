@@ -56,5 +56,8 @@ func Validate(key string, count int, returns bool) error {
 			return fmt.Errorf("E_FFI_TYPE unsupported C parameter %q", p)
 		}
 	}
+	if strings.EqualFold(parts[1], "mio.dynamic.dll") && (count < 1 || count > 13 || parts[4] != "uint64") {
+		return fmt.Errorf("E_FFI_PROTOTYPE dynamic calls require a uint64 function token and at most 12 native arguments")
+	}
 	return nil
 }

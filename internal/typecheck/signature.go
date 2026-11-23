@@ -162,13 +162,27 @@ func (c *Checker) registerFunctionSignature(
 			cabi.TypeCode(fn.ReturnType.Name) == "" || len(fn.ReturnType.Args) != 0 {
 			return fmt.Errorf("%s", prototypeError)
 		}
-		for _, param := range fn.Parameters {
+		for index, param := range fn.Parameters {
 			if param.DeclaredType == nil || len(param.DeclaredType.Args) != 0 {
 				return fmt.Errorf("%s", prototypeError)
 			}
-			if code := cabi.TypeCode(param.DeclaredType.Name); code == "" || code == "v" {
+			element := ""
+			if param.DeclaredType.Element != nil {
+				if len(param.DeclaredType.Element.Args) != 0 || param.DeclaredType.Element.Element != nil {
+					return fmt.Errorf("%s", prototypeError)
+				}
+				element = param.DeclaredType.Element.Name
+			}
+			code := cabi.ParamCode(param.DeclaredType.Name, element)
+			if code == "" || code == "v" {
 				return fmt.Errorf("%s", prototypeError)
 			}
+			if fn.CSymbol == cabi.IndirectSymbol && index == 0 && code != "k" {
+				return fmt.Errorf("E_CABI an indirect C call takes the function pointer (cptr) as its first parameter")
+			}
+		}
+		if fn.CSymbol == cabi.IndirectSymbol && len(fn.Parameters) == 0 {
+			return fmt.Errorf("E_CABI an indirect C call takes the function pointer (cptr) as its first parameter")
 		}
 	}
 

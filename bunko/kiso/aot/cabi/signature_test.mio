@@ -18,3 +18,13 @@ waza test_c_target_capabilities() -> unit {
     testing.expect(!supports_target("linux-arm64") && !supports_target("darwin-amd64"), "no C ABI backend on the other Unix targets");
     testing.expect(!supports_target("windows-amd64") && !supports_target("windows-arm64") && !supports_target(""), "no C ABI backend on Windows");
 }
+
+waza test_export_and_indirect_call_signatures() -> unit {
+    kaku external = signature("$cabi::mio_ffi_indirect:gkm", 2, hai);
+    testing.expect(external.valid && external.indirect, "indirect call accepts a target pointer and buffer");
+    testing.expect(!signature("$cabi::mio_ffi_indirect:gg", 1, hai).valid, "indirect call requires a target pointer");
+
+    kaku exported = export_signature("$export::mio_ffi_indirect:gg", 1, hai);
+    testing.expect(exported.valid && !exported.indirect, "the same symbol is an ordinary scalar export");
+    testing.expect(!export_signature("$export::mio_buffer:gm", 1, hai).valid, "exports only accept scalar parameters");
+}

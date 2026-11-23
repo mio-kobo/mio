@@ -4,6 +4,8 @@ yobu "kiso/string";
 // 空指令体是原生声明在 Mochi 中的既有表示。专用前缀携带固定原型，
 // 普通 Mio 和 MMA 函数都不能使用这一命名空间。
 koukai teisu prefix = "$cabi::";
+// 间接调用的保留符号：第一个参数是目标函数指针（cptr，通常来自 dlsym），其余参数是 C 参数。
+koukai teisu indirect_symbol = "mio_ffi_indirect";
 // 保留 "require native darwin-arm64" 这一段措辞：Darwin 回归测试按它匹配跨目标构建的拒绝诊断。
 koukai teisu target_error = "E_CABI C ABI declarations require native darwin-arm64 or linux-amd64 on a matching host";
 
@@ -42,12 +44,19 @@ koukai waza type_code(name: string) -> string {
     kaesu "";
 }
 
-koukai kata Signature { symbol: string; result: int64; parameters: []int64; valid: bool; }
+// 参数专用代码：[]uint8 传递数据首地址（"m"），数组仍归 Mio 所有，指针只在调用期间有效。
+koukai waza param_code(name: string, element: string) -> string {
+    moshi (name == "[]") { moshi (element == "uint8") { kaesu "m"; } kaesu ""; }
+    moshi (element != "") { kaesu ""; }
+    kaesu type_code(name);
+}
+
+koukai kata Signature { symbol: string; result: int64; parameters: []int64; valid: bool; indirect: bool; }
 
 koukai waza signature(name: string, count: int64, returns_value: bool) -> Signature {
-    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
     moshi (!is_external(name)) { kaesu invalid; }
-    kaesu parse_signature(name, count, returns_value, 7);
+    kaesu parse_signature(name, count, returns_value, 7, hai);
 }
 
 // Functions that a Linux AMD64 shared library exports through the C ABI keep their Mio body and carry the same
@@ -56,13 +65,13 @@ koukai waza signature(name: string, count: int64, returns_value: bool) -> Signat
 koukai teisu export_prefix = "$export::";
 koukai waza is_export(name: string) -> bool { kaesu string.has_prefix(name, export_prefix); }
 koukai waza export_signature(name: string, count: int64, returns_value: bool) -> Signature {
-    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
     moshi (!is_export(name)) { kaesu invalid; }
-    kaesu parse_signature(name, count, returns_value, 9);
+    kaesu parse_signature(name, count, returns_value, 9, iie);
 }
 
-waza parse_signature(name: string, count: int64, returns_value: bool, start: int64) -> Signature {
-    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
+waza parse_signature(name: string, count: int64, returns_value: bool, start: int64, external: bool) -> Signature {
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
     moshi (count < 0 || count > 256) { kaesu invalid; }
     kaku bytes = string.to_bytes(name);
     kaku at = start;
@@ -77,9 +86,11 @@ waza parse_signature(name: string, count: int64, returns_value: bool, start: int
     at = at + 2;
     aida (at < len(bytes)) {
         kaku parameter = int64(bytes[at]);
-        moshi (parameter < 97 || parameter > 108) { kaesu invalid; }
+        moshi (parameter < 97 || parameter > 109 || (parameter == 109 && !external)) { kaesu invalid; }
         array.push(parameters, parameter);
         at = at + 1;
     }
-    kaesu Signature { symbol: symbol, result: result, parameters: parameters, valid: hai };
+    kaku indirect = external && symbol == indirect_symbol;
+    moshi (indirect && (len(parameters) == 0 || parameters[0] != 107)) { kaesu invalid; }
+    kaesu Signature { symbol: symbol, result: result, parameters: parameters, valid: hai, indirect: indirect };
 }
