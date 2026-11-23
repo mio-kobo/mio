@@ -799,6 +799,10 @@ waza emit_word_natives(code: x86_64.Assembler) -> unit {
     // words_new(count)：从 64 KiB 匿名内存块中切分出清零的 count 个 64 位字控制块。
     // 控制块在进程生命周期内永不归还给操作系统，确保销毁通道后仍处于 send/receive 路径中的线程只会读到已关闭标志，绝不会访问已释放内存。
     x86_64.label(code, "rt.words_new");
+    // Bound the count before scaling it: count * 8 wraps for counts near 2^61, which would hand out a small block for a huge request.
+    // The unsigned compare also rejects every negative count.
+    x86_64.cmp_ri(code, x86_64.rdi, 8192);
+    x86_64.jcc(code, x86_64.cc_a, "rt.words_new.toobig");
     x86_64.mov_rr(code, x86_64.rsi, x86_64.rdi);
     x86_64.shl_ri(code, x86_64.rsi, 3);
     x86_64.add_ri(code, x86_64.rsi, 63);

@@ -71,10 +71,37 @@ teisu sender_unit = 4294967296;
 // 唤醒全部等待者时使用的唤醒上限（覆盖所有可能并发阻塞的线程数）。
 teisu wake_all_count = 1000000;
 
-koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
+// error == 0: channel is usable. Otherwise the control block could not be allocated and error is the negative errno from the runtime
+// (-12: the control-word pool is exhausted or the system is out of memory, -22: invalid size); channel is then a dead channel.
+koukai kata ChannelResult<T> { channel: Channel<T>; error: int64; }
+
+// A handle is a live control block only when it is positive: the runtime reports allocation failure as a negative errno, and 0 is never issued.
+waza usable<T>(channel: Channel<T>) -> bool { kaesu channel.words > 0; }
+
+// Creates a channel and reports allocation failure instead of hiding it. The ring is allocated first, so a failed control block leaves
+// nothing behind but garbage the collector reclaims. capacity below 1 is raised to 1.
+koukai waza channel_try_new<T>(capacity: int64, filler: T) -> ChannelResult<T> {
     kaku slots = capacity;
     moshi (slots < 1) { slots = 1; }
-    kaesu Channel[T] { words: runtime.words_new(8), ring: array.make[T](slots, filler), filler: filler, capacity: slots };
+    kaku ring = array.make[T](slots, filler);
+    kaku words = runtime.words_new(8);
+    moshi (words <= 0) {
+        kaku error = words;
+        moshi (error == 0) { error = -12; }
+        kaesu ChannelResult[T] { channel: Channel[T] { words: 0, ring: [], filler: filler, capacity: slots }, error: error };
+    }
+    kaesu ChannelResult[T] { channel: Channel[T] { words: words, ring: ring, filler: filler, capacity: slots }, error: 0 };
+}
+
+// Reports whether allocation succeeded. Closing or destroying a channel does not release its control block.
+koukai waza channel_valid<T>(channel: Channel<T>) -> bool { kaesu usable[T](channel); }
+
+// Compatible with the original signature. If the control block cannot be allocated this returns a DEAD channel: it is permanently closed, a
+// send is rejected and hands its value back, a receive reports closed, close and destroy do nothing, and no operation ever reaches the
+// invalid handle. Use channel_try_new (or channel_valid) to learn about the failure.
+koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
+    kaku created = channel_try_new[T](capacity, filler);
+    kaesu created.channel;
 }
 
 // 基于三态互斥字的通道锁：0 空闲，1 已加锁，2 已加锁且存在等待者。
@@ -139,6 +166,7 @@ waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((i
 
 // 向通道发送元素；若通道已满则阻塞等待。调用时应配合 yuzuru 移交所有权：`thread.send[Graph](channel, yuzuru graph)`。
 koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
+    moshi (!usable[T](channel)) { kaesu SendResult[T] { sent: iie, back: value }; }
     aida (hai) {
         lock[T](channel);
         moshi (runtime.word_get(channel.words, word_closed) != 0) {
@@ -166,6 +194,7 @@ koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
 
 // 从通道接收元素；若通道为空且尚未关闭则阻塞等待。
 koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
+    moshi (!usable[T](channel)) { kaesu Received[T] { item: channel.filler, closed: hai }; }
     aida (hai) {
         lock[T](channel);
         kaku count = runtime.word_get(channel.words, word_count);
@@ -194,6 +223,7 @@ koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
 
 // 关闭通道：拒绝后续发送（并将传入值退回给发送方），已入队的元素仍可由接收方继续排空，排空后返回 closed == hai。
 koukai waza close<T>(channel: Channel<T>) -> int64 {
+    moshi (!usable[T](channel)) { kaesu 0; }
     lock[T](channel);
     runtime.word_set(channel.words, word_closed, 1);
     unlock[T](channel);
@@ -205,6 +235,7 @@ koukai waza close<T>(channel: Channel<T>) -> int64 {
 // 支持从任意线程多次调用；对已销毁通道执行 send/receive 的行为与已关闭通道完全一致。
 // 注意：64 字节离堆控制块会在进程生命周期内刻意保持映射而不释放，以确保正处于 send/receive 路径中的线程永远不会访问到已释放内存。
 koukai waza destroy<T>(channel: Channel<T>) -> int64 {
+    moshi (!usable[T](channel)) { kaesu 0; }
     lock[T](channel);
     runtime.word_set(channel.words, word_closed, 1);
     runtime.word_set(channel.words, word_count, 0);
