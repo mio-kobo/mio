@@ -92,6 +92,7 @@ def main():
     expect('ffi.address(version_call_ref.handle)!=cptr(0)', "function address")
     lines.append('kaku input = ffi.bytes([uint8(230),uint8(151),uint8(165),uint8(230),uint8(156),uint8(172),uint8(232),uint8(170),uint8(158)]);')
     lines.append('kaku output = ffi.buffer_new(uint64(16));')
+    expect('ffi.buffer_pointer(output)==cptr(0)', "zero pointer out buffer")
     function("utf8", "string", "mio_utf8_length", "uint64", ["cptr", "uint64"])
     expect('utf8(utf8_ref.handle,ffi.buffer_data(input),uint64(9))==uint64(3)', "UTF8 input")
     function("textout", "string", "mio_utf8_output", "uint64", ["cptr", "uint64"])
@@ -193,6 +194,7 @@ def main():
     for m in MODULES:
         expect(f'ffi.close({m}.handle)==uint32(1)', 'close-' + m)
         expect(f'ffi.close({m}.handle)==uint32(0)', 'double-close-' + m)
+    expect('ffi.error()==uint32(1) && ffi.os_error()==uint32(0)', "last native handle error")
     expect('ffi.check(add32_ref.handle,ffi.signature("int32",["int32","int32"]))==uint32(0)', "use after close")
     lines.append('kaku iteration=0; aida(iteration<1100){kaku lib=ffi.open("./mio_ffi_version.dll");expect(lib.error==uint32(0),"reopen");kaku fn=ffi.symbol(lib.handle,"mio_ffi_abi_version","uint32",[]);expect(fn.error==uint32(0),"resolve repeat");expect(version_call(fn.handle)==uint32(1),"repeated version call");expect(ffi.close(lib.handle)==uint32(1),"reclose");iteration=iteration+1;}')
     expect('ffi.check(version_call_ref.handle,ffi.signature("uint32",[]))==uint32(0)', "stale generation after reuse")
