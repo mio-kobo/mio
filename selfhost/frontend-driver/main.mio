@@ -14,21 +14,36 @@ waza fail(message: string) -> unit {
 
 waza run() -> unit {
     kaku request = fs.read_all("/dev/stdin");
-    moshi (request.error != mu) { fail("E_IO stdin: cannot read frontend request"); kaesu; }
-    kaku fields: []string = []; kaku field: []uint8 = []; kaku index = 0;
+    moshi (request.error != mu) {
+        fail("E_IO stdin: cannot read frontend request");
+        kaesu;
+    }
+    kaku fields: []string = [];
+    kaku field: []uint8 = [];
+    kaku index = 0;
     aida (index < len(request.data)) {
         kaku value = request.data[index];
         moshi (value == uint8(10)) {
             kaku text = string.from_utf8(field);
-            moshi (text == mu) { fail("E_INPUT stdin: request must be UTF-8"); kaesu; }
-            array.push(fields, text); field = [];
+            moshi (text == mu) {
+                fail("E_INPUT stdin: request must be UTF-8");
+                kaesu;
+            }
+            array.push(fields, text);
+            field = [];
         }
         sore { array.push(field, value); }
         index = index + 1;
     }
-    moshi (len(fields) != 4 || len(field) != 0) { fail("E_INPUT stdin: expected four newline-terminated paths"); kaesu; }
+    moshi (len(fields) != 4 || len(field) != 0) {
+        fail("E_INPUT stdin: expected four newline-terminated paths");
+        kaesu;
+    }
     kaku compiled = frontend.compile_source(fields[0], fields[1], fields[2]);
-    moshi (compiled.error != "") { fail(compiled.error); kaesu; }
+    moshi (compiled.error != "") {
+        fail(compiled.error);
+        kaesu;
+    }
     kaku written = fs.write_all(fields[3], compiled.bytes);
     moshi (written.error != mu) { fail("E_IO output: cannot write compiled source"); }
 }

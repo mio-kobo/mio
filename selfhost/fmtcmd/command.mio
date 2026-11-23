@@ -1,0 +1,251 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/convert";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "selfhost/format";
+yobu "selfhost/frontend";
+yobu "selfhost/bunkopath";
+yobu "selfhost/imports";
+yobu "selfhost/progress";
+
+kata FormatOptions {
+    check: bool;
+    diff: bool;
+    stdin: bool;
+    organize: bool;
+    bunko: string;
+    filename: string;
+    paths: []string;
+    error: string;
+}
+
+waza parse_fmt(args: []string) -> FormatOptions {
+    kaku check = iie;
+    kaku diff = iie;
+    kaku stdin = iie;
+    kaku organize = hai;
+    kaku bunko = "";
+    kaku filename = "";
+    kaku error = "";
+    kaku paths: []string = [];
+    kaku positional = iie;
+    kaku at = 2;
+    aida (at < len(args) && error == "") {
+        kaku name = args[at];
+        at = at + 1;
+        moshi (positional || !string.has_prefix(name, "-")) { array.push(paths, name); tsuzuku; }
+        moshi (name == "--") { positional = hai; tsuzuku; }
+        moshi (name == "--stdin") { stdin = hai; tsuzuku; }
+        moshi (name == "--check") { check = hai; tsuzuku; }
+        moshi (name == "--diff") { diff = hai; tsuzuku; }
+        moshi (name == "--no-organize-imports") { organize = iie; tsuzuku; }
+        moshi (name == "--bunko-root") {
+            moshi (at >= len(args) || args[at] == "") { error = "--bunko-root requires a path"; }
+            sore { bunko = args[at]; at = at + 1; }
+            tsuzuku;
+        }
+        moshi (name == "--stdin-filepath") {
+            moshi (at >= len(args) || args[at] == "") { error = "--stdin-filepath requires a path"; }
+            sore { filename = args[at]; at = at + 1; }
+            tsuzuku;
+        }
+        error = string.concat("unknown option ", name);
+    }
+    moshi ((stdin && len(paths) > 0) || (!stdin && (filename != "" || len(paths) == 0))) {
+        moshi (error == "") { error = "provide source paths or --stdin"; }
+    }
+    kaesu FormatOptions { check: check, diff: diff, stdin: stdin, organize: organize, bunko: bunko, filename: filename, paths: paths, error: error };
+}
+
+waza fmt_error(name: string, message: string) -> int64 {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(name, string.concat(": ", string.concat(message, "\n")))));
+    kaesu 2;
+}
+
+waza skip_fmt_dir(name: string) -> bool {
+    kaesu string.has_prefix(name, ".") || name == "node_modules" || name == "vendor" ||
+        name == "build" || name == "dist" || name == "out" || name == "target";
+}
+
+waza collect_fmt(pathname: string, files: []string, seen: []string) -> int64 {
+    kaku info = fs.stat(pathname);
+    moshi (!info.exists) { kaesu fmt_error(pathname, "cannot access source"); }
+    kaku identity = os.canonical_path(pathname);
+    moshi (identity == mu) { kaesu fmt_error(pathname, "cannot resolve source path"); }
+    kaku previous = 0;
+    aida (previous < len(seen)) {
+        moshi (seen[previous] == identity) { kaesu 0; }
+        previous = previous + 1;
+    }
+    array.push(seen, identity);
+    moshi (info.is_file) { array.push(files, pathname); kaesu 0; }
+    moshi (!info.is_dir) { kaesu fmt_error(pathname, "expected a regular file or directory"); }
+    kaku listing = fs.read_dir(pathname);
+    moshi (listing.error != mu) { kaesu fmt_error(pathname, "cannot read directory"); }
+    kaku status = 0;
+    kaku at = 0;
+    aida (at < len(listing.entries)) {
+        kaku entry = listing.entries[at];
+        moshi ((entry.is_dir && !skip_fmt_dir(entry.name)) ||
+            (entry.is_file && string.has_suffix(entry.name, ".mio"))) {
+            moshi (collect_fmt(path.join(pathname, entry.name), files, seen) != 0) { status = 2; }
+        }
+        at = at + 1;
+    }
+    kaesu status;
+}
+
+waza diff_lines(out: bytes.ByteBuffer, source: []uint8, prefix: uint8) -> unit {
+    kaku at = 0;
+    kaku start = hai;
+    aida (at < len(source)) {
+        moshi (start) { bytes.write_byte(out, prefix); }
+        bytes.write_byte(out, source[at]);
+        start = source[at] == uint8(10);
+        at = at + 1;
+    }
+    moshi (!start) { bytes.write(out, string.to_bytes("\n\\ No newline at end of file\n")); }
+}
+
+waza diff_range(source: []uint8) -> string {
+    moshi (len(source) == 0) { kaesu "0,0"; }
+    kaku lines = 0;
+    kaku at = 0;
+    aida (at < len(source)) {
+        moshi (source[at] == uint8(10)) { lines = lines + 1; }
+        at = at + 1;
+    }
+    moshi (source[len(source) - 1] != uint8(10)) { lines = lines + 1; }
+    kaesu string.concat("1,", convert.format_int(lines));
+}
+
+waza fmt_diff(name: string, source: []uint8, formatted: []uint8) -> bool {
+    kaku out = bytes.new_buffer();
+    kaku header = string.new_builder();
+    string.write_string(header, "--- ");
+    string.write_string(header, name);
+    string.write_string(header, "\n+++ ");
+    string.write_string(header, name);
+    string.write_string(header, "\n@@ -");
+    string.write_string(header, diff_range(source));
+    string.write_string(header, " +");
+    string.write_string(header, diff_range(formatted));
+    string.write_string(header, " @@\n");
+    bytes.write(out, string.to_bytes(string.builder_string(header)));
+    diff_lines(out, source, uint8(45));
+    diff_lines(out, formatted, uint8(43));
+    kaesu fs.write_all("/dev/stdout", bytes.buffer_bytes(out)).error == mu;
+}
+
+waza format_input(name: string, input: string, options: FormatOptions, catalog: imports.Index) -> int64 {
+    kaku read = fs.read_all(input);
+    moshi (read.error != mu) { kaesu fmt_error(name, "cannot read source"); }
+    kaku formatted = format.source(read.data);
+    moshi (formatted.error != "") { kaesu fmt_error(name, formatted.error); }
+    kaku result = formatted.data;
+    moshi (options.organize) {
+        kaku file = frontend.source_file_identity(name);
+        kaku entry = path.dir(file);
+        moshi (name == "<stdin>") {
+            file = frontend.source_file_identity(path.join(catalog.root, ".mio-fmt-stdin.mio"));
+            entry = file;
+        }
+        kaku work = progress.context();
+        // Analyze the original snapshot, then apply only a validated organizer
+        // edit and format the result. The editor and CLI use this same edit.
+        kaku overlays = [frontend.SourceOverlay { path: file, bytes: read.data }];
+        kaku analysis = frontend.analyze_source_with_progress(catalog.root, entry, catalog.bunko, overlays,
+            string.has_suffix(file, "_test.mio"), work);
+        kaku edit = imports.organize(read.data, file, analysis, catalog, work);
+        moshi (edit != mu) {
+            kaku updated = format.source(imports.apply(read.data, edit));
+            moshi (updated.error != "") { kaesu fmt_error(name, updated.error); }
+            result = updated.data;
+        }
+    }
+    kaku changed = !bytes.equal(read.data, result);
+    moshi (options.diff && changed) {
+        moshi (!fmt_diff(name, read.data, result)) { kaesu fmt_error(name, "cannot write diff"); }
+    }
+    moshi (options.stdin && !options.check && !options.diff) {
+        moshi (fs.write_all("/dev/stdout", result).error != mu) {
+            kaesu fmt_error(name, "cannot write formatted source");
+        }
+    }
+    moshi (!options.stdin && changed && !options.diff) {
+        moshi (!options.check) {
+            kaku before_write = fs.read_all(input);
+            moshi (before_write.error != mu || !bytes.equal(read.data, before_write.data)) {
+                kaesu fmt_error(name, "source changed while formatting");
+            }
+            moshi (fs.write_all(input, result).error != mu) {
+                kaesu fmt_error(name, "cannot write formatted source");
+            }
+        }
+        chant(name);
+    }
+    moshi (options.check && changed) { kaesu 1; }
+    kaesu 0;
+}
+
+koukai waza run(args: []string, language: string) -> int64 {
+    kaku options = parse_fmt(args);
+    moshi (options.error != "") { kaesu fmt_error("mio fmt", options.error); }
+    kaku bunko = "";
+    moshi (options.organize) {
+        kaku library = bunkopath.resolve(options.bunko, language);
+        moshi (library.error != "") { kaesu fmt_error("mio fmt", library.error); }
+        bunko = library.root;
+        moshi (bunko == "" && fs.is_dir("bunko/kiso")) {
+            kaku local = os.canonical_path("bunko");
+            moshi (local != mu) { bunko = local; }
+        }
+    }
+    kaku catalog = imports.index(".", bunko);
+    moshi (options.stdin) {
+        kaku name = options.filename;
+        moshi (name == "") { name = "<stdin>"; }
+        kaesu format_input(name, "/dev/stdin", options, catalog);
+    }
+    kaku files: []string = [];
+    kaku seen: []string = [];
+    kaku status = 0;
+    kaku at = 0;
+    aida (at < len(options.paths)) {
+        moshi (collect_fmt(path.clean(options.paths[at]), files, seen) != 0) { status = 2; }
+        at = at + 1;
+    }
+    // Directory entries are not guaranteed to arrive in lexical order.
+    at = 1;
+    aida (at < len(files)) {
+        kaku current = files[at];
+        kaku index = at;
+        aida (index > 0 && fmt_path_less(current, files[index - 1])) {
+            files[index] = files[index - 1];
+            index = index - 1;
+        }
+        files[index] = current;
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(files)) {
+        kaku result = format_input(files[at], files[at], options, catalog);
+        moshi (result > status) { status = result; }
+        at = at + 1;
+    }
+    kaesu status;
+}
+
+waza fmt_path_less(left: string, right: string) -> bool {
+    kaku a = string.to_bytes(left);
+    kaku b = string.to_bytes(right);
+    kaku at = 0;
+    aida (at < len(a) && at < len(b)) {
+        moshi (a[at] != b[at]) { kaesu a[at] < b[at]; }
+        at = at + 1;
+    }
+    kaesu len(a) < len(b);
+}

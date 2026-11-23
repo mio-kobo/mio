@@ -4,12 +4,19 @@
 yobu "kiso/thread";
 yobu "kiso/array";
 
-kata Item { id: int64; tags: []int64; }
+kata Item {
+    id: int64;
+    tags: []int64;
+}
 
 waza deep_copy(source: []Item) -> []Item {
     kaku out: []Item = [];
     kaku i = 0;
-    aida (i < len(source)) { array.push(out, Item { id: source[i].id, tags: [source[i].tags[0]] }); i = i + 1; }
+    aida (i < len(source)) {
+        array.push(out, Item {
+                id: source[i].id, tags: [source[i].tags[0]] });
+        i = i + 1;
+    }
     kaesu out;
 }
 
@@ -23,7 +30,10 @@ waza run() -> int64 {
             kaku got = thread.receive[[]Item](channel);
             moshi (got.closed) { nukeru; }
             kaku i = 0;
-            aida (i < len(got.item)) { total = total + got.item[i].id + got.item[i].tags[0]; i = i + 1; }
+            aida (i < len(got.item)) {
+                total = total + got.item[i].id + got.item[i].tags[0];
+                i = i + 1;
+            }
         }
         kaesu total;
     };

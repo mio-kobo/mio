@@ -64,6 +64,11 @@ func signatureFingerprint(fn *ast.FunctionStatement) string {
 		f.typeRef(parameter.DeclaredType)
 	}
 	f.typeRef(fn.ReturnType)
+	if fn.CABI {
+		f.text("windows-amd64-c")
+		f.text(fn.CDLL)
+		f.text(fn.CSymbol)
+	}
 	return f.sum()
 }
 

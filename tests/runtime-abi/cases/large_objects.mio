@@ -2,12 +2,25 @@
 // generational layout) stay valid while referenced, are reclaimed when unreferenced (about 2.5 GiB in total, more
 // than the default Darwin heap) and coexist with small objects that point at them and that they point at.
 yobu "kiso/array";
-kata Big { id: int64; data: []int64; refs: []Big; }
+kata Big {
+    id: int64;
+    data: []int64;
+    refs: []Big;
+}
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
 waza big(id: int64, words: int64) -> Big { kaesu Big { id: id, data: array.make[int64](words, id), refs: [] }; }
-kaku ring: []Big = []; kaku i = 0;
-aida (i < 8) { array.push(ring, big(i, 131072)); i = i + 1; }
+kaku ring: []Big = [];
+kaku i = 0;
+aida (i < 8) {
+    array.push(ring, big(i, 131072));
+    i = i + 1;
+}
 kaku pinned = big(-1, 262144);
 kaku strings = array.make[string](40000, "large string array");
 kaku round = 8;
@@ -21,8 +34,18 @@ aida (round < 2568) {
     moshi (round - (round / 256) * 256 == 0) { check(pinned.data[262143] == -1 && strings[39999] == "large string array", "pinned"); }
     round = round + 1;
 }
-kaku total = 0; i = 0;
-aida (i < 8) { total = total + ring[i].id + ring[i].refs[0].id; check(ring[i].refs[0].data[5] == -1, "back reference"); i = i + 1; }
+kaku total = 0;
+i = 0;
+aida (i < 8) {
+    total = total + ring[i].id + ring[i].refs[0].id;
+    check(ring[i].refs[0].data[5] == -1, "back reference");
+    i = i + 1;
+}
 chant(total);
 check(total == 20500, "ring ids");
-moshi (failures == 0) { chant("large_objects: ok"); } sore { chant("large_objects: FAIL"); chant(failures); }
+moshi (failures == 0) {
+    chant("large_objects: ok");
+} sore {
+    chant("large_objects: FAIL");
+    chant(failures);
+}

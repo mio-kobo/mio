@@ -1,8 +1,8 @@
 # M19ef native development witnesses
 
 Production additions and these tests are Mio. Shell/Python may record evidence,
-but never generate compiler/runtime/native machine code. Use verified GF4 seed
-SHA256 `4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da`.
+but never generate compiler/runtime/native machine code. Use the verified native v2.1 seed (bootstrap-v2.1.0-seed.1, mio-v2.1.0-darwin-arm64) with
+SHA256 `be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79`.
 The `--bunko-root` argument is mandatory until new resources are regenerated;
 otherwise the seed will read its frozen embedded older library.
 

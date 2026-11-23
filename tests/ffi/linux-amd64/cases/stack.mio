@@ -1,0 +1,33 @@
+waza alignment() -> int64 = c "mio_c_stack_alignment";
+waza probe(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64, h: int64) -> int64 = c "mio_c_stack_probe";
+waza ninth(a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64, h: float64, i: float64) -> float64 = c "mio_c_double_stack_probe";
+waza add3(a: int32, b: int32, c: int32) -> int32 = c "mio_c_add";
+
+// 在不同深度的 Mio 帧和不同数量的待求值操作数下调用，C 入口处的栈都必须按 System V 对齐。
+waza depth0() -> int64 { kaesu alignment(); }
+waza depth1() -> int64 { kaku a = 1; kaesu alignment() + a - 1; }
+waza depth2() -> int64 { kaku a = 1; kaku b = 2; kaesu alignment() + a + b - 3; }
+waza depth3() -> int64 { kaku a = 1; kaku b = 2; kaku c = 3; kaesu 0 + alignment() + a + b + c - 6; }
+waza nest(n: int64) -> int64 {
+    moshi (n == 0) { kaesu alignment() + probe(0, 0, 0, 0, 0, 0, 7, 8) - 78; }
+    kaesu nest(n - 1);
+}
+
+chant(alignment());
+chant(1 + alignment());
+chant(1 + 2 * (3 + alignment()));
+chant(depth0() + depth1() + depth2() + depth3());
+chant(nest(0) + nest(1) + nest(2) + nest(3) + nest(4));
+// 栈参数：第 7、8 个整数参数分别位于调用点 RSP+0、RSP+8；对齐位在高位。
+chant(probe(1, 2, 3, 4, 5, 6, 7, 8));
+chant(probe(0, 0, 0, 0, 0, 0, -1, 100));
+chant(1 + 2 * probe(1, 2, 3, 4, 5, 6, 3, 4));
+// 第九个 double 位于栈上；前八个在 XMM0-XMM7。
+chant(ninth(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5) == 9.5);
+kaku sum = 0;
+kaku i = 0;
+aida (i < 100) {
+    sum = sum + alignment() + probe(0, 0, 0, 0, 0, 0, i, 0) - i * 10;
+    i = i + 1;
+}
+chant(sum);

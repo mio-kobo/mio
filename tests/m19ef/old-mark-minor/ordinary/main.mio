@@ -1,65 +1,178 @@
 // Ordinary allocation, Minor promotion and LOS cooperation regression.
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;next:Node?;}
-kata Shared {head:Node?;a:[]Node?;b:[]Node?;}
-kaku shared:Shared?=mu;kaku control=0;kaku ready_a=0;kaku ready_b=0;kaku done_a=0;kaku done_b=0;kaku failures=0;
-waza work(id:int64) -> unit {
- moshi(id==0){ready_a=1;}sore{ready_b=1;}
- aida(control==0){kaku waited=rt_wait(1000000);}
- kaku g=shared;moshi(g==mu){failures=1;kaesu;}
- kaku slots=g.a;moshi(id!=0){slots=g.b;}
- kaku i=0;aida(i<200){
-  kaku current=Node {value:id*1000+i,next:mu};slots[0]=current;
-  moshi(current.value!=id*1000+i){failures=2;kaesu;}
-  kaku observed=rt_collect(5);i=i+1;
-  moshi(i-(i/8)*8==0){kaku waited=rt_wait(100000);}
- }
- moshi(id==0){done_a=1;}sore{done_b=1;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    next: Node?;
 }
-waza first() -> unit {work(0);}
-waza second() -> unit {work(1);}
+kata Shared {
+    head: Node?;
+    a: []Node?;
+    b: []Node?;
+}
+kaku shared: Shared?= mu;
+kaku control = 0;
+kaku ready_a = 0;
+kaku ready_b = 0;
+kaku done_a = 0;
+kaku done_b = 0;
+kaku failures = 0;
+waza work(id: int64) -> unit {
+    moshi (id == 0) {
+        ready_a = 1;
+    } sore {
+        ready_b = 1;
+    }
+    aida (control == 0) { kaku waited = rt_wait(1000000); }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 1;
+        kaesu;
+    }
+    kaku slots = g.a;
+    moshi (id != 0) {
+        slots = g.b;
+    }
+    kaku i = 0; aida (i<200) {
+        kaku current = Node {
+            value: id * 1000 + i, next: mu };
+        slots[0] = current;
+        moshi (current.value != id * 1000 + i) {
+            failures = 2;
+            kaesu;
+        }
+        kaku observed = rt_collect(5);
+        i = i + 1;
+        moshi (i - (i / 8) * 8 == 0) { kaku waited = rt_wait(100000); }
+    }
+    moshi (id == 0) {
+        done_a = 1;
+    } sore {
+        done_b = 1;
+    }
+}
+waza first() -> unit { work(0); }
+waza second() -> unit { work(1); }
 waza prepare() -> unit {
- kaku head:Node?=mu;kaku i=0;aida(i<8000){head=Node {value:i,next:head};i=i+1;}
- shared=Shared {head:head,a:array.make[Node?](1,mu),b:array.make[Node?](1,mu)};
+    kaku head: Node?= mu;
+    kaku i = 0;
+    aida (i<8000) {
+        head = Node {
+            value: i, next: head };
+        i = i + 1;
+    }
+    shared = Shared { head: head, a: array.make[Node?](1, mu), b: array.make[Node?](1, mu) };
 }
 waza dead_witness() -> unit {
- kaku dead=Node {value:99999,next:mu};kaku i=0;
- aida(i<8){kaku occupied=rt_collect(0);i=i+1;}
- moshi(dead.value!=99999){failures=3;}
+    kaku dead = Node {
+        value: 99999, next: mu };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) { failures = 3; }
 }
 waza run() -> unit {
- prepare();kaku a=rt_start(first);kaku b=rt_start(second);
- aida(ready_a+ready_b<2){kaku waited=rt_wait(1000000);}
- dead_witness();kaku started=rt_collect(2);
- kaku initial=shared;moshi(initial==mu){failures=10;kaesu;}
- kaku held=Node {value:12345,next:initial.head};
- // Large storage and descriptor must remain fully initialized through the
- // entire constructor, including any nested Minor/promotion during malloc.
- kaku large=array.make[uint8](131072,uint8(90));
- // A real reference LOS scan supplies an observable concurrent interval; the
- // existing128KiB byte LOS and1MiB heap pressure remain present.
- kaku dense=array.make[Node](16384,held);
- kaku i=0;aida(i<100){kaku occupied=rt_collect(0);kaku observed=rt_collect(5);kaku reads=0;aida(reads<16){kaku observed=rt_collect(5);moshi(held.value!=12345 || dense[reads].value!=12345 || large[131071]!=uint8(90)){failures=11;}reads=reads+1;}i=i+1;}
- // No Worker allocation has begun. Exactly one new ordinary Node plus the
- // two LOS storages/descriptors must be scanned through promotion, before Remark.
- aida(rt_collect(7)<8012 && rt_collect(4)==2){kaku observed=rt_collect(5);kaku waited=rt_wait(100000);}
- moshi(dense[16383].value!=12345){failures=15;}
- kaku pre_marked=rt_collect(7);moshi(pre_marked!=8012){failures=12;}
- control=1;i=0;aida(i<100){kaku occupied=rt_collect(0);kaku observed=rt_collect(5);i=i+1;}
- aida(done_a+done_b<2 && failures==0){kaku occupied=rt_collect(0);kaku waited=rt_wait(100000);}
- kaku ja=rt_join(a);kaku jb=rt_join(b);kaku g=shared;
- moshi(g==mu){failures=4;}sore{
-  kaku left=g.a[0];kaku right=g.b[0];
-  moshi(left==mu){failures=5;}sore{moshi(left.value!=199){failures=6;}}
-  moshi(right==mu){failures=7;}sore{moshi(right.value!=1199){failures=8;}}
- }
- kaku previous=held.next;moshi(previous==mu){failures=13;}sore{moshi(previous.value!=7999 || held.value!=12345){failures=14;}}
- moshi(len(large)!=131072 || large[131071]!=uint8(90)){failures=9;}
- chant(failures+started+ja+jb);chant(rt_collect(4));chant(rt_collect(11));chant(rt_collect(12));chant(rt_collect(13));chant(rt_collect(14));chant(pre_marked);
- kaku marked=rt_collect(3);chant(marked>=8012);chant(rt_collect(6)>=1);chant(rt_collect(4));shared=mu;
+    prepare();
+    kaku a = rt_start(first);
+    kaku b = rt_start(second);
+    aida (ready_a + ready_b<2) { kaku waited = rt_wait(1000000); }
+    dead_witness();
+    kaku started = rt_collect(2);
+    kaku initial = shared;
+    moshi (initial == mu) {
+        failures = 10;
+        kaesu;
+    }
+    kaku held = Node { value: 12345, next: initial.head };
+    // Large storage and descriptor must remain fully initialized through the
+    // entire constructor, including any nested Minor/promotion during malloc.
+    kaku large = array.make[uint8](131072, uint8(90));
+    // A real reference LOS scan supplies an observable concurrent interval; the
+    // existing128KiB byte LOS and1MiB heap pressure remain present.
+    kaku dense = array.make[Node](16384, held);
+    kaku i = 0;
+    aida (i<100) {
+        kaku occupied = rt_collect(0);
+        kaku observed = rt_collect(5);
+        kaku reads = 0;
+        aida (reads<16) {
+            kaku observed = rt_collect(5);
+            moshi (held.value != 12345 || dense[reads].value != 12345 || large[131071] != uint8(90)) {
+                failures = 11;
+            }
+            reads = reads + 1;
+        }
+        i = i + 1;
+    }
+    // No Worker allocation has begun. Exactly one new ordinary Node plus the
+    // two LOS storages/descriptors must be scanned through promotion, before Remark.
+    aida (rt_collect(7)<8012 && rt_collect(4) == 2) {
+        kaku observed = rt_collect(5);
+        kaku waited = rt_wait(100000);
+    }
+    moshi (dense[16383].value != 12345) { failures = 15; }
+    kaku pre_marked = rt_collect(7);
+    moshi (pre_marked != 8012) {
+        failures = 12;
+    }
+    control = 1;
+    i = 0;
+    aida (i<100) {
+        kaku occupied = rt_collect(0);
+        kaku observed = rt_collect(5);
+        i = i + 1;
+    }
+    aida (done_a + done_b<2 && failures == 0) {
+        kaku occupied = rt_collect(0);
+        kaku waited = rt_wait(100000);
+    }
+    kaku ja = rt_join(a);
+    kaku jb = rt_join(b);
+    kaku g = shared;
+    moshi (g == mu) { failures = 4; } sore {
+        kaku left = g.a[0];
+        kaku right = g.b[0];
+        moshi (left == mu) {
+            failures = 5;
+        } sore {
+            moshi (left.value != 199) {
+                failures = 6;
+            }
+        }
+        moshi (right == mu) {
+            failures = 7;
+        } sore {
+            moshi (right.value != 1199) {
+                failures = 8;
+            }
+        }
+    }
+    kaku previous = held.next;
+    moshi (previous == mu) {
+        failures = 13;
+    } sore {
+        moshi (previous.value != 7999 || held.value != 12345) {
+            failures = 14;
+        }
+    }
+    moshi (len(large) != 131072 || large[131071] != uint8(90)) { failures = 9; }
+    chant(failures + started + ja + jb);
+    chant(rt_collect(4));
+    chant(rt_collect(11));
+    chant(rt_collect(12));
+    chant(rt_collect(13));
+    chant(rt_collect(14));
+    chant(pre_marked);
+    kaku marked = rt_collect(3);
+    chant(marked >= 8012);
+    chant(rt_collect(6) >= 1);
+    chant(rt_collect(4));
+    shared = mu;
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

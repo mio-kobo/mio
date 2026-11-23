@@ -1,11 +1,32 @@
-yobu "kiso/array";yobu "kiso/string";yobu "kiso/fs";yobu "kiso/testing";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku phase=0;
-waza text() -> string {kaku bytes=array.make[uint8](200000,uint8(65));kaku value=string.from_utf8(bytes);moshi(value==mu){kaesu "invalid";}phase=1;kaesu value;}
-waza work() -> unit {testing.fail(text());}
-waza signal_ready() -> unit {kaku marker=fs.write_all("build/m19ef-report-ready",[uint8(1)]);}
-kaku child=rt_start(work);aida(phase<1){kaku waited=rt_wait(1000000);}kaku i=0;aida(i<100){kaku occupied=rt_collect(1);i=i+1;}
-signal_ready();kaku joined=rt_join(child);chant(rt_collect(1));
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/fs";
+yobu "kiso/testing";
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku phase = 0;
+waza text() -> string {
+    kaku bytes = array.make[uint8](200000, uint8(65));
+    kaku value = string.from_utf8(bytes);
+    moshi (value == mu) {
+        kaesu "invalid";
+    }
+    phase = 1;
+    kaesu value;
+}
+waza work() -> unit { testing.fail(text()); }
+waza signal_ready() -> unit { kaku marker = fs.write_all("build/m19ef-report-ready", [uint8(1)]); }
+kaku child = rt_start(work);
+aida (phase<1) {
+    kaku waited = rt_wait(1000000);
+}
+kaku i = 0;
+aida (i<100) {
+    kaku occupied = rt_collect(1);
+    i = i + 1;
+}
+signal_ready();
+kaku joined = rt_join(child);
+chant(rt_collect(1));

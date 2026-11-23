@@ -1,35 +1,129 @@
-yobu "kiso/runtime/gc";yobu "kiso/runtime/ir";yobu "kiso/runtime/os/darwin";yobu "kiso/runtime/cpu/aarch64";
-yobu "kiso/aot/arm64";yobu "kiso/aot/macho";yobu "kiso/aot/sign";yobu "kiso/array";yobu "kiso/fs";yobu "kiso/os";
+yobu "kiso/runtime/gc";
+yobu "kiso/runtime/ir";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/runtime/cpu/aarch64";
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
 // Component boundary checks for reference memmove/clear. This does not claim
 // automatic roots or concurrent SATB; those require the ordinary Worker matrix.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza eq(f:ir.Function,r:int64,v:int64) -> unit {n(f,30,v);ir.put(f,ir.equal,30,r,30,0);ir.branch(f,ir.zero,30,"fail");}
-waza call_copy(f:ir.Function,d:int64,s:int64,bytes:int64,result:int64) -> unit {
- n(f,31,0);n(f,3,bytes);ir.invoke_function(f,"gc_copy_reference_slots",5,[31,d,s,3]);eq(f,5,result);
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza eq(f: ir.Function, r: int64, v: int64) -> unit {
+    n(f, 30, v);
+    ir.put(f, ir.equal, 30, r, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
 }
-waza call_clear(f:ir.Function,d:int64,bytes:int64,result:int64) -> unit {
- n(f,31,0);n(f,3,bytes);ir.invoke_function(f,"gc_clear_reference_slots",5,[31,d,3]);eq(f,5,result);
+waza call_copy(f: ir.Function, d: int64, s: int64, bytes: int64, result: int64) -> unit {
+    n(f, 31, 0);
+    n(f, 3, bytes);
+    ir.invoke_function(f, "gc_copy_reference_slots", 5, [31, d, s, 3]);
+    eq(f, 5, result);
 }
-waza words(f:ir.Function,expected:[]int64) -> unit {kaku i=0;aida(i<len(expected)){ir.put(f,ir.load,5,20,0,i*8);eq(f,5,expected[i]);i=i+1;}}
+waza call_clear(f: ir.Function, d: int64, bytes: int64, result: int64) -> unit {
+    n(f, 31, 0);
+    n(f, 3, bytes);
+    ir.invoke_function(f, "gc_clear_reference_slots", 5, [31, d, 3]);
+    eq(f, 5, result);
+}
+waza words(f: ir.Function, expected: []int64) -> unit {
+    kaku i = 0;
+    aida (i<len(expected)) {
+        ir.put(f, ir.load, 5, 20, 0, i * 8);
+        eq(f, 5, expected[i]);
+        i = i + 1;
+    }
+}
 waza run() -> ir.Function {
- kaku f=ir.function("run");ir.put(f,ir.address,20,0,0,128);ir.put(f,ir.address,21,20,0,8);ir.put(f,ir.address,22,20,0,1*8);n(f,23,1);ir.put(f,ir.add,22,20,23,0);n(f,24,-8);n(f,25,0);
- call_copy(f,25,25,0,0);call_clear(f,25,0,0);
- kaku i=0;aida(i<8){n(f,26,i+1);ir.put(f,ir.store,0,20,26,i*8);i=i+1;}
- call_copy(f,21,20,56,0);words(f,[1,1,2,3,4,5,6,7]);
- call_copy(f,20,21,56,0);words(f,[1,2,3,4,5,6,7,7]);
- call_copy(f,20,20,64,0);words(f,[1,2,3,4,5,6,7,7]);
- call_clear(f,21,48,0);words(f,[1,0,0,0,0,0,0,7]);
- call_copy(f,22,20,8,4);call_copy(f,20,22,8,4);call_copy(f,20,21,7,4);
- call_copy(f,20,24,16,4);call_copy(f,24,20,16,4);call_copy(f,25,20,8,4);
- call_clear(f,20,7,4);call_clear(f,24,16,4);call_clear(f,25,8,4);
- words(f,[1,0,0,0,0,0,0,7]);n(f,26,15);ir.put(f,ir.store,0,0,26,48);ir.put(f,ir.address,1,0,0,48);n(f,2,8);ir.call(f,103,5,[1,2]);eq(f,5,8);n(f,1,0);ir.put(f,ir.result,0,1,0,0);
- ir.branch(f,ir.label,0,"fail");n(f,1,88);ir.call(f,102,2,[1]);kaesu f;
+    kaku f = ir.function("run");
+    ir.put(f, ir.address, 20, 0, 0, 128);
+    ir.put(f, ir.address, 21, 20, 0, 8);
+    ir.put(f, ir.address, 22, 20, 0, 1 * 8);
+    n(f, 23, 1);
+    ir.put(f, ir.add, 22, 20, 23, 0);
+    n(f, 24, -8);
+    n(f, 25, 0);
+    call_copy(f, 25, 25, 0, 0);
+    call_clear(f, 25, 0, 0);
+    kaku i = 0;
+    aida (i<8) {
+        n(f, 26, i + 1);
+        ir.put(f, ir.store, 0, 20, 26, i * 8);
+        i = i + 1;
+    }
+    call_copy(f, 21, 20, 56, 0);
+    words(f, [1, 1, 2, 3, 4, 5, 6, 7]);
+    call_copy(f, 20, 21, 56, 0);
+    words(f, [1, 2, 3, 4, 5, 6, 7, 7]);
+    call_copy(f, 20, 20, 64, 0);
+    words(f, [1, 2, 3, 4, 5, 6, 7, 7]);
+    call_clear(f, 21, 48, 0);
+    words(f, [1, 0, 0, 0, 0, 0, 0, 7]);
+    call_copy(f, 22, 20, 8, 4);
+    call_copy(f, 20, 22, 8, 4);
+    call_copy(f, 20, 21, 7, 4);
+    call_copy(f, 20, 24, 16, 4);
+    call_copy(f, 24, 20, 16, 4);
+    call_copy(f, 25, 20, 8, 4);
+    call_clear(f, 20, 7, 4);
+    call_clear(f, 24, 16, 4);
+    call_clear(f, 25, 8, 4);
+    words(f, [1, 0, 0, 0, 0, 0, 0, 7]);
+    n(f, 26, 15);
+    ir.put(f, ir.store, 0, 0, 26, 48);
+    ir.put(f, ir.address, 1, 0, 0, 48);
+    n(f, 2, 8);
+    ir.call(f, 103, 5, [1, 2]);
+    eq(f, 5, 8);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 1, 88);
+    ir.call(f, 102, 2, [1]);
+    kaesu f;
 }
-waza emit(c:arm64.Assembler,x:arm64.Instruction) -> unit {arm64.assembler_emit(c,x);}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,off:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:off,register:r});}
+waza emit(c: arm64.Assembler, x: arm64.Instruction) -> unit { arm64.assembler_emit(c, x); }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, off: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: off, register: r });
+}
 waza main() -> unit {
- kaku functions=gc.old_mark_program();array.append_all(functions,darwin.worker_platform_program());array.push(functions,run());kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];addr(c,patches,7,0);addr(c,patches,0,256);
- arm64.assembler_bl(c,"rt_run");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));kaku error=aarch64.emit_program(c,functions,darwin.worker_bindings(),25,"rt");moshi(error!=""){chant(error);os.exit(2);}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(4);}kaku image=darwin.executable_appended(macho.ImageSpec {words:assembled.words,constants:[],globals:0,patches:patches},darwin.worker_symbols(),128);moshi(image.error!=""){chant(image.error);os.exit(5);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){os.exit(6);}kaku args=os.arguments();fs.write_all(args[1],signed.bytes);os.chmod(args[1],448);
+    kaku functions = gc.old_mark_program();
+    array.append_all(functions, darwin.worker_platform_program());
+    array.push(functions, run());
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    addr(c, patches, 7, 0);
+    addr(c, patches, 0, 256);
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.movz_x(16, 1, 0));
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, darwin.worker_bindings(), 25, "rt");
+    moshi (error != "") {
+        chant(error);
+        os.exit(2);
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(4);
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 0, patches: patches }, darwin.worker_symbols(), 128);
+    moshi (image.error != "") {
+        chant(image.error);
+        os.exit(5);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(6);
+    }
+    kaku args = os.arguments();
+    fs.write_all(args[1], signed.bytes);
+    os.chmod(args[1], 448);
 }
 main();

@@ -9,9 +9,19 @@ koukai sentaku IoError {
     Other(string);
 }
 
-koukai kata ReadResult { count: int64; eof: bool; error: IoError?; }
-koukai kata WriteResult { count: int64; error: IoError?; }
-koukai kata CopyResult { count: int64; error: IoError?; }
+koukai kata ReadResult {
+    count: int64;
+    eof: bool;
+    error: IoError?;
+}
+koukai kata WriteResult {
+    count: int64;
+    error: IoError?;
+}
+koukai kata CopyResult {
+    count: int64;
+    error: IoError?;
+}
 
 koukai kata Reader { read: ([]uint8, int64, int64) -> ReadResult; }
 koukai kata Writer { write: ([]uint8, int64, int64) -> WriteResult; }
@@ -117,33 +127,33 @@ koukai waza copy_stream(reader: Reader, writer: Writer) -> CopyResult {
 koukai waza reader_from_bytes(source: []uint8) -> Reader {
     kaku position = 0;
     kaesu Reader { read: waza (destination: []uint8, offset: int64, length: int64) -> ReadResult {
-        moshi (!valid_range(destination, offset, length)) {
-            kaesu ReadResult { count: 0, eof: iie, error: IoError.InvalidArgument() };
-        }
-        moshi (position > len(source)) { position = len(source); }
-        kaku remaining = len(source) - position;
-        kaku count = length;
-        moshi (remaining < count) { count = remaining; }
-        kaku index = 0;
-        aida (index < count) {
-            destination[offset + index] = source[position + index];
-            index = index + 1;
-        }
-        position = position + count;
-        kaesu ReadResult { count: count, eof: position == len(source), error: mu };
-    } };
+            moshi (!valid_range(destination, offset, length)) {
+                kaesu ReadResult { count: 0, eof: iie, error: IoError.InvalidArgument() };
+            }
+            moshi (position > len(source)) { position = len(source); }
+            kaku remaining = len(source) - position;
+            kaku count = length;
+            moshi (remaining < count) { count = remaining; }
+            kaku index = 0;
+            aida (index < count) {
+                destination[offset + index] = source[position + index];
+                index = index + 1;
+            }
+            position = position + count;
+            kaesu ReadResult { count: count, eof: position == len(source), error: mu };
+        } };
 }
 
 koukai waza writer_to_buffer(buffer: bytes.ByteBuffer) -> Writer {
     kaesu Writer { write: waza (source: []uint8, offset: int64, length: int64) -> WriteResult {
-        moshi (!valid_range(source, offset, length)) {
-            kaesu WriteResult { count: 0, error: IoError.InvalidArgument() };
-        }
-        kaku index = 0;
-        aida (index < length) {
-            array.push(buffer.data, source[offset + index]);
-            index = index + 1;
-        }
-        kaesu WriteResult { count: length, error: mu };
-    } };
+            moshi (!valid_range(source, offset, length)) {
+                kaesu WriteResult { count: 0, error: IoError.InvalidArgument() };
+            }
+            kaku index = 0;
+            aida (index < length) {
+                array.push(buffer.data, source[offset + index]);
+                index = index + 1;
+            }
+            kaesu WriteResult { count: length, error: mu };
+        } };
 }

@@ -1,5 +1,7 @@
+yobu "kiso/encoding/win64c";
 yobu "selfhost/progress";
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/convert";
 yobu "kiso/fs";
 yobu "kiso/os";
@@ -250,12 +252,19 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             kaku pi = 0; aida (pi < len(parsed.errors)) { kaku problem = parsed.errors[pi];
                 kaku code = "E0101"; kaku detail = "invalid source syntax";
                 moshi (parser.parse_error_kind_code(problem.kind) == 0) { code = "E0001"; detail = "invalid source token"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
                 kaku end = problem.position; kaku ti = 0;
                 aida (ti < len(parsed.tokens)) { moshi (parsed.tokens[ti].start.offset == problem.position.offset) { end = parsed.tokens[ti].end; nukeru; } ti = ti + 1; }
                 array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: file_path, span: parser.SourceSpan { start: problem.position, end: end }, detail: detail }); pi = pi + 1;
             }
         }
-        moshi (len(parsed.errors) != 0 && !state.analysis_mode) { state.failed[0] = hai; state.diagnostic[0] = diagnostic("E_PARSE", file_path, parsed.errors[0].position.line, parsed.errors[0].position.column, "invalid source syntax"); nukeru; }
+        moshi (len(parsed.errors) != 0 && !state.analysis_mode) {
+            kaku problem = parsed.errors[0]; kaku code = "E_PARSE"; kaku detail = "invalid source syntax";
+            moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
+            moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
+            state.failed[0] = hai; state.diagnostic[0] = diagnostic(code, file_path, problem.position.line, problem.position.column, detail); nukeru;
+        }
         moshi (parsed.root < 0 || parsed.root >= len(parsed.ast.nodes)) { index = index + 1; tsuzuku; }
         array.push(files, resolver.SourceFile { file_id: len(files), path: file_path, ast: parsed.ast, root: parsed.root });
         kaku root_node = parsed.ast.nodes[parsed.root];
@@ -307,7 +316,8 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
         index = 0;
         aida (index < len(dependencies)) {
             kaku dependency = 0;
-            aida (dependency < len(state.paths) && state.paths[dependency] != dependencies[index]) { dependency = dependency + 1; }
+            kaku identity = package_identity(root, dependencies[index]);
+            aida (dependency < len(state.paths) && state.paths[dependency] != identity) { dependency = dependency + 1; }
             moshi (dependency == len(state.paths) && state.analysis_mode) { index = index + 1; tsuzuku; }
             moshi (dependency == len(state.paths)) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IMPORT missing dependency: ", dependencies[index]); nukeru; }
             array.push(resolved_dependencies, state.resolved[dependency]);
@@ -315,6 +325,25 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             index = index + 1;
         }
         moshi (!state.failed[0]) {
+            // The resolver compares dependency identities, while the parser's
+            // alias comes from the original import spelling.
+            kaku fi = 0;
+            aida (fi < len(files)) {
+                kaku file = files[fi];
+                kaku children = file.ast.nodes[file.root].children;
+                kaku ni = 0;
+                aida (ni < len(children)) {
+                    kaku id = children[ni];
+                    kaku node = file.ast.nodes[id];
+                    moshi (parser.node_kind_code(node.kind) == 1) {
+                        file.ast.nodes[id] = parser.Node { kind: node.kind, text: package_identity(root, node.text),
+                            extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator,
+                            children: node.children, span: node.span };
+                    }
+                    ni = ni + 1;
+                }
+                fi = fi + 1;
+            }
             kaku resolved = resolver.resolve_package_with_progress(package_path, files, resolved_dependencies,state.work);
             moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
             kaku checked = typecheck.check_package_with_progress(resolved, checked_dependencies,state.work);
@@ -369,11 +398,15 @@ waza diagnostic(code: string, file: string, line: int64, column: int64, detail: 
 // Real source entry and project/Bunko roots are supplied by the caller. This
 // module has no top-level execution, output files or bootstrap configuration.
 koukai waza compile_source(root: string, entry: string, bunko_root: string) -> FrontendResult {
-    kaku state = source_state(bunko_root, "");
-    kaesu compile_state(state, root, entry);
+    kaesu compile_source_target(root, entry, bunko_root, iie);
 }
 
-koukai waza compile_tests(root: string, entry: string, bunko_root: string) -> TestsResult {
+koukai waza compile_source_target(root: string, entry: string, bunko_root: string, allow_c: bool) -> FrontendResult {
+    kaku state = source_state(bunko_root, "");
+    kaesu compile_state(state, root, entry, allow_c);
+}
+
+koukai waza compile_tests(root: string, entry: string, bunko_root: string, allow_c: bool) -> TestsResult {
     kaku state = source_state(bunko_root, package_identity(root,entry));
     kaku listing = fs.read_dir(source_directory(state, root, entry));
     moshi (listing.error == mu) {
@@ -381,7 +414,7 @@ koukai waza compile_tests(root: string, entry: string, bunko_root: string) -> Te
         aida (at < len(listing.entries)) { moshi (!listing.entries[at].is_dir && string.has_suffix(listing.entries[at].name, ".mio")) { any = hai; } at = at + 1; }
         moshi (!any) { kaesu TestsResult { bytes: [], tests: [], error: "" }; }
     }
-    kaku compiled = compile_state(state, root, entry);
+    kaku compiled = compile_state(state, root, entry, allow_c);
     kaesu TestsResult { bytes: compiled.bytes, tests: state.tests, error: compiled.error };
 }
 
@@ -391,7 +424,7 @@ koukai waza compile_tests(root: string, entry: string, bunko_root: string) -> Te
 // in its own process from the same image. Returns an empty result (callers then build one image per test) when the
 // package is not a plain source directory: a single file, or Bunko sources embedded in the compiler.
 koukai teisu test_dispatch_function = "mio_test_dispatch";
-koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: string, tests: []TestCase) -> TestsResult {
+koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: string, tests: []TestCase, allow_c: bool) -> TestsResult {
     kaku probe = source_state(bunko_root, package_identity(root, entry));
     moshi (bunko_root == "" && string.has_prefix(entry, "kiso/")) { kaesu TestsResult { bytes: [], tests: [], error: "" }; }
     kaku directory = source_directory(probe, root, entry);
@@ -408,7 +441,7 @@ koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: st
     string.write_string(source, "    testing.expect(iie, \"E_TEST unknown test selection\");\n}\n");
     kaku overlay = SourceOverlay { path: path.join(directory, "mio_test_dispatch_test.mio"), bytes: string.to_bytes(string.builder_string(source)) };
     kaku state = source_state_options(bunko_root, package_identity(root, entry), [overlay], iie);
-    kaku compiled = compile_state(state, root, entry);
+    kaku compiled = compile_state(state, root, entry, allow_c);
     kaesu TestsResult { bytes: compiled.bytes, tests: state.tests, error: compiled.error };
 }
 
@@ -429,9 +462,32 @@ koukai waza analyze_source_with_progress(root: string, entry: string, bunko_root
     kaesu AnalysisResult { resolved: state.resolved, checked: state.checked, sources: state.sources, diagnostics: state.diagnostics, error: error };
 }
 
-waza compile_state(state: PackageState, root: string, entry: string) -> FrontendResult {
+koukai waza c_declaration_error(packages: []resolver.ResolvedPackage) -> string {
+    kaku pi = 0;
+    aida (pi < len(packages)) {
+        kaku files = packages[pi].files;
+        kaku fi = 0;
+        aida (fi < len(files)) {
+            kaku file = files[fi]; kaku root = file.ast.nodes[file.root]; kaku ni = 0;
+            aida (ni < len(root.children)) {
+                kaku node = file.ast.nodes[root.children[ni]];
+                moshi (parser.node_kind_code(node.kind) == 32 && node.extra != "" && !win64c.is_external(node.extra)) { kaesu cabi.target_error; }
+                ni = ni + 1;
+            }
+            fi = fi + 1;
+        }
+        pi = pi + 1;
+    }
+    kaesu "";
+}
+
+waza compile_state(state: PackageState, root: string, entry: string, allow_c: bool) -> FrontendResult {
     load_package(state, root, entry);
     moshi (state.failed[0]) { kaesu FrontendResult { bytes: [], error: state.diagnostic[0] }; }
+    moshi (!allow_c) {
+        kaku problem = c_declaration_error(state.resolved);
+        moshi (problem != "") { kaesu FrontendResult { bytes: [], error: problem }; }
+    }
     kaku natives = native_layouts(); add_socket_layouts(natives, state.resolved); kaku testing_runtime = iie; kaku os_runtime = iie; kaku thread_runtime = iie; kaku package_index = 0;
     aida (package_index < len(state.resolved)) {
         kaku symbols = state.resolved[package_index].symbols; kaku symbol_index = 0;

@@ -2,269 +2,869 @@ yobu "kiso/runtime/ir";
 yobu "kiso/array";
 yobu "kiso/convert";
 yobu "kiso/string";
-// Thread extension ABI v2; allocated separately from the frozen heap metadata.
-// All fields are native scalar words. OS opaque storage is passed by pointer.
-koukai teisu thread_context_bytes=288;
-koukai teisu thread_version=0;
-koukai teisu thread_imports=8;
-koukai teisu thread_handle=16;
-koukai teisu thread_key=24;
-koukai teisu thread_mutex=32;
-koukai teisu thread_condition=40;
-koukai teisu thread_state=48;
-koukai teisu thread_stop=56;
-koukai teisu thread_error=64;
-koukai teisu thread_owns_key=72;
-koukai teisu thread_owns_mutex=80;
-koukai teisu thread_owns_condition=88;
-koukai teisu thread_owns_handle=96;
-koukai teisu thread_registered=104;
-koukai teisu thread_starts=112;
-koukai teisu thread_joins=120;
-koukai teisu thread_registrations=128;
-koukai teisu thread_exits=136;
-koukai teisu thread_fault_operation=144;
-koukai teisu thread_fault_error=152;
-koukai teisu thread_fault_count=160;
-koukai teisu thread_shadow=168;
-koukai teisu thread_identity_value=176;
-koukai teisu thread_wakes=184;
-koukai teisu thread_waits=192;
-koukai teisu thread_join_retries=200;
-koukai teisu thread_registry=208;
-koukai teisu thread_progress=216;
-koukai teisu thread_waiting=thread_progress;
-koukai teisu thread_at_work=0;
-koukai teisu thread_parked=1;
-koukai teisu thread_finished=2;
-koukai teisu thread_entry=224;
-koukai teisu thread_user=232;
-koukai teisu thread_acquisitions=240;
-koukai teisu thread_releases=248;
-koukai teisu thread_new=0;
-koukai teisu thread_starting=1;
-koukai teisu thread_running=2;
-koukai teisu thread_stopping=3;
-koukai teisu thread_exited=4;
-koukai teisu thread_joined=5;
-koukai teisu thread_closed=6;
-koukai teisu thread_failed=7;
-koukai teisu thread_quarantined=8;
-koukai teisu thread_next=256;
-koukai teisu thread_member=264;
-koukai teisu thread_ack_epoch=272;
-koukai teisu thread_seen_epoch=280;
-// Shared registry v2: version, active, registrations, exits, head, lock,
-// requested epoch, coordinator state. Enumerators must hold the registry lock.
-// Storage remains
-// owned until all handles are joined; counters use AcqRel RMW.
-koukai teisu thread_registry_bytes=64;
-waza tload(f:ir.Function,dst:int64,offset:int64) -> unit {ir.put(f,ir.load,dst,0,0,offset);}
-waza tstore(f:ir.Function,offset:int64,src:int64) -> unit {ir.put(f,ir.store,0,0,src,offset);}
-waza tconstant(f:ir.Function,dst:int64,value:int64) -> unit {ir.put(f,ir.constant,dst,0,0,value);}
-waza tset(f:ir.Function,offset:int64,value:int64) -> unit {tconstant(f,31,value);tstore(f,offset,31);}
-waza tpublish(f:ir.Function,offset:int64,value:int64) -> unit {tconstant(f,31,value);ir.put(f,ir.release_store,0,0,31,offset);}
-waza tinc(f:ir.Function,offset:int64) -> unit {tload(f,29,offset);tconstant(f,30,1);ir.put(f,ir.add,29,29,30,0);tstore(f,offset,29);}
-waza tcheck(f:ir.Function,value:int64,expected:int64,label:string) -> unit {tconstant(f,30,expected);ir.put(f,ir.equal,30,value,30,0);ir.branch(f,ir.nonzero,30,label);}
-waza treturn(f:ir.Function,value:int64) -> unit {tconstant(f,31,value);ir.put(f,ir.result,0,31,0,0);}
-waza terror(f:ir.Function,src:int64) -> unit {
-    kaku done=string.concat("error_saved_",convert.format_int(len(f.steps)));
-    ir.branch(f,ir.zero,src,done);ir.put(f,ir.address,27,0,0,thread_error);tconstant(f,28,0);
-    array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:26,left:27,right:src,immediate:0,name:"",arguments:[28],order:acq_rel,failure_order:acquire});
-    ir.branch(f,ir.label,0,done);
+
+// 线程扩展 ABI v2：独立于冻结堆元数据单独分配。
+// 所有字段均为原生标量字；操作系统不透明存储（mutex/condition）通过指针传递。
+koukai teisu thread_context_bytes = 288;
+koukai teisu thread_version = 0;
+koukai teisu thread_imports = 8;
+koukai teisu thread_handle = 16;
+koukai teisu thread_key = 24;
+koukai teisu thread_mutex = 32;
+koukai teisu thread_condition = 40;
+koukai teisu thread_state = 48;
+koukai teisu thread_stop = 56;
+koukai teisu thread_error = 64;
+koukai teisu thread_owns_key = 72;
+koukai teisu thread_owns_mutex = 80;
+koukai teisu thread_owns_condition = 88;
+koukai teisu thread_owns_handle = 96;
+koukai teisu thread_registered = 104;
+koukai teisu thread_starts = 112;
+koukai teisu thread_joins = 120;
+koukai teisu thread_registrations = 128;
+koukai teisu thread_exits = 136;
+koukai teisu thread_fault_operation = 144;
+koukai teisu thread_fault_error = 152;
+koukai teisu thread_fault_count = 160;
+koukai teisu thread_shadow = 168;
+koukai teisu thread_identity_value = 176;
+koukai teisu thread_wakes = 184;
+koukai teisu thread_waits = 192;
+koukai teisu thread_join_retries = 200;
+koukai teisu thread_registry = 208;
+koukai teisu thread_progress = 216;
+koukai teisu thread_waiting = thread_progress;
+koukai teisu thread_at_work = 0;
+koukai teisu thread_parked = 1;
+koukai teisu thread_finished = 2;
+koukai teisu thread_entry = 224;
+koukai teisu thread_user = 232;
+koukai teisu thread_acquisitions = 240;
+koukai teisu thread_releases = 248;
+koukai teisu thread_new = 0;
+koukai teisu thread_starting = 1;
+koukai teisu thread_running = 2;
+koukai teisu thread_stopping = 3;
+koukai teisu thread_exited = 4;
+koukai teisu thread_joined = 5;
+koukai teisu thread_closed = 6;
+koukai teisu thread_failed = 7;
+koukai teisu thread_quarantined = 8;
+koukai teisu thread_next = 256;
+koukai teisu thread_member = 264;
+koukai teisu thread_ack_epoch = 272;
+koukai teisu thread_seen_epoch = 280;
+
+// 共享注册表 v2：version、active、registrations、exits、head、lock、requested epoch、coordinator state。
+// 遍历链表时必须持有注册表锁；所有存储直到所有句柄均完成 join 之前保持归属权；计数器使用 AcqRel RMW。
+koukai teisu thread_registry_bytes = 64;
+
+waza tload(f: ir.Function, dst: int64, offset: int64) -> unit {
+    ir.put(f, ir.load, dst, 0, 0, offset);
 }
-waza tprepare(f:ir.Function) -> unit {tload(f,31,thread_imports);ir.put(f,ir.imports,0,31,0,0);}
-// One-shot fault injection is compiled only into explicit validation programs.
-// It substitutes an operation result BEFORE acquisition, then follows the same
-// production error/cleanup path. Default production functions have no hook.
-waza tcall(f:ir.Function,operation:int64,dst:int64,args:[]int64,faults:bool) -> unit {
-    moshi(!faults){ir.call(f,operation,dst,args);kaesu;}
-    kaku tag=convert.format_int(len(f.steps));kaku actual=string.concat("actual_",tag);kaku done=string.concat("call_done_",tag);
-    tload(f,30,thread_fault_operation);tconstant(f,31,operation);ir.put(f,ir.equal,30,30,31,0);ir.branch(f,ir.zero,30,actual);
-    tload(f,dst,thread_fault_error);tset(f,thread_fault_operation,0);tinc(f,thread_fault_count);ir.branch(f,ir.jump,0,done);
-    ir.branch(f,ir.label,0,actual);ir.call(f,operation,dst,args);ir.branch(f,ir.label,0,done);
+
+waza tstore(f: ir.Function, offset: int64, src: int64) -> unit {
+    ir.put(f, ir.store, 0, 0, src, offset);
 }
-waza registry_add(f:ir.Function,offset:int64,delta:int64) -> unit {
-    tload(f,27,thread_registry);ir.put(f,ir.address,27,27,0,offset);tconstant(f,28,delta);
-    array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:26,left:27,right:28,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});
+
+waza tconstant(f: ir.Function, dst: int64, value: int64) -> unit {
+    ir.put(f, ir.constant, dst, 0, 0, value);
 }
-waza thread_open_program(faults:bool,cooperative:bool) -> ir.Function {
-    kaesu thread_open_options(faults,cooperative,iie);
+
+waza tset(f: ir.Function, offset: int64, value: int64) -> unit {
+    tconstant(f, 31, value);
+    tstore(f, offset, 31);
 }
-waza thread_open_options(faults:bool,cooperative:bool,shared_key:bool) -> ir.Function {
-    kaku version=2;moshi(cooperative){version=3;}
-    kaku name="thread_open";moshi(shared_key){name="thread_open_shared";}
-    kaku f=ir.function(name);tprepare(f);tload(f,1,thread_version);tcheck(f,1,version,"version_ok");treturn(f,1);
-    ir.branch(f,ir.label,0,"version_ok");tload(f,2,thread_registry);ir.branch(f,ir.zero,2,"invalid_registry");ir.put(f,ir.load,3,2,0,0);tcheck(f,3,version,"registry_ok");
-    ir.branch(f,ir.label,0,"invalid_registry");treturn(f,1);
-    ir.branch(f,ir.label,0,"registry_ok");tload(f,1,thread_member);ir.branch(f,ir.zero,1,"not_member");treturn(f,1);
-    ir.branch(f,ir.label,0,"not_member");tload(f,1,thread_state);
-    tcheck(f,1,thread_new,"start");tcheck(f,1,thread_closed,"start");treturn(f,1);
-    ir.branch(f,ir.label,0,"start");tset(f,thread_version,version);tset(f,thread_error,0);tset(f,thread_stop,0);moshi(!cooperative){tset(f,thread_shadow,0);}tset(f,thread_registered,0);tset(f,thread_progress,thread_at_work);
-    // Shared-key callers retain the key until every child has joined. The
-    // child's close never deletes a borrowed key. Context/mutex/condition and
-    // handle ownership remain independent for every actual worker.
-    moshi(shared_key){tset(f,thread_owns_key,0);}
-    sore{ir.put(f,ir.address,2,0,0,thread_key);tcall(f,ir.tls_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_key,1);tinc(f,thread_acquisitions);}
-    tload(f,2,thread_mutex);tcall(f,ir.mutex_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_mutex,1);tinc(f,thread_acquisitions);
-    tload(f,2,thread_condition);tcall(f,ir.condition_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_condition,1);tinc(f,thread_acquisitions);
-    tpublish(f,thread_state,thread_starting);ir.put(f,ir.address,2,0,0,thread_handle);tload(f,3,thread_entry);
-    moshi(shared_key){
-        ir.put(f,ir.address,4,0,0,thread_error);ir.invoke_function(f,"platform_thread_start",1,[2,3,0,4]);
-    } sore {tcall(f,thread_start,1,[2,3,0],faults);}
-    ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_handle,1);tinc(f,thread_acquisitions);tinc(f,thread_starts);treturn(f,0);
-    ir.branch(f,ir.label,0,"failed");terror(f,1);ir.invoke_function(f,"thread_close",2,[0]);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);kaesu f;
+
+waza tpublish(f: ir.Function, offset: int64, value: int64) -> unit {
+    tconstant(f, 31, value);
+    ir.put(f, ir.release_store, 0, 0, 31, offset);
 }
-waza thread_enter_program(faults:bool,cooperative:bool) -> ir.Function {
-    kaku f=ir.function("thread_enter");tprepare(f);tload(f,2,thread_key);tconstant(f,4,0);
-    tcall(f,tls_set,1,[2,0],faults);ir.branch(f,ir.nonzero,1,"failed");tconstant(f,4,1);
-    tcall(f,tls_get,1,[2],faults);ir.put(f,ir.equal,3,1,0,0);ir.branch(f,ir.nonzero,3,"registered");tconstant(f,1,3);ir.branch(f,ir.jump,0,"failed");
-    ir.branch(f,ir.label,0,"registered");ir.invoke_function(f,"registry_enter",1,[0]);ir.branch(f,ir.nonzero,1,"failed");tinc(f,thread_registrations);tpublish(f,thread_registered,1);
-    ir.call(f,thread_identity,1,[]);tstore(f,thread_identity_value,1);
-    tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_registered");
-    ir.put(f,ir.acquire_load,3,0,0,thread_stop);ir.branch(f,ir.nonzero,3,"stopping");tpublish(f,thread_state,thread_running);ir.branch(f,ir.jump,0,"publish");
-    ir.branch(f,ir.label,0,"stopping");tpublish(f,thread_state,thread_stopping);
-    ir.branch(f,ir.label,0,"publish");tload(f,3,thread_condition);ir.call(f,wake,1,[3]);terror(f,1);tinc(f,thread_wakes);ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_registered");
-    moshi(cooperative){tload(f,2,thread_shadow);ir.invoke_function(f,"gc_poll",1,[0,2]);ir.branch(f,ir.nonzero,1,"failed_registered");}treturn(f,0);
-    ir.branch(f,ir.label,0,"failed_registered");terror(f,1);ir.invoke_function(f,"thread_leave",2,[0]);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);
-    ir.branch(f,ir.label,0,"failed");ir.branch(f,ir.zero,4,"failure_publish");tconstant(f,3,0);ir.call(f,tls_set,5,[2,3]);
-    ir.branch(f,ir.label,0,"failure_publish");terror(f,1);tpublish(f,thread_state,thread_failed);tpublish(f,thread_progress,thread_finished);treturn(f,1);kaesu f;
+
+waza tinc(f: ir.Function, offset: int64) -> unit {
+    tload(f, 29, offset);
+    tconstant(f, 30, 1);
+    ir.put(f, ir.add, 29, 29, 30, 0);
+    tstore(f, offset, 29);
 }
-// Attach the calling native thread without creating/joining a pthread. The
-// context is caller-owned and zero-initialized, with imports/registry and opaque
-// mutex/condition storage configured. Reuse is allowed only after full close.
-// Acquisition/rollback uses the same ownership accounting as thread_open.
-waza thread_attach_program(faults:bool) -> ir.Function {
-    kaku f=ir.function("thread_attach");tprepare(f);
-    tload(f,1,thread_version);tcheck(f,1,3,"version_ok");treturn(f,1);
-    ir.branch(f,ir.label,0,"version_ok");tload(f,2,thread_registry);ir.branch(f,ir.zero,2,"invalid");
-    ir.put(f,ir.load,3,2,0,0);tcheck(f,3,3,"registry_ok");
-    ir.branch(f,ir.label,0,"invalid");treturn(f,1);
-    ir.branch(f,ir.label,0,"registry_ok");tload(f,1,thread_member);ir.branch(f,ir.nonzero,1,"invalid");
-    tload(f,1,thread_state);tcheck(f,1,thread_new,"acquire");tcheck(f,1,thread_closed,"acquire");treturn(f,1);
-    ir.branch(f,ir.label,0,"acquire");tset(f,thread_error,0);tset(f,thread_stop,0);tset(f,thread_shadow,0);tset(f,thread_progress,thread_at_work);
-    ir.put(f,ir.address,2,0,0,thread_key);tcall(f,ir.tls_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_key,1);tinc(f,thread_acquisitions);
-    tload(f,2,thread_mutex);tcall(f,ir.mutex_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_mutex,1);tinc(f,thread_acquisitions);
-    tload(f,2,thread_condition);tcall(f,ir.condition_create,1,[2],faults);ir.branch(f,ir.nonzero,1,"failed");tset(f,thread_owns_condition,1);tinc(f,thread_acquisitions);
-    tpublish(f,thread_state,thread_starting);ir.invoke_function(f,"thread_enter",1,[0]);ir.branch(f,ir.nonzero,1,"failed");treturn(f,0);
-    ir.branch(f,ir.label,0,"failed");terror(f,1);ir.invoke_function(f,"thread_close",2,[0]);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);kaesu f;
+
+waza tcheck(f: ir.Function, value: int64, expected: int64, label: string) -> unit {
+    tconstant(f, 30, expected);
+    ir.put(f, ir.equal, 30, value, 30, 0);
+    ir.branch(f, ir.nonzero, 30, label);
 }
-waza thread_leave_program(cooperative:bool) -> ir.Function {
-    kaku f=ir.function("thread_leave");tprepare(f);
-    moshi(cooperative){tload(f,2,thread_shadow);ir.invoke_function(f,"gc_poll",1,[0,2]);terror(f,1);}
-    tload(f,1,thread_registered);ir.branch(f,ir.zero,1,"publish");
-    tload(f,2,thread_key);tconstant(f,3,0);ir.call(f,tls_set,1,[2,3]);terror(f,1);
-    ir.invoke_function(f,"registry_leave",1,[0]);ir.branch(f,ir.zero,1,"unlinked");terror(f,1);ir.branch(f,ir.jump,0,"publish");
-    ir.branch(f,ir.label,0,"unlinked");tinc(f,thread_exits);tpublish(f,thread_registered,0);tpublish(f,thread_shadow,0);
-    ir.branch(f,ir.label,0,"publish");tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"bad_lock");
-    tpublish(f,thread_state,thread_exited);tpublish(f,thread_progress,thread_finished);tload(f,3,thread_condition);ir.call(f,wake,1,[3]);terror(f,1);tinc(f,thread_wakes);ir.call(f,ir.mutex_unlock,1,[2]);terror(f,1);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);
-    ir.branch(f,ir.label,0,"bad_lock");terror(f,1);tpublish(f,thread_state,thread_exited);tpublish(f,thread_progress,thread_finished);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);kaesu f;
+
+waza treturn(f: ir.Function, value: int64) -> unit {
+    tconstant(f, 31, value);
+    ir.put(f, ir.result, 0, 31, 0, 0);
 }
-waza thread_wait_program(faults:bool,cooperative:bool) -> ir.Function {
-    // Bounded GC wait: arg1 is 0..1s in ns. Zero means deadline already due.
-    // Wake is only a hint: recheck stop under the same mutex after every wake.
-    // The absolute deadline survives spurious wakes; they cannot extend it.
-    kaku f=ir.function("thread_wait");tprepare(f);ir.put(f,ir.copy,5,1,0,0);tconstant(f,7,1000000001);ir.put(f,ir.less_unsigned,7,5,7,0);ir.branch(f,ir.zero,7,"bad_timeout");
-    ir.invoke_function(f,"platform_now",6,[]);ir.branch(f,ir.zero,6,"bad_timeout");ir.put(f,ir.copy,8,6,0,0);ir.put(f,ir.add,6,6,5,0);ir.put(f,ir.less_unsigned,8,6,8,0);ir.branch(f,ir.nonzero,8,"bad_timeout");
-    tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"lock_failed");
-    ir.branch(f,ir.label,0,"predicate");moshi(cooperative){ir.invoke_function(f,"gc_park_locked",9,[0]);ir.branch(f,ir.nonzero,9,"gc_failed");}ir.put(f,ir.acquire_load,3,0,0,thread_stop);ir.branch(f,ir.nonzero,3,"stopped");
-    ir.invoke_function(f,"platform_now",7,[]);ir.branch(f,ir.zero,7,"clock_failed");ir.put(f,ir.less_unsigned,8,7,6,0);ir.branch(f,ir.zero,8,"timed_out");ir.put(f,ir.subtract,5,6,7,0);
-    moshi(faults){tload(f,3,thread_fault_operation);tcheck(f,3,park,"inject");}
-    tpublish(f,thread_progress,thread_parked);tload(f,3,thread_condition);ir.invoke_function(f,"platform_wait",4,[3,2,5]);tinc(f,thread_waits);ir.branch(f,ir.zero,4,"predicate");ir.branch(f,ir.jump,0,"unlock");
-    moshi(faults){ir.branch(f,ir.label,0,"inject");tload(f,4,thread_fault_error);tset(f,thread_fault_operation,0);tinc(f,thread_fault_count);ir.branch(f,ir.jump,0,"unlock");}
-    ir.branch(f,ir.label,0,"stopped");tconstant(f,4,0);ir.branch(f,ir.jump,0,"unlock");
-    ir.branch(f,ir.label,0,"timed_out");tconstant(f,4,1);ir.branch(f,ir.jump,0,"unlock");
-    ir.branch(f,ir.label,0,"gc_failed");
-    ir.branch(f,ir.label,0,"clock_failed");tconstant(f,4,-2);
-    ir.branch(f,ir.label,0,"unlock");moshi(cooperative){ir.invoke_function(f,"gc_park_locked",9,[0]);}tpublish(f,thread_progress,thread_at_work);ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"lock_failed");ir.put(f,ir.result,0,4,0,0);
-    ir.branch(f,ir.label,0,"lock_failed");tconstant(f,3,0);ir.put(f,ir.subtract,1,3,1,0);ir.put(f,ir.result,0,1,0,0);
-    ir.branch(f,ir.label,0,"bad_timeout");treturn(f,-2);kaesu f;
+
+waza terror(f: ir.Function, src: int64) -> unit {
+    kaku done = string.concat("error_saved_", convert.format_int(len(f.steps)));
+    ir.branch(f, ir.zero, src, done);
+    ir.put(f, ir.address, 27, 0, 0, thread_error);
+    tconstant(f, 28, 0);
+    array.push(f.steps, ir.Step {
+        kind: ir.compare_exchange,
+        destination: 26,
+        left: 27,
+        right: src,
+        immediate: 0,
+        name: "",
+        arguments: [28],
+        order: acq_rel,
+        failure_order: acquire
+    });
+    ir.branch(f, ir.label, 0, done);
 }
-waza thread_close_program(faults:bool) -> ir.Function {
-    kaku f=ir.function("thread_close");tprepare(f);tload(f,1,thread_owns_handle);ir.branch(f,ir.zero,1,"destroy");
-    tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"quarantine");
-    tpublish(f,thread_stop,1);tload(f,3,thread_condition);ir.call(f,wake,1,[3]);terror(f,1);
-    ir.invoke_function(f,"platform_now",6,[]);ir.branch(f,ir.zero,6,"unlock_quarantine");tconstant(f,7,1000000000);ir.put(f,ir.copy,8,6,0,0);ir.put(f,ir.add,6,6,7,0);ir.put(f,ir.less_unsigned,8,6,8,0);ir.branch(f,ir.nonzero,8,"unlock_quarantine");
-    ir.branch(f,ir.label,0,"wait_exit");ir.put(f,ir.acquire_load,4,0,0,thread_state);tcheck(f,4,thread_exited,"exited");tcheck(f,4,thread_failed,"exited");ir.put(f,ir.acquire_load,4,0,0,thread_progress);tcheck(f,4,thread_finished,"exited");
-    ir.invoke_function(f,"platform_now",4,[]);ir.branch(f,ir.zero,4,"unlock_quarantine");ir.put(f,ir.less_unsigned,5,4,6,0);ir.branch(f,ir.zero,5,"unlock_quarantine");
-    tconstant(f,5,10000000);ir.invoke_function(f,"platform_wait",4,[3,2,5]);ir.branch(f,ir.zero,4,"wait_exit");tcheck(f,4,1,"wait_exit");terror(f,4);ir.branch(f,ir.jump,0,"unlock_quarantine");
-    ir.branch(f,ir.label,0,"exited");ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"quarantine");
-    tload(f,2,thread_handle);tconstant(f,3,0);tcall(f,thread_join,1,[2,3],faults);ir.branch(f,ir.zero,1,"joined");terror(f,1);tinc(f,thread_join_retries);
-    // Retry without the injection hook. Until a real join succeeds every
-    // native resource remains owned and the context may not be freed/reused.
-    ir.call(f,thread_join,1,[2,3]);ir.branch(f,ir.nonzero,1,"quarantine");
-    ir.branch(f,ir.label,0,"joined");tset(f,thread_owns_handle,0);tinc(f,thread_joins);tinc(f,thread_releases);tpublish(f,thread_state,thread_joined);
-    ir.branch(f,ir.label,0,"destroy");tload(f,1,thread_member);ir.branch(f,ir.nonzero,1,"quarantine");tload(f,1,thread_owns_condition);ir.branch(f,ir.zero,1,"destroy_mutex");tload(f,2,thread_condition);ir.call(f,ir.condition_destroy,1,[2]);ir.branch(f,ir.nonzero,1,"quarantine");tset(f,thread_owns_condition,0);tinc(f,thread_releases);
-    ir.branch(f,ir.label,0,"destroy_mutex");tload(f,1,thread_owns_mutex);ir.branch(f,ir.zero,1,"destroy_key");tload(f,2,thread_mutex);ir.call(f,ir.mutex_destroy,1,[2]);ir.branch(f,ir.nonzero,1,"quarantine");tset(f,thread_owns_mutex,0);tinc(f,thread_releases);
-    ir.branch(f,ir.label,0,"destroy_key");tload(f,1,thread_owns_key);ir.branch(f,ir.zero,1,"closed");tload(f,2,thread_key);ir.call(f,ir.tls_destroy,1,[2]);ir.branch(f,ir.nonzero,1,"quarantine");tset(f,thread_owns_key,0);tinc(f,thread_releases);
-    ir.branch(f,ir.label,0,"closed");tpublish(f,thread_state,thread_closed);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);
-    ir.branch(f,ir.label,0,"unlock_quarantine");tconstant(f,1,2);terror(f,1);ir.call(f,ir.mutex_unlock,1,[2]);
-    ir.branch(f,ir.label,0,"quarantine");terror(f,1);tpublish(f,thread_state,thread_quarantined);tload(f,1,thread_error);ir.branch(f,ir.nonzero,1,"return_error");tset(f,thread_error,2);tconstant(f,1,2);
-    ir.branch(f,ir.label,0,"return_error");ir.put(f,ir.result,0,1,0,0);kaesu f;
+
+waza tprepare(f: ir.Function) -> unit {
+    tload(f, 31, thread_imports);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
 }
-waza thread_error_program() -> ir.Function {
-    kaku f=ir.function("thread_record_error");tprepare(f);terror(f,1);tload(f,1,thread_error);ir.put(f,ir.result,0,1,0,0);kaesu f;
-}
-waza registry_lock_program(cooperative:bool) -> ir.Function {
-    kaku f=ir.function("registry_lock");tprepare(f);ir.invoke_function(f,"platform_now",4,[]);ir.branch(f,ir.zero,4,"timeout");tconstant(f,6,1000000000);ir.put(f,ir.copy,8,4,0,0);ir.put(f,ir.add,4,4,6,0);ir.put(f,ir.less_unsigned,8,4,8,0);ir.branch(f,ir.nonzero,8,"timeout");
-    // Cooperative registry acquisition distinguishes real GC progress from
-    // a stalled lock. A gc_poll may legitimately park beyond the soft1s
-    // deadline; renewing only on a changed heartbeat avoids false failure.
-    // The independent30s ceiling still bounds starvation under continuous GC.
-    moshi(cooperative){tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_heartbeat);tconstant(f,12,29000000000);ir.put(f,ir.add,12,4,12,0);ir.put(f,ir.less_unsigned,7,12,4,0);ir.branch(f,ir.nonzero,7,"timeout");}
-    tload(f,2,thread_registry);ir.put(f,ir.address,2,2,0,40);tconstant(f,3,1);tconstant(f,5,0);
-    ir.branch(f,ir.label,0,"retry");moshi(cooperative){tconstant(f,19,0);}array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:1,left:2,right:3,immediate:0,name:"",arguments:[5],order:acq_rel,failure_order:acquire});ir.branch(f,ir.zero,1,"acquired");
-    moshi(cooperative){tload(f,9,thread_registered);ir.branch(f,ir.zero,9,"not_registered");
-        ir.put(f,ir.acquire_load,15,0,0,thread_seen_epoch);tload(f,9,thread_shadow);ir.invoke_function(f,"gc_poll",1,[0,9]);ir.branch(f,ir.nonzero,1,"poll_failed");
-        ir.put(f,ir.acquire_load,16,0,0,thread_seen_epoch);ir.put(f,ir.equal,17,16,15,0);ir.branch(f,ir.nonzero,17,"not_registered");tconstant(f,19,1);
-        ir.branch(f,ir.label,0,"not_registered");}
-    ir.invoke_function(f,"platform_now",6,[]);ir.branch(f,ir.zero,6,"timeout");
-    moshi(cooperative){
-        ir.put(f,ir.less_unsigned,7,6,12,0);ir.branch(f,ir.zero,7,"timeout");
-        // gc_poll may complete an acknowledged parked epoch after the soft
-        // deadline without a heartbeat change during that heap operation.
-        // Only that real completion renews1s; the original30s ceiling stays.
-        ir.branch(f,ir.zero,19,"no_completed_park");tconstant(f,14,1000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
-        ir.branch(f,ir.label,0,"no_completed_park");
-        ir.put(f,ir.acquire_load,13,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,14,13,11,0);ir.branch(f,ir.nonzero,14,"no_registry_progress");
-        ir.put(f,ir.copy,11,13,0,0);tconstant(f,14,1000000000);ir.put(f,ir.add,4,6,14,0);ir.put(f,ir.less_unsigned,7,4,6,0);ir.branch(f,ir.nonzero,7,"timeout");
-        ir.branch(f,ir.label,0,"no_registry_progress");
+
+// 一次性故障注入仅编译进显式验证程序中：在资源获取之前替换操作结果，然后沿用与生产环境完全一致的错误/清理路径。
+// 默认生产函数不包含该钩子。
+waza tcall(f: ir.Function, operation: int64, dst: int64, args: []int64, faults: bool) -> unit {
+    moshi (!faults) {
+        ir.call(f, operation, dst, args);
+        kaesu;
     }
-    ir.put(f,ir.less_unsigned,7,6,4,0);ir.branch(f,ir.nonzero,7,"retry");
-    ir.branch(f,ir.label,0,"timeout");treturn(f,2);
-    ir.branch(f,ir.label,0,"acquired");treturn(f,0);ir.branch(f,ir.label,0,"poll_failed");ir.put(f,ir.result,0,1,0,0);kaesu f;
+    kaku tag = convert.format_int(len(f.steps));
+    kaku actual = string.concat("actual_", tag);
+    kaku done = string.concat("call_done_", tag);
+    tload(f, 30, thread_fault_operation);
+    tconstant(f, 31, operation);
+    ir.put(f, ir.equal, 30, 30, 31, 0);
+    ir.branch(f, ir.zero, 30, actual);
+    tload(f, dst, thread_fault_error);
+    tset(f, thread_fault_operation, 0);
+    tinc(f, thread_fault_count);
+    ir.branch(f, ir.jump, 0, done);
+    ir.branch(f, ir.label, 0, actual);
+    ir.call(f, operation, dst, args);
+    ir.branch(f, ir.label, 0, done);
 }
+
+waza registry_add(f: ir.Function, offset: int64, delta: int64) -> unit {
+    tload(f, 27, thread_registry);
+    ir.put(f, ir.address, 27, 27, 0, offset);
+    tconstant(f, 28, delta);
+    array.push(f.steps, ir.Step {
+        kind: ir.fetch_add,
+        destination: 26,
+        left: 27,
+        right: 28,
+        immediate: 0,
+        name: "",
+        arguments: [],
+        order: acq_rel,
+        failure_order: relaxed
+    });
+}
+
+waza thread_open_program(faults: bool, cooperative: bool) -> ir.Function {
+    kaesu thread_open_options(faults, cooperative, iie);
+}
+
+waza thread_open_options(faults: bool, cooperative: bool, shared_key: bool) -> ir.Function {
+    kaku version = 2;
+    moshi (cooperative) { version = 3; }
+    kaku name = "thread_open";
+    moshi (shared_key) { name = "thread_open_shared"; }
+
+    kaku f = ir.function(name);
+    tprepare(f);
+    tload(f, 1, thread_version);
+    tcheck(f, 1, version, "version_ok");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "version_ok");
+    tload(f, 2, thread_registry);
+    ir.branch(f, ir.zero, 2, "invalid_registry");
+    ir.put(f, ir.load, 3, 2, 0, 0);
+    tcheck(f, 3, version, "registry_ok");
+
+    ir.branch(f, ir.label, 0, "invalid_registry");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "registry_ok");
+    tload(f, 1, thread_member);
+    ir.branch(f, ir.zero, 1, "not_member");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "not_member");
+    tload(f, 1, thread_state);
+    tcheck(f, 1, thread_new, "start");
+    tcheck(f, 1, thread_closed, "start");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "start");
+    tset(f, thread_version, version);
+    tset(f, thread_error, 0);
+    tset(f, thread_stop, 0);
+    moshi (!cooperative) { tset(f, thread_shadow, 0); }
+    tset(f, thread_registered, 0);
+    tset(f, thread_progress, thread_at_work);
+
+    // 共享 TLS Key 模式下，调用方一直持有 Key 直到所有子线程 join 完毕，子线程 close 绝不会删除借用的 Key。
+    // 每个实际 Worker 的上下文/互斥锁/条件变量与线程句柄归属权仍保持独立。
+    moshi (shared_key) {
+        tset(f, thread_owns_key, 0);
+    } sore {
+        ir.put(f, ir.address, 2, 0, 0, thread_key);
+        tcall(f, ir.tls_create, 1, [2], faults);
+        ir.branch(f, ir.nonzero, 1, "failed");
+        tset(f, thread_owns_key, 1);
+        tinc(f, thread_acquisitions);
+    }
+
+    tload(f, 2, thread_mutex);
+    tcall(f, ir.mutex_create, 1, [2], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_mutex, 1);
+    tinc(f, thread_acquisitions);
+
+    tload(f, 2, thread_condition);
+    tcall(f, ir.condition_create, 1, [2], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_condition, 1);
+    tinc(f, thread_acquisitions);
+
+    tpublish(f, thread_state, thread_starting);
+    ir.put(f, ir.address, 2, 0, 0, thread_handle);
+    tload(f, 3, thread_entry);
+    moshi (shared_key) {
+        ir.put(f, ir.address, 4, 0, 0, thread_error);
+        ir.invoke_function(f, "platform_thread_start", 1, [2, 3, 0, 4]);
+    } sore {
+        tcall(f, thread_start, 1, [2, 3, 0], faults);
+    }
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_handle, 1);
+    tinc(f, thread_acquisitions);
+    tinc(f, thread_starts);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "failed");
+    terror(f, 1);
+    ir.invoke_function(f, "thread_close", 2, [0]);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
+waza thread_enter_program(faults: bool, cooperative: bool) -> ir.Function {
+    kaku f = ir.function("thread_enter");
+    tprepare(f);
+    tload(f, 2, thread_key);
+    tconstant(f, 4, 0);
+    tcall(f, tls_set, 1, [2, 0], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+
+    tconstant(f, 4, 1);
+    tcall(f, tls_get, 1, [2], faults);
+    ir.put(f, ir.equal, 3, 1, 0, 0);
+    ir.branch(f, ir.nonzero, 3, "registered");
+    tconstant(f, 1, 3);
+    ir.branch(f, ir.jump, 0, "failed");
+
+    ir.branch(f, ir.label, 0, "registered");
+    ir.invoke_function(f, "registry_enter", 1, [0]);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tinc(f, thread_registrations);
+    tpublish(f, thread_registered, 1);
+
+    ir.call(f, thread_identity, 1, []);
+    tstore(f, thread_identity_value, 1);
+
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_registered");
+
+    ir.put(f, ir.acquire_load, 3, 0, 0, thread_stop);
+    ir.branch(f, ir.nonzero, 3, "stopping");
+    tpublish(f, thread_state, thread_running);
+    ir.branch(f, ir.jump, 0, "publish");
+
+    ir.branch(f, ir.label, 0, "stopping");
+    tpublish(f, thread_state, thread_stopping);
+
+    ir.branch(f, ir.label, 0, "publish");
+    tload(f, 3, thread_condition);
+    ir.call(f, wake, 1, [3]);
+    terror(f, 1);
+    tinc(f, thread_wakes);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_registered");
+
+    moshi (cooperative) {
+        tload(f, 2, thread_shadow);
+        ir.invoke_function(f, "gc_poll", 1, [0, 2]);
+        ir.branch(f, ir.nonzero, 1, "failed_registered");
+    }
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "failed_registered");
+    terror(f, 1);
+    ir.invoke_function(f, "thread_leave", 2, [0]);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+
+    ir.branch(f, ir.label, 0, "failed");
+    ir.branch(f, ir.zero, 4, "failure_publish");
+    tconstant(f, 3, 0);
+    ir.call(f, tls_set, 5, [2, 3]);
+
+    ir.branch(f, ir.label, 0, "failure_publish");
+    terror(f, 1);
+    tpublish(f, thread_state, thread_failed);
+    tpublish(f, thread_progress, thread_finished);
+    treturn(f, 1);
+    kaesu f;
+}
+
+// 将当前调用线程附加到协作式注册表（不创建/join pthread）。
+// 上下文由调用方持有并清零初始化，已配置 imports/registry 与不透明互斥锁/条件变量存储；
+// 仅在完全 close 后才允许复用。资源获取与回滚沿用与 thread_open 相同的归属计数规则。
+waza thread_attach_program(faults: bool) -> ir.Function {
+    kaku f = ir.function("thread_attach");
+    tprepare(f);
+    tload(f, 1, thread_version);
+    tcheck(f, 1, 3, "version_ok");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "version_ok");
+    tload(f, 2, thread_registry);
+    ir.branch(f, ir.zero, 2, "invalid");
+    ir.put(f, ir.load, 3, 2, 0, 0);
+    tcheck(f, 3, 3, "registry_ok");
+
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "registry_ok");
+    tload(f, 1, thread_member);
+    ir.branch(f, ir.nonzero, 1, "invalid");
+
+    tload(f, 1, thread_state);
+    tcheck(f, 1, thread_new, "acquire");
+    tcheck(f, 1, thread_closed, "acquire");
+    treturn(f, 1);
+
+    ir.branch(f, ir.label, 0, "acquire");
+    tset(f, thread_error, 0);
+    tset(f, thread_stop, 0);
+    tset(f, thread_shadow, 0);
+    tset(f, thread_progress, thread_at_work);
+
+    ir.put(f, ir.address, 2, 0, 0, thread_key);
+    tcall(f, ir.tls_create, 1, [2], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_key, 1);
+    tinc(f, thread_acquisitions);
+
+    tload(f, 2, thread_mutex);
+    tcall(f, ir.mutex_create, 1, [2], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_mutex, 1);
+    tinc(f, thread_acquisitions);
+
+    tload(f, 2, thread_condition);
+    tcall(f, ir.condition_create, 1, [2], faults);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    tset(f, thread_owns_condition, 1);
+    tinc(f, thread_acquisitions);
+
+    tpublish(f, thread_state, thread_starting);
+    ir.invoke_function(f, "thread_enter", 1, [0]);
+    ir.branch(f, ir.nonzero, 1, "failed");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "failed");
+    terror(f, 1);
+    ir.invoke_function(f, "thread_close", 2, [0]);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
+waza thread_leave_program(cooperative: bool) -> ir.Function {
+    kaku f = ir.function("thread_leave");
+    tprepare(f);
+    moshi (cooperative) {
+        tload(f, 2, thread_shadow);
+        ir.invoke_function(f, "gc_poll", 1, [0, 2]);
+        terror(f, 1);
+    }
+
+    tload(f, 1, thread_registered);
+    ir.branch(f, ir.zero, 1, "publish");
+
+    tload(f, 2, thread_key);
+    tconstant(f, 3, 0);
+    ir.call(f, tls_set, 1, [2, 3]);
+    terror(f, 1);
+
+    ir.invoke_function(f, "registry_leave", 1, [0]);
+    ir.branch(f, ir.zero, 1, "unlinked");
+    terror(f, 1);
+    ir.branch(f, ir.jump, 0, "publish");
+
+    ir.branch(f, ir.label, 0, "unlinked");
+    tinc(f, thread_exits);
+    tpublish(f, thread_registered, 0);
+    tpublish(f, thread_shadow, 0);
+
+    ir.branch(f, ir.label, 0, "publish");
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "bad_lock");
+
+    tpublish(f, thread_state, thread_exited);
+    tpublish(f, thread_progress, thread_finished);
+    tload(f, 3, thread_condition);
+    ir.call(f, wake, 1, [3]);
+    terror(f, 1);
+    tinc(f, thread_wakes);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    terror(f, 1);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+
+    ir.branch(f, ir.label, 0, "bad_lock");
+    terror(f, 1);
+    tpublish(f, thread_state, thread_exited);
+    tpublish(f, thread_progress, thread_finished);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
+waza thread_wait_program(faults: bool, cooperative: bool) -> ir.Function {
+    // 有界 GC 等待：arg1 为 0..1s（纳秒），0 表示已到期。
+    // 唤醒仅作提示：每次唤醒后必须在同一把互斥锁下重新检查 thread_stop；
+    // 绝对截止时间不会因虚假唤醒而延长。
+    kaku f = ir.function("thread_wait");
+    tprepare(f);
+    ir.put(f, ir.copy, 5, 1, 0, 0);
+    tconstant(f, 7, 1000000001);
+    ir.put(f, ir.less_unsigned, 7, 5, 7, 0);
+    ir.branch(f, ir.zero, 7, "bad_timeout");
+
+    ir.invoke_function(f, "platform_now", 6, []);
+    ir.branch(f, ir.zero, 6, "bad_timeout");
+    ir.put(f, ir.copy, 8, 6, 0, 0);
+    ir.put(f, ir.add, 6, 6, 5, 0);
+    ir.put(f, ir.less_unsigned, 8, 6, 8, 0);
+    ir.branch(f, ir.nonzero, 8, "bad_timeout");
+
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "lock_failed");
+
+    ir.branch(f, ir.label, 0, "predicate");
+    moshi (cooperative) {
+        ir.invoke_function(f, "gc_park_locked", 9, [0]);
+        ir.branch(f, ir.nonzero, 9, "gc_failed");
+    }
+    ir.put(f, ir.acquire_load, 3, 0, 0, thread_stop);
+    ir.branch(f, ir.nonzero, 3, "stopped");
+
+    ir.invoke_function(f, "platform_now", 7, []);
+    ir.branch(f, ir.zero, 7, "clock_failed");
+    ir.put(f, ir.less_unsigned, 8, 7, 6, 0);
+    ir.branch(f, ir.zero, 8, "timed_out");
+    ir.put(f, ir.subtract, 5, 6, 7, 0);
+
+    moshi (faults) {
+        tload(f, 3, thread_fault_operation);
+        tcheck(f, 3, park, "inject");
+    }
+    tpublish(f, thread_progress, thread_parked);
+    tload(f, 3, thread_condition);
+    ir.invoke_function(f, "platform_wait", 4, [3, 2, 5]);
+    tinc(f, thread_waits);
+    ir.branch(f, ir.zero, 4, "predicate");
+    ir.branch(f, ir.jump, 0, "unlock");
+
+    moshi (faults) {
+        ir.branch(f, ir.label, 0, "inject");
+        tload(f, 4, thread_fault_error);
+        tset(f, thread_fault_operation, 0);
+        tinc(f, thread_fault_count);
+        ir.branch(f, ir.jump, 0, "unlock");
+    }
+
+    ir.branch(f, ir.label, 0, "stopped");
+    tconstant(f, 4, 0);
+    ir.branch(f, ir.jump, 0, "unlock");
+
+    ir.branch(f, ir.label, 0, "timed_out");
+    tconstant(f, 4, 1);
+    ir.branch(f, ir.jump, 0, "unlock");
+
+    ir.branch(f, ir.label, 0, "gc_failed");
+    ir.branch(f, ir.label, 0, "clock_failed");
+    tconstant(f, 4, -2);
+
+    ir.branch(f, ir.label, 0, "unlock");
+    moshi (cooperative) { ir.invoke_function(f, "gc_park_locked", 9, [0]); }
+    tpublish(f, thread_progress, thread_at_work);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "lock_failed");
+    ir.put(f, ir.result, 0, 4, 0, 0);
+
+    ir.branch(f, ir.label, 0, "lock_failed");
+    tconstant(f, 3, 0);
+    ir.put(f, ir.subtract, 1, 3, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+
+    ir.branch(f, ir.label, 0, "bad_timeout");
+    treturn(f, -2);
+    kaesu f;
+}
+
+waza thread_close_program(faults: bool) -> ir.Function {
+    kaku f = ir.function("thread_close");
+    tprepare(f);
+    tload(f, 1, thread_owns_handle);
+    ir.branch(f, ir.zero, 1, "destroy");
+
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+
+    tpublish(f, thread_stop, 1);
+    tload(f, 3, thread_condition);
+    ir.call(f, wake, 1, [3]);
+    terror(f, 1);
+
+    ir.invoke_function(f, "platform_now", 6, []);
+    ir.branch(f, ir.zero, 6, "unlock_quarantine");
+    tconstant(f, 7, 1000000000);
+    ir.put(f, ir.copy, 8, 6, 0, 0);
+    ir.put(f, ir.add, 6, 6, 7, 0);
+    ir.put(f, ir.less_unsigned, 8, 6, 8, 0);
+    ir.branch(f, ir.nonzero, 8, "unlock_quarantine");
+
+    ir.branch(f, ir.label, 0, "wait_exit");
+    ir.put(f, ir.acquire_load, 4, 0, 0, thread_state);
+    tcheck(f, 4, thread_exited, "exited");
+    tcheck(f, 4, thread_failed, "exited");
+    ir.put(f, ir.acquire_load, 4, 0, 0, thread_progress);
+    tcheck(f, 4, thread_finished, "exited");
+
+    ir.invoke_function(f, "platform_now", 4, []);
+    ir.branch(f, ir.zero, 4, "unlock_quarantine");
+    ir.put(f, ir.less_unsigned, 5, 4, 6, 0);
+    ir.branch(f, ir.zero, 5, "unlock_quarantine");
+
+    tconstant(f, 5, 10000000);
+    ir.invoke_function(f, "platform_wait", 4, [3, 2, 5]);
+    ir.branch(f, ir.zero, 4, "wait_exit");
+    tcheck(f, 4, 1, "wait_exit");
+    terror(f, 4);
+    ir.branch(f, ir.jump, 0, "unlock_quarantine");
+
+    ir.branch(f, ir.label, 0, "exited");
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+
+    tload(f, 2, thread_handle);
+    tconstant(f, 3, 0);
+    tcall(f, thread_join, 1, [2, 3], faults);
+    ir.branch(f, ir.zero, 1, "joined");
+    terror(f, 1);
+    tinc(f, thread_join_retries);
+
+    // 绕过故障注入重试：在真正的 join 成功之前，所有原生资源仍归当前上下文所有，绝不能释放或复用该上下文。
+    ir.call(f, thread_join, 1, [2, 3]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+
+    ir.branch(f, ir.label, 0, "joined");
+    tset(f, thread_owns_handle, 0);
+    tinc(f, thread_joins);
+    tinc(f, thread_releases);
+    tpublish(f, thread_state, thread_joined);
+
+    ir.branch(f, ir.label, 0, "destroy");
+    tload(f, 1, thread_member);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+
+    tload(f, 1, thread_owns_condition);
+    ir.branch(f, ir.zero, 1, "destroy_mutex");
+    tload(f, 2, thread_condition);
+    ir.call(f, ir.condition_destroy, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+    tset(f, thread_owns_condition, 0);
+    tinc(f, thread_releases);
+
+    ir.branch(f, ir.label, 0, "destroy_mutex");
+    tload(f, 1, thread_owns_mutex);
+    ir.branch(f, ir.zero, 1, "destroy_key");
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_destroy, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+    tset(f, thread_owns_mutex, 0);
+    tinc(f, thread_releases);
+
+    ir.branch(f, ir.label, 0, "destroy_key");
+    tload(f, 1, thread_owns_key);
+    ir.branch(f, ir.zero, 1, "closed");
+    tload(f, 2, thread_key);
+    ir.call(f, ir.tls_destroy, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "quarantine");
+    tset(f, thread_owns_key, 0);
+    tinc(f, thread_releases);
+
+    ir.branch(f, ir.label, 0, "closed");
+    tpublish(f, thread_state, thread_closed);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+
+    ir.branch(f, ir.label, 0, "unlock_quarantine");
+    tconstant(f, 1, 2);
+    terror(f, 1);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+
+    ir.branch(f, ir.label, 0, "quarantine");
+    terror(f, 1);
+    tpublish(f, thread_state, thread_quarantined);
+    tload(f, 1, thread_error);
+    ir.branch(f, ir.nonzero, 1, "return_error");
+    tset(f, thread_error, 2);
+    tconstant(f, 1, 2);
+
+    ir.branch(f, ir.label, 0, "return_error");
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
+waza thread_error_program() -> ir.Function {
+    kaku f = ir.function("thread_record_error");
+    tprepare(f);
+    terror(f, 1);
+    tload(f, 1, thread_error);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
+waza registry_lock_program(cooperative: bool) -> ir.Function {
+    kaku f = ir.function("registry_lock");
+    tprepare(f);
+    ir.invoke_function(f, "platform_now", 4, []);
+    ir.branch(f, ir.zero, 4, "timeout");
+    tconstant(f, 6, 120000000000);
+    ir.put(f, ir.copy, 8, 4, 0, 0);
+    ir.put(f, ir.add, 4, 4, 6, 0);
+    ir.put(f, ir.less_unsigned, 8, 4, 8, 0);
+    ir.branch(f, ir.nonzero, 8, "timeout");
+
+    // 协作式注册表锁获取会区分真正的 GC 推进与锁卡死：gc_poll 可能会合法停靠超过 120 秒的软期限，
+    // 只有当心跳（heartbeat）确实推进时才续期，从而避免误判超时；同时 600 秒的独立总上限仍能防止在持续 GC 下无限饥饿。
+    moshi (cooperative) {
+        tload(f, 10, thread_registry);
+        ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_heartbeat);
+        tconstant(f, 12, 600000000000);
+        ir.put(f, ir.add, 12, 4, 12, 0);
+        ir.put(f, ir.less_unsigned, 7, 12, 4, 0);
+        ir.branch(f, ir.nonzero, 7, "timeout");
+    }
+
+    tload(f, 2, thread_registry);
+    ir.put(f, ir.address, 2, 2, 0, 40);
+    tconstant(f, 3, 1);
+    tconstant(f, 5, 0);
+
+    ir.branch(f, ir.label, 0, "retry");
+    moshi (cooperative) { tconstant(f, 19, 0); }
+    array.push(f.steps, ir.Step {
+        kind: ir.compare_exchange,
+        destination: 1,
+        left: 2,
+        right: 3,
+        immediate: 0,
+        name: "",
+        arguments: [5],
+        order: acq_rel,
+        failure_order: acquire
+    });
+    ir.branch(f, ir.zero, 1, "acquired");
+
+    moshi (cooperative) {
+        tload(f, 9, thread_registered);
+        ir.branch(f, ir.zero, 9, "not_registered");
+        ir.put(f, ir.acquire_load, 15, 0, 0, thread_seen_epoch);
+        tload(f, 9, thread_shadow);
+        ir.invoke_function(f, "gc_poll", 1, [0, 9]);
+        ir.branch(f, ir.nonzero, 1, "poll_failed");
+        ir.put(f, ir.acquire_load, 16, 0, 0, thread_seen_epoch);
+        ir.put(f, ir.equal, 17, 16, 15, 0);
+        ir.branch(f, ir.nonzero, 17, "not_registered");
+        tconstant(f, 19, 1);
+        ir.branch(f, ir.label, 0, "not_registered");
+    }
+
+    ir.invoke_function(f, "platform_now", 6, []);
+    ir.branch(f, ir.zero, 6, "timeout");
+
+    moshi (cooperative) {
+        ir.put(f, ir.less_unsigned, 7, 6, 12, 0);
+        ir.branch(f, ir.zero, 7, "timeout");
+
+        // gc_poll 可能在软期限之后才完成一次已确认停靠的 Epoch（期间该次堆操作本身未触发心跳变化）。
+        // 仅当确实完成了停靠 Epoch 时才将软期限续期 120 秒，600 秒的绝对总上限保持不变。
+        ir.branch(f, ir.zero, 19, "no_completed_park");
+        tconstant(f, 14, 120000000000);
+        ir.put(f, ir.add, 4, 6, 14, 0);
+        ir.put(f, ir.less_unsigned, 7, 4, 6, 0);
+        ir.branch(f, ir.nonzero, 7, "timeout");
+
+        ir.branch(f, ir.label, 0, "no_completed_park");
+        ir.put(f, ir.acquire_load, 13, 10, 0, gc_registry_heartbeat);
+        ir.put(f, ir.equal, 14, 13, 11, 0);
+        ir.branch(f, ir.nonzero, 14, "no_registry_progress");
+        ir.put(f, ir.copy, 11, 13, 0, 0);
+        tconstant(f, 14, 120000000000);
+        ir.put(f, ir.add, 4, 6, 14, 0);
+        ir.put(f, ir.less_unsigned, 7, 4, 6, 0);
+        ir.branch(f, ir.nonzero, 7, "timeout");
+        ir.branch(f, ir.label, 0, "no_registry_progress");
+    }
+
+    ir.put(f, ir.less_unsigned, 7, 6, 4, 0);
+    ir.branch(f, ir.nonzero, 7, "retry");
+
+    ir.branch(f, ir.label, 0, "timeout");
+    treturn(f, 2);
+
+    ir.branch(f, ir.label, 0, "acquired");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "poll_failed");
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
+
 waza registry_unlock_program() -> ir.Function {
-    kaku f=ir.function("registry_unlock");tload(f,2,thread_registry);tconstant(f,3,0);ir.put(f,ir.release_store,0,2,3,40);treturn(f,0);kaesu f;
+    kaku f = ir.function("registry_unlock");
+    tload(f, 2, thread_registry);
+    tconstant(f, 3, 0);
+    ir.put(f, ir.release_store, 0, 2, 3, 40);
+    treturn(f, 0);
+    kaesu f;
 }
+
 waza registry_enter_program() -> ir.Function {
-    kaku f=ir.function("registry_enter");ir.invoke_function(f,"registry_lock",1,[0]);ir.branch(f,ir.nonzero,1,"done");tload(f,6,thread_member);ir.branch(f,ir.nonzero,6,"duplicate");
-    tload(f,2,thread_registry);ir.put(f,ir.load,3,2,0,32);tstore(f,thread_next,3);tpublish(f,thread_member,1);ir.put(f,ir.release_store,0,2,0,32);registry_add(f,8,1);registry_add(f,16,1);
-    ir.invoke_function(f,"registry_unlock",1,[0]);treturn(f,0);
-    ir.branch(f,ir.label,0,"duplicate");ir.invoke_function(f,"registry_unlock",1,[0]);tconstant(f,1,4);
-    ir.branch(f,ir.label,0,"done");ir.put(f,ir.result,0,1,0,0);kaesu f;
+    kaku f = ir.function("registry_enter");
+    ir.invoke_function(f, "registry_lock", 1, [0]);
+    ir.branch(f, ir.nonzero, 1, "done");
+
+    tload(f, 6, thread_member);
+    ir.branch(f, ir.nonzero, 6, "duplicate");
+
+    tload(f, 2, thread_registry);
+    ir.put(f, ir.load, 3, 2, 0, 32);
+    tstore(f, thread_next, 3);
+    tpublish(f, thread_member, 1);
+    ir.put(f, ir.release_store, 0, 2, 0, 32);
+    registry_add(f, 8, 1);
+    registry_add(f, 16, 1);
+
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "duplicate");
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    tconstant(f, 1, 4);
+
+    ir.branch(f, ir.label, 0, "done");
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
 }
+
 waza registry_leave_program() -> ir.Function {
-    kaku f=ir.function("registry_leave");ir.invoke_function(f,"registry_lock",1,[0]);ir.branch(f,ir.nonzero,1,"done");
-    tload(f,2,thread_registry);ir.put(f,ir.load,3,2,0,32);ir.put(f,ir.load,6,2,0,8);tconstant(f,4,0);tconstant(f,7,0);
-    ir.branch(f,ir.label,0,"find");ir.put(f,ir.less_unsigned,8,7,6,0);ir.branch(f,ir.zero,8,"missing");ir.branch(f,ir.zero,3,"missing");ir.put(f,ir.equal,8,3,0,0);ir.branch(f,ir.nonzero,8,"found");
-    ir.put(f,ir.copy,4,3,0,0);ir.put(f,ir.load,3,3,0,thread_next);tconstant(f,9,1);ir.put(f,ir.add,7,7,9,0);ir.branch(f,ir.jump,0,"find");
-    ir.branch(f,ir.label,0,"found");ir.put(f,ir.load,5,3,0,thread_next);ir.branch(f,ir.nonzero,4,"predecessor");ir.put(f,ir.release_store,0,2,5,32);ir.branch(f,ir.jump,0,"removed");
-    ir.branch(f,ir.label,0,"predecessor");ir.put(f,ir.store,0,4,5,thread_next);
-    ir.branch(f,ir.label,0,"removed");tset(f,thread_next,0);tpublish(f,thread_member,0);registry_add(f,8,-1);registry_add(f,24,1);ir.invoke_function(f,"registry_unlock",1,[0]);treturn(f,0);
-    ir.branch(f,ir.label,0,"missing");ir.invoke_function(f,"registry_unlock",1,[0]);tconstant(f,1,4);
-    ir.branch(f,ir.label,0,"done");ir.put(f,ir.result,0,1,0,0);kaesu f;
+    kaku f = ir.function("registry_leave");
+    ir.invoke_function(f, "registry_lock", 1, [0]);
+    ir.branch(f, ir.nonzero, 1, "done");
+
+    tload(f, 2, thread_registry);
+    ir.put(f, ir.load, 3, 2, 0, 32);
+    ir.put(f, ir.load, 6, 2, 0, 8);
+    tconstant(f, 4, 0);
+    tconstant(f, 7, 0);
+
+    ir.branch(f, ir.label, 0, "find");
+    ir.put(f, ir.less_unsigned, 8, 7, 6, 0);
+    ir.branch(f, ir.zero, 8, "missing");
+    ir.branch(f, ir.zero, 3, "missing");
+    ir.put(f, ir.equal, 8, 3, 0, 0);
+    ir.branch(f, ir.nonzero, 8, "found");
+    ir.put(f, ir.copy, 4, 3, 0, 0);
+    ir.put(f, ir.load, 3, 3, 0, thread_next);
+    tconstant(f, 9, 1);
+    ir.put(f, ir.add, 7, 7, 9, 0);
+    ir.branch(f, ir.jump, 0, "find");
+
+    ir.branch(f, ir.label, 0, "found");
+    ir.put(f, ir.load, 5, 3, 0, thread_next);
+    ir.branch(f, ir.nonzero, 4, "predecessor");
+    ir.put(f, ir.release_store, 0, 2, 5, 32);
+    ir.branch(f, ir.jump, 0, "removed");
+
+    ir.branch(f, ir.label, 0, "predecessor");
+    ir.put(f, ir.store, 0, 4, 5, thread_next);
+
+    ir.branch(f, ir.label, 0, "removed");
+    tset(f, thread_next, 0);
+    tpublish(f, thread_member, 0);
+    registry_add(f, 8, -1);
+    registry_add(f, 24, 1);
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "missing");
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    tconstant(f, 1, 4);
+
+    ir.branch(f, ir.label, 0, "done");
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
 }
-koukai waza thread_program(faults:bool) -> []ir.Function {kaesu thread_program_options(faults,iie);}
-// Cooperative ABI v3 preserves a caller-provided bootstrap root chain. It can
-// only join a v3 GC registry, which also owns heartbeat and handshake phase.
-koukai waza cooperative_thread_program(faults:bool) -> []ir.Function {kaesu thread_program_options(faults,hai);}
-// Managed workers require the platform's configured-stack start operation.
-// Primitive/lifecycle callers keep the previously accepted default-start ABI.
-koukai waza worker_thread_program(faults:bool) -> []ir.Function {
-    kaku functions=thread_program_options(faults,hai);array.push(functions,thread_open_options(faults,hai,hai));kaesu functions;
+
+koukai waza thread_program(faults: bool) -> []ir.Function {
+    kaesu thread_program_options(faults, iie);
 }
-waza thread_program_options(faults:bool,cooperative:bool) -> []ir.Function {
-    kaku functions=[thread_open_program(faults,cooperative),thread_enter_program(faults,cooperative),thread_leave_program(cooperative),thread_wait_program(faults,cooperative),thread_close_program(faults),thread_error_program(),registry_lock_program(cooperative),registry_unlock_program(),registry_enter_program(),registry_leave_program()];
-    moshi(cooperative){array.push(functions,thread_attach_program(faults));}kaesu functions;
+
+// 协作式 ABI v3 保留调用方提供的引导根链，且仅可加入拥有心跳与握手阶段的 v3 GC 注册表。
+koukai waza cooperative_thread_program(faults: bool) -> []ir.Function {
+    kaesu thread_program_options(faults, hai);
+}
+
+// 托管 Worker 需要支持显式栈配置的启动原语；底层原语与生命周期测试沿用原有默认启动 ABI。
+koukai waza worker_thread_program(faults: bool) -> []ir.Function {
+    kaku functions = thread_program_options(faults, hai);
+    array.push(functions, thread_open_options(faults, hai, hai));
+    kaesu functions;
+}
+
+waza thread_program_options(faults: bool, cooperative: bool) -> []ir.Function {
+    kaku functions = [
+        thread_open_program(faults, cooperative),
+        thread_enter_program(faults, cooperative),
+        thread_leave_program(cooperative),
+        thread_wait_program(faults, cooperative),
+        thread_close_program(faults),
+        thread_error_program(),
+        registry_lock_program(cooperative),
+        registry_unlock_program(),
+        registry_enter_program(),
+        registry_leave_program()
+    ];
+    moshi (cooperative) {
+        array.push(functions, thread_attach_program(faults));
+    }
+    kaesu functions;
 }

@@ -1,8 +1,16 @@
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku result=0;
-waza deep(depth:int64) -> int64 {moshi(depth==0){kaesu 1;}kaesu deep(depth-1)+1;}
-waza worker() -> unit {result=deep(90);}
-kaku child=rt_start(worker);kaku joined=rt_join(child);chant(result);chant(rt_collect(1));
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku result = 0;
+waza deep(depth: int64) -> int64 {
+    moshi (depth == 0) {
+        kaesu 1;
+    }
+    kaesu deep(depth - 1) + 1;
+}
+waza worker() -> unit { result = deep(90); }
+kaku child = rt_start(worker);
+kaku joined = rt_join(child);
+chant(result);
+chant(rt_collect(1));

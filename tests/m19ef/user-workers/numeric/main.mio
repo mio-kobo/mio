@@ -1,15 +1,26 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku done=0;
-waza recurse(depth:int64,value:float64) -> float64 {
-    moshi(depth==0){kaesu value;}
-    kaku bytes=array.make[uint8](32,uint8(11));
-    kaesu recurse(depth-1,value)+float64(bytes[0])-11.0;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku done = 0;
+waza recurse(depth: int64, value: float64) -> float64 {
+    moshi (depth == 0) { kaesu value; }
+    kaku bytes = array.make[uint8](32, uint8(11));
+    kaesu recurse(depth - 1, value) + float64(bytes[0]) - 11.0;
 }
-waza worker() -> unit {chant(recurse(5,1.5));chant(float32(3.25));chant(hai);chant(iie);chant(7);done=1;}
-kaku child=rt_start(worker);
-aida(done==0){kaku occupied=rt_collect(1);kaku waited=rt_wait(1000000);}
-kaku joined=rt_join(child);chant(rt_collect(1));
+waza worker() -> unit {
+    chant(recurse(5, 1.5));
+    chant(float32(3.25));
+    chant(hai);
+    chant(iie);
+    chant(7);
+    done = 1;
+}
+kaku child = rt_start(worker);
+aida (done == 0) {
+    kaku occupied = rt_collect(1);
+    kaku waited = rt_wait(1000000);
+}
+kaku joined = rt_join(child);
+chant(rt_collect(1));

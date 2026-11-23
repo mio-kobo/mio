@@ -44,7 +44,7 @@ waza emit_gen_remember(code: arm64.Assembler, owner: int64) -> unit {
     emit(code, arm64.ldr_x(15, 23, 1056));
     emit(code, arm64.str_x(15, 17, 8));
     emit(code, arm64.str_x(14, 23, 1056));
-    moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_remember_header");}
+    moshi (old_mark_proto_enabled(code)) { arm64.assembler_bl(code, "old_remember_header"); }
     sore {
         emit(code, arm64.ldr_x(15, 14, 0));
         move_bits(code, 17, uint32(256), uint32(0));
@@ -80,17 +80,27 @@ waza emit_gen_register(code: arm64.Assembler) -> unit {
 }
 waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     arm64.assembler_label(code, "runtime_collect");
-    emit(code,arm64.sub_imm_x(31,31,16,iie));emit(code,arm64.str_x(30,31,0));
-    arm64.assembler_bl(code,"gen_minor");
-    moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_major_active");arm64.assembler_cbnz_x(code,9,"gen_policy_done");}
-    emit(code,arm64.ldr_x(9,23,gen_MinorCount));emit(code,arm64.movz_x(10,7,0));emit(code,arm64.and_x(9,9,10));
-    arm64.assembler_cbnz_x(code,9,"gen_policy_done");
-    emit(code,arm64.ldr_x(9,23,gen_OldBytes));arm64.assembler_cbz_x(code,9,"gen_policy_done");
-    arm64.assembler_bl(code,"gen_major");
-    arm64.assembler_label(code,"gen_policy_done");
-    emit(code,arm64.ldr_x(30,31,0));emit(code,arm64.add_imm_x(31,31,16,iie));emit(code,arm64.ret());
+    emit(code, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(code, arm64.str_x(30, 31, 0));
+    arm64.assembler_bl(code, "gen_minor");
+    moshi (old_mark_proto_enabled(code)) {
+        arm64.assembler_bl(code, "old_major_active");
+        arm64.assembler_cbnz_x(code, 9, "gen_policy_done");
+    }
+    emit(code, arm64.ldr_x(9, 23, gen_MinorCount));
+    emit(code, arm64.movz_x(10, 7, 0));
+    emit(code, arm64.and_x(9, 9, 10));
+    arm64.assembler_cbnz_x(code, 9, "gen_policy_done");
+    emit(code, arm64.ldr_x(9, 23, gen_OldBytes));
+    arm64.assembler_cbz_x(code, 9, "gen_policy_done");
+    arm64.assembler_bl(code, "gen_major");
+    arm64.assembler_label(code, "gen_policy_done");
+    emit(code, arm64.ldr_x(30, 31, 0));
+    emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    emit(code, arm64.ret());
     arm64.assembler_label(code, "gen_minor");
-    emit(code,arm64.movz_x(9,1,0)); emit(code,arm64.str_x(9,23,memory_GCActive));
+    emit(code, arm64.movz_x(9, 1, 0));
+    emit(code, arm64.str_x(9, 23, memory_GCActive));
     emit(code, arm64.sub_imm_x(31, 31, 160, iie));
     emit(code, arm64.str_x(19, 31, 0));
     emit(code, arm64.str_x(20, 31, 8));
@@ -103,7 +113,10 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     emit(code, arm64.str_x(27, 31, 64));
     emit(code, arm64.str_x(28, 31, 72));
     emit(code, arm64.str_x(30, 31, 80));
-    moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_pause_heap");arm64.assembler_bl(code,"old_note_minor");}
+    moshi (old_mark_proto_enabled(code)) {
+        arm64.assembler_bl(code, "old_pause_heap");
+        arm64.assembler_bl(code, "old_note_minor");
+    }
     move_x(code, 20, 24);
     emit(code, arm64.add_imm_x(21, 23, 3072, iie));
     emit(code, arm64.ldr_x(22, 23, 0));
@@ -185,7 +198,8 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     // The young list is a chain of cache misses (next object, then its header); start fetching the next header while
     // this object is processed. PRFM is only a hint and cannot fault, including for the null end of the list.
     emit(code, arm64.prfm_load(9, 0));
-    emit_los_side(code, 10, 9, 11); emit(code, arm64.prfm_load(10, 0));
+    emit_los_side(code, 10, 9, 11);
+    emit(code, arm64.prfm_load(10, 0));
     emit(code, arm64.ldr_x(26, 25, 8));
     emit(code, arm64.add_imm_x(26, 26, 31, iie));
     emit(code, arm64.movn_x(9, 15, 0));
@@ -226,7 +240,10 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     move_bits(code, 10, uint32(8), uint32(0));
     emit(code, arm64.orr_x(27, 27, 10));
     emit(code, arm64.str_x(27, 25, 0));
-    moshi(old_mark_proto_enabled(code)){emit(code,arm64.add_imm_x(0,25,16,iie));emit_old_promoted_publish(code,0);}
+    moshi (old_mark_proto_enabled(code)) {
+        emit(code, arm64.add_imm_x(0, 25, 16, iie));
+        emit_old_promoted_publish(code, 0);
+    }
     emit(code, arm64.ldr_x(10, 23, 1120));
     emit(code, arm64.add_x(10, 10, 26));
     emit(code, arm64.str_x(10, 23, 1120));
@@ -241,41 +258,53 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     arm64.assembler_b(code, "gen_sweep_next");
     arm64.assembler_label(code, "gen_sweep_dead");
     emit(code, arm64.str_x(31, 25, 0));
-    emit(code,arm64.add_imm_x(9,23,3072,iie)); emit(code,arm64.cmp_x(25,9)); arm64.assembler_b_cond(code,3,"los_minor_dead");
-    emit(code,arm64.ldr_x(9,23,8)); emit(code,arm64.cmp_x(25,9)); arm64.assembler_b_cond(code,2,"los_minor_dead");
+    emit(code, arm64.add_imm_x(9, 23, 3072, iie));
+    emit(code, arm64.cmp_x(25, 9));
+    arm64.assembler_b_cond(code, 3, "los_minor_dead");
+    emit(code, arm64.ldr_x(9, 23, 8));
+    emit(code, arm64.cmp_x(25, 9));
+    arm64.assembler_b_cond(code, 2, "los_minor_dead");
     emit(code, arm64.add_x(20, 20, 26));
     emit(code, arm64.add_imm_x(24, 24, 1, iie));
     // Publish the block with its full capacity, as the major sweep does: a dead object still carries its exact payload
     // size, so a later request of the same class but a few bytes larger skipped it. (size + 31) & ~15 of either value
     // gives the same block extent, so heap walks are unchanged.
-    emit(code, arm64.sub_imm_x(9, 26, 16, iie)); emit(code, arm64.str_x(9, 25, 8));
+    emit(code, arm64.sub_imm_x(9, 26, 16, iie));
+    emit(code, arm64.str_x(9, 25, 8));
     emit_free_class(code, 26, 11, 9);
     arm64.assembler_label(code, "gen_dead_class");
     emit_free_head(code, 11, 12);
     emit(code, arm64.ldr_x(13, 12, 0));
     emit(code, arm64.str_x(13, 25, 16));
     emit(code, arm64.str_x(25, 12, 0));
-    arm64.assembler_b(code,"gen_sweep_next");
-    arm64.assembler_label(code,"los_minor_dead");
-    emit(code,arm64.add_x(20,20,26)); emit(code,arm64.add_imm_x(24,24,1,iie));
-    emit(code,arm64.ldr_x(9,23,los_Bytes)); emit(code,arm64.sub_x(9,9,26)); emit(code,arm64.str_x(9,23,los_Bytes));
-    emit(code,arm64.ldr_x(9,23,los_Reclaimed)); emit(code,arm64.add_x(9,9,26)); emit(code,arm64.str_x(9,23,los_Reclaimed));
-    emit(code,arm64.ldr_x(9,23,los_Count)); emit(code,arm64.sub_imm_x(9,9,1,iie)); emit(code,arm64.str_x(9,23,los_Count));
+    arm64.assembler_b(code, "gen_sweep_next");
+    arm64.assembler_label(code, "los_minor_dead");
+    emit(code, arm64.add_x(20, 20, 26));
+    emit(code, arm64.add_imm_x(24, 24, 1, iie));
+    emit(code, arm64.ldr_x(9, 23, los_Bytes));
+    emit(code, arm64.sub_x(9, 9, 26));
+    emit(code, arm64.str_x(9, 23, los_Bytes));
+    emit(code, arm64.ldr_x(9, 23, los_Reclaimed));
+    emit(code, arm64.add_x(9, 9, 26));
+    emit(code, arm64.str_x(9, 23, los_Reclaimed));
+    emit(code, arm64.ldr_x(9, 23, los_Count));
+    emit(code, arm64.sub_imm_x(9, 9, 1, iie));
+    emit(code, arm64.str_x(9, 23, los_Count));
     arm64.assembler_label(code, "gen_sweep_next");
     emit(code, arm64.ldr_x(25, 31, 88));
     arm64.assembler_b(code, "gen_sweep_loop");
     arm64.assembler_label(code, "gen_sweep_done");
     moshi (hai) {
-    emit(code, arm64.ldr_x(9, 23, 304));
-    emit(code, arm64.str_x(9, 23, 872));
-    emit(code, arm64.sub_x(9, 9, 20));
-    emit(code, arm64.str_x(9, 23, 304));
-    emit(code, arm64.str_x(9, 23, 880));
-    emit(code, arm64.ldr_x(10, 23, 888));
-    emit(code, arm64.add_x(10, 10, 20));
-    emit(code, arm64.str_x(10, 23, 888));
+        emit(code, arm64.ldr_x(9, 23, 304));
+        emit(code, arm64.str_x(9, 23, 872));
+        emit(code, arm64.sub_x(9, 9, 20));
+        emit(code, arm64.str_x(9, 23, 304));
+        emit(code, arm64.str_x(9, 23, 880));
+        emit(code, arm64.ldr_x(10, 23, 888));
+        emit(code, arm64.add_x(10, 10, 20));
+        emit(code, arm64.str_x(10, 23, 888));
     }
-    emit(code,arm64.str_x(20,23,2800));
+    emit(code, arm64.str_x(20, 23, 2800));
     emit(code, arm64.str_x(20, 31, 104));
     arm64.assembler_bl(code, "los_prune");
     arm64.assembler_bl(code, "gen_adapt");
@@ -294,8 +323,8 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     emit(code, arm64.str_x(10, 23, 1096));
     moshi (observation) { emit_gen_pause(code, 192 * 8, "minor"); }
     emit(code, arm64.str_x(31, 23, 1064));
-    arm64.assembler_bl(code,"memory_aftergc");
-    moshi(old_mark_proto_enabled(code)){arm64.assembler_bl(code,"old_resume_heap");}
+    arm64.assembler_bl(code, "memory_aftergc");
+    moshi (old_mark_proto_enabled(code)) { arm64.assembler_bl(code, "old_resume_heap"); }
     emit(code, arm64.ldr_x(30, 31, 80));
     emit(code, arm64.ldr_x(19, 31, 0));
     emit(code, arm64.ldr_x(20, 31, 8));
@@ -311,28 +340,39 @@ waza emit_gen_minor(code: arm64.Assembler, observation: bool) -> unit {
     emit(code, arm64.ret());
 }
 waza emit_gen_pause(code: arm64.Assembler, bucket: int64, kind: string) -> unit {
-    kaku max_offset = gen_MinorMax; moshi (kind == "major") { max_offset = gen_MajorMax; }
-    emit(code, arm64.ldr_x(10, 23, max_offset)); emit(code, arm64.cmp_x(9, 10));
-    kaku kind_max = string.concat("gen_kindmax_", kind); arm64.assembler_b_cond(code, 9, kind_max);
-    emit(code, arm64.str_x(9, 23, max_offset)); arm64.assembler_label(code, kind_max);
+    kaku max_offset = gen_MinorMax;
+    moshi (kind == "major") {
+        max_offset = gen_MajorMax;
+    }
+    emit(code, arm64.ldr_x(10, 23, max_offset));
+    emit(code, arm64.cmp_x(9, 10));
+    kaku kind_max = string.concat("gen_kindmax_", kind);
+    arm64.assembler_b_cond(code, 9, kind_max);
+    emit(code, arm64.str_x(9, 23, max_offset));
+    arm64.assembler_label(code, kind_max);
     emit(code, arm64.str_x(9, 23, 328));
     emit(code, arm64.ldr_x(10, 23, 336));
     emit(code, arm64.add_x(10, 10, 9));
     emit(code, arm64.str_x(10, 23, 336));
     emit(code, arm64.ldr_x(10, 23, 344));
     emit(code, arm64.cmp_x(9, 10));
-    kaku maximum = string.concat("gen_max_", kind); arm64.assembler_b_cond(code, 9, maximum);
+    kaku maximum = string.concat("gen_max_", kind);
+    arm64.assembler_b_cond(code, 9, maximum);
     emit(code, arm64.str_x(9, 23, 344));
     arm64.assembler_label(code, maximum);
     emit(code, arm64.movz_x(13, 0, 0));
-    kaku done = string.concat("gen_bucket_", kind); kaku loop = string.concat("gen_shift_", kind); arm64.assembler_cbz_x(code, 9, done);
+    kaku done = string.concat("gen_bucket_", kind);
+    kaku loop = string.concat("gen_shift_", kind);
+    arm64.assembler_cbz_x(code, 9, done);
     emit(code, arm64.sub_imm_x(14, 9, 1, iie));
-    arm64.assembler_label(code, loop); arm64.assembler_cbz_x(code, 14, done);
+    arm64.assembler_label(code, loop);
+    arm64.assembler_cbz_x(code, 14, done);
     emit(code, arm64.cmp_imm_x(13, 63, iie));
     arm64.assembler_b_cond(code, 0, done);
     emit(code, arm64.lsr_x(14, 14, 1));
     emit(code, arm64.add_imm_x(13, 13, 1, iie));
-    arm64.assembler_b(code, loop); arm64.assembler_label(code, done);
+    arm64.assembler_b(code, loop);
+    arm64.assembler_label(code, done);
     emit(code, arm64.lsl_x(13, 13, 3));
     emit(code, arm64.add_x(13, 23, 13));
     emit(code, arm64.ldr_x(14, 13, 360));
@@ -364,11 +404,11 @@ waza emit_gen_rebuild(code: arm64.Assembler) -> unit {
     emit(code, arm64.str_x(31, 23, 1144));
     emit(code, arm64.str_x(31, 23, 1112));
     emit(code, arm64.str_x(31, 23, 1120));
-    emit(code,arm64.movz_x(28,0,0));
+    emit(code, arm64.movz_x(28, 0, 0));
     arm64.assembler_label(code, "gen_rebuild_loop");
     emit(code, arm64.cmp_x(25, 22));
     arm64.assembler_b_cond(code, 2, "los_rebuild_begin");
-    arm64.assembler_label(code,"los_rebuild_body");
+    arm64.assembler_label(code, "los_rebuild_body");
     emit(code, arm64.ldr_x(26, 25, 8));
     emit(code, arm64.add_imm_x(26, 26, 31, iie));
     emit(code, arm64.movn_x(10, 15, 0));
@@ -392,15 +432,23 @@ waza emit_gen_rebuild(code: arm64.Assembler) -> unit {
     emit(code, arm64.add_imm_x(0, 25, 16, iie));
     emit_gen_remember(code, 0);
     arm64.assembler_label(code, "gen_rebuild_next");
-    arm64.assembler_cbnz_x(code,28,"los_rebuild_next");
+    arm64.assembler_cbnz_x(code, 28, "los_rebuild_next");
     emit(code, arm64.add_x(25, 25, 26));
     arm64.assembler_b(code, "gen_rebuild_loop");
-    arm64.assembler_label(code,"los_rebuild_begin"); emit(code,arm64.movz_x(28,1,0)); emit(code,arm64.ldr_x(25,23,los_Head)); arm64.assembler_b(code,"los_rebuild_test");
-    arm64.assembler_label(code,"los_rebuild_next"); emit(code,arm64.ldr_x(25,31,88));
-    arm64.assembler_label(code,"los_rebuild_test"); arm64.assembler_cbz_x(code,25,"gen_rebuild_done");
-    emit(code,arm64.ldr_x(9,25,0)); emit(code,arm64.str_x(9,31,88)); emit(code,arm64.add_imm_x(25,25,32,iie)); arm64.assembler_b(code,"los_rebuild_body");
+    arm64.assembler_label(code, "los_rebuild_begin");
+    emit(code, arm64.movz_x(28, 1, 0));
+    emit(code, arm64.ldr_x(25, 23, los_Head));
+    arm64.assembler_b(code, "los_rebuild_test");
+    arm64.assembler_label(code, "los_rebuild_next");
+    emit(code, arm64.ldr_x(25, 31, 88));
+    arm64.assembler_label(code, "los_rebuild_test");
+    arm64.assembler_cbz_x(code, 25, "gen_rebuild_done");
+    emit(code, arm64.ldr_x(9, 25, 0));
+    emit(code, arm64.str_x(9, 31, 88));
+    emit(code, arm64.add_imm_x(25, 25, 32, iie));
+    arm64.assembler_b(code, "los_rebuild_body");
     arm64.assembler_label(code, "gen_rebuild_done");
-    arm64.assembler_bl(code,"los_prune");
+    arm64.assembler_bl(code, "los_prune");
     emit(code, arm64.ldr_x(30, 31, 80));
     emit(code, arm64.ldr_x(19, 31, 0));
     emit(code, arm64.ldr_x(20, 31, 8));

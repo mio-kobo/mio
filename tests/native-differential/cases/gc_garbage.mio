@@ -1,10 +1,18 @@
 yobu "kiso/array";
-kata Cell { value: int64; label: string; next: Cell?; }
+kata Cell {
+    value: int64;
+    label: string;
+    next: Cell?;
+}
 waza push_cell(value: int64, tail: Cell?) -> Cell { kaesu Cell { value: value, label: "c", next: tail }; }
 waza make_chain(n: int64) -> Cell? {
     moshi (n == 0) { kaesu mu; }
-    kaku head = push_cell(0, mu); kaku i = 1;
-    aida (i < n) { head = push_cell(i, head); i = i + 1; }
+    kaku head = push_cell(0, mu);
+    kaku i = 1;
+    aida (i < n) {
+        head = push_cell(i, head);
+        i = i + 1;
+    }
     kaesu head;
 }
 waza chain_sum(c: Cell?) -> int64 {
@@ -13,11 +21,16 @@ waza chain_sum(c: Cell?) -> int64 {
 }
 // about 3.2 GB of short-lived arrays: impossible without reclamation in a 1 GiB heap
 kaku keep = make_chain(400);
-kaku sink = 0; kaku i = 0;
+kaku sink = 0;
+kaku i = 0;
 aida (i < 400000) {
     kaku scratch = array.make[int64](1000, i);
     sink = sink + scratch[999];
-    moshi (i - (i / 50000) * 50000 == 0) { kaku extra = make_chain(300); sink = sink + chain_sum(extra); }
+    moshi (i - (i / 50000) * 50000 == 0) {
+        kaku extra = make_chain(300);
+        sink = sink + chain_sum(extra);
+    }
     i = i + 1;
 }
-chant(sink); chant(chain_sum(keep));
+chant(sink);
+chant(chain_sum(keep));

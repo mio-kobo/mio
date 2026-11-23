@@ -1,13 +1,22 @@
 yobu "kiso/array";
 
 // U64 keeps the complete unsigned 64-bit bit pattern without adding uint64 to Mio.
-koukai kata U64 { high: uint32; low: uint32; }
-koukai kata U64Result { value: U64; error: BinaryError?; }
+koukai kata U64 {
+    high: uint32;
+    low: uint32;
+}
+koukai kata U64Result {
+    value: U64;
+    error: BinaryError?;
+}
 
 // BinaryReader owns an immutable view of the caller's bytes and a private cursor cell.
 // Reads never modify data.  The single-element state array gives functions reference
 // semantics while keeping the public language free of pointers.
-koukai kata BinaryReader { data: []uint8; state: []int64; }
+koukai kata BinaryReader {
+    data: []uint8;
+    state: []int64;
+}
 
 koukai waza reader(data: []uint8) -> BinaryReader {
     kaesu BinaryReader { data: data, state: [0] };
@@ -91,7 +100,10 @@ koukai waza reader_read_bytes(value: BinaryReader, count: int64) -> BytesResult 
 }
 
 // max_length is a hard allocation ceiling. A negative limit is rejected.
-koukai kata BinaryWriter { data: []uint8; max_length: int64; }
+koukai kata BinaryWriter {
+    data: []uint8;
+    max_length: int64;
+}
 
 koukai waza writer(max_length: int64) -> BinaryWriter {
     kaku limit = max_length;
@@ -121,7 +133,10 @@ koukai waza writer_write_bytes(value: BinaryWriter, source: []uint8) -> BinaryEr
     kaku start = writer_reserve(value, len(source));
     moshi (start.error != mu) { kaesu start.error; }
     kaku index = 0;
-    aida (index < len(source)) { value.data[start.value + index] = source[index]; index = index + 1; }
+    aida (index < len(source)) {
+        value.data[start.value + index] = source[index];
+        index = index + 1;
+    }
     kaesu mu;
 }
 
@@ -135,28 +150,46 @@ koukai waza writer_write_length_prefixed(value: BinaryWriter, source: []uint8) -
 }
 
 koukai waza writer_write_u8(value: BinaryWriter, number: uint8) -> BinaryError? {
-    kaku start = writer_reserve(value, 1); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 1);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     kaesu write_u8(value.data, start.value, number);
 }
 koukai waza writer_write_u16_le(value: BinaryWriter, number: uint16) -> BinaryError? {
-    kaku start = writer_reserve(value, 2); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 2);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     kaesu write_u16_le(value.data, start.value, number);
 }
 koukai waza writer_write_u16_be(value: BinaryWriter, number: uint16) -> BinaryError? {
-    kaku start = writer_reserve(value, 2); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 2);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     kaesu write_u16_be(value.data, start.value, number);
 }
 koukai waza writer_write_u32_le(value: BinaryWriter, number: uint32) -> BinaryError? {
-    kaku start = writer_reserve(value, 4); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 4);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     kaesu write_u32_le(value.data, start.value, number);
 }
 koukai waza writer_write_u32_be(value: BinaryWriter, number: uint32) -> BinaryError? {
-    kaku start = writer_reserve(value, 4); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 4);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     kaesu write_u32_be(value.data, start.value, number);
 }
 
 waza writer_write_u64_order(value: BinaryWriter, number: U64, little: bool) -> BinaryError? {
-    kaku start = writer_reserve(value, 8); moshi (start.error != mu) { kaesu start.error; }
+    kaku start = writer_reserve(value, 8);
+    moshi (start.error != mu) {
+        kaesu start.error;
+    }
     moshi (little) {
         write_u32_le(value.data, start.value, number.low);
         kaesu write_u32_le(value.data, start.value + 4, number.high);
@@ -167,16 +200,30 @@ waza writer_write_u64_order(value: BinaryWriter, number: U64, little: bool) -> B
 koukai waza writer_write_u64_le(value: BinaryWriter, number: U64) -> BinaryError? { kaesu writer_write_u64_order(value, number, hai); }
 koukai waza writer_write_u64_be(value: BinaryWriter, number: U64) -> BinaryError? { kaesu writer_write_u64_order(value, number, iie); }
 
-koukai waza writer_patch_u16_be(value: BinaryWriter, offset: int64, number: uint16) -> BinaryError? { kaesu write_u16_be(value.data, offset, number); }
-koukai waza writer_patch_u16_le(value: BinaryWriter, offset: int64, number: uint16) -> BinaryError? { kaesu write_u16_le(value.data, offset, number); }
-koukai waza writer_patch_u32_be(value: BinaryWriter, offset: int64, number: uint32) -> BinaryError? { kaesu write_u32_be(value.data, offset, number); }
-koukai waza writer_patch_u32_le(value: BinaryWriter, offset: int64, number: uint32) -> BinaryError? { kaesu write_u32_le(value.data, offset, number); }
+koukai waza writer_patch_u16_be(value: BinaryWriter, offset: int64, number: uint16) -> BinaryError? {
+    kaesu write_u16_be(value.data, offset, number);
+}
+koukai waza writer_patch_u16_le(value: BinaryWriter, offset: int64, number: uint16) -> BinaryError? {
+    kaesu write_u16_le(value.data, offset, number);
+}
+koukai waza writer_patch_u32_be(value: BinaryWriter, offset: int64, number: uint32) -> BinaryError? {
+    kaesu write_u32_be(value.data, offset, number);
+}
+koukai waza writer_patch_u32_le(value: BinaryWriter, offset: int64, number: uint32) -> BinaryError? {
+    kaesu write_u32_le(value.data, offset, number);
+}
 koukai waza writer_patch_u64_be(value: BinaryWriter, offset: int64, number: U64) -> BinaryError? {
-    kaku failure = write_u32_be(value.data, offset, number.high); moshi (failure != mu) { kaesu failure; }
+    kaku failure = write_u32_be(value.data, offset, number.high);
+    moshi (failure != mu) {
+        kaesu failure;
+    }
     kaesu write_u32_be(value.data, offset + 4, number.low);
 }
 koukai waza writer_patch_u64_le(value: BinaryWriter, offset: int64, number: U64) -> BinaryError? {
-    kaku failure = write_u32_le(value.data, offset, number.low); moshi (failure != mu) { kaesu failure; }
+    kaku failure = write_u32_le(value.data, offset, number.low);
+    moshi (failure != mu) {
+        kaesu failure;
+    }
     kaesu write_u32_le(value.data, offset + 4, number.high);
 }
 

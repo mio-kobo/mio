@@ -50,7 +50,7 @@ waza test_invalid_instantiated_container_types() -> unit {
     kaku nested = check_source("waza none<T>() -> T? { kaesu mu; } kaku value=none[int64?]();");
     testing.expect(len(nested.errors)>0, "generic substitution cannot construct nested nullable types");
     kaku valid = check_source("waza empty<T>() -> []T { kaku values: []T=[]; kaesu values; } kaku ints=empty[int64](); kaku strings=empty[string]();");
-    testing.expect(len(valid.errors)==0, "valid value-free generic arrays retain their checked types");
+    testing.expect(len(valid.errors) == 0, "valid value-free generic arrays retain their checked types");
 }
 
 waza test_enum_match_exhaustiveness() -> unit {
@@ -70,7 +70,9 @@ waza has_integer_constant(result: TypeCheckResult, value: int64) -> bool {
     kaku index = 0;
     aida (index < len(result.constants)) {
         kaku item = result.constants[index];
-        moshi (item.declaration && constant_state_code(item.value.state) == 2 && constant_kind_code(item.value.kind) == 1 && item.value.integer == value) { kaesu hai; }
+        moshi (item.declaration && constant_state_code(item.value.state) == 2 && constant_kind_code(item.value.kind) == 1 && item.value.integer == value) {
+            kaesu hai;
+        }
         index = index + 1;
     }
     kaesu iie;
@@ -128,36 +130,39 @@ waza test_cross_file_and_package_constants() -> unit {
     kaku app_source = parser.parse(string.to_bytes("yobu \"library\"; teisu answer: int64 = library.value;"));
     kaku app_files: []resolver.SourceFile = [];
     array.push(app_files, resolver.SourceFile { file_id: 0, path: "app.mio", ast: app_source.ast, root: app_source.root });
-    kaku resolved_dependencies: []resolver.ResolvedPackage = []; array.push(resolved_dependencies, resolved_library);
-    kaku checked_dependencies: []TypeCheckResult = []; array.push(checked_dependencies, library);
+    kaku resolved_dependencies: []resolver.ResolvedPackage = [];
+    array.push(resolved_dependencies, resolved_library);
+    kaku checked_dependencies: []TypeCheckResult = [];
+    array.push(checked_dependencies, library);
     kaku app = check_package(resolver.resolve_package("app", app_files, resolved_dependencies), checked_dependencies);
     testing.expect(len(app.errors) == 0 && has_integer_constant(app, 42), "cross-package constant evaluates");
 }
 
 waza test_nullable_recheck_and_function_fact_isolation() -> unit {
-    kaku repeated=check_source("waza main(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} moshi(value==mu){kaesu 0;} kaesu value; }");
-    testing.expect(len(repeated.errors)==0,"nullable declaration remains comparable to mu after narrowing");
-    kaku nonnullable=check_source("kaku value: int64=1; chant(value==mu);");testing.expect(len(nonnullable.errors)>0,"non-nullable scalar cannot compare to mu");
-    kaku closure=check_source("kaku value: int64?=mu; kaku setter=waza () -> unit { value=1; }; chant(value+1);");
-    testing.expect(len(closure.errors)>0,"unexecuted closure assignment cannot prove an outer value non-nil");
-    kaku function=check_source("kaku value: int64?=mu; waza setter() -> unit { value=1; } chant(value+1);");
-    testing.expect(len(function.errors)>0,"unexecuted function assignment cannot leak a non-nil proof");
-    kaku preserved_closure=check_source("waza f(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} kaku setter=waza () -> unit {value=mu;}; kaesu value+1; }");
-    testing.expect(len(preserved_closure.errors)==0,"closure definition preserves an existing outer non-nil proof");
-    kaku preserved_function=check_source("kaku value: int64?=mu; value=1; waza setter() -> unit {value=mu;} chant(value+1);");
-    testing.expect(len(preserved_function.errors)==0,"function definition preserves an existing outer non-nil proof");
-    kaku delayed_closure=check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { kaesu value+1; };");
-    testing.expect(len(delayed_closure.errors)>0,"delayed closure cannot inherit a temporary outer non-nil proof");
-    kaku delayed_function=check_source("kaku value: int64?=mu; value=1; waza getter() -> int64 { kaesu value+1; }");
-    testing.expect(len(delayed_function.errors)>0,"function body requires its own proof for captured nullable state");
-    kaku guarded_closure=check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { moshi(value==mu){kaesu 0;} kaesu value+1; };");
-    testing.expect(len(guarded_closure.errors)==0,"a closure may establish its own non-nil proof");
+    kaku repeated = check_source("waza main(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} moshi(value==mu){kaesu 0;} kaesu value; }");
+    testing.expect(len(repeated.errors) == 0, "nullable declaration remains comparable to mu after narrowing");
+    kaku nonnullable = check_source("kaku value: int64=1; chant(value==mu);");
+    testing.expect(len(nonnullable.errors)>0, "non-nullable scalar cannot compare to mu");
+    kaku closure = check_source("kaku value: int64?=mu; kaku setter=waza () -> unit { value=1; }; chant(value+1);");
+    testing.expect(len(closure.errors)>0, "unexecuted closure assignment cannot prove an outer value non-nil");
+    kaku function = check_source("kaku value: int64?=mu; waza setter() -> unit { value=1; } chant(value+1);");
+    testing.expect(len(function.errors)>0, "unexecuted function assignment cannot leak a non-nil proof");
+    kaku preserved_closure = check_source("waza f(value: int64?) -> int64 { moshi(value==mu){kaesu 0;} kaku setter=waza () -> unit {value=mu;}; kaesu value+1; }");
+    testing.expect(len(preserved_closure.errors) == 0, "closure definition preserves an existing outer non-nil proof");
+    kaku preserved_function = check_source("kaku value: int64?=mu; value=1; waza setter() -> unit {value=mu;} chant(value+1);");
+    testing.expect(len(preserved_function.errors) == 0, "function definition preserves an existing outer non-nil proof");
+    kaku delayed_closure = check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { kaesu value+1; };");
+    testing.expect(len(delayed_closure.errors)>0, "delayed closure cannot inherit a temporary outer non-nil proof");
+    kaku delayed_function = check_source("kaku value: int64?=mu; value=1; waza getter() -> int64 { kaesu value+1; }");
+    testing.expect(len(delayed_function.errors)>0, "function body requires its own proof for captured nullable state");
+    kaku guarded_closure = check_source("kaku value: int64?=mu; value=1; kaku getter=waza () -> int64 { moshi(value==mu){kaesu 0;} kaesu value+1; };");
+    testing.expect(len(guarded_closure.errors) == 0, "a closure may establish its own non-nil proof");
 }
 waza test_captured_record_replacement_and_recheck_typecheck() -> unit {
-    kaku rechecked=check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku clear=waza () -> unit {item=mu;}; moshi(item==mu){kaesu;} apply(clear); moshi(item==mu){kaesu;} chant(item.key); }");
-    testing.expect(len(rechecked.errors)==0,"captured nullable record can be rechecked after a call");
-    kaku replaced=check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku replace=waza () -> unit {item=Item {key: \"changed\"};}; moshi(item==mu){kaesu;} apply(replace); chant(item.key); }");
-    testing.expect(len(replaced.errors)==0,"checking a closure replacement cannot narrow the surrounding declaration");
+    kaku rechecked = check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku clear=waza () -> unit {item=mu;}; moshi(item==mu){kaesu;} apply(clear); moshi(item==mu){kaesu;} chant(item.key); }");
+    testing.expect(len(rechecked.errors) == 0, "captured nullable record can be rechecked after a call");
+    kaku replaced = check_source("kata Item { key: string; } waza apply(callback: () -> unit) -> unit { callback(); } waza test() -> unit { kaku item: Item?=Item {key: \"alive\"}; kaku replace=waza () -> unit {item=Item {key: \"changed\"};}; moshi(item==mu){kaesu;} apply(replace); chant(item.key); }");
+    testing.expect(len(replaced.errors) == 0, "checking a closure replacement cannot narrow the surrounding declaration");
 }
 
 waza linear_symbol_position(symbols: []resolver.Symbol, package_path: string, name: string, kind: int64) -> int64 {
@@ -183,10 +188,14 @@ waza test_symbol_index_matches_linear_scan() -> unit {
     aida (at < len(resolved.symbols)) {
         kaku symbol = resolved.symbols[at];
         kaku kind = resolver.symbol_kind_code(symbol.kind);
-        moshi (find_current_symbol(index, symbol.package_path, symbol.name, kind) != linear_symbol_position(resolved.symbols, symbol.package_path, symbol.name, kind)) { mismatches = mismatches + 1; }
+        moshi (find_current_symbol(index, symbol.package_path, symbol.name, kind) != linear_symbol_position(resolved.symbols, symbol.package_path, symbol.name, kind)) {
+            mismatches = mismatches + 1;
+        }
         moshi (find_current_symbol(index, symbol.package_path, symbol.name, kind + 100) != -1) { mismatches = mismatches + 1; }
         moshi (find_current_symbol(index, "other/package", symbol.name, kind) != -1) { mismatches = mismatches + 1; }
-        moshi (find_current_symbol(index, symbol.package_path, string.concat(symbol.name, "_missing"), kind) != -1) { mismatches = mismatches + 1; }
+        moshi (find_current_symbol(index, symbol.package_path, string.concat(symbol.name, "_missing"), kind) != -1) {
+            mismatches = mismatches + 1;
+        }
         at = at + 1;
     }
     testing.expect(mismatches == 0, "indexed lookup equals linear scan for hits and misses");
@@ -223,7 +232,9 @@ waza test_qualified_name_matches_concatenation() -> unit {
             // every near miss must be rejected exactly like the string comparison rejects it
             moshi (qualified_name_matches(packages[p], names[n], string.concat(qualified, "x"))) { wrong = wrong + 1; }
             moshi (qualified_name_matches(packages[p], names[n], names[n])) { wrong = wrong + 1; }
-            moshi (qualified_name_matches(packages[p], names[n], string.concat(string.concat(packages[p], ":"), names[n]))) { wrong = wrong + 1; }
+            moshi (qualified_name_matches(packages[p], names[n], string.concat(string.concat(packages[p], ":"), names[n]))) {
+                wrong = wrong + 1;
+            }
             moshi (qualified_name_matches(string.concat(packages[p], "x"), names[n], qualified)) { wrong = wrong + 1; }
             moshi (qualified_name_matches(packages[p], string.concat("y", names[n]), qualified)) { wrong = wrong + 1; }
             n = n + 1;

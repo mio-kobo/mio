@@ -46,7 +46,9 @@ waza empty_result(path: string) -> TypeCheckResult {
     };
 }
 
-waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {kaesu new_environment_with_progress(resolved,progress.context());}
+waza new_environment(resolved: resolver.ResolvedPackage) -> TypeEnvironment {
+    kaesu new_environment_with_progress(resolved, progress.context());
+}
 waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: progress.Context) -> TypeEnvironment {
     kaku result = empty_result(resolved.package_path);
     scalar_type(result, TypeKind.Invalid(), "invalid");
@@ -64,10 +66,12 @@ waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: pro
     scalar_type(result, TypeKind.Nil(), "mu");
     scalar_type(result, TypeKind.Unit(), "unit");
     scalar_type(result, TypeKind.Resource(), "resource");
+    scalar_type(result, TypeKind.CPtr(), "cptr");
+    scalar_type(result, TypeKind.Uint64(), "uint64");
     kaku versions = array.make[int64](len(resolved.symbols), 0);
     kaku bindings = resolver.build_binding_table(resolved);
     kaesu TypeEnvironment {
-        work:work,
+        work: work,
         resolved: resolved,
         result: result,
         current_file: [0],
@@ -92,7 +96,7 @@ waza builtin_type(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.types)) {
         kaku info = env.result.types[index];
-        moshi (info.name == wanted && type_kind_code(info.kind) <= 14) { kaesu index; }
+        moshi (info.name == wanted && (type_kind_code(info.kind) <= 14 || type_kind_code(info.kind) == 20 || type_kind_code(info.kind) == 21)) { kaesu index; }
         index = index + 1;
     }
     kaesu 0;
@@ -121,7 +125,9 @@ waza symbol_type_position(env: TypeEnvironment, symbol_id: int64) -> int64 {
 waza symbol_type(env: TypeEnvironment, symbol_id: int64) -> int64 {
     kaku index = 0;
     aida (index < len(env.facts)) {
-        moshi (env.facts[index].symbol_id == symbol_id && env.facts[index].version == env.versions[symbol_id]) { kaesu env.facts[index].type_id; }
+        moshi (env.facts[index].symbol_id == symbol_id && env.facts[index].version == env.versions[symbol_id]) {
+            kaesu env.facts[index].type_id;
+        }
         index = index + 1;
     }
     kaku position = symbol_type_position(env, symbol_id);
@@ -139,15 +145,22 @@ waza set_symbol_type(env: TypeEnvironment, symbol_id: int64, type_id: int64) -> 
     kaku position = symbol_type_position(env, symbol_id);
     moshi (position >= 0) {
         kaku old = env.result.symbol_types[position];
-        env.result.symbol_types[position] = SymbolType { symbol_id: symbol_id, name: old.name, package_path: old.package_path, symbol_kind: old.symbol_kind, type_id: type_id };
+        env.result.symbol_types[position] = SymbolType {
+            symbol_id: symbol_id, name: old.name, package_path: old.package_path, symbol_kind: old.symbol_kind, type_id: type_id };
         kaesu;
     }
-    kaku name = ""; kaku package_path = ""; kaku symbol_kind = -1;
+    kaku name = "";
+    kaku package_path = "";
+    kaku symbol_kind = -1;
     moshi (symbol_id >= 0 && symbol_id < len(env.resolved.symbols)) {
-        kaku symbol = env.resolved.symbols[symbol_id]; name = symbol.name; package_path = symbol.package_path; symbol_kind = resolver.symbol_kind_code(symbol.kind);
+        kaku symbol = env.resolved.symbols[symbol_id];
+        name = symbol.name;
+        package_path = symbol.package_path;
+        symbol_kind = resolver.symbol_kind_code(symbol.kind);
         env.symbol_type_slots[symbol_id] = len(env.result.symbol_types);
     }
-    array.push(env.result.symbol_types, SymbolType { symbol_id: symbol_id, name: name, package_path: package_path, symbol_kind: symbol_kind, type_id: type_id });
+    array.push(env.result.symbol_types, SymbolType {
+            symbol_id: symbol_id, name: name, package_path: package_path, symbol_kind: symbol_kind, type_id: type_id });
 }
 
 waza set_node_type(env: TypeEnvironment, file_id: int64, node_id: int64, type_id: int64) -> int64 {
@@ -167,7 +180,11 @@ waza set_node_type(env: TypeEnvironment, file_id: int64, node_id: int64, type_id
     kaku index = 0;
     aida (index < len(env.result.node_types)) {
         kaku item = env.result.node_types[index];
-        moshi (item.node.file_id == file_id && item.node.node_id == node_id) { env.result.node_types[index] = NodeType { node: item.node, type_id: type_id }; kaesu type_id; }
+        moshi (item.node.file_id == file_id && item.node.node_id == node_id) {
+            env.result.node_types[index] = NodeType {
+                node: item.node, type_id: type_id };
+            kaesu type_id;
+        }
         index = index + 1;
     }
     array.push(env.result.node_types, NodeType { node: resolver.NodeRef { file_id: file_id, node_id: node_id }, type_id: type_id });
@@ -206,7 +223,9 @@ waza struct_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
 waza struct_named(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.structs)) {
-        moshi ((env.result.structs[index].package_path == env.resolved.package_path && env.result.structs[index].name == name) || qualified_name_matches(env.result.structs[index].package_path, env.result.structs[index].name, name)) { kaesu index; }
+        moshi ((env.result.structs[index].package_path == env.resolved.package_path && env.result.structs[index].name == name) || qualified_name_matches(env.result.structs[index].package_path, env.result.structs[index].name, name)) {
+            kaesu index;
+        }
         index = index + 1;
     }
     kaesu -1;
@@ -224,7 +243,9 @@ waza enum_of(env: TypeEnvironment, symbol_id: int64) -> int64 {
 waza enum_named(env: TypeEnvironment, name: string) -> int64 {
     kaku index = 0;
     aida (index < len(env.result.enums)) {
-        moshi ((env.result.enums[index].package_path == env.resolved.package_path && env.result.enums[index].name == name) || qualified_name_matches(env.result.enums[index].package_path, env.result.enums[index].name, name)) { kaesu index; }
+        moshi ((env.result.enums[index].package_path == env.resolved.package_path && env.result.enums[index].name == name) || qualified_name_matches(env.result.enums[index].package_path, env.result.enums[index].name, name)) {
+            kaesu index;
+        }
         index = index + 1;
     }
     kaesu -1;
@@ -232,7 +253,9 @@ waza enum_named(env: TypeEnvironment, name: string) -> int64 {
 
 waza add_type_error(env: TypeEnvironment, kind: TypeErrorKind, code: string, file_id: int64, node_id: int64, expected: int64, actual: int64, detail: string) -> unit {
     kaku span = node_at(env, file_id, node_id).span;
-    array.push(env.result.errors, TypeError { kind: kind, code: code, node: resolver.NodeRef { file_id: file_id, node_id: node_id }, span: span, expected: expected, actual: actual, detail: detail });
+    array.push(env.result.errors, TypeError {
+            kind: kind, code: code, node: resolver.NodeRef {
+                file_id: file_id, node_id: node_id }, span: span, expected: expected, actual: actual, detail: detail });
 }
 
 waza add_fact(env: TypeEnvironment, symbol_id: int64, type_id: int64) -> unit {
@@ -268,7 +291,10 @@ waza invalidate_global_facts(env: TypeEnvironment) -> unit {
 
 waza invalidate_all_facts(env: TypeEnvironment) -> unit {
     kaku index = 0;
-    aida (index < len(env.facts)) { invalidate_fact(env, env.facts[index].symbol_id); index = index + 1; }
+    aida (index < len(env.facts)) {
+        invalidate_fact(env, env.facts[index].symbol_id);
+        index = index + 1;
+    }
 }
 
 waza constraint_for(env: TypeEnvironment, name: string) -> string {

@@ -3,27 +3,43 @@ yobu "kiso/array";
 yobu "kiso/encoding/binary";
 
 waza test_exit_and_stdout_images() -> unit {
-    kaku exit=exit_executable(47);
-    testing.expect(exit.error=="" && len(exit.bytes)>0,"encoder plus PE exit image");
-    kaku output=stdout_executable([77,105,111,0,255,10],48);
-    testing.expect(output.error=="" && len(output.bytes)>len(exit.bytes),"binary stdout image");
-    testing.expect(int64(binary.read_u16_le(output.bytes,132).value)==34404,"AMD64 machine");
-    testing.expect(binary.read_u32_le(output.bytes,304).value!=uint32(0),"absolute IAT/data operands have base relocations");
+    kaku exit = exit_executable(47);
+    testing.expect(exit.error == "" && len(exit.bytes)>0, "encoder plus PE exit image");
+    kaku output = stdout_executable([77, 105, 111, 0, 255, 10], 48);
+    testing.expect(output.error == "" && len(output.bytes)>len(exit.bytes), "binary stdout image");
+    testing.expect(int64(binary.read_u16_le(output.bytes, 132).value) == 34404, "AMD64 machine");
+    testing.expect(binary.read_u32_le(output.bytes, 304).value != uint32(0), "absolute IAT/data operands have base relocations");
 }
 waza test_empty_stdout_and_determinism() -> unit {
-    kaku empty=stdout_executable([],50);kaku exit=exit_executable(50);
-    testing.expect(empty.error=="" && len(empty.bytes)==len(exit.bytes),"empty output uses exit-only image");
-    kaku i=0;kaku same=hai;
-    aida(i<len(exit.bytes)){moshi(empty.bytes[i]!=exit.bytes[i]){same=iie;}i=i+1;}
-    testing.expect(same,"deterministic exit bytes");
-    kaku first=stdout_executable([65,0,10],48);kaku next=stdout_executable([65,0,10],48);i=0;
-    testing.expect(first.error=="" && next.error=="" && len(first.bytes)==len(next.bytes),"stdout deterministic lengths");
-    aida(i<len(first.bytes)){moshi(first.bytes[i]!=next.bytes[i]){same=iie;}i=i+1;}
-    testing.expect(same,"deterministic stdout bytes");
+    kaku empty = stdout_executable([], 50);
+    kaku exit = exit_executable(50);
+    testing.expect(empty.error == "" && len(empty.bytes) == len(exit.bytes), "empty output uses exit-only image");
+    kaku i = 0;
+    kaku same = hai;
+    aida (i<len(exit.bytes)) {
+        moshi (empty.bytes[i] != exit.bytes[i]) {
+            same = iie;
+        }
+        i = i + 1;
+    }
+    testing.expect(same, "deterministic exit bytes");
+    kaku first = stdout_executable([65, 0, 10], 48);
+    kaku next = stdout_executable([65, 0, 10], 48);
+    i = 0;
+    testing.expect(first.error == "" && next.error == "" && len(first.bytes) == len(next.bytes), "stdout deterministic lengths");
+    aida (i<len(first.bytes)) {
+        moshi (first.bytes[i] != next.bytes[i]) {
+            same = iie;
+        }
+        i = i + 1;
+    }
+    testing.expect(same, "deterministic stdout bytes");
 }
 waza test_invalid_console_inputs_fail_closed() -> unit {
-    kaku bad=exit_executable(-1);testing.expect(bad.error!="" && len(bad.bytes)==0,"negative exit rejected");
-    bad=stdout_executable([65],256);testing.expect(bad.error!="" && len(bad.bytes)==0,"exit overflow rejected");
-    bad=stdout_executable(array.make[uint8](maximum_message_size+1,uint8(65)),0);
-    testing.expect(bad.error=="MESSAGE_TOO_LARGE" && len(bad.bytes)==0,"message bound checked before encoding");
+    kaku bad = exit_executable(-1);
+    testing.expect(bad.error != "" && len(bad.bytes) == 0, "negative exit rejected");
+    bad = stdout_executable([65], 256);
+    testing.expect(bad.error != "" && len(bad.bytes) == 0, "exit overflow rejected");
+    bad = stdout_executable(array.make[uint8](maximum_message_size + 1, uint8(65)), 0);
+    testing.expect(bad.error == "MESSAGE_TOO_LARGE" && len(bad.bytes) == 0, "message bound checked before encoding");
 }

@@ -3,12 +3,23 @@ yobu "kiso/testing";
 
 waza label_word(labels: []arm64.Label, name: string) -> int64 {
     kaku at = 0;
-    aida (at < len(labels)) { moshi (labels[at].name == name) { kaesu labels[at].word; } at = at + 1; }
+    aida (at < len(labels)) {
+        moshi (labels[at].name == name) {
+            kaesu labels[at].word;
+        }
+        at = at + 1;
+    }
     kaesu -1;
 }
 waza count_word(words: []uint32, value: uint32) -> int64 {
-    kaku at = 0; kaku count = 0;
-    aida (at < len(words)) { moshi (words[at] == value) { count = count + 1; } at = at + 1; }
+    kaku at = 0;
+    kaku count = 0;
+    aida (at < len(words)) {
+        moshi (words[at] == value) {
+            count = count + 1;
+        }
+        at = at + 1;
+    }
     kaesu count;
 }
 
@@ -44,7 +55,8 @@ waza test_linux_target_rejects_bad_capacity_like_darwin() -> unit {
 waza test_linux_adapter_keeps_the_darwin_16k_mapping_contract() -> unit {
     kaku lin = compile_linux_arm64(empty_v14([]), 1073741824, iie);
     testing.expect(lin.error == mu, "the adapter assembles (every immediate encodes)");
-    kaku mmap_at = label_word(lin.labels, "lx_mmap"); kaku munmap_at = label_word(lin.labels, "lx_munmap");
+    kaku mmap_at = label_word(lin.labels, "lx_mmap");
+    kaku munmap_at = label_word(lin.labels, "lx_munmap");
     testing.expect(mmap_at >= 0 && munmap_at >= 0 && label_word(lin.labels, "lx_mmap_plain") > mmap_at, "mmap has a plain and an aligned path; munmap is translated");
     // munmap: x1 = (x1 + 16383) & ~16383 before the Linux call
     testing.expect(lin.words[munmap_at] == arm64.movz_x(10, 16383, 0).word, "movz x10, #16383");

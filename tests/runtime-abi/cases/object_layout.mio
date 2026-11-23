@@ -2,19 +2,40 @@
 // collections. Objects of neighbouring sizes must not overlap (header, alignment and size rounding are correct),
 // and scalar payloads that look like heap addresses are never treated as references (precise pointer layout).
 yobu "kiso/array";
-kata Mixed { a: int64; s: string; f: float64; n: int64?; b: bool; xs: []int64; u: uint8; next: Mixed?; }
+kata Mixed {
+    a: int64;
+    s: string;
+    f: float64;
+    n: int64?;
+    b: bool;
+    xs: []int64;
+    u: uint8;
+    next: Mixed?;
+}
 kata Tiny { v: uint8; }
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
 waza mod(a: int64, b: int64) -> int64 { kaesu a - (a / b) * b; }
 waza mixed(i: int64, next: Mixed?) -> Mixed {
-    kaku n: int64? = mu; moshi (mod(i, 3) != 0) { n = i * 4294967296; }
+    kaku n: int64? = mu;
+    moshi (mod(i, 3) != 0) {
+        n = i * 4294967296;
+    }
     kaesu Mixed { a: i * 65536 * 16, s: "m", f: float64(i) * 0.5, n: n, b: mod(i, 2) == 0,
         xs: array.make[int64](mod(i, 9) + 1, i * 16), u: uint8(mod(i, 251)), next: next };
 }
 // arrays of every element width with lengths 0..47 (all small size classes)
-kaku bytes: [][]uint8 = []; kaku words: [][]int32 = []; kaku longs: [][]int64 = []; kaku reals: [][]float64 = [];
-kaku texts: [][]string = []; kaku tinies: [][]Tiny = [];
+kaku bytes: [][]uint8 = [];
+kaku words: [][]int32 = [];
+kaku longs: [][]int64 = [];
+kaku reals: [][]float64 = [];
+kaku texts: [][]string = [];
+kaku tinies: [][]Tiny = [];
 kaku len_at = 0;
 aida (len_at < 48) {
     array.push(bytes, array.make[uint8](len_at, uint8(mod(len_at, 256))));
@@ -25,13 +46,24 @@ aida (len_at < 48) {
     array.push(tinies, array.make[Tiny](len_at, Tiny { v: uint8(len_at) }));
     len_at = len_at + 1;
 }
-kaku chain: Mixed? = mu; kaku i = 0;
-aida (i < 600) { chain = mixed(i, chain); i = i + 1; }
+kaku chain: Mixed? = mu;
+kaku i = 0;
+aida (i < 600) {
+    chain = mixed(i, chain);
+    i = i + 1;
+}
 // churn: about 96 MiB in large blocks and 20000 small objects, so that every target collects several times
-kaku round = 0; kaku sink = 0;
+kaku round = 0;
+kaku sink = 0;
 aida (round < 192) {
-    kaku junk = array.make[int64](65536, round); sink = sink + junk[65535];
-    kaku k = 0; aida (k < 100) { kaku t = mixed(k, mu); sink = sink + int64(t.u); k = k + 1; }
+    kaku junk = array.make[int64](65536, round);
+    sink = sink + junk[65535];
+    kaku k = 0;
+    aida (k < 100) {
+        kaku t = mixed(k, mu);
+        sink = sink + int64(t.u);
+        k = k + 1;
+    }
     round = round + 1;
 }
 len_at = 0;
@@ -50,7 +82,10 @@ aida (len_at < 48) {
     len_at = len_at + 1;
 }
 waza verify(cur: Mixed?, expect: int64) -> Mixed? {
-    moshi (cur == mu) { check(iie, "chain too short"); kaesu mu; }
+    moshi (cur == mu) {
+        check(iie, "chain too short");
+        kaesu mu;
+    }
     check(cur.a == expect * 65536 * 16, "int64 field");
     check(cur.s == "m", "string field");
     check(cur.f == float64(expect) * 0.5, "float64 field");
@@ -61,12 +96,30 @@ waza verify(cur: Mixed?, expect: int64) -> Mixed? {
     kaesu cur.next;
 }
 waza verify_nullable(n: int64?, expect: int64) -> unit {
-    moshi (mod(expect, 3) == 0) { check(n == mu, "nil field"); kaesu; }
-    moshi (n == mu) { check(iie, "nullable field lost"); kaesu; }
+    moshi (mod(expect, 3) == 0) {
+        check(n == mu, "nil field");
+        kaesu;
+    }
+    moshi (n == mu) {
+        check(iie, "nullable field lost");
+        kaesu;
+    }
     check(n == expect * 4294967296, "nullable field");
 }
-kaku count = 0; kaku cursor = chain; kaku expect = 599;
-aida (expect >= 0) { cursor = verify(cursor, expect); count = count + 1; expect = expect - 1; }
+kaku count = 0;
+kaku cursor = chain;
+kaku expect = 599;
+aida (expect >= 0) {
+    cursor = verify(cursor, expect);
+    count = count + 1;
+    expect = expect - 1;
+}
 check(cursor == mu, "chain too long");
-chant(count); chant(sink);
-moshi (failures == 0) { chant("object_layout: ok"); } sore { chant("object_layout: FAIL"); chant(failures); }
+chant(count);
+chant(sink);
+moshi (failures == 0) {
+    chant("object_layout: ok");
+} sore {
+    chant("object_layout: FAIL");
+    chant(failures);
+}

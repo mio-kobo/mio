@@ -414,7 +414,11 @@ waza emit_socket_runtime(code: x86_64.Assembler) -> unit {
     x86_64.ret(code);
 
     // The reactor primitives: kqueue when the lowering targets Darwin (the adapter label exists), epoll otherwise.
-    moshi (x86_64.label_offset(code, "darwin_abi") >= 0) { emit_reactor_kqueue(code); } sore { emit_reactor_epoll(code); }
+    moshi (x86_64.label_offset(code, "darwin_abi") >= 0) {
+        emit_reactor_kqueue(code);
+    } sore {
+        emit_reactor_epoll(code);
+    }
 
     // rt.sock_accept: rdi = token -> token of the accepted connection (a failed handle carries the error)
     x86_64.label(code, "rt.sock_accept");
@@ -839,7 +843,10 @@ waza socket_routine(function_name: string) -> string {
     kaku bytes = string.to_bytes(function_name);
     kaku at = string.byte_len(prefix);
     kaku output: []uint8 = [];
-    aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(output, bytes[at]); at = at + 1; }
+    aida (at < len(bytes) && bytes[at] != uint8(58)) {
+        array.push(output, bytes[at]);
+        at = at + 1;
+    }
     kaku name = string.from_utf8(output);
     moshi (name == mu) { kaesu ""; }
     moshi (name == "open") { kaesu "rt.sock_open"; }

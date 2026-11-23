@@ -97,91 +97,159 @@ koukai waza capabilities() -> target.TargetInfo {
 koukai waza platform_program() -> []ir.Function {
     kaku wait = ir.function("platform_futex_wait");
     // (address, expected, timeout_ns): build the relative timespec {sec, nsec} in scratch.
-    ir.put(wait, ir.scratch_address, 3, 0, 0, 0); ir.put(wait, ir.constant, 4, 0, 0, 1000000000);
-    ir.put(wait, ir.divide_unsigned, 5, 2, 4, 0); ir.put(wait, ir.multiply, 6, 5, 4, 0); ir.put(wait, ir.subtract, 6, 2, 6, 0);
-    ir.put(wait, ir.store, 0, 3, 5, 0); ir.put(wait, ir.store, 0, 3, 6, 8);
-    ir.call(wait, 204, 4, [0, 1, 3]); ir.branch(wait, ir.zero, 4, "return");
+    ir.put(wait, ir.scratch_address, 3, 0, 0, 0);
+    ir.put(wait, ir.constant, 4, 0, 0, 1000000000);
+    ir.put(wait, ir.divide_unsigned, 5, 2, 4, 0);
+    ir.put(wait, ir.multiply, 6, 5, 4, 0);
+    ir.put(wait, ir.subtract, 6, 2, 6, 0);
+    ir.put(wait, ir.store, 0, 3, 5, 0);
+    ir.put(wait, ir.store, 0, 3, 6, 8);
+    ir.call(wait, 204, 4, [0, 1, 3]);
+    ir.branch(wait, ir.zero, 4, "return");
     // ETIMEDOUT=110 -> timeout(1). EAGAIN=11 (value changed) and EINTR=4 are
     // legitimate wakeups from the portable point of view -> 0. Other errors are negative errno.
-    ir.put(wait, ir.constant, 5, 0, 0, -110); ir.put(wait, ir.equal, 5, 4, 5, 0); ir.branch(wait, ir.zero, 5, "again");
-    ir.put(wait, ir.constant, 4, 0, 0, 1); ir.branch(wait, ir.jump, 0, "return");
+    ir.put(wait, ir.constant, 5, 0, 0, -110);
+    ir.put(wait, ir.equal, 5, 4, 5, 0);
+    ir.branch(wait, ir.zero, 5, "again");
+    ir.put(wait, ir.constant, 4, 0, 0, 1);
+    ir.branch(wait, ir.jump, 0, "return");
     ir.branch(wait, ir.label, 0, "again");
-    ir.put(wait, ir.constant, 5, 0, 0, -11); ir.put(wait, ir.equal, 5, 4, 5, 0); ir.branch(wait, ir.nonzero, 5, "woken");
-    ir.put(wait, ir.constant, 5, 0, 0, -4); ir.put(wait, ir.equal, 5, 4, 5, 0); ir.branch(wait, ir.zero, 5, "return");
-    ir.branch(wait, ir.label, 0, "woken"); ir.put(wait, ir.constant, 4, 0, 0, 0);
-    ir.branch(wait, ir.label, 0, "return"); ir.put(wait, ir.result, 0, 4, 0, 0);
+    ir.put(wait, ir.constant, 5, 0, 0, -11);
+    ir.put(wait, ir.equal, 5, 4, 5, 0);
+    ir.branch(wait, ir.nonzero, 5, "woken");
+    ir.put(wait, ir.constant, 5, 0, 0, -4);
+    ir.put(wait, ir.equal, 5, 4, 5, 0);
+    ir.branch(wait, ir.zero, 5, "return");
+    ir.branch(wait, ir.label, 0, "woken");
+    ir.put(wait, ir.constant, 4, 0, 0, 0);
+    ir.branch(wait, ir.label, 0, "return");
+    ir.put(wait, ir.result, 0, 4, 0, 0);
 
     kaku clock = ir.function("platform_now");
-    ir.put(clock, ir.scratch_address, 1, 0, 0, 0); ir.call(clock, 101, 2, [1]); ir.branch(clock, ir.nonzero, 2, "error");
-    ir.put(clock, ir.load, 2, 1, 0, 0); ir.put(clock, ir.load, 3, 1, 0, 8); ir.put(clock, ir.constant, 4, 0, 0, 1000000000);
-    ir.put(clock, ir.multiply, 2, 2, 4, 0); ir.put(clock, ir.add, 2, 2, 3, 0); ir.put(clock, ir.result, 0, 2, 0, 0);
-    ir.branch(clock, ir.label, 0, "error"); ir.put(clock, ir.constant, 2, 0, 0, 0); ir.put(clock, ir.result, 0, 2, 0, 0);
+    ir.put(clock, ir.scratch_address, 1, 0, 0, 0);
+    ir.call(clock, 101, 2, [1]);
+    ir.branch(clock, ir.nonzero, 2, "error");
+    ir.put(clock, ir.load, 2, 1, 0, 0);
+    ir.put(clock, ir.load, 3, 1, 0, 8);
+    ir.put(clock, ir.constant, 4, 0, 0, 1000000000);
+    ir.put(clock, ir.multiply, 2, 2, 4, 0);
+    ir.put(clock, ir.add, 2, 2, 3, 0);
+    ir.put(clock, ir.result, 0, 2, 0, 0);
+    ir.branch(clock, ir.label, 0, "error");
+    ir.put(clock, ir.constant, 2, 0, 0, 0);
+    ir.put(clock, ir.result, 0, 2, 0, 0);
 
     kaku wake = ir.function("platform_futex_wake");
-    ir.call(wake, 205, 2, [0, 1]); ir.put(wake, ir.result, 0, 2, 0, 0);
+    ir.call(wake, 205, 2, [0, 1]);
+    ir.put(wake, ir.result, 0, 2, 0, 0);
     kaku wake_all = ir.function("platform_futex_wake_all");
-    ir.put(wake_all, ir.constant, 1, 0, 0, 2147483647); ir.call(wake_all, 205, 2, [0, 1]); ir.put(wake_all, ir.result, 0, 2, 0, 0);
+    ir.put(wake_all, ir.constant, 1, 0, 0, 2147483647);
+    ir.call(wake_all, 205, 2, [0, 1]);
+    ir.put(wake_all, ir.result, 0, 2, 0, 0);
 
     // Virtual memory. reserve: PROT_NONE private anonymous NORESERVE mapping.
     kaku reserve = ir.function("platform_reserve");
     // virtual registers: 0=length (argument) 1=addr(NULL) 2=PROT_NONE 3=flags 4=fd(-1) 5=offset
-    ir.put(reserve, ir.constant, 1, 0, 0, 0); ir.put(reserve, ir.constant, 2, 0, 0, 0); ir.put(reserve, ir.constant, 3, 0, 0, 16418);
-    ir.put(reserve, ir.constant, 4, 0, 0, -1); ir.put(reserve, ir.constant, 5, 0, 0, 0);
-    ir.call(reserve, 200, 7, [1, 0, 2, 3, 4, 5]); ir.put(reserve, ir.result, 0, 7, 0, 0);
+    ir.put(reserve, ir.constant, 1, 0, 0, 0);
+    ir.put(reserve, ir.constant, 2, 0, 0, 0);
+    ir.put(reserve, ir.constant, 3, 0, 0, 16418);
+    ir.put(reserve, ir.constant, 4, 0, 0, -1);
+    ir.put(reserve, ir.constant, 5, 0, 0, 0);
+    ir.call(reserve, 200, 7, [1, 0, 2, 3, 4, 5]);
+    ir.put(reserve, ir.result, 0, 7, 0, 0);
     // commit(addr,len): PROT_READ|PROT_WRITE (3)
     kaku commit = ir.function("platform_commit");
-    ir.put(commit, ir.constant, 2, 0, 0, 3); ir.call(commit, 202, 3, [0, 1, 2]); ir.put(commit, ir.result, 0, 3, 0, 0);
+    ir.put(commit, ir.constant, 2, 0, 0, 3);
+    ir.call(commit, 202, 3, [0, 1, 2]);
+    ir.put(commit, ir.result, 0, 3, 0, 0);
     // decommit(addr,len): MADV_DONTNEED (4) drops pages; then PROT_NONE (0)
     kaku decommit = ir.function("platform_decommit");
-    ir.put(decommit, ir.constant, 2, 0, 0, 4); ir.call(decommit, 203, 3, [0, 1, 2]); ir.branch(decommit, ir.nonzero, 3, "done");
-    ir.put(decommit, ir.constant, 2, 0, 0, 0); ir.call(decommit, 202, 3, [0, 1, 2]);
-    ir.branch(decommit, ir.label, 0, "done"); ir.put(decommit, ir.result, 0, 3, 0, 0);
+    ir.put(decommit, ir.constant, 2, 0, 0, 4);
+    ir.call(decommit, 203, 3, [0, 1, 2]);
+    ir.branch(decommit, ir.nonzero, 3, "done");
+    ir.put(decommit, ir.constant, 2, 0, 0, 0);
+    ir.call(decommit, 202, 3, [0, 1, 2]);
+    ir.branch(decommit, ir.label, 0, "done");
+    ir.put(decommit, ir.result, 0, 3, 0, 0);
     kaku release = ir.function("platform_release");
-    ir.call(release, 201, 2, [0, 1]); ir.put(release, ir.result, 0, 2, 0, 0);
+    ir.call(release, 201, 2, [0, 1]);
+    ir.put(release, ir.result, 0, 2, 0, 0);
     kaku protect = ir.function("platform_protect");
-    ir.call(protect, 202, 3, [0, 1, 2]); ir.put(protect, ir.result, 0, 3, 0, 0);
+    ir.call(protect, 202, 3, [0, 1, 2]);
+    ir.put(protect, ir.result, 0, 3, 0, 0);
 
     // ---- Native threads (raw clone, no libc). These are OS primitives only: the thread is NOT registered with the
     // collector and must not run managed code (capabilities() keeps threads/tls false until that is integrated).
     // platform_thread_stack(size) -> usable stack start or -errno: a PROT_NONE guard page followed by `size` RW bytes.
     kaku thread_stack = ir.function("platform_thread_stack");
-    ir.put(thread_stack, ir.constant, 1, 0, 0, thread_guard_bytes); ir.put(thread_stack, ir.add, 2, 0, 1, 0);
+    ir.put(thread_stack, ir.constant, 1, 0, 0, thread_guard_bytes);
+    ir.put(thread_stack, ir.add, 2, 0, 1, 0);
     ir.invoke_function(thread_stack, "platform_reserve", 3, [2]);
-    ir.put(thread_stack, ir.constant, 4, 0, 0, -4095); ir.put(thread_stack, ir.less_unsigned, 5, 3, 4, 0); ir.branch(thread_stack, ir.zero, 5, "done");
-    ir.put(thread_stack, ir.add, 6, 3, 1, 0); ir.invoke_function(thread_stack, "platform_commit", 7, [6, 0]); ir.branch(thread_stack, ir.zero, 7, "ready");
-    ir.invoke_function(thread_stack, "platform_release", 8, [3, 2]); ir.put(thread_stack, ir.copy, 3, 7, 0, 0); ir.branch(thread_stack, ir.jump, 0, "done");
-    ir.branch(thread_stack, ir.label, 0, "ready"); ir.put(thread_stack, ir.copy, 3, 6, 0, 0);
-    ir.branch(thread_stack, ir.label, 0, "done"); ir.put(thread_stack, ir.result, 0, 3, 0, 0);
+    ir.put(thread_stack, ir.constant, 4, 0, 0, -4095);
+    ir.put(thread_stack, ir.less_unsigned, 5, 3, 4, 0);
+    ir.branch(thread_stack, ir.zero, 5, "done");
+    ir.put(thread_stack, ir.add, 6, 3, 1, 0);
+    ir.invoke_function(thread_stack, "platform_commit", 7, [6, 0]);
+    ir.branch(thread_stack, ir.zero, 7, "ready");
+    ir.invoke_function(thread_stack, "platform_release", 8, [3, 2]);
+    ir.put(thread_stack, ir.copy, 3, 7, 0, 0);
+    ir.branch(thread_stack, ir.jump, 0, "done");
+    ir.branch(thread_stack, ir.label, 0, "ready");
+    ir.put(thread_stack, ir.copy, 3, 6, 0, 0);
+    ir.branch(thread_stack, ir.label, 0, "done");
+    ir.put(thread_stack, ir.result, 0, 3, 0, 0);
     // platform_thread_stack_release(usable_start, size) -> 0 or -errno
     kaku thread_stack_release = ir.function("platform_thread_stack_release");
-    ir.put(thread_stack_release, ir.constant, 2, 0, 0, thread_guard_bytes); ir.put(thread_stack_release, ir.subtract, 3, 0, 2, 0);
-    ir.put(thread_stack_release, ir.add, 4, 1, 2, 0); ir.invoke_function(thread_stack_release, "platform_release", 5, [3, 4]);
+    ir.put(thread_stack_release, ir.constant, 2, 0, 0, thread_guard_bytes);
+    ir.put(thread_stack_release, ir.subtract, 3, 0, 2, 0);
+    ir.put(thread_stack_release, ir.add, 4, 1, 2, 0);
+    ir.invoke_function(thread_stack_release, "platform_release", 5, [3, 4]);
     ir.put(thread_stack_release, ir.result, 0, 5, 0, 0);
     // platform_thread_create(entry, argument, stack_start, stack_size, tid_word*, tls) -> thread id or -errno.
     // The child runs entry(argument) on the given stack with the import table installed, then exits the thread. The kernel stores
     // the id in *tid_word before either side runs and clears it (waking futex waiters) when the thread ends: that is the join word.
     kaku thread_create = ir.function("platform_thread_create");
-    ir.put(thread_create, ir.add, 6, 2, 3, 0); ir.put(thread_create, ir.constant, 7, 0, 0, 16); ir.put(thread_create, ir.divide_unsigned, 6, 6, 7, 0);
-    ir.put(thread_create, ir.multiply, 6, 6, 7, 0); ir.put(thread_create, ir.subtract, 6, 6, 7, 0);
-    ir.put(thread_create, ir.store, 0, 6, 0, 0); ir.put(thread_create, ir.store, 0, 6, 1, 8);
+    ir.put(thread_create, ir.add, 6, 2, 3, 0);
+    ir.put(thread_create, ir.constant, 7, 0, 0, 16);
+    ir.put(thread_create, ir.divide_unsigned, 6, 6, 7, 0);
+    ir.put(thread_create, ir.multiply, 6, 6, 7, 0);
+    ir.put(thread_create, ir.subtract, 6, 6, 7, 0);
+    ir.put(thread_create, ir.store, 0, 6, 0, 0);
+    ir.put(thread_create, ir.store, 0, 6, 1, 8);
     ir.put(thread_create, ir.constant, 8, 0, 0, clone_thread_flags);
-    ir.call(thread_create, 206, 9, [8, 6, 4, 4, 5]); ir.put(thread_create, ir.result, 0, 9, 0, 0);
+    ir.call(thread_create, 206, 9, [8, 6, 4, 4, 5]);
+    ir.put(thread_create, ir.result, 0, 9, 0, 0);
     // platform_thread_join(tid_word*) -> 0 once the thread has ended, or -errno. Waits on the kernel-cleared id word.
     kaku thread_join = ir.function("platform_thread_join");
     ir.put(thread_join, ir.constant, 3, 0, 0, 1000000000);
-    ir.branch(thread_join, ir.label, 0, "again"); ir.put(thread_join, ir.acquire_load, 1, 0, 0, 0); ir.branch(thread_join, ir.zero, 1, "done");
+    ir.branch(thread_join, ir.label, 0, "again");
+    ir.put(thread_join, ir.acquire_load, 1, 0, 0, 0);
+    ir.branch(thread_join, ir.zero, 1, "done");
     ir.invoke_function(thread_join, "platform_futex_wait", 2, [0, 1, 3]);
-    ir.put(thread_join, ir.constant, 4, 0, 0, -4095); ir.put(thread_join, ir.less_unsigned, 5, 2, 4, 0); ir.branch(thread_join, ir.nonzero, 5, "again");
+    ir.put(thread_join, ir.constant, 4, 0, 0, -4095);
+    ir.put(thread_join, ir.less_unsigned, 5, 2, 4, 0);
+    ir.branch(thread_join, ir.nonzero, 5, "again");
     ir.put(thread_join, ir.result, 0, 2, 0, 0);
-    ir.branch(thread_join, ir.label, 0, "done"); ir.put(thread_join, ir.constant, 1, 0, 0, 0); ir.put(thread_join, ir.result, 0, 1, 0, 0);
+    ir.branch(thread_join, ir.label, 0, "done");
+    ir.put(thread_join, ir.constant, 1, 0, 0, 0);
+    ir.put(thread_join, ir.result, 0, 1, 0, 0);
     kaku thread_id = ir.function("platform_thread_id");
-    ir.call(thread_id, 208, 0, []); ir.put(thread_id, ir.result, 0, 0, 0, 0);
+    ir.call(thread_id, 208, 0, []);
+    ir.put(thread_id, ir.result, 0, 0, 0, 0);
     // TLS: the FS base. platform_tls_set(address) -> 0/-errno; platform_tls_get() -> address (0 on failure).
     kaku tls_set = ir.function("platform_tls_set");
-    ir.put(tls_set, ir.constant, 1, 0, 0, arch_set_fs); ir.call(tls_set, 207, 2, [1, 0]); ir.put(tls_set, ir.result, 0, 2, 0, 0);
+    ir.put(tls_set, ir.constant, 1, 0, 0, arch_set_fs);
+    ir.call(tls_set, 207, 2, [1, 0]);
+    ir.put(tls_set, ir.result, 0, 2, 0, 0);
     kaku tls_get = ir.function("platform_tls_get");
-    ir.put(tls_get, ir.scratch_address, 1, 0, 0, 0); ir.put(tls_get, ir.constant, 2, 0, 0, arch_get_fs); ir.call(tls_get, 207, 3, [2, 1]);
-    ir.branch(tls_get, ir.nonzero, 3, "failed"); ir.put(tls_get, ir.load, 4, 1, 0, 0); ir.put(tls_get, ir.result, 0, 4, 0, 0);
-    ir.branch(tls_get, ir.label, 0, "failed"); ir.put(tls_get, ir.constant, 4, 0, 0, 0); ir.put(tls_get, ir.result, 0, 4, 0, 0);
+    ir.put(tls_get, ir.scratch_address, 1, 0, 0, 0);
+    ir.put(tls_get, ir.constant, 2, 0, 0, arch_get_fs);
+    ir.call(tls_get, 207, 3, [2, 1]);
+    ir.branch(tls_get, ir.nonzero, 3, "failed");
+    ir.put(tls_get, ir.load, 4, 1, 0, 0);
+    ir.put(tls_get, ir.result, 0, 4, 0, 0);
+    ir.branch(tls_get, ir.label, 0, "failed");
+    ir.put(tls_get, ir.constant, 4, 0, 0, 0);
+    ir.put(tls_get, ir.result, 0, 4, 0, 0);
     kaesu [wait, clock, wake, wake_all, reserve, commit, decommit, release, protect, thread_stack, thread_stack_release, thread_create, thread_join, thread_id, tls_set, tls_get];
 }

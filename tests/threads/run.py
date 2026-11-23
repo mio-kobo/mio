@@ -38,6 +38,7 @@ PROGRAMS = {
     "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
     "channel_mpmc": b"600\n1379100\n",
     "summary_copy": b"198\n5\n",
+    "alloc_cache": b"83\n0\n4\nhai\n",
     # Stage one hardening (docs/threading-stages.md)
     "lifecycle_cycles": b"252000\n0\n126000\n",
     "invalid_handles": b"-22\n-22\n-22\niie\nhai\n7\niie\nhai\niie\n7\nhai\n-5\n",
@@ -47,15 +48,25 @@ PROGRAMS = {
     "gc_lifecycle": b"913200\n",
     "channel_lifecycle": b"2000\nhai\n9\nhai\n1\n",
     "channel_alloc_failure": b"hai\n" * 14,
+    # Heap-exclusion classification: Epoch-free scalar/read opcodes beside Epoch-owning mutations (docs/darwin-thread-heap-exclusion-design.md)
+    "heap_epochs": b"hai\nhai\nhai\nhai\n4266394162\n",
+    # Bounded epoch retention: long straight-line allocation runs on four threads, compared with the sequential result
+    "epoch_retention": b"hai\nhai\nhai\nhai\n108827160\n",
+    # Heap-access audit regressions (array growth/read and transfer, captured cell references, nullable boxing, nested initialization)
+    "heap_invariants": b"hai\nhai\nhai\nhai\n310242027\n",
+    "alloc_lock": b"hai\nhai\nhai\nhai\nhai\n1349806440710\n",
+    # Small-workload variant of alloc_lock with managed fields, enums and in-place mutation: the program of the Darwin lock-stress image (design doc section 12)
+    "alloc_lock_stress": b"hai\nhai\nhai\nhai\nhai\n3047825\n",
+    "alloc_lock_wait": b"hai\nhai\nhai\n",
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
-HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active", "channel_alloc_failure"}   # fewer repetitions
+HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repetitions
 
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
 NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",
             "reject_escape_global": "E0701"}
-STRESS_SKIPPED = {"reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
+STRESS_SKIPPED = {"alloc_lock", "reclaim", "lifecycle_cycles", "creation_limit", "shutdown_active"}   # stress collects on every allocation: 19 GiB of garbage (reclaim) or thousands of threads would take far too long
 
 
 def main():

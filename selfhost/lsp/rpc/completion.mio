@@ -56,7 +56,7 @@ waza label_less(a: string, b: string) -> bool {
     kaku left=string.to_bytes(a);kaku right=string.to_bytes(b);kaku at=0;
     aida(at<len(left) && at<len(right)){moshi(left[at]!=right[at]){kaesu left[at]<right[at];}at=at+1;}kaesu len(left)<len(right);
 }
-waza completion_json(items: []Completion, prefix: string, buffer: lsp.TextBuffer, start: int64, end: int64) -> string {
+waza completion_json(items: []Completion, prefix: string, buffer: lsp.TextBuffer, start: int64, end: int64, extra: string) -> string {
     kaku at=1;aida(at<len(items)){kaku i=at;aida(i>0 && label_less(items[i].label,items[i-1].label)){kaku saved=items[i-1];items[i-1]=items[i];items[i]=saved;i=i-1;}at=at+1;}
     kaku output=string.new_builder();string.write_string(output,"{\"isIncomplete\":false,\"items\":[");kaku first=hai;at=0;
     aida(at<len(items)){
@@ -66,7 +66,7 @@ waza completion_json(items: []Completion, prefix: string, buffer: lsp.TextBuffer
             string.write_string(output,"{\"label\":");string.write_string(output,json.quote(item.label));string.write_string(output,",\"kind\":");string.write_string(output,convert.format_int(item.kind));
             string.write_string(output,",\"detail\":");string.write_string(output,json.quote(item.detail));string.write_string(output,",\"insertText\":");string.write_string(output,json.quote(item.insert));
             kaku format=1;moshi(item.snippet){format=2;}string.write_string(output,",\"insertTextFormat\":");string.write_string(output,convert.format_int(format));
-            string.write_string(output,",\"textEdit\":{\"range\":");string.write_string(output,range_json(buffer,start,end));string.write_string(output,",\"newText\":");string.write_string(output,json.quote(item.insert));string.write_string(output,"}}");
+            string.write_string(output,",\"textEdit\":{\"range\":");string.write_string(output,range_json(buffer,start,end));string.write_string(output,",\"newText\":");string.write_string(output,json.quote(item.insert));string.write_string(output,"}");string.write_string(output,extra);string.write_string(output,"}");
         }at=at+1;
     }
     string.write_string(output,"]}");kaesu string.builder_string(output);
@@ -81,9 +81,13 @@ waza completion_result(state: Session, analysis: DocumentAnalysis, position: lsp
     }
     kaku previous= -1;at=0;aida(at<len(tokens) && tokens[at].end.offset<=start){moshi(lexer.token_kind_code(tokens[at].kind)!=1){previous=at;}at=at+1;}
     // Member candidates come from checked receiver types or resolved module exports.
-    moshi(previous>=0){moshi(lexer.token_kind_code(tokens[previous].kind)==30){kaesu completion_json(member_completions(state,analysis,tokens,previous,offset),byte_text(buffer.data,start,offset),buffer,start,end);}}
+    moshi(previous>=0){moshi(lexer.token_kind_code(tokens[previous].kind)==30){
+        kaku members=member_completions(state,analysis,tokens,previous,offset);
+        moshi(len(members)==0){kaesu import_completion(state,analysis,tokens,previous,buffer,start,offset,end);}
+        kaesu completion_json(members,byte_text(buffer.data,start,offset),buffer,start,end,"");
+    }}
     kaku literal=literal_completions(analysis,offset);
-    moshi(literal!=mu){kaesu completion_json(literal.items,byte_text(buffer.data,start,offset),buffer,start,end);}
+    moshi(literal!=mu){kaesu completion_json(literal.items,byte_text(buffer.data,start,offset),buffer,start,end,"");}
     kaku items: []Completion=[];at=0;
     aida(at<len(analysis.index.symbols)){
         kaku symbol=analysis.index.symbols[at];kaku rank=completion_rank(analysis,symbol,offset);
@@ -109,5 +113,5 @@ waza completion_result(state: Session, analysis: DocumentAnalysis, position: lsp
     }
     kaku keywords=["kaku","waza","moshi","sore","kaesu","hai","iie","mu","aida","nukeru","tsuzuku","kata","sentaku","awase","baai","yobu","koukai","teisu","yuzuru"];at=0;
     aida(at<len(keywords)){kaku name=keywords[at];offer(items,Completion {label:name,detail:"keyword",insert:name,kind:14,rank:0,snippet:iie});at=at+1;}
-    kaku prefix=byte_text(buffer.data,start,offset);kaesu completion_json(items,prefix,buffer,start,end);
+    kaku prefix=byte_text(buffer.data,start,offset);kaesu completion_json(items,prefix,buffer,start,end,"");
 }
