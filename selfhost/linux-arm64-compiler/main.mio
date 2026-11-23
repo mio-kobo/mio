@@ -286,13 +286,13 @@ waza lower_to_elf(bytes: []uint8, output: string) -> bool {
     kaesu hai;
 }
 
-// Compiles the package `entry` (looked up below the current directory) to a Linux AArch64 ELF64 executable.
-waza compile(entry: string, output: string) -> bool {
+// Compile the package below the current directory to self-contained Mochi.
+waza compile_mochi(entry: string) -> []uint8 {
     kaku state = PackageState { paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""] };
     load_package(state, ".", entry);
     moshi (state.failed[0]) {
         diagnostic(string.concat("E_SOURCE linux-arm64-compiler: ", state.diagnostic[0]));
-        kaesu iie;
+        kaesu [];
     }
     kaku natives = native_layouts();
     add_socket_layouts(natives, state.resolved);
@@ -352,9 +352,17 @@ waza compile(entry: string, output: string) -> bool {
             diagnostic(result.errors[error_index].detail);
             error_index = error_index + 1;
         }
-        kaesu iie;
+        kaesu [];
     }
-    moshi (!lower_to_elf(result.bytes, output)) { kaesu iie; }
+    kaesu result.bytes;
+}
+
+// Return only encoded IR across the phase boundary. The frontend AST, type
+// graphs and codegen layout must become collectible before native lowering.
+waza compile(entry: string, output: string) -> bool {
+    kaku bytes = compile_mochi(entry);
+    moshi (len(bytes) == 0) { kaesu iie; }
+    moshi (!lower_to_elf(bytes, output)) { kaesu iie; }
     chant("linux-arm64-compiler: ok");
     kaesu hai;
 }
