@@ -1,0 +1,52 @@
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Integer keys that agree in their low bits, growth through several table sizes, overwrites, missing keys and negative keys.
+kaku ints = Map[int64, int64]();
+kaku i = 0;
+aida (i < 700) { ints[i * 4096] = i; i = i + 1; }
+aida (i < 1400) { ints[0 - i] = i; i = i + 1; }
+kaku overwritten = 0; kaku j = 0;
+aida (j < 700) { ints[j * 4096] = j * 2; j = j + 7; overwritten = overwritten + 1; }
+kaku sum = 0; kaku misses = 0; kaku k = 0;
+aida (k < 1500) {
+    kaku v = ints[k * 4096];
+    moshi (v != mu) { sum = sum + v; } sore { misses = misses + 1; }
+    kaku w = ints[0 - k];
+    moshi (w != mu) { sum = sum + w; } sore { misses = misses + 1; }
+    k = k + 1;
+}
+chant(sum); chant(misses); chant(overwritten);
+
+// String keys: equal content in distinct objects, similar prefixes, the empty string, and values that are strings.
+kaku words = Map[string, string]();
+kaku n = 0;
+aida (n < 500) { kaku name = string.concat("key", convert.format_int(n)); words[name] = string.concat("v", convert.format_int(n * n)); n = n + 1; }
+words[""] = "empty";
+kaku hits = 0; kaku m = 0;
+aida (m < 600) {
+    kaku probe = string.concat("key", convert.format_int(m));
+    kaku found = words[probe];
+    moshi (found != mu) { hits = hits + 1; }
+    m = m + 1;
+}
+chant(hits);
+kaku e = words[""]; moshi (e != mu) { chant(e); }
+kaku last = words["key499"]; moshi (last != mu) { chant(last); }
+chant(words["key500"] == mu);
+
+// Nullable payloads across growth.
+kaku maybe = Map[int64, int64?]();
+kaku none: int64? = mu;
+kaku p = 0;
+aida (p < 300) {
+    moshi (p - (p / 3) * 3 == 0) { maybe[p] = none; } sore { maybe[p] = p; }
+    p = p + 1;
+}
+kaku nils = 0; kaku total = 0; kaku q = 0;
+aida (q < 300) {
+    kaku item = maybe[q];
+    moshi (item == mu) { nils = nils + 1; } sore { total = total + item; }
+    q = q + 1;
+}
+chant(nils); chant(total);
