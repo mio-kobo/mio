@@ -139,9 +139,15 @@ waza test_cross_file_and_package_constants() -> unit {
 }
 
 waza test_equality_operand_contract() -> unit {
-    testing.expect(len(check_source("chant(1 == 2); chant(\"a\" != \"b\");").errors)==0,"scalars and strings compare");
-    testing.expect(len(check_source("kaku l = [1]; kaku r = [1]; chant(l == r);").errors)>0,"arrays are not comparable");
-    testing.expect(len(check_source("chant(mu == mu);").errors)>0,"mu == mu is rejected");
+    kaku valid = check_source("kaku n: int64? = 1; chant(1 == 2); chant(hai != iie); chant(n == mu);");
+    testing.expect(len(valid.errors) == 0, "scalar equality and nullable comparisons with mu are allowed");
+
+    kaku arrays = check_source("kaku l = [1]; kaku r = [1]; chant(l == r);");
+    testing.expect(len(arrays.errors) > 0 && arrays.errors[0].code == "E0302", "array equality reports E0302");
+    kaku nils = check_source("chant(mu == mu);");
+    testing.expect(len(nils.errors) > 0 && nils.errors[0].code == "E0302", "mu == mu reports E0302");
+    kaku units = check_source("waza f() -> unit { } chant(f() != f());");
+    testing.expect(len(units.errors) > 0 && units.errors[0].code == "E0302", "unit inequality reports E0302");
 }
 
 waza test_nullable_recheck_and_function_fact_isolation() -> unit {

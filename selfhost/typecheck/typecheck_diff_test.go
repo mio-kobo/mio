@@ -554,6 +554,7 @@ func TestEqualityOperandContract(t *testing.T) {
 		{"chant(\"a\" == \"b\");", false},
 		{"kaku a: int64? = 1; chant(a == mu);", false},
 		{"kaku l = [1]; kaku r = [1]; chant(l == r);", true},
+		{"kaku l = [1]; chant(l != l);", true},
 		{"chant(mu == mu);", true},
 		{"waza f() -> unit { } chant(f() == f());", true},
 	}
@@ -563,11 +564,22 @@ func TestEqualityOperandContract(t *testing.T) {
 	}
 	actual, _ := runMioTypecheck(t, sources)
 	for index, item := range cases {
-		if goFailed := runGoTypecheck(item.source) != nil; goFailed != item.wantReject {
-			t.Errorf("Go reject=%v, want %v: %s", goFailed, item.wantReject, item.source)
+		_, _, goErr := runGoTypecheckDetailed(item.source)
+		if (goErr != nil) != item.wantReject {
+			t.Errorf("Go error=%v, want rejection=%v: %s", goErr, item.wantReject, item.source)
 		}
-		if mioFailed := actual[index].errors != 0; mioFailed != item.wantReject {
-			t.Errorf("Mio reject=%v, want %v: %s", mioFailed, item.wantReject, item.source)
+		if (actual[index].errors != 0) != item.wantReject {
+			t.Errorf("Mio errors=%d, want rejection=%v: %s", actual[index].errors, item.wantReject, item.source)
+		}
+		if item.wantReject {
+			var diag *diagnostic.Diagnostic
+			if !errors.As(goErr, &diag) || diag.Code != "E0302" {
+				t.Errorf("Go expected E0302, got %v: %s", goErr, item.source)
+			} else if len(actual[index].errorDetails) == 0 || actual[index].errorDetails[0].code != diag.Code {
+				t.Errorf("Mio expected E0302, got %+v: %s", actual[index].errorDetails, item.source)
+			} else if label, ok := diag.PrimaryLabel(); !ok || actual[index].errorDetails[0].start != label.Span.Start.Offset {
+				t.Errorf("equality diagnostic highlights different operands: %s", item.source)
+			}
 		}
 	}
 }
