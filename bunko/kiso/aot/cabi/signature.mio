@@ -46,9 +46,26 @@ koukai kata Signature { symbol: string; result: int64; parameters: []int64; vali
 
 koukai waza signature(name: string, count: int64, returns_value: bool) -> Signature {
     kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
-    moshi (!is_external(name) || count < 0 || count > 256) { kaesu invalid; }
+    moshi (!is_external(name)) { kaesu invalid; }
+    kaesu parse_signature(name, count, returns_value, 7);
+}
+
+// Functions that a Linux AMD64 shared library exports through the C ABI keep their Mio body and carry the same
+// fixed prototype in their name: "$export::<symbol>:<result><parameters>" (type codes as in type_code). Only
+// `koukai waza ... export "symbol"` declarations produce it; the name is a label, call sites use function ids.
+koukai teisu export_prefix = "$export::";
+koukai waza is_export(name: string) -> bool { kaesu string.has_prefix(name, export_prefix); }
+koukai waza export_signature(name: string, count: int64, returns_value: bool) -> Signature {
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
+    moshi (!is_export(name)) { kaesu invalid; }
+    kaesu parse_signature(name, count, returns_value, 9);
+}
+
+waza parse_signature(name: string, count: int64, returns_value: bool, start: int64) -> Signature {
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie };
+    moshi (count < 0 || count > 256) { kaesu invalid; }
     kaku bytes = string.to_bytes(name);
-    kaku at = 7;
+    kaku at = start;
     kaku symbol_bytes: []uint8 = [];
     aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(symbol_bytes, bytes[at]); at = at + 1; }
     kaku symbol = string.from_utf8(symbol_bytes);
