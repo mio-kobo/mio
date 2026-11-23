@@ -533,7 +533,7 @@ func (c *Checker) checkFunction(fn *ast.FunctionStatement) error {
 			fn.Name.Name,
 		)
 	}
-	if fn.Intrinsic != "" {
+	if fn.Intrinsic != "" || fn.CSymbol != "" {
 		return nil
 	}
 

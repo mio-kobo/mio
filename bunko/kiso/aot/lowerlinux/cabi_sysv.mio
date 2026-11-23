@@ -1,0 +1,144 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/x86_64";
+yobu "kiso/array";
+
+// Linux x86-64 的 C ABI 后端：System V AMD64 psABI，只覆盖 Mio → C 的定参标量调用。
+//
+// 与 Darwin ARM64 后端（kiso/aot/lower/cabi_darwin.mio）刻意分开，原因如下：
+//   * 整数参数寄存器是 RDI、RSI、RDX、RCX、R8、R9（6 个），而不是 x0–x7；
+//   * 浮点参数寄存器是 XMM0–XMM7（8 个），两个寄存器组独立耗尽；
+//   * 栈参数每个固定占 8 字节槽，不按类型大小紧凑排列（Darwin ARM64 按自然大小排列）；
+//   * 窄整数的扩展由调用者负责到至少 32 位，被调用者可以依赖；本后端总是扩展到完整 64 位；
+//   * 调用点（CALL 之前）RSP 必须 16 字节对齐，CALL 压入返回地址后被调用者入口处 RSP+8 对齐；
+//   * 返回值在 RAX（整数、指针、bool）或 XMM0（float、double）。
+// Mio 内部调用约定保持不变：参数由调用者压栈，返回值在 RAX，浮点以位模式存放在 64 位槽中。
+
+// 参数分类：System V 把标量归为 INTEGER（通用寄存器）或 SSE（XMM），寄存器用尽后转为 MEMORY（栈）。
+koukai teisu class_integer = 0;
+koukai teisu class_sse = 1;
+koukai teisu class_memory = 2;
+
+koukai kata Placement {
+    class: int64;
+    // INTEGER/SSE 为寄存器序号（INTEGER 按 RDI,RSI,RDX,RCX,R8,R9 排列），MEMORY 为栈槽序号（每槽 8 字节）。
+    index: int64;
+}
+
+koukai kata Layout {
+    placements: []Placement;
+    gp_registers: int64;
+    sse_registers: int64;
+    stack_slots: int64;
+}
+
+koukai waza integer_registers() -> []int64 {
+    kaesu [x86_64.rdi, x86_64.rsi, x86_64.rdx, x86_64.rcx, x86_64.r8, x86_64.r9];
+}
+
+koukai waza is_sse(kind: int64) -> bool { kaesu kind == 105 || kind == 106; }
+
+// 两个寄存器组各自计数：整数参数耗尽 6 个寄存器后只有整数参数上栈，浮点参数仍可使用 XMM，反之亦然。
+// 栈槽按参数顺序分配，第一个栈参数位于调用点 RSP+0。
+koukai waza classify(signature: cabi.Signature) -> Layout {
+    kaku placements: []Placement = [];
+    kaku gp = 0; kaku sse = 0; kaku stack = 0; kaku at = 0;
+    aida (at < len(signature.parameters)) {
+        kaku kind = signature.parameters[at];
+        moshi (is_sse(kind) && sse < 8) {
+            array.push(placements, Placement { class: class_sse, index: sse });
+            sse = sse + 1;
+        } sore { moshi (!is_sse(kind) && gp < 6) {
+            array.push(placements, Placement { class: class_integer, index: gp });
+            gp = gp + 1;
+        } sore {
+            array.push(placements, Placement { class: class_memory, index: stack });
+            stack = stack + 1;
+        } }
+        at = at + 1;
+    }
+    kaesu Layout { placements: placements, gp_registers: gp, sse_registers: sse, stack_slots: stack };
+}
+
+// 栈参数区大小：每个槽 8 字节，整体向上取整到 16 字节，保证 CALL 处 RSP 对齐。
+koukai waza stack_bytes(layout: Layout) -> int64 {
+    kaesu ((layout.stack_slots * 8 + 15) / 16) * 16;
+}
+
+// 窄整数在 Mio 中的槽描述符（与 types.constrain_c_scalar 一致）：12/13/14 为有符号 8/16/32 位，15/16/17 为无符号。
+// 0 表示无需扩展（64 位整数、指针、浮点）。bool 按无符号 8 位处理。
+koukai waza extension(kind: int64) -> int64 {
+    moshi (kind == 97) { kaesu 12; }
+    moshi (kind == 99) { kaesu 13; }
+    moshi (kind == 101) { kaesu 14; }
+    moshi (kind == 98 || kind == 108) { kaesu 15; }
+    moshi (kind == 100) { kaesu 16; }
+    moshi (kind == 102) { kaesu 17; }
+    kaesu 0;
+}
+
+// 把 reg 中的窄整数扩展到完整 64 位：有符号用算术右移，无符号用逻辑右移。
+waza emit_extend(code: x86_64.Assembler, reg: int64, descriptor: int64) -> unit {
+    moshi (descriptor < 12 || descriptor > 17) { kaesu; }
+    kaku width = 8;
+    moshi (descriptor == 13 || descriptor == 16) { width = 16; }
+    moshi (descriptor == 14 || descriptor == 17) { width = 32; }
+    x86_64.shl_ri(code, reg, 64 - width);
+    moshi (descriptor <= 14) { x86_64.sar_ri(code, reg, 64 - width); }
+    moshi (descriptor > 14) { x86_64.shr_ri(code, reg, 64 - width); }
+}
+
+// Mio 外部函数的桥接体。进入时已有标准 Mio 帧（push rbp; mov rbp, rsp），参数位于
+// [rbp + local_disp(n, i)]。桥接体不是 GC 安全点：C 无法回调 Mio，调用期间没有 Mio 轮询，
+// 因此不需要帧描述符；Mio 栈帧上的根在调用期间保持原位。
+//
+// 栈对齐：Mio 的操作数栈随意推进 RSP，进入桥接体时 RSP 没有对齐保证，所以用 `and rsp, -16`
+// 动态对齐，再预留 16 字节倍数的栈参数区；此时 CALL 处 RSP 为 16 的倍数，返回地址压入后
+// 被调用者入口处 (RSP + 8) 为 16 的倍数，符合 psABI。返回后用 `mov rsp, rbp` 恢复，所以无需
+// 记录原 RSP，嵌套调用同样正确。128 字节红区：Mio 不在 RSP 以下保存数据，被调用者看到的
+// RSP 以下都是死区。
+//
+// 寄存器：RBX、RBP、R12–R15 由 C 保存；RAX、RCX、RDX、RSI、RDI、R8–R11 和全部 XMM 可能被
+// C 破坏，Mio 本身从不跨调用把值留在寄存器中，值都在栈帧里，所以无需额外保存。
+// 可变参数函数不生成（定参声明是唯一入口），否则调用点必须把 AL 设为用到的向量寄存器数。
+koukai waza emit_c_bridge(code: x86_64.Assembler, signature: cabi.Signature, parameter_count: int64) -> string {
+    moshi (!signature.valid || len(signature.parameters) != parameter_count) { kaesu "INVALID_C_PROTOTYPE"; }
+    kaku layout = classify(signature);
+    kaku registers = integer_registers();
+    kaku frame = stack_bytes(layout);
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    moshi (frame > 0) { x86_64.sub_ri(code, x86_64.rsp, frame); }
+    // 先写栈参数，再装寄存器；RAX 只作搬运暂存，不是参数寄存器（AL 仅变参调用使用）。
+    kaku at = 0;
+    aida (at < len(signature.parameters)) {
+        kaku place = layout.placements[at];
+        kaku kind = signature.parameters[at];
+        kaku disp = local_disp(parameter_count, at);
+        moshi (place.class == class_memory) {
+            x86_64.mov_load(code, x86_64.rax, x86_64.rbp, disp);
+            emit_extend(code, x86_64.rax, extension(kind));
+            x86_64.mov_store(code, x86_64.rsp, place.index * 8, x86_64.rax);
+        }
+        moshi (place.class == class_sse) {
+            x86_64.mov_load(code, x86_64.rax, x86_64.rbp, disp);
+            moshi (kind == 105) { x86_64.movd_xmm_r(code, place.index, x86_64.rax); }
+            sore { x86_64.movq_xmm_r(code, place.index, x86_64.rax); }
+        }
+        moshi (place.class == class_integer) {
+            x86_64.mov_load(code, registers[place.index], x86_64.rbp, disp);
+            emit_extend(code, registers[place.index], extension(kind));
+        }
+        at = at + 1;
+    }
+    x86_64.call_external(code, signature.symbol);
+    // 返回值：窄整数按符号扩展或零扩展回完整的 Mio 槽；float 的位模式原样搬回 RAX；bool 规范为 0/1。
+    kaku result = signature.result;
+    moshi (result == 105) { x86_64.movd_r_xmm(code, x86_64.rax, 0); }
+    moshi (result == 106) { x86_64.movq_r_xmm(code, x86_64.rax, 0); }
+    moshi (result == 108) {
+        emit_extend(code, x86_64.rax, 15);
+        x86_64.cmp_ri(code, x86_64.rax, 0);
+        x86_64.setcc_rax(code, x86_64.cc_ne);
+    }
+    moshi (result != 108 && result != 118) { emit_extend(code, x86_64.rax, extension(result)); }
+    kaesu "";
+}

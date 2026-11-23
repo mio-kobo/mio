@@ -1,30 +1,34 @@
 yobu "kiso/testing";
 waza test_handshakes_and_termination_cannot_be_skipped() -> unit {
-    testing.expect(next_phase(idle,hai,iie,iie,iie,iie,iie,iie,iie)==init_handshake, "cycle begins with handshake");
-    testing.expect(next_phase(init_handshake,iie,hai,iie,hai,hai,iie,hai,iie)==init_handshake, "park without roots is insufficient");
-    testing.expect(next_phase(init_handshake,iie,iie,hai,hai,hai,iie,hai,iie)==init_handshake, "roots from running threads cannot count");
-    testing.expect(next_phase(init_handshake,iie,hai,hai,iie,iie,iie,iie,iie)==concurrent_mark, "snapshot unlocks concurrent mark");
-    testing.expect(next_phase(concurrent_mark,iie,iie,iie,hai,iie,iie,iie,iie)==concurrent_mark, "empty queue with in-flight publisher is not termination");
-    testing.expect(next_phase(concurrent_mark,iie,iie,iie,hai,hai,iie,iie,iie)==remark_handshake, "quiescence requests second handshake");
-    kaku mask=0;
-    aida(mask<16){
-        kaku parked=mask-(mask/2)*2==1; kaku roots=(mask/2)-(mask/4)*2==1;
-        kaku empty=(mask/4)-(mask/8)*2==1; kaku quiet=mask/8==1;
-        kaku next=next_phase(remark_handshake,iie,parked,roots,empty,quiet,iie,iie,iie);
-        testing.expect((next==concurrent_sweep)==(mask==15), "remark requires all four current-epoch conditions");mask=mask+1;
+    testing.expect(next_phase(idle, hai, iie, iie, iie, iie, iie, iie, iie) == init_handshake, "cycle begins with handshake");
+    testing.expect(next_phase(init_handshake, iie, hai, iie, hai, hai, iie, hai, iie) == init_handshake, "park without roots is insufficient");
+    testing.expect(next_phase(init_handshake, iie, iie, hai, hai, hai, iie, hai, iie) == init_handshake, "roots from running threads cannot count");
+    testing.expect(next_phase(init_handshake, iie, hai, hai, iie, iie, iie, iie, iie) == concurrent_mark, "snapshot unlocks concurrent mark");
+    testing.expect(next_phase(concurrent_mark, iie, iie, iie, hai, iie, iie, iie, iie) == concurrent_mark, "empty queue with in-flight publisher is not termination");
+    testing.expect(next_phase(concurrent_mark, iie, iie, iie, hai, hai, iie, iie, iie) == remark_handshake, "quiescence requests second handshake");
+    kaku mask = 0;
+    aida (mask<16) {
+        kaku parked = mask - (mask / 2) * 2 == 1;
+        kaku roots = (mask / 2) - (mask / 4) * 2 == 1;
+        kaku empty = (mask / 4) - (mask / 8) * 2 == 1;
+        kaku quiet = mask / 8 == 1;
+        kaku next = next_phase(remark_handshake, iie, parked, roots, empty, quiet, iie, iie, iie);
+        testing.expect((next == concurrent_sweep) == (mask == 15), "remark requires all four current-epoch conditions");
+        mask = mask + 1;
     }
 }
 waza test_abort_backpressure_and_reclamation_guards() -> unit {
-    kaku phase=idle;
-    aida(phase<=aborted){
-        testing.expect(next_phase(phase,hai,hai,hai,hai,hai,hai,hai,hai)==aborted, "worker error always forbids reclaim transition");
-        testing.expect(may_reclaim(phase,hai,hai,hai)==(phase==concurrent_sweep), "only sweep can reclaim");
-        testing.expect(!may_reclaim(phase,iie,hai,hai) && !may_reclaim(phase,hai,iie,hai) && !may_reclaim(phase,hai,hai,iie), "dead proof, no readers, matching epoch all mandatory");
-        testing.expect(minor_allowed(phase)==(phase==idle), "Minor excluded from active Old protocol");
-        testing.expect(pointer_store_allowed(phase,hai,iie)==!needs_satb(phase,hai), "overflow holds pointer store until reference saved");
-        testing.expect(pointer_store_allowed(phase,iie,iie), "numeric payload never enters SATB");phase=phase+1;
+    kaku phase = idle;
+    aida (phase <= aborted) {
+        testing.expect(next_phase(phase, hai, hai, hai, hai, hai, hai, hai, hai) == aborted, "worker error always forbids reclaim transition");
+        testing.expect(may_reclaim(phase, hai, hai, hai) == (phase == concurrent_sweep), "only sweep can reclaim");
+        testing.expect(!may_reclaim(phase, iie, hai, hai) && !may_reclaim(phase, hai, iie, hai) && !may_reclaim(phase, hai, hai, iie), "dead proof, no readers, matching epoch all mandatory");
+        testing.expect(minor_allowed(phase) == (phase == idle), "Minor excluded from active Old protocol");
+        testing.expect(pointer_store_allowed(phase, hai, iie) == !needs_satb(phase, hai), "overflow holds pointer store until reference saved");
+        testing.expect(pointer_store_allowed(phase, iie, iie), "numeric payload never enters SATB");
+        phase = phase + 1;
     }
-    testing.expect(next_phase(aborted,hai,hai,hai,hai,hai,hai,hai,iie)==aborted, "abort requires explicit joined recovery");
-    testing.expect(next_phase(100,iie,iie,iie,iie,iie,iie,iie,iie)==-1, "unknown phase fails closed");
-    testing.expect(next_phase(concurrent_sweep,iie,iie,iie,hai,hai,hai,iie,iie)==concurrent_sweep, "no epoch retirement while readers remain");
+    testing.expect(next_phase(aborted, hai, hai, hai, hai, hai, hai, hai, iie) == aborted, "abort requires explicit joined recovery");
+    testing.expect(next_phase(100, iie, iie, iie, iie, iie, iie, iie, iie) == -1, "unknown phase fails closed");
+    testing.expect(next_phase(concurrent_sweep, iie, iie, iie, hai, hai, hai, iie, iie) == concurrent_sweep, "no epoch retirement while readers remain");
 }

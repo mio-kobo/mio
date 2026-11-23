@@ -433,6 +433,9 @@ func (b *indexBuilder) declareFunction(function *ast.FunctionStatement, fileKey 
 		}
 		symbol.Type = symbol.Signature.Return
 	}
+	if function.CABI {
+		symbol.Detail += " = c " + strconv.Quote(function.CDLL) + " " + strconv.Quote(function.CSymbol)
+	}
 	b.addDeclaration(symbol)
 	b.addTopLevel(fileKey, symbol)
 	b.addScope(fileKey, 0, len(fileText), 0, symbol)

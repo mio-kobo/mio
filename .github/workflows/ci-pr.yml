@@ -139,9 +139,10 @@ jobs:
     name: Native Verification / macos-arm64
     needs: infrastructure
     # Only scheduled when the repository variable MIO_NATIVE_VERIFICATION is exactly "enabled" (the plan then lists
-    # native modules). It needs the trusted Native Seed (SHA-256 pinned in scripts/ci/runner.py) at $MIO_NATIVE_SEED.
-    # No approved Seed source exists yet, so nothing here downloads or builds one: without the Seed the runner
-    # reports NOT_RUN (exit 2) and this job fails; it can never pass without executing the native tests.
+    # native modules). It needs the trusted Native V21 Seed (SHA-256 pinned in scripts/distribution/seed_evidence.py)
+    # at $MIO_NATIVE_SEED (or bootstrap/seeds/native-v21/mio-v2.1.0-darwin-arm64).
+    # Without a verified Seed the runner reports NOT_RUN (exit 2) and this job fails; it can never pass without
+    # executing the native tests.
     if: needs.infrastructure.outputs.native_modules != ''
     runs-on: macos-15
     timeout-minutes: 180
@@ -161,7 +162,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # A future step that materializes the trusted Native Seed and exports MIO_NATIVE_SEED belongs here.
+      # Materialize and verify the trusted Native V21 Seed via scripts/ci/seed_source.py --ensure.
       - run: bash scripts/ci/run.sh macos-arm64 "$MODULES" quick
       - uses: actions/upload-artifact@v4
         if: always()

@@ -1,50 +1,186 @@
-yobu "kiso/runtime/ir";yobu "kiso/runtime/gc";yobu "kiso/runtime/os/darwin";yobu "kiso/runtime/cpu/aarch64";
-yobu "kiso/aot/arm64";yobu "kiso/aot/macho";yobu "kiso/aot/sign";yobu "kiso/array";yobu "kiso/fs";yobu "kiso/os";
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza check(f:ir.Function,r:int64,v:int64) -> unit {n(f,30,v);ir.put(f,ir.equal,30,r,30,0);ir.branch(f,ir.zero,30,"fail");}
-waza fail_tail(f:ir.Function) -> unit {ir.branch(f,ir.label,0,"fail");n(f,30,85);ir.call(f,gc.abort_runtime,31,[30]);}
-waza wrapper(index:int64) -> ir.Function {
- kaku names=["test_attr_init","test_attr_stack","test_create","test_attr_destroy"];kaku error_args=[1,2,4,1];kaku f=ir.function(names[index]);kaku err=error_args[index];
- ir.put(f,ir.load,10,err,0,8);ir.put(f,ir.load,11,err,0,16+index*8);n(f,12,1);ir.put(f,ir.add,11,11,12,0);ir.put(f,ir.store,0,err,11,16+index*8);
- moshi(index==0 || index==1 || index==2){
-  n(f,12,index+1);ir.put(f,ir.equal,12,10,12,0);ir.branch(f,ir.nonzero,12,"injected");
-  moshi(index==2){n(f,12,5);ir.put(f,ir.equal,12,10,12,0);ir.branch(f,ir.nonzero,12,"injected");}
- }
- kaku operation=106;kaku args:[]int64=[0];moshi(index==1){operation=107;args=[0,1];}moshi(index==2){operation=109;args=[0,1,2,3];}moshi(index==3){operation=108;}
- ir.call(f,operation,20,args);
- moshi(index==3){check(f,20,0);n(f,12,4);ir.put(f,ir.equal,12,10,12,0);ir.branch(f,ir.nonzero,12,"injected");n(f,12,5);ir.put(f,ir.equal,12,10,12,0);ir.branch(f,ir.nonzero,12,"injected");}
- ir.put(f,ir.result,0,20,0,0);ir.branch(f,ir.label,0,"injected");n(f,20,(index+1)*11);ir.put(f,ir.result,0,20,0,0);fail_tail(f);kaesu f;
+yobu "kiso/runtime/ir";
+yobu "kiso/runtime/gc";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/runtime/cpu/aarch64";
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza check(f: ir.Function, r: int64, v: int64) -> unit {
+    n(f, 30, v);
+    ir.put(f, ir.equal, 30, r, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
 }
-waza task() -> ir.Function {kaku f=ir.function("task");n(f,1,1);ir.put(f,ir.release_store,0,0,1,64);n(f,1,0);ir.put(f,ir.result,0,1,0,0);kaesu f;}
+waza fail_tail(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 30, 85);
+    ir.call(f, gc.abort_runtime, 31, [30]);
+}
+waza wrapper(index: int64) -> ir.Function {
+    kaku names = ["test_attr_init", "test_attr_stack", "test_create", "test_attr_destroy"];
+    kaku error_args = [1, 2, 4, 1];
+    kaku f = ir.function(names[index]);
+    kaku err = error_args[index];
+    ir.put(f, ir.load, 10, err, 0, 8);
+    ir.put(f, ir.load, 11, err, 0, 16 + index * 8);
+    n(f, 12, 1);
+    ir.put(f, ir.add, 11, 11, 12, 0);
+    ir.put(f, ir.store, 0, err, 11, 16 + index * 8);
+    moshi (index == 0 || index == 1 || index == 2) {
+        n(f, 12, index + 1);
+        ir.put(f, ir.equal, 12, 10, 12, 0);
+        ir.branch(f, ir.nonzero, 12, "injected");
+        moshi (index == 2) {
+            n(f, 12, 5);
+            ir.put(f, ir.equal, 12, 10, 12, 0);
+            ir.branch(f, ir.nonzero, 12, "injected");
+        }
+    }
+    kaku operation = 106;
+    kaku args: []int64 = [0];
+    moshi (index == 1) {
+        operation = 107;
+        args = [0, 1];
+    }
+    moshi (index == 2) {
+        operation = 109;
+        args = [0, 1, 2, 3];
+    }
+    moshi (index == 3) {
+        operation = 108;
+    }
+    ir.call(f, operation, 20, args);
+    moshi (index == 3) {
+        check(f, 20, 0);
+        n(f, 12, 4);
+        ir.put(f, ir.equal, 12, 10, 12, 0);
+        ir.branch(f, ir.nonzero, 12, "injected");
+        n(f, 12, 5);
+        ir.put(f, ir.equal, 12, 10, 12, 0);
+        ir.branch(f, ir.nonzero, 12, "injected");
+    }
+    ir.put(f, ir.result, 0, 20, 0, 0);
+    ir.branch(f, ir.label, 0, "injected");
+    n(f, 20, (index + 1) * 11);
+    ir.put(f, ir.result, 0, 20, 0, 0);
+    fail_tail(f);
+    kaesu f;
+}
+waza task() -> ir.Function {
+    kaku f = ir.function("task");
+    n(f, 1, 1);
+    ir.put(f, ir.release_store, 0, 0, 1, 64);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
+}
 waza run() -> ir.Function {
- kaku f=ir.function("run");kaku expected=[0,11,22,33,0,33];kaku errors=[0,0,22,33,44,66];kaku c=0;
- aida(c<6){
-  n(f,10,0);ir.put(f,ir.store,0,0,10,8);ir.put(f,ir.store,0,0,10,64);ir.put(f,ir.store,0,0,10,16);n(f,10,c);ir.put(f,ir.store,0,0,10,24);n(f,10,0);moshi(c==5){n(f,10,66);}ir.put(f,ir.store,0,0,10,16);
-  ir.put(f,ir.address,1,0,0,8);ir.function_pointer(f,"task",2);ir.put(f,ir.address,4,0,0,16);ir.invoke_function(f,"platform_thread_start",5,[1,2,0,4]);check(f,5,expected[c]);ir.put(f,ir.acquire_load,5,0,0,16);check(f,5,errors[c]);
-  moshi(c==0 || c==4){ir.put(f,ir.load,1,0,0,8);n(f,2,0);ir.call(f,gc.thread_join,5,[1,2]);check(f,5,0);ir.put(f,ir.acquire_load,5,0,0,64);check(f,5,1);}
-  c=c+1;
- }
- // All wrapper calls are counted, but only success/case4 create real handles.
- kaku totals=[6,5,4,5];c=0;aida(c<4){ir.put(f,ir.load,5,0,0,32+c*8);check(f,5,totals[c]);c=c+1;}
- n(f,1,0);ir.put(f,ir.result,0,1,0,0);fail_tail(f);kaesu f;
+    kaku f = ir.function("run");
+    kaku expected = [0, 11, 22, 33, 0, 33];
+    kaku errors = [0, 0, 22, 33, 44, 66];
+    kaku c = 0;
+    aida (c<6) {
+        n(f, 10, 0);
+        ir.put(f, ir.store, 0, 0, 10, 8);
+        ir.put(f, ir.store, 0, 0, 10, 64);
+        ir.put(f, ir.store, 0, 0, 10, 16);
+        n(f, 10, c);
+        ir.put(f, ir.store, 0, 0, 10, 24);
+        n(f, 10, 0);
+        moshi (c == 5) {
+            n(f, 10, 66);
+        }
+        ir.put(f, ir.store, 0, 0, 10, 16);
+        ir.put(f, ir.address, 1, 0, 0, 8);
+        ir.function_pointer(f, "task", 2);
+        ir.put(f, ir.address, 4, 0, 0, 16);
+        ir.invoke_function(f, "platform_thread_start", 5, [1, 2, 0, 4]);
+        check(f, 5, expected[c]);
+        ir.put(f, ir.acquire_load, 5, 0, 0, 16);
+        check(f, 5, errors[c]);
+        moshi (c == 0 || c == 4) {
+            ir.put(f, ir.load, 1, 0, 0, 8);
+            n(f, 2, 0);
+            ir.call(f, gc.thread_join, 5, [1, 2]);
+            check(f, 5, 0);
+            ir.put(f, ir.acquire_load, 5, 0, 0, 64);
+            check(f, 5, 1);
+        }
+        c = c + 1;
+    }
+    // All wrapper calls are counted, but only success/case4 create real handles.
+    kaku totals = [6, 5, 4, 5];
+    c = 0;
+    aida (c<4) {
+        ir.put(f, ir.load, 5, 0, 0, 32 + c * 8);
+        check(f, 5, totals[c]);
+        c = c + 1;
+    }
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    fail_tail(f);
+    kaesu f;
 }
-waza emit(c:arm64.Assembler,v:arm64.Instruction) -> unit {arm64.assembler_emit(c,v);}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,offset:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:offset,register:r});}
+waza emit(c: arm64.Assembler, v: arm64.Instruction) -> unit { arm64.assembler_emit(c, v); }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, offset: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: offset, register: r });
+}
 waza main() -> unit {
- kaku functions=darwin.worker_platform_program();kaku i=0;
- aida(i<len(functions)){moshi(functions[i].name=="platform_thread_start"){
-  kaku j=0;aida(j<len(functions[i].steps)){kaku s=functions[i].steps[j];moshi(s.kind==ir.system){
-   moshi(s.immediate==106){functions[i].steps[j]=ir.step(ir.invoke,s.destination,0,0,0,"test_attr_init",[4,3]);}
-   moshi(s.immediate==107){functions[i].steps[j]=ir.step(ir.invoke,s.destination,0,0,0,"test_attr_stack",[4,6,3]);}
-   moshi(s.immediate==109){functions[i].steps[j]=ir.step(ir.invoke,s.destination,0,0,0,"test_create",[0,4,1,2,3]);}
-   moshi(s.immediate==108){functions[i].steps[j]=ir.step(ir.invoke,s.destination,0,0,0,"test_attr_destroy",[4,3]);}
-  }j=j+1;}
- }i=i+1;}
- i=0;aida(i<4){array.push(functions,wrapper(i));i=i+1;}array.push(functions,task());array.push(functions,run());
- kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];addr(c,patches,7,0);addr(c,patches,0,200);arm64.assembler_bl(c,"rt_run");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));
- kaku error=aarch64.emit_program(c,functions,darwin.worker_bindings(),25,"rt");moshi(error!=""){chant(error);os.exit(2);}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(3);}
- kaku image=darwin.executable_appended(macho.ImageSpec {words:assembled.words,constants:[],globals:0,patches:patches},darwin.worker_symbols(),128);moshi(image.error!=""){chant(image.error);os.exit(4);}
- kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){os.exit(5);}kaku args=os.arguments();fs.write_all(args[1],signed.bytes);os.chmod(args[1],448);
+    kaku functions = darwin.worker_platform_program();
+    kaku i = 0;
+    aida (i<len(functions)) { moshi (functions[i].name == "platform_thread_start") {
+            kaku j = 0;
+            aida (j<len(functions[i].steps)) {
+                kaku s = functions[i].steps[j];
+                moshi (s.kind == ir.system) {
+                    moshi (s.immediate == 106) { functions[i].steps[j] = ir.step(ir.invoke, s.destination, 0, 0, 0, "test_attr_init", [4, 3]); }
+                    moshi (s.immediate == 107) { functions[i].steps[j] = ir.step(ir.invoke, s.destination, 0, 0, 0, "test_attr_stack", [4, 6, 3]); }
+                    moshi (s.immediate == 109) { functions[i].steps[j] = ir.step(ir.invoke, s.destination, 0, 0, 0, "test_create", [0, 4, 1, 2, 3]); }
+                    moshi (s.immediate == 108) { functions[i].steps[j] = ir.step(ir.invoke, s.destination, 0, 0, 0, "test_attr_destroy", [4, 3]); }
+                } j = j + 1; }
+        } i = i + 1; }
+    i = 0;
+    aida (i<4) {
+        array.push(functions, wrapper(i));
+        i = i + 1;
+    }
+    array.push(functions, task());
+    array.push(functions, run());
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    addr(c, patches, 7, 0);
+    addr(c, patches, 0, 200);
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.movz_x(16, 1, 0));
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, darwin.worker_bindings(), 25, "rt");
+    moshi (error != "") {
+        chant(error);
+        os.exit(2);
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(3);
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 0, patches: patches }, darwin.worker_symbols(), 128);
+    moshi (image.error != "") {
+        chant(image.error);
+        os.exit(4);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(5);
+    }
+    kaku args = os.arguments();
+    fs.write_all(args[1], signed.bytes);
+    os.chmod(args[1], 448);
 }
 main();

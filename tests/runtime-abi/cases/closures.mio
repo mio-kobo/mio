@@ -1,39 +1,126 @@
 // RA-1 / closure captures: captured references and mutable captured cells are roots for as long as the closure
 // is reachable, including closures stored in arrays, maps and struct fields and closures returned from closures.
 yobu "kiso/array";
-kata Box { v: int64; tag: string; }
+kata Box {
+    v: int64;
+    tag: string;
+}
 kata Holder { f: () -> int64; }
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
-waza churn(n: int64) -> int64 { kaku t = 0; kaku i = 0; aida (i < n) { kaku j = array.make[int64](32768, i); t = t + j[0]; i = i + 1; } kaesu t; }
-waza capture_box(v: int64) -> () -> int64 { kaku b = Box { v: v, tag: "boxed" }; kaesu waza () -> int64 { kaesu b.v; }; }
-waza counter() -> () -> int64 { kaku n = 0; kaku hist: []int64 = []; kaesu waza () -> int64 { n = n + 1; array.push(hist, n); kaesu len(hist) * 1000 + n; }; }
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
+waza churn(n: int64) -> int64 {
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) {
+        kaku j = array.make[int64](32768, i);
+        t = t + j[0];
+        i = i + 1;
+    }
+    kaesu t;
+}
+waza capture_box(v: int64) -> () -> int64 {
+    kaku b = Box {
+        v: v, tag: "boxed" };
+    kaesu waza () -> int64 {
+        kaesu b.v;
+    };
+}
+waza counter() -> () -> int64 {
+    kaku n = 0;
+    kaku hist: []int64 = [];
+    kaesu waza () -> int64 {
+        n = n + 1;
+        array.push(hist, n);
+        kaesu len(hist) * 1000 + n;
+    };
+}
 waza outer(seed: int64) -> () -> () -> int64 {
     kaku shared = Box { v: seed, tag: "outer" };
-    kaesu waza () -> () -> int64 { kaku inner = Box { v: shared.v * 2, tag: "inner" }; kaesu waza () -> int64 { kaesu shared.v + inner.v; }; };
+    kaesu waza () -> () -> int64 {
+        kaku inner = Box {
+            v: shared.v * 2, tag: "inner" };
+        kaesu waza () -> int64 {
+            kaesu shared.v + inner.v;
+        };
+    };
 }
-kaku fs: [](() -> int64) = []; kaku i = 0;
-aida (i < 200) { array.push(fs, capture_box(i)); i = i + 1; }
+kaku fs: [](() -> int64) = [];
+kaku i = 0;
+aida (i < 200) {
+    array.push(fs, capture_box(i));
+    i = i + 1;
+}
 kaku by_name = Map[string, Holder]();
-by_name["a"] = Holder { f: capture_box(7) }; by_name["b"] = Holder { f: counter() };
+by_name["a"] = Holder {
+    f: capture_box(7) };
+by_name["b"] = Holder {
+    f: counter() };
 kaku holder = Holder { f: capture_box(99) };
-kaku make_nested = outer(5); kaku nested = make_nested();
-kaku c = counter(); c(); c();
+kaku make_nested = outer(5);
+kaku nested = make_nested();
+kaku c = counter();
+c();
+c();
 churn(96);
-kaku total = 0; i = 0;
-aida (i < 200) { kaku f = fs[i]; total = total + f(); i = i + 1; }
+kaku total = 0;
+i = 0;
+aida (i < 200) {
+    kaku f = fs[i];
+    total = total + f();
+    i = i + 1;
+}
 check(total == 19900, "array of closures");
-kaku a = by_name["a"]; moshi (a != mu) { kaku af = a.f; check(af() == 7, "map closure"); } sore { check(iie, "map closure missing"); }
-kaku b = by_name["b"]; moshi (b != mu) { kaku bf = b.f; bf(); check(bf() == 2002, "map counter"); } sore { check(iie, "map counter missing"); }
-kaku hf = holder.f; check(hf() == 99, "struct closure");
+kaku a = by_name["a"];
+moshi (a != mu) {
+    kaku af = a.f;
+    check(af() == 7, "map closure");
+} sore {
+    check(iie, "map closure missing");
+}
+kaku b = by_name["b"];
+moshi (b != mu) {
+    kaku bf = b.f;
+    bf();
+    check(bf() == 2002, "map counter");
+} sore {
+    check(iie, "map counter missing");
+}
+kaku hf = holder.f;
+check(hf() == 99, "struct closure");
 check(nested() == 15, "nested capture");
 check(c() == 3003, "mutable cells");
 // replace captured references under pressure
-kaku ring: [](() -> int64) = []; i = 0;
-aida (i < 16) { array.push(ring, capture_box(-1)); i = i + 1; }
+kaku ring: [](() -> int64) = [];
 i = 0;
-aida (i < 4000) { ring[i - (i / 16) * 16] = capture_box(i); moshi (i - (i / 500) * 500 == 0) { churn(4); } i = i + 1; }
-total = 0; i = 0;
-aida (i < 16) { kaku f = ring[i]; total = total + f(); i = i + 1; }
-chant(total); check(total == 63864, "ring of closures");
-moshi (failures == 0) { chant("closures: ok"); } sore { chant("closures: FAIL"); chant(failures); }
+aida (i < 16) {
+    array.push(ring, capture_box(-1));
+    i = i + 1;
+}
+i = 0;
+aida (i < 4000) {
+    ring[i - (i / 16) * 16] = capture_box(i);
+    moshi (i - (i / 500) * 500 == 0) {
+        churn(4);
+    }
+    i = i + 1;
+}
+total = 0;
+i = 0;
+aida (i < 16) {
+    kaku f = ring[i];
+    total = total + f();
+    i = i + 1;
+}
+chant(total);
+check(total == 63864, "ring of closures");
+moshi (failures == 0) {
+    chant("closures: ok");
+} sore {
+    chant("closures: FAIL");
+    chant(failures);
+}

@@ -399,10 +399,6 @@ func helpWidthFromEnv() int {
 	return 80
 }
 
-func writeHelpText(out io.Writer, text string) {
-	fmt.Fprint(out, text)
-}
-
 func writeHelpEntry(out io.Writer, theme helpTheme, syntax, description string, width, column int, role string) {
 	indent := 2
 	syntaxWidth := helpWidth(syntax)

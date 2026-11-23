@@ -5,63 +5,248 @@
 // Results:0 success,1 full/empty,2 lock contention,4 protocol error. No item
 // is silently dropped. A full offer leaves the overwritten reference owned by
 // its caller, which must retry or Abort the entire GC without reclaiming.
-koukai teisu gc_work_context_bytes=128;
+koukai teisu gc_work_context_bytes = 128;
 waza work_lock_program() -> ir.Function {
- kaku f=ir.function("gc_work_lock");tconstant(f,10,0);tconstant(f,11,1);tconstant(f,12,0);tconstant(f,13,1024);
- ir.branch(f,ir.label,0,"retry");array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:14,left:0,right:11,immediate:0,name:"",arguments:[10],order:acq_rel,failure_order:acquire});ir.branch(f,ir.zero,14,"locked");ir.put(f,ir.add,12,12,11,0);ir.put(f,ir.less_unsigned,14,12,13,0);ir.branch(f,ir.nonzero,14,"retry");treturn(f,2);
- ir.branch(f,ir.label,0,"locked");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_work_lock");
+    tconstant(f, 10, 0);
+    tconstant(f, 11, 1);
+    tconstant(f, 12, 0);
+    tconstant(f, 13, 1024);
+    ir.branch(f, ir.label, 0, "retry");
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 14, left: 0, right: 11, immediate: 0, name: "", arguments: [10], order: acq_rel, failure_order: acquire });
+    ir.branch(f, ir.zero, 14, "locked");
+    ir.put(f, ir.add, 12, 12, 11, 0);
+    ir.put(f, ir.less_unsigned, 14, 12, 13, 0);
+    ir.branch(f, ir.nonzero, 14, "retry");
+    treturn(f, 2);
+    ir.branch(f, ir.label, 0, "locked");
+    treturn(f, 0);
+    kaesu f;
 }
-waza work_unlock(f:ir.Function) -> unit {tconstant(f,31,0);ir.put(f,ir.release_store,0,0,31,0);}
-waza work_enter(f:ir.Function) -> unit {
- ir.invoke_function(f,"gc_work_lock",5,[0]);ir.branch(f,ir.nonzero,5,"busy");
- ir.branch(f,ir.zero,1,"invalid");ir.put(f,ir.load,6,0,0,8);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,6,0,0,16);ir.branch(f,ir.zero,6,"invalid");
- ir.put(f,ir.load,6,0,0,112);ir.put(f,ir.equal,6,6,1,0);ir.branch(f,ir.zero,6,"invalid");ir.put(f,ir.load,6,0,0,64);ir.branch(f,ir.nonzero,6,"invalid");
+waza work_unlock(f: ir.Function) -> unit {
+    tconstant(f, 31, 0);
+    ir.put(f, ir.release_store, 0, 0, 31, 0);
 }
-waza work_tails(f:ir.Function) -> unit {
- ir.branch(f,ir.label,0,"invalid");work_unlock(f);treturn(f,4);ir.branch(f,ir.label,0,"busy");treturn(f,2);
+waza work_enter(f: ir.Function) -> unit {
+    ir.invoke_function(f, "gc_work_lock", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "busy");
+    ir.branch(f, ir.zero, 1, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 8);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 16);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 112);
+    ir.put(f, ir.equal, 6, 6, 1, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 64);
+    ir.branch(f, ir.nonzero, 6, "invalid");
 }
-waza work_increment(f:ir.Function,off:int64) -> unit {ir.put(f,ir.load,28,0,0,off);tconstant(f,29,1);ir.put(f,ir.add,28,28,29,0);ir.put(f,ir.release_store,0,0,28,off);}
+waza work_tails(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "invalid");
+    work_unlock(f);
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "busy");
+    treturn(f, 2);
+}
+waza work_increment(f: ir.Function, off: int64) -> unit {
+    ir.put(f, ir.load, 28, 0, 0, off);
+    tconstant(f, 29, 1);
+    ir.put(f, ir.add, 28, 28, 29, 0);
+    ir.put(f, ir.release_store, 0, 0, 28, off);
+}
 waza work_configure_program() -> ir.Function {
- // ctx,buffer,capacity,buffer_bytes,epoch. Reuse requires closed+quiet and a
- // strictly newer Epoch. A stale caller cannot access a reconfigured buffer.
- kaku f=ir.function("gc_work_configure");ir.invoke_function(f,"gc_work_lock",5,[0]);ir.branch(f,ir.nonzero,5,"busy");
- ir.branch(f,ir.zero,1,"invalid");ir.branch(f,ir.zero,2,"invalid");ir.branch(f,ir.zero,4,"invalid");tconstant(f,6,8);ir.put(f,ir.divide_unsigned,7,1,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,1,0);ir.branch(f,ir.zero,7,"invalid");ir.put(f,ir.divide_unsigned,7,3,6,0);ir.put(f,ir.less_unsigned,7,7,2,0);ir.branch(f,ir.nonzero,7,"invalid");
- ir.put(f,ir.add,7,1,3,0);ir.put(f,ir.less_unsigned,7,7,1,0);ir.branch(f,ir.nonzero,7,"invalid");ir.put(f,ir.load,6,0,0,112);ir.put(f,ir.less_unsigned,7,6,4,0);ir.branch(f,ir.zero,7,"invalid");ir.branch(f,ir.zero,6,"configure");
- ir.put(f,ir.load,7,0,0,56);ir.branch(f,ir.zero,7,"invalid");ir.put(f,ir.load,7,0,0,40);ir.branch(f,ir.nonzero,7,"invalid");ir.put(f,ir.load,7,0,0,48);ir.branch(f,ir.nonzero,7,"invalid");
- ir.branch(f,ir.label,0,"configure");ir.put(f,ir.store,0,0,1,8);ir.put(f,ir.store,0,0,2,16);ir.put(f,ir.store,0,0,4,112);tconstant(f,6,0);
- kaku off=24;aida(off<=104){ir.put(f,ir.store,0,0,6,off);off=off+8;}work_unlock(f);treturn(f,0);work_tails(f);kaesu f;
+    // ctx,buffer,capacity,buffer_bytes,epoch. Reuse requires closed+quiet and a
+    // strictly newer Epoch. A stale caller cannot access a reconfigured buffer.
+    kaku f = ir.function("gc_work_configure");
+    ir.invoke_function(f, "gc_work_lock", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "busy");
+    ir.branch(f, ir.zero, 1, "invalid");
+    ir.branch(f, ir.zero, 2, "invalid");
+    ir.branch(f, ir.zero, 4, "invalid");
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 7, 1, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 1, 0);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.put(f, ir.divide_unsigned, 7, 3, 6, 0);
+    ir.put(f, ir.less_unsigned, 7, 7, 2, 0);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.put(f, ir.add, 7, 1, 3, 0);
+    ir.put(f, ir.less_unsigned, 7, 7, 1, 0);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 112);
+    ir.put(f, ir.less_unsigned, 7, 6, 4, 0);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.branch(f, ir.zero, 6, "configure");
+    ir.put(f, ir.load, 7, 0, 0, 56);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.put(f, ir.load, 7, 0, 0, 40);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.put(f, ir.load, 7, 0, 0, 48);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.branch(f, ir.label, 0, "configure");
+    ir.put(f, ir.store, 0, 0, 1, 8);
+    ir.put(f, ir.store, 0, 0, 2, 16);
+    ir.put(f, ir.store, 0, 0, 4, 112);
+    tconstant(f, 6, 0);
+    kaku off = 24;
+    aida (off <= 104) {
+        ir.put(f, ir.store, 0, 0, 6, off);
+        off = off + 8;
+    }
+    work_unlock(f);
+    treturn(f, 0);
+    work_tails(f);
+    kaesu f;
 }
 waza work_offer_program() -> ir.Function {
- // ctx,epoch,non-null exact reference. It never guesses numeric values.
- kaku f=ir.function("gc_work_offer");work_enter(f);ir.branch(f,ir.zero,2,"invalid");tconstant(f,6,16);ir.put(f,ir.divide_unsigned,7,2,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,2,0);ir.branch(f,ir.zero,7,"invalid");ir.put(f,ir.load,6,0,0,56);ir.branch(f,ir.nonzero,6,"invalid");ir.put(f,ir.load,7,0,0,40);ir.put(f,ir.load,8,0,0,16);ir.put(f,ir.less_unsigned,6,7,8,0);ir.branch(f,ir.zero,6,"full");
- ir.put(f,ir.load,9,0,0,32);ir.put(f,ir.load,10,0,0,8);tconstant(f,11,8);ir.put(f,ir.multiply,11,9,11,0);ir.put(f,ir.add,10,10,11,0);ir.put(f,ir.store,0,10,2,0);
- tconstant(f,11,1);ir.put(f,ir.add,9,9,11,0);ir.put(f,ir.equal,6,9,8,0);ir.branch(f,ir.zero,6,"tail_ready");tconstant(f,9,0);ir.branch(f,ir.label,0,"tail_ready");ir.put(f,ir.store,0,0,9,32);ir.put(f,ir.add,7,7,11,0);ir.put(f,ir.store,0,0,7,40);work_increment(f,72);work_unlock(f);treturn(f,0);
- ir.branch(f,ir.label,0,"full");work_increment(f,96);work_unlock(f);treturn(f,1);work_tails(f);kaesu f;
+    // ctx,epoch,non-null exact reference. It never guesses numeric values.
+    kaku f = ir.function("gc_work_offer");
+    work_enter(f);
+    ir.branch(f, ir.zero, 2, "invalid");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.divide_unsigned, 7, 2, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 2, 0);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 56);
+    ir.branch(f, ir.nonzero, 6, "invalid");
+    ir.put(f, ir.load, 7, 0, 0, 40);
+    ir.put(f, ir.load, 8, 0, 0, 16);
+    ir.put(f, ir.less_unsigned, 6, 7, 8, 0);
+    ir.branch(f, ir.zero, 6, "full");
+    ir.put(f, ir.load, 9, 0, 0, 32);
+    ir.put(f, ir.load, 10, 0, 0, 8);
+    tconstant(f, 11, 8);
+    ir.put(f, ir.multiply, 11, 9, 11, 0);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.put(f, ir.store, 0, 10, 2, 0);
+    tconstant(f, 11, 1);
+    ir.put(f, ir.add, 9, 9, 11, 0);
+    ir.put(f, ir.equal, 6, 9, 8, 0);
+    ir.branch(f, ir.zero, 6, "tail_ready");
+    tconstant(f, 9, 0);
+    ir.branch(f, ir.label, 0, "tail_ready");
+    ir.put(f, ir.store, 0, 0, 9, 32);
+    ir.put(f, ir.add, 7, 7, 11, 0);
+    ir.put(f, ir.store, 0, 0, 7, 40);
+    work_increment(f, 72);
+    work_unlock(f);
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "full");
+    work_increment(f, 96);
+    work_unlock(f);
+    treturn(f, 1);
+    work_tails(f);
+    kaesu f;
 }
 waza work_take_program() -> ir.Function {
- // ctx,epoch,out*. Return status separately from a potential pointer value.
- kaku f=ir.function("gc_work_take");ir.branch(f,ir.zero,2,"bad_out");tconstant(f,6,0);ir.put(f,ir.store,0,2,6,0);work_enter(f);ir.put(f,ir.load,7,0,0,40);ir.branch(f,ir.zero,7,"empty");ir.put(f,ir.load,8,0,0,16);ir.put(f,ir.load,9,0,0,24);ir.put(f,ir.load,10,0,0,8);tconstant(f,11,8);ir.put(f,ir.multiply,11,9,11,0);ir.put(f,ir.add,10,10,11,0);ir.put(f,ir.load,12,10,0,0);ir.put(f,ir.store,0,2,12,0);tconstant(f,12,0);ir.put(f,ir.store,0,10,12,0);
- tconstant(f,11,1);ir.put(f,ir.add,9,9,11,0);ir.put(f,ir.equal,6,9,8,0);ir.branch(f,ir.zero,6,"head_ready");tconstant(f,9,0);ir.branch(f,ir.label,0,"head_ready");ir.put(f,ir.store,0,0,9,24);ir.put(f,ir.subtract,7,7,11,0);ir.put(f,ir.store,0,0,7,40);work_increment(f,48);work_increment(f,80);work_unlock(f);treturn(f,0);
- ir.branch(f,ir.label,0,"empty");work_unlock(f);treturn(f,1);ir.branch(f,ir.label,0,"bad_out");treturn(f,4);work_tails(f);kaesu f;
+    // ctx,epoch,out*. Return status separately from a potential pointer value.
+    kaku f = ir.function("gc_work_take");
+    ir.branch(f, ir.zero, 2, "bad_out");
+    tconstant(f, 6, 0);
+    ir.put(f, ir.store, 0, 2, 6, 0);
+    work_enter(f);
+    ir.put(f, ir.load, 7, 0, 0, 40);
+    ir.branch(f, ir.zero, 7, "empty");
+    ir.put(f, ir.load, 8, 0, 0, 16);
+    ir.put(f, ir.load, 9, 0, 0, 24);
+    ir.put(f, ir.load, 10, 0, 0, 8);
+    tconstant(f, 11, 8);
+    ir.put(f, ir.multiply, 11, 9, 11, 0);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.put(f, ir.load, 12, 10, 0, 0);
+    ir.put(f, ir.store, 0, 2, 12, 0);
+    tconstant(f, 12, 0);
+    ir.put(f, ir.store, 0, 10, 12, 0);
+    tconstant(f, 11, 1);
+    ir.put(f, ir.add, 9, 9, 11, 0);
+    ir.put(f, ir.equal, 6, 9, 8, 0);
+    ir.branch(f, ir.zero, 6, "head_ready");
+    tconstant(f, 9, 0);
+    ir.branch(f, ir.label, 0, "head_ready");
+    ir.put(f, ir.store, 0, 0, 9, 24);
+    ir.put(f, ir.subtract, 7, 7, 11, 0);
+    ir.put(f, ir.store, 0, 0, 7, 40);
+    work_increment(f, 48);
+    work_increment(f, 80);
+    work_unlock(f);
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "empty");
+    work_unlock(f);
+    treturn(f, 1);
+    ir.branch(f, ir.label, 0, "bad_out");
+    treturn(f, 4);
+    work_tails(f);
+    kaesu f;
 }
 waza work_complete_program() -> ir.Function {
- kaku f=ir.function("gc_work_complete");work_enter(f);ir.put(f,ir.load,7,0,0,48);ir.branch(f,ir.zero,7,"invalid");tconstant(f,8,1);ir.put(f,ir.subtract,7,7,8,0);ir.put(f,ir.store,0,0,7,48);work_increment(f,88);work_unlock(f);treturn(f,0);work_tails(f);kaesu f;
+    kaku f = ir.function("gc_work_complete");
+    work_enter(f);
+    ir.put(f, ir.load, 7, 0, 0, 48);
+    ir.branch(f, ir.zero, 7, "invalid");
+    tconstant(f, 8, 1);
+    ir.put(f, ir.subtract, 7, 7, 8, 0);
+    ir.put(f, ir.store, 0, 0, 7, 48);
+    work_increment(f, 88);
+    work_unlock(f);
+    treturn(f, 0);
+    work_tails(f);
+    kaesu f;
 }
 waza work_close_program() -> ir.Function {
- kaku f=ir.function("gc_work_close");work_enter(f);tconstant(f,6,1);ir.put(f,ir.store,0,0,6,56);work_unlock(f);treturn(f,0);work_tails(f);kaesu f;
+    kaku f = ir.function("gc_work_close");
+    work_enter(f);
+    tconstant(f, 6, 1);
+    ir.put(f, ir.store, 0, 0, 6, 56);
+    work_unlock(f);
+    treturn(f, 0);
+    work_tails(f);
+    kaesu f;
 }
 waza work_quiet_program() -> ir.Function {
- // Quiescence requires closed producer input AND no queued/in-flight work.
- // This queue condition does not replace an all-Mutator Remark handshake.
- kaku f=ir.function("gc_work_quiet");work_enter(f);ir.put(f,ir.load,6,0,0,56);ir.branch(f,ir.zero,6,"no");ir.put(f,ir.load,6,0,0,40);ir.branch(f,ir.nonzero,6,"no");ir.put(f,ir.load,6,0,0,48);ir.branch(f,ir.nonzero,6,"no");ir.put(f,ir.acquire_load,6,0,0,104);ir.branch(f,ir.nonzero,6,"no");work_unlock(f);treturn(f,1);
- ir.branch(f,ir.label,0,"no");work_unlock(f);treturn(f,0);work_tails(f);kaesu f;
+    // Quiescence requires closed producer input AND no queued/in-flight work.
+    // This queue condition does not replace an all-Mutator Remark handshake.
+    kaku f = ir.function("gc_work_quiet");
+    work_enter(f);
+    ir.put(f, ir.load, 6, 0, 0, 56);
+    ir.branch(f, ir.zero, 6, "no");
+    ir.put(f, ir.load, 6, 0, 0, 40);
+    ir.branch(f, ir.nonzero, 6, "no");
+    ir.put(f, ir.load, 6, 0, 0, 48);
+    ir.branch(f, ir.nonzero, 6, "no");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 104);
+    ir.branch(f, ir.nonzero, 6, "no");
+    work_unlock(f);
+    treturn(f, 1);
+    ir.branch(f, ir.label, 0, "no");
+    work_unlock(f);
+    treturn(f, 0);
+    work_tails(f);
+    kaesu f;
 }
 waza work_abort_program() -> ir.Function {
- // Abort closes input and preserves the first error. It never frees queued
- // objects/buffers, and quiet cannot be mistaken for permission to reclaim.
- kaku f=ir.function("gc_work_abort");ir.invoke_function(f,"gc_work_lock",5,[0]);ir.branch(f,ir.nonzero,5,"busy");ir.put(f,ir.load,6,0,0,112);ir.put(f,ir.equal,6,6,1,0);ir.branch(f,ir.zero,6,"invalid");ir.branch(f,ir.zero,2,"invalid");ir.put(f,ir.load,6,0,0,64);ir.branch(f,ir.nonzero,6,"closed");ir.put(f,ir.store,0,0,2,64);
- ir.branch(f,ir.label,0,"closed");tconstant(f,6,1);ir.put(f,ir.store,0,0,6,56);work_unlock(f);treturn(f,0);work_tails(f);kaesu f;
+    // Abort closes input and preserves the first error. It never frees queued
+    // objects/buffers, and quiet cannot be mistaken for permission to reclaim.
+    kaku f = ir.function("gc_work_abort");
+    ir.invoke_function(f, "gc_work_lock", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "busy");
+    ir.put(f, ir.load, 6, 0, 0, 112);
+    ir.put(f, ir.equal, 6, 6, 1, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.branch(f, ir.zero, 2, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 64);
+    ir.branch(f, ir.nonzero, 6, "closed");
+    ir.put(f, ir.store, 0, 0, 2, 64);
+    ir.branch(f, ir.label, 0, "closed");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.store, 0, 0, 6, 56);
+    work_unlock(f);
+    treturn(f, 0);
+    work_tails(f);
+    kaesu f;
 }
 koukai waza work_queue_program() -> []ir.Function {
- kaesu [work_lock_program(),work_configure_program(),work_offer_program(),work_take_program(),work_complete_program(),work_close_program(),work_quiet_program(),work_abort_program()];
+    kaesu [work_lock_program(), work_configure_program(), work_offer_program(), work_take_program(), work_complete_program(), work_close_program(), work_quiet_program(), work_abort_program()];
 }

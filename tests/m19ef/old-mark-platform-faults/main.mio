@@ -1,45 +1,217 @@
-yobu "kiso/runtime/gc";yobu "kiso/runtime/ir";yobu "kiso/runtime/os/darwin";yobu "kiso/runtime/cpu/aarch64";
-yobu "kiso/aot/arm64";yobu "kiso/aot/macho";yobu "kiso/aot/sign";yobu "kiso/array";yobu "kiso/fs";yobu "kiso/os";
+yobu "kiso/runtime/gc";
+yobu "kiso/runtime/ir";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/runtime/cpu/aarch64";
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
 // Negative OS-adapter cases only. Inject invalid ARGUMENTS into actual native
 // APIs, never fabricated return codes. Not ordinary roots/mark acceptance.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza eq(f:ir.Function,r:int64,v:int64) -> unit {n(f,30,v);ir.put(f,ir.equal,30,r,30,0);ir.branch(f,ir.zero,30,"fail");}
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza eq(f: ir.Function, r: int64, v: int64) -> unit {
+    n(f, 30, v);
+    ir.put(f, ir.equal, 30, r, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
 waza destroy_wrapper() -> ir.Function {
- kaku f=ir.function("test_attr_destroy");ir.call(f,108,20,[0]);ir.put(f,ir.store,0,1,20,96);ir.put(f,ir.address,21,1,0,104);n(f,22,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:23,left:21,right:22,immediate:0,name:"",arguments:[],order:3,failure_order:0});ir.put(f,ir.result,0,20,0,0);kaesu f;
+    kaku f = ir.function("test_attr_destroy");
+    ir.call(f, 108, 20, [0]);
+    ir.put(f, ir.store, 0, 1, 20, 96);
+    ir.put(f, ir.address, 21, 1, 0, 104);
+    n(f, 22, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 23, left: 21, right: 22, immediate: 0, name: "", arguments: [], order: 3, failure_order: 0 });
+    ir.put(f, ir.result, 0, 20, 0, 0);
+    kaesu f;
 }
 waza join_wrapper() -> ir.Function {
- // ctx,real target,return**. First attempt really asks OS to join self,
- // yielding Darwin EDEADLK11; retry actually joins the original child handle.
- kaku f=ir.function("test_collector_join");ir.put(f,ir.address,21,0,0,328);n(f,22,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:23,left:21,right:22,immediate:0,name:"",arguments:[],order:3,failure_order:0});ir.branch(f,ir.nonzero,23,"real_target");ir.call(f,gc.thread_identity,20,[]);ir.call(f,gc.thread_join,5,[20,2]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"real_target");ir.call(f,gc.thread_join,5,[1,2]);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // ctx,real target,return**. First attempt really asks OS to join self,
+    // yielding Darwin EDEADLK11; retry actually joins the original child handle.
+    kaku f = ir.function("test_collector_join");
+    ir.put(f, ir.address, 21, 0, 0, 328);
+    n(f, 22, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 23, left: 21, right: 22, immediate: 0, name: "", arguments: [], order: 3, failure_order: 0 });
+    ir.branch(f, ir.nonzero, 23, "real_target");
+    ir.call(f, gc.thread_identity, 20, []);
+    ir.call(f, gc.thread_join, 5, [20, 2]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "real_target");
+    ir.call(f, gc.thread_join, 5, [1, 2]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
-waza run(mode:int64) -> ir.Function {
- kaku f=ir.function("run");ir.call(f,gc.thread_identity,20,[]);ir.put(f,ir.address,22,0,0,1024);ir.put(f,ir.load,31,0,0,0);ir.put(f,ir.store,0,22,31,248);n(f,31,gc.old_mark_extension_version);ir.put(f,ir.store,0,22,31,416);n(f,31,999);ir.put(f,ir.store,0,22,31,336);
- ir.put(f,ir.address,1,22,0,512);n(f,2,32);n(f,3,256);n(f,4,1);ir.invoke_function(f,"gc_work_configure",5,[22,1,2,3,4]);eq(f,5,0);n(f,31,1);ir.put(f,ir.store,0,22,31,56);ir.put(f,ir.release_store,0,22,31,296);
- ir.invoke_function(f,"gc_old_launch",5,[22]);
- moshi(mode==0){
-  eq(f,5,22);kaku offsets=[144,192,304,312,232,336,344];kaku expected=[6,22,0,0,0,0,1];kaku i=0;aida(i<len(offsets)){ir.put(f,ir.acquire_load,5,22,0,offsets[i]);eq(f,5,expected[i]);ir.put(f,ir.store,0,0,5,48+i*8);i=i+1;}
-  ir.put(f,ir.address,1,0,0,48);n(f,2,56);ir.call(f,103,5,[1,2]);eq(f,5,56);
- }sore{
-  eq(f,5,0);ir.invoke_function(f,"gc_old_join",5,[22]);eq(f,5,11);ir.put(f,ir.load,23,22,0,232);ir.branch(f,ir.zero,23,"fail");ir.put(f,ir.acquire_load,5,22,0,280);eq(f,5,0);ir.put(f,ir.acquire_load,5,22,0,312);eq(f,5,0);
-  ir.invoke_function(f,"gc_old_abort_join",5,[22]);eq(f,5,0);kaku offsets=[144,192,304,312,184,280,328,336,344];kaku expected=[6,11,1,1,1,1,2,0,1];kaku i=0;aida(i<len(offsets)){ir.put(f,ir.acquire_load,5,22,0,offsets[i]);eq(f,5,expected[i]);ir.put(f,ir.store,0,0,5,48+i*8);i=i+1;}
-  ir.put(f,ir.acquire_load,5,22,0,200);ir.branch(f,ir.zero,5,"fail");ir.put(f,ir.equal,5,5,20,0);ir.branch(f,ir.nonzero,5,"fail");ir.put(f,ir.address,1,0,0,48);n(f,2,72);ir.call(f,103,5,[1,2]);eq(f,5,72);
- }
- n(f,1,0);ir.put(f,ir.result,0,1,0,0);ir.branch(f,ir.label,0,"fail");ir.put(f,ir.store,0,0,5,128);ir.put(f,ir.address,1,0,0,48);n(f,2,88);ir.call(f,103,6,[1,2]);n(f,1,91);ir.call(f,102,2,[1]);kaesu f;
+waza run(mode: int64) -> ir.Function {
+    kaku f = ir.function("run");
+    ir.call(f, gc.thread_identity, 20, []);
+    ir.put(f, ir.address, 22, 0, 0, 1024);
+    ir.put(f, ir.load, 31, 0, 0, 0);
+    ir.put(f, ir.store, 0, 22, 31, 248);
+    n(f, 31, gc.old_mark_extension_version);
+    ir.put(f, ir.store, 0, 22, 31, 416);
+    n(f, 31, 999);
+    ir.put(f, ir.store, 0, 22, 31, 336);
+    ir.put(f, ir.address, 1, 22, 0, 512);
+    n(f, 2, 32);
+    n(f, 3, 256);
+    n(f, 4, 1);
+    ir.invoke_function(f, "gc_work_configure", 5, [22, 1, 2, 3, 4]);
+    eq(f, 5, 0);
+    n(f, 31, 1);
+    ir.put(f, ir.store, 0, 22, 31, 56);
+    ir.put(f, ir.release_store, 0, 22, 31, 296);
+    ir.invoke_function(f, "gc_old_launch", 5, [22]);
+    moshi (mode == 0) {
+        eq(f, 5, 22);
+        kaku offsets = [144, 192, 304, 312, 232, 336, 344];
+        kaku expected = [6, 22, 0, 0, 0, 0, 1];
+        kaku i = 0;
+        aida (i<len(offsets)) {
+            ir.put(f, ir.acquire_load, 5, 22, 0, offsets[i]);
+            eq(f, 5, expected[i]);
+            ir.put(f, ir.store, 0, 0, 5, 48 + i * 8);
+            i = i + 1;
+        }
+        ir.put(f, ir.address, 1, 0, 0, 48);
+        n(f, 2, 56);
+        ir.call(f, 103, 5, [1, 2]);
+        eq(f, 5, 56);
+    } sore {
+        eq(f, 5, 0);
+        ir.invoke_function(f, "gc_old_join", 5, [22]);
+        eq(f, 5, 11);
+        ir.put(f, ir.load, 23, 22, 0, 232);
+        ir.branch(f, ir.zero, 23, "fail");
+        ir.put(f, ir.acquire_load, 5, 22, 0, 280);
+        eq(f, 5, 0);
+        ir.put(f, ir.acquire_load, 5, 22, 0, 312);
+        eq(f, 5, 0);
+        ir.invoke_function(f, "gc_old_abort_join", 5, [22]);
+        eq(f, 5, 0);
+        kaku offsets = [144, 192, 304, 312, 184, 280, 328, 336, 344];
+        kaku expected = [6, 11, 1, 1, 1, 1, 2, 0, 1];
+        kaku i = 0;
+        aida (i<len(offsets)) {
+            ir.put(f, ir.acquire_load, 5, 22, 0, offsets[i]);
+            eq(f, 5, expected[i]);
+            ir.put(f, ir.store, 0, 0, 5, 48 + i * 8);
+            i = i + 1;
+        }
+        ir.put(f, ir.acquire_load, 5, 22, 0, 200);
+        ir.branch(f, ir.zero, 5, "fail");
+        ir.put(f, ir.equal, 5, 5, 20, 0);
+        ir.branch(f, ir.nonzero, 5, "fail");
+        ir.put(f, ir.address, 1, 0, 0, 48);
+        n(f, 2, 72);
+        ir.call(f, 103, 5, [1, 2]);
+        eq(f, 5, 72);
+    }
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    ir.branch(f, ir.label, 0, "fail");
+    ir.put(f, ir.store, 0, 0, 5, 128);
+    ir.put(f, ir.address, 1, 0, 0, 48);
+    n(f, 2, 88);
+    ir.call(f, 103, 6, [1, 2]);
+    n(f, 1, 91);
+    ir.call(f, 102, 2, [1]);
+    kaesu f;
 }
-waza emit(c:arm64.Assembler,x:arm64.Instruction) -> unit {arm64.assembler_emit(c,x);}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,off:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:off,register:r});}
+waza emit(c: arm64.Assembler, x: arm64.Instruction) -> unit { arm64.assembler_emit(c, x); }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, off: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: off, register: r });
+}
 waza main() -> unit {
- kaku argv=os.arguments();moshi(len(argv)!=3){os.exit(64);}kaku mode=0;moshi(argv[2]=="join"){mode=1;}sore{moshi(argv[2]!="stack"){os.exit(64);}}
- kaku functions=gc.old_mark_program();kaku platform=darwin.worker_platform_program();kaku i=0;
- aida(i<len(platform)){kaku f=platform[i];moshi(f.name=="platform_thread_start"){
-  kaku steps:[]ir.Step=[];kaku j=0;aida(j<len(f.steps)){kaku s=f.steps[j];
-   moshi(mode==0 && s.kind==ir.system && s.immediate==107){array.push(steps,ir.step(ir.constant,6,0,0,1,"",[]));}
-   moshi(s.kind==ir.system && s.immediate==108){array.push(steps,ir.step(ir.invoke,s.destination,0,0,0,"test_attr_destroy",[4,3]));}sore{array.push(steps,s);}j=j+1;
-  }platform[i]=ir.Function {name:f.name,steps:steps};
- }i=i+1;}
- moshi(mode==1){i=0;aida(i<len(functions)){kaku f=functions[i];moshi(f.name=="gc_old_join"){kaku steps:[]ir.Step=[];kaku j=0;aida(j<len(f.steps)){kaku s=f.steps[j];moshi(s.kind==ir.system && s.immediate==gc.thread_join){array.push(steps,ir.step(ir.invoke,s.destination,0,0,0,"test_collector_join",[0,10,11]));}sore{array.push(steps,s);}j=j+1;}functions[i]=ir.Function {name:f.name,steps:steps};}i=i+1;}}
- array.append_all(functions,platform);array.push(functions,destroy_wrapper());array.push(functions,join_wrapper());array.push(functions,run(mode));kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];addr(c,patches,7,0);addr(c,patches,0,256);emit(c,arm64.str_x(7,0,0));arm64.assembler_bl(c,"rt_run");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));kaku error=aarch64.emit_program(c,functions,darwin.worker_bindings(),25,"rt");moshi(error!=""){chant(error);os.exit(2);}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(4);}kaku image=darwin.executable_appended(macho.ImageSpec {words:assembled.words,constants:[],globals:0,patches:patches},darwin.worker_symbols(),4096);moshi(image.error!=""){chant(image.error);os.exit(5);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){os.exit(6);}fs.write_all(argv[1],signed.bytes);os.chmod(argv[1],448);
+    kaku argv = os.arguments();
+    moshi (len(argv) != 3) {
+        os.exit(64);
+    }
+    kaku mode = 0;
+    moshi (argv[2] == "join") {
+        mode = 1;
+    } sore {
+        moshi (argv[2] != "stack") {
+            os.exit(64);
+        }
+    }
+    kaku functions = gc.old_mark_program();
+    kaku platform = darwin.worker_platform_program();
+    kaku i = 0;
+    aida (i<len(platform)) { kaku f = platform[i]; moshi (f.name == "platform_thread_start") {
+            kaku steps: []ir.Step = [];
+            kaku j = 0;
+            aida (j<len(f.steps)) {
+                kaku s = f.steps[j];
+                moshi (mode == 0 && s.kind == ir.system && s.immediate == 107) { array.push(steps, ir.step(ir.constant, 6, 0, 0, 1, "", [])); }
+                moshi (s.kind == ir.system && s.immediate == 108) {
+                    array.push(steps, ir.step(ir.invoke, s.destination, 0, 0, 0, "test_attr_destroy", [4, 3]));
+                } sore {
+                    array.push(steps, s);
+                }
+                j = j + 1;
+            } platform[i] = ir.Function { name: f.name, steps: steps };
+        } i = i + 1; }
+    moshi (mode == 1) {
+        i = 0;
+        aida (i<len(functions)) {
+            kaku f = functions[i];
+            moshi (f.name == "gc_old_join") {
+                kaku steps: []ir.Step = [];
+                kaku j = 0;
+                aida (j<len(f.steps)) {
+                    kaku s = f.steps[j];
+                    moshi (s.kind == ir.system && s.immediate == gc.thread_join) {
+                        array.push(steps, ir.step(ir.invoke, s.destination, 0, 0, 0, "test_collector_join", [0, 10, 11]));
+                    } sore {
+                        array.push(steps, s);
+                    }
+                    j = j + 1;
+                }
+                functions[i] = ir.Function {
+                    name: f.name, steps: steps };
+            }
+            i = i + 1;
+        }
+    }
+    array.append_all(functions, platform);
+    array.push(functions, destroy_wrapper());
+    array.push(functions, join_wrapper());
+    array.push(functions, run(mode));
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    addr(c, patches, 7, 0);
+    addr(c, patches, 0, 256);
+    emit(c, arm64.str_x(7, 0, 0));
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.movz_x(16, 1, 0));
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, darwin.worker_bindings(), 25, "rt");
+    moshi (error != "") {
+        chant(error);
+        os.exit(2);
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(4);
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 0, patches: patches }, darwin.worker_symbols(), 4096);
+    moshi (image.error != "") {
+        chant(image.error);
+        os.exit(5);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(6);
+    }
+    fs.write_all(argv[1], signed.bytes);
+    os.chmod(argv[1], 448);
 }
 main();

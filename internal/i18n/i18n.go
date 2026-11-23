@@ -271,10 +271,3 @@ func usableLocale(value string) bool {
 	tag := normalizeTag(value)
 	return tag != "" && firstSubtag(tag) == "en"
 }
-
-func beforeColon(value string) string {
-	if index := strings.IndexByte(value, ':'); index >= 0 {
-		return value[:index]
-	}
-	return value
-}

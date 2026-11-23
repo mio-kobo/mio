@@ -62,7 +62,10 @@ waza test_write_all_and_read_all_are_byte_exact() -> unit {
     testing.expect(write_all(path, []).error == mu && len(read_all(path).data) == 0, "an empty file round-trips");
     kaku large = bytes.new_buffer();
     kaku index = 0;
-    aida (index < 100000) { bytes.write_byte(large, uint8(index - (index / 251) * 251)); index = index + 1; }
+    aida (index < 100000) {
+        bytes.write_byte(large, uint8(index - (index / 251) * 251));
+        index = index + 1;
+    }
     testing.expect(write_all(path, bytes.buffer_bytes(large)).error == mu, "a file larger than one read chunk is written");
     kaku big = read_all(path);
     testing.expect(len(big.data) == 100000 && big.data[99999] == uint8(99999 - (99999 / 251) * 251), "a large file is read completely");
@@ -84,12 +87,18 @@ waza test_streams_append_and_close() -> unit {
     testing.expect(after.error != mu, "writing after close fails");
     kaku appended = open_append(path);
     kaku tail = appended.file;
-    moshi (tail == mu) { testing.fail("open_append should open the file"); kaesu; }
+    moshi (tail == mu) {
+        testing.fail("open_append should open the file");
+        kaesu;
+    }
     testing.expect(write(tail, string.to_bytes("two\n"), 0, 4).count == 4, "append write");
     close(tail);
     kaku opened = open_read(path);
     kaku reading = opened.file;
-    moshi (reading == mu) { testing.fail("open_read should open the file"); kaesu; }
+    moshi (reading == mu) {
+        testing.fail("open_read should open the file");
+        kaesu;
+    }
     kaku destination = array.make[uint8](8, uint8(0));
     kaku full = io.read_full(reader(reading), destination, 0, 8);
     testing.expect(full.count == 8 && bytes.equal(destination, string.to_bytes("one\ntwo\n")), "append should keep earlier content");
@@ -115,7 +124,9 @@ waza test_stat_directories_and_unicode_names() -> unit {
     testing.expect(!is_character_device(path) && !is_character_device(directory), "files and directories are not character devices");
     kaku listing = read_dir(directory);
     testing.expect(listing.error == mu && len(listing.entries) == 2, "read_dir lists exactly the two entries (no . or ..)");
-    kaku found_file = iie; kaku found_dir = iie; kaku index = 0;
+    kaku found_file = iie;
+    kaku found_dir = iie;
+    kaku index = 0;
     aida (index < len(listing.entries)) {
         kaku entry = listing.entries[index];
         moshi (entry.name == name && entry.is_file && !entry.is_dir) { found_file = hai; }

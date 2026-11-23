@@ -1,44 +1,84 @@
-yobu "kiso/array";yobu "kiso/fs";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(kind:int64) -> int64 {kaesu 0;}
-kata Box {bytes:[]uint8;}
-kaku shared:Box?=mu;kaku phase=0;kaku reader_ok=0;kaku waiter_ready=0;
+yobu "kiso/array";
+yobu "kiso/fs";
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(kind: int64) -> int64 { kaesu 0; }
+kata Box { bytes: []uint8; }
+kaku shared: Box?= mu;
+kaku phase = 0;
+kaku reader_ok = 0;
+kaku waiter_ready = 0;
 waza prepare() -> unit {
- shared=Box {bytes:array.make[uint8](131072,uint8(7))};
- kaku i=0;aida(i<8){rt_collect(0);i=i+1;}
+    shared = Box { bytes: array.make[uint8](131072, uint8(7)) };
+    kaku i = 0;
+    aida (i<8) {
+        rt_collect(0);
+        i = i + 1;
+    }
 }
-waza hold(file:fs.File,buffer:[]uint8) -> unit {
- // The caller's Shadow Frame was built while shared was still non-null.
- // It remains live across this entire ordinary function and real Native read.
- phase=1;kaku got=fs.read(file,buffer,0,1);
- moshi(got.error==mu && got.count==1 && buffer[0]==uint8(90) && buffer[131071]==uint8(90)){reader_ok=1;}
+waza hold(file: fs.File, buffer: []uint8) -> unit {
+    // The caller's Shadow Frame was built while shared was still non-null.
+    // It remains live across this entire ordinary function and real Native read.
+    phase = 1;
+    kaku got = fs.read(file, buffer, 0, 1);
+    moshi (got.error == mu && got.count == 1 && buffer[0] == uint8(90) && buffer[131071] == uint8(90)) { reader_ok = 1; }
 }
 waza reader() -> unit {
- kaku buffer=array.make[uint8](131072,uint8(90));
- kaku opened=fs.open_read("build/m19ef-worker-fifo");kaku file=opened.file;
- moshi(file==mu){reader_ok=-1;phase=1;kaesu;}
- hold(file,buffer);fs.close(file);
+    kaku buffer = array.make[uint8](131072, uint8(90));
+    kaku opened = fs.open_read("build/m19ef-worker-fifo");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        reader_ok = -1;
+        phase = 1;
+        kaesu;
+    }
+    hold(file, buffer);
+    fs.close(file);
 }
 waza waiter() -> unit {
- // thread_wait_started acknowledges registration, not execution of this body.
- // Complete a real NativeFS call and an owned Minor snapshot before readiness.
- // Main cannot clear the global/release reader until BOTH user bodies ran.
- kaku checked=fs.read_all("VERSION");
- rt_collect(0);
- moshi(checked.error!=mu || len(checked.data)!=6){waiter_ready=-1;kaesu;}
- waiter_ready=1;aida(phase<2){rt_wait(100000);}
+    // thread_wait_started acknowledges registration, not execution of this body.
+    // Complete a real NativeFS call and an owned Minor snapshot before readiness.
+    // Main cannot clear the global/release reader until BOTH user bodies ran.
+    kaku checked = fs.read_all("VERSION");
+    rt_collect(0);
+    moshi (checked.error != mu || len(checked.data) != 6) {
+        waiter_ready = -1;
+        kaesu;
+    }
+    waiter_ready = 1;
+    aida (phase<2) {
+        rt_wait(100000);
+    }
 }
 waza exercise() -> unit {
- prepare();kaku a=rt_start(reader);kaku b=rt_start(waiter);
- kaku opened=fs.open_write("build/m19ef-worker-fifo");kaku file=opened.file;
- moshi(file==mu){chant(-1);kaesu;}
- aida(phase<1 || waiter_ready==0){rt_wait(100000);}
- // Report a failed probe, but still release/join the blocked reader below.
- moshi(waiter_ready!=1){chant(-2);}
- kaku before=rt_collect(1);shared=mu;kaku after=rt_collect(1);chant(before-after>=131120);
- kaku sent=fs.write(file,[uint8(90)],0,1);fs.close(file);phase=2;rt_join(a);rt_join(b);
- chant(reader_ok);moshi(sent.error==mu && sent.count==1){chant(1);}sore{chant(-1);}
+    prepare();
+    kaku a = rt_start(reader);
+    kaku b = rt_start(waiter);
+    kaku opened = fs.open_write("build/m19ef-worker-fifo");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        chant(-1);
+        kaesu;
+    }
+    aida (phase<1 || waiter_ready == 0) { rt_wait(100000); }
+    // Report a failed probe, but still release/join the blocked reader below.
+    moshi (waiter_ready != 1) { chant(-2); }
+    kaku before = rt_collect(1);
+    shared = mu;
+    kaku after = rt_collect(1);
+    chant(before - after >= 131120);
+    kaku sent = fs.write(file, [uint8(90)], 0, 1);
+    fs.close(file);
+    phase = 2;
+    rt_join(a);
+    rt_join(b);
+    chant(reader_ok);
+    moshi (sent.error == mu && sent.count == 1) {
+        chant(1);
+    } sore {
+        chant(-1);
+    }
 }
-exercise();chant(rt_collect(1));
+exercise();
+chant(rt_collect(1));

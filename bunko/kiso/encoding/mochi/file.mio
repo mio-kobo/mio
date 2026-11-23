@@ -14,12 +14,24 @@ koukai waza decode_file(path: string) -> DecodeResult {
     aida (hai) {
         kaku result = fs.read(file, buffer, 0, len(buffer));
         kaku read_error = result.error;
-        moshi (read_error != mu) { fs.close(file); kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }
-        moshi (result.count > MAX_FILE_SIZE - len(output)) { fs.close(file); kaesu failure(DecodeErrorKind.LimitExceeded(), len(output), result.count); }
+        moshi (read_error != mu) {
+            fs.close(file);
+            kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0);
+        }
+        moshi (result.count > MAX_FILE_SIZE - len(output)) {
+            fs.close(file);
+            kaesu failure(DecodeErrorKind.LimitExceeded(), len(output), result.count);
+        }
         kaku index = 0;
-        aida (index < result.count) { array.push(output, buffer[index]); index = index + 1; }
+        aida (index < result.count) {
+            array.push(output, buffer[index]);
+            index = index + 1;
+        }
         moshi (result.eof) { nukeru; }
-        moshi (result.count == 0) { fs.close(file); kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }
+        moshi (result.count == 0) {
+            fs.close(file);
+            kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0);
+        }
     }
     kaku closed = fs.close(file);
     moshi (closed.error != mu) { kaesu failure(DecodeErrorKind.IoFailure(), len(output), 0); }

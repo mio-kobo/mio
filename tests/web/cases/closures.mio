@@ -1,13 +1,38 @@
 waza make_counter(step: int64) -> () -> int64 {
     kaku n = 0;
-    kaesu waza () -> int64 { n = n + step; kaesu n; };
+    kaesu waza () -> int64 {
+        n = n + step;
+        kaesu n;
+    };
 }
 waza compose(f: (int64) -> int64, g: (int64) -> int64) -> (int64) -> int64 {
-    kaesu waza (x: int64) -> int64 { kaesu f(g(x)); };
+    kaesu waza (x: int64) -> int64 {
+        kaesu f(g(x));
+    };
 }
-waza each(xs: []int64, f: (int64) -> unit) -> unit { kaku i = 0; aida (i < len(xs)) { f(xs[i]); i = i + 1; } }
-kaku c = make_counter(5); chant(c()); chant(c()); kaku d = make_counter(1); chant(d()); chant(c());
-kaku inc = waza (x: int64) -> int64 { kaesu x + 1; };
-kaku dbl = waza (x: int64) -> int64 { kaesu x * 2; };
-chant(compose(inc, dbl)(10)); chant(compose(dbl, inc)(10));
-kaku total = 0; each([1, 2, 3, 4], waza (x: int64) -> unit { total = total + x; }); chant(total);
+waza each(xs: []int64, f: (int64) -> unit) -> unit {
+    kaku i = 0;
+    aida (i < len(xs)) {
+        f(xs[i]);
+        i = i + 1;
+    }
+}
+kaku c = make_counter(5);
+chant(c());
+chant(c());
+kaku d = make_counter(1);
+chant(d());
+chant(c());
+kaku inc = waza (x: int64) -> int64 {
+    kaesu x + 1;
+};
+kaku dbl = waza (x: int64) -> int64 {
+    kaesu x * 2;
+};
+chant(compose(inc, dbl)(10));
+chant(compose(dbl, inc)(10));
+kaku total = 0;
+each([1, 2, 3, 4], waza (x: int64) -> unit {
+        total = total + x;
+    });
+chant(total);

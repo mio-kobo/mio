@@ -1,0 +1,54 @@
+yobu "kiso/aot/win64abi";
+yobu "kiso/aot/x86_64";
+yobu "kiso/aot/pe";
+yobu "kiso/encoding/mochi";
+yobu "kiso/encoding/win64c";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/string";
+
+waza check(code: x86_64.Assembler, reg: int64, value: int64) -> unit {
+    x86_64.cmp_ri(code, reg, value); x86_64.jcc(code, x86_64.cc_ne, "fail");
+}
+waza exit_call(code: x86_64.Assembler, patches: []pe.Patch, status: int64) -> unit {
+    x86_64.and_ri(code, x86_64.rsp, -16); x86_64.sub_ri(code, x86_64.rsp, 32);
+    x86_64.mov_ri(code, x86_64.rcx, status);
+    x86_64.byte(code, 255); x86_64.byte(code, 21); kaku at = len(code.bytes);
+    x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
+    array.push(patches, pe.Patch { section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: 0 });
+}
+// 测试入口直接终止进程，不返回；只为被测生产桥发布它真实的展开信息。
+// 所有寄存器断言都在真实 PE 进程内执行，覆盖 XMM6..15 的低 128 位。
+waza generate(path: string) -> unit {
+    kaku code = x86_64.assembler(); kaku patches: []pe.Patch = []; kaku frames: []pe.FrameFunction = [];
+    x86_64.push_r(code, x86_64.rbp); x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    x86_64.sub_ri(code, x86_64.rsp, 32); x86_64.mov_store(code, x86_64.rbp, -8, x86_64.rsp);
+    kaku regs = [x86_64.rbx, x86_64.rdi, x86_64.rsi, x86_64.r12, x86_64.r13, x86_64.r14, x86_64.r15];
+    kaku i = 0;
+    aida (i<len(regs)) { x86_64.mov_ri(code, regs[i], 1000 + i); i = i + 1; }
+    i = 6; aida (i<16) { x86_64.mov_ri(code, x86_64.rax, 2000 + i); x86_64.movq_xmm_r(code, i, x86_64.rax); i = i + 1; }
+    // 奇数个活跃操作数故意改变进入桥时的对齐。
+    x86_64.mov_ri(code, x86_64.rax, 777); x86_64.push_r(code, x86_64.rax); x86_64.call(code, "bridge");
+    check(code, x86_64.rax, 42); x86_64.pop_r(code, x86_64.rax); check(code, x86_64.rax, 777);
+    i = 0; aida (i<len(regs)) { check(code, regs[i], 1000 + i); i = i + 1; }
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -8); x86_64.cmp_rr(code, x86_64.rsp, x86_64.rax); x86_64.jcc(code, x86_64.cc_ne, "fail");
+    i = 6;
+    aida (i<16) {
+        x86_64.mov_ri(code, x86_64.rax, 2000 + i); x86_64.movq_xmm_r(code, 0, x86_64.rax);
+        x86_64.byte(code, 102); moshi (i >= 8) { x86_64.byte(code, 65); }
+        x86_64.byte(code, 15); x86_64.byte(code, 118); x86_64.byte(code, 192 + i - (i / 8) * 8);
+        x86_64.byte(code, 102); x86_64.byte(code, 15); x86_64.byte(code, 215); x86_64.byte(code, 192);
+        check(code, x86_64.rax, 65535); i = i + 1;
+    }
+    exit_call(code, patches, 42); x86_64.label(code, "fail"); exit_call(code, patches, 1);
+    kaku name = win64c.key("mio_ffi_fixture.dll", "mio_c_clobber", "int64", []);
+    win64abi.emit(code, patches, frames, mochi.Function { id: 0, name: name, name_bytes: [], parameter_count: 0, local_count: 0, returns_value: hai, captures: [], instructions: [] }, "bridge", 1);
+    // 测试的两个 IAT 索引预先固定；只消解桥的负补丁标记。
+    kaku iat = win64abi.ImportPlan { libraries: [], slots: [], runtime_slots: [0], error: "" }; win64abi.patch_imports(iat, patches);
+    kaku assembled = x86_64.assemble(code); moshi (assembled.error != "") { os.exit(1); kaesu; }
+    kaku image = pe.executable_framed(pe.ImageSpec { text: assembled.bytes, rdata: [], data: [], zero_fill: 0, entry: 0, imports: [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["ExitProcess"] }, pe.ImportLibrary { name: "mio_ffi_fixture.dll", symbols: ["mio_c_clobber"] }], patches: patches, unwind: [] }, frames);
+    moshi (image.error != mu) { os.exit(2); kaesu; }
+    kaku written = fs.write_all(path, image.bytes); moshi (written.error != mu) { os.exit(3); }
+}
+kaku args = os.arguments(); moshi (len(args) != 2) { os.exit(4); } sore { generate(args[1]); }

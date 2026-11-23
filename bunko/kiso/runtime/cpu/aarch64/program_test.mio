@@ -1,18 +1,30 @@
 yobu "kiso/testing";
 waza test_runtime_IR_rejects_undefined_calls_before_emission() -> unit {
-    kaku f=ir.function("main");ir.call(f,6,1,[0,1,2]);kaku c=arm64.assembler();
-    testing.expect(emit_program(c,[f],[],0,"test")!="" && len(c.words)==0, "missing OS capability fails closed before machine code");
-    kaku bad=ir.function("bad");ir.invoke_function(bad,"missing",1,[]);
-    testing.expect(emit_program(c,[bad],[],0,"test")!="" && len(c.words)==0, "unresolved runtime function rejected");
-    kaku good=ir.function("leaf");ir.put(good,ir.constant,1,0,0,42);ir.put(good,ir.result,0,1,0,0);
-    testing.expect(emit_program(c,[good],[],0,"leaf")=="" && arm64.assembler_assemble(c).error==mu, "target-neutral scalar function lowers without OS bindings");
+    kaku f = ir.function("main");
+    ir.call(f, 6, 1, [0, 1, 2]);
+    kaku c = arm64.assembler();
+    testing.expect(emit_program(c, [f], [], 0, "test") != "" && len(c.words) == 0, "missing OS capability fails closed before machine code");
+    kaku bad = ir.function("bad");
+    ir.invoke_function(bad, "missing", 1, []);
+    testing.expect(emit_program(c, [bad], [], 0, "test") != "" && len(c.words) == 0, "unresolved runtime function rejected");
+    kaku good = ir.function("leaf");
+    ir.put(good, ir.constant, 1, 0, 0, 42);
+    ir.put(good, ir.result, 0, 1, 0, 0);
+    testing.expect(emit_program(c, [good], [], 0, "leaf") == "" && arm64.assembler_assemble(c).error == mu, "target-neutral scalar function lowers without OS bindings");
 }
 
 waza test_runtime_IR_invalid_labels_orders_and_ABI_are_rejected_atomically() -> unit {
-    kaku c=arm64.assembler();kaku duplicate=ir.function("duplicate");ir.branch(duplicate,ir.label,0,"a");ir.branch(duplicate,ir.label,0,"a");
-    testing.expect(emit_program(c,[duplicate],[],0,"duplicate")=="DUPLICATE_RUNTIME_LABEL" && len(c.words)==0, "duplicate labels rejected before output");
-    kaku cas=ir.function("bad_cas");ir.put(cas,ir.compare_exchange,1,0,2,0);
-    testing.expect(emit_program(c,[cas],[],0,"bad")!="" && len(c.words)==0, "missing CAS expected operand rejected before output");
-    kaku call=ir.function("bad_abi");ir.call(call,100,1,[0]);
-    testing.expect(emit_program(c,[call],[ir.Binding {operation:100,slot:0,arguments:[0],result_bits:16}],1,"bad")=="INVALID_RUNTIME_BINDING" && len(c.words)==0, "unsupported native return width is explicit");
+    kaku c = arm64.assembler();
+    kaku duplicate = ir.function("duplicate");
+    ir.branch(duplicate, ir.label, 0, "a");
+    ir.branch(duplicate, ir.label, 0, "a");
+    testing.expect(emit_program(c, [duplicate], [], 0, "duplicate") == "DUPLICATE_RUNTIME_LABEL" && len(c.words) == 0, "duplicate labels rejected before output");
+    kaku cas = ir.function("bad_cas");
+    ir.put(cas, ir.compare_exchange, 1, 0, 2, 0);
+    testing.expect(emit_program(c, [cas], [], 0, "bad") != "" && len(c.words) == 0, "missing CAS expected operand rejected before output");
+    kaku call = ir.function("bad_abi");
+    ir.call(call, 100, 1, [0]);
+    testing.expect(emit_program(c, [call], [ir.Binding {
+                    operation: 100, slot: 0, arguments: [0], result_bits: 16 }
+            ], 1, "bad") == "INVALID_RUNTIME_BINDING" && len(c.words) == 0, "unsupported native return width is explicit");
 }

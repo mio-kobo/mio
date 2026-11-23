@@ -34,14 +34,22 @@ waza listen_free(base: int64) -> int64 {
     aida (port < base + 50) {
         kaku attempt = listen(loopback(port), 128);
         kaku found = attempt.listener;
-        moshi (found != mu) { close_listener(found); moshi (attempt.error == mu) { kaesu port; } }
+        moshi (found != mu) {
+            close_listener(found);
+            moshi (attempt.error == mu) {
+                kaesu port;
+            }
+        }
         port = port + 1;
     }
     kaesu -1;
 }
 
 // Connects to a listener and accepts the connection. Both sides are nonblocking. Bounded retries instead of waiting.
-koukai kata Pair { client: AsyncConnection?; server: AsyncConnection?; }
+koukai kata Pair {
+    client: AsyncConnection?;
+    server: AsyncConnection?;
+}
 
 waza make_pair(listener: AsyncListener, port: int64) -> Pair {
     kaku started = connect(loopback(port));
@@ -57,12 +65,23 @@ waza make_pair(listener: AsyncListener, port: int64) -> Pair {
         connected = !done.pending;
         tries = tries + 1;
     }
-    moshi (!connected) { close(client); kaesu Pair { client: mu, server: mu }; }
+    moshi (!connected) {
+        close(client);
+        kaesu Pair {
+            client: mu, server: mu };
+    }
     kaku accepted = accept(listener);
     tries = 0;
-    aida (accepted.pending && tries < 100000) { accepted = accept(listener); tries = tries + 1; }
+    aida (accepted.pending && tries < 100000) {
+        accepted = accept(listener);
+        tries = tries + 1;
+    }
     kaku maybe_server = accepted.connection;
-    moshi (maybe_server == mu) { close(client); kaesu Pair { client: mu, server: mu }; }
+    moshi (maybe_server == mu) {
+        close(client);
+        kaesu Pair {
+            client: mu, server: mu };
+    }
     kaku server = maybe_server;
     kaesu Pair { client: client, server: server };
 }
@@ -93,9 +112,16 @@ waza test_accept_and_read_report_pending_instead_of_blocking() -> unit {
     kaku maybe_client = pair.client;
     kaku maybe_server = pair.server;
     testing.expect(maybe_client != mu && maybe_server != mu, "connect and accept complete");
-    moshi (maybe_client == mu) { close_listener(listener); kaesu; }
+    moshi (maybe_client == mu) {
+        close_listener(listener);
+        kaesu;
+    }
     kaku client = maybe_client;
-    moshi (maybe_server == mu) { close_listener(listener); close(client); kaesu; }
+    moshi (maybe_server == mu) {
+        close_listener(listener);
+        close(client);
+        kaesu;
+    }
     kaku server = maybe_server;
     kaku buffer = array.make[uint8](8, uint8(0));
     kaku idle = read(server, buffer, 0, 8);
@@ -109,13 +135,25 @@ waza test_echo_roundtrip_and_eof() -> unit {
     kaku port = listen_free(42100);
     kaku made = listen(loopback(port), 16);
     kaku listener = made.listener;
-    moshi (listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku pair = make_pair(listener, port);
     kaku maybe_client = pair.client;
     kaku maybe_server = pair.server;
-    moshi (maybe_client == mu) { testing.expect(iie, "pair"); close_listener(listener); kaesu; }
+    moshi (maybe_client == mu) {
+        testing.expect(iie, "pair");
+        close_listener(listener);
+        kaesu;
+    }
     kaku client = maybe_client;
-    moshi (maybe_server == mu) { testing.expect(iie, "pair"); close_listener(listener); close(client); kaesu; }
+    moshi (maybe_server == mu) {
+        testing.expect(iie, "pair");
+        close_listener(listener);
+        close(client);
+        kaesu;
+    }
     kaku server = maybe_server;
     kaku payload: []uint8 = [uint8(104), uint8(101), uint8(108), uint8(108), uint8(111)];
     kaku sent = write(client, payload, 0, 5);
@@ -147,20 +185,35 @@ waza test_partial_writes_preserve_progress() -> unit {
     kaku port = listen_free(42200);
     kaku made = listen(loopback(port), 16);
     kaku listener = made.listener;
-    moshi (listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku pair = make_pair(listener, port);
     kaku maybe_client = pair.client;
     kaku maybe_server = pair.server;
-    moshi (maybe_client == mu) { testing.expect(iie, "pair"); close_listener(listener); kaesu; }
+    moshi (maybe_client == mu) {
+        testing.expect(iie, "pair");
+        close_listener(listener);
+        kaesu;
+    }
     kaku client = maybe_client;
-    moshi (maybe_server == mu) { testing.expect(iie, "pair"); close_listener(listener); close(client); kaesu; }
+    moshi (maybe_server == mu) {
+        testing.expect(iie, "pair");
+        close_listener(listener);
+        close(client);
+        kaesu;
+    }
     kaku server = maybe_server;
     // The pattern period (251) divides the chunk size, so every chunk is identical and stream position n holds
     // pattern(n). Writing continues chunk after chunk until the kernel reports pending (buffers full) or a cap is hit.
     kaku size = 251 * 512;
     kaku data = array.make[uint8](size, uint8(0));
     kaku at = 0;
-    aida (at < size) { data[at] = pattern(at); at = at + 1; }
+    aida (at < size) {
+        data[at] = pattern(at);
+        at = at + 1;
+    }
     kaku written = 0;
     kaku short_writes = 0;
     kaku saw_pending = iie;
@@ -204,9 +257,14 @@ waza test_partial_writes_preserve_progress() -> unit {
     // after draining, the writer can make progress again
     kaku resumed = 0;
     kaku tries = 0;
-    aida (resumed == 0 && tries < 100000) { resumed = write(client, data, 0, 16).count; tries = tries + 1; }
+    aida (resumed == 0 && tries < 100000) {
+        resumed = write(client, data, 0, 16).count;
+        tries = tries + 1;
+    }
     testing.expect(resumed > 0, "writing resumes after the reader drained");
-    close(client); close(server); close_listener(listener);
+    close(client);
+    close(server);
+    close_listener(listener);
 }
 
 waza test_refused_connect_and_stale_handles() -> unit {
@@ -248,18 +306,27 @@ waza test_repeated_connect_close_does_not_leak() -> unit {
     kaku port = listen_free(42400);
     kaku made = listen(loopback(port), 64);
     kaku listener = made.listener;
-    moshi (listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku round = 0;
     kaku failures = 0;
     aida (round < 200) {
         kaku pair = make_pair(listener, port);
         kaku client = pair.client;
         kaku server = pair.server;
-        moshi (client == mu) { failures = failures + 1; round = 200; }
+        moshi (client == mu) {
+            failures = failures + 1;
+            round = 200;
+        }
         moshi (client != mu) {
             moshi (close(client).error != mu) { failures = failures + 1; }
         }
-        moshi (server == mu) { failures = failures + 1; round = 200; }
+        moshi (server == mu) {
+            failures = failures + 1;
+            round = 200;
+        }
         moshi (server != mu) {
             moshi (close(server).error != mu) { failures = failures + 1; }
         }
@@ -277,9 +344,15 @@ waza test_high_slot_socket_is_not_a_directory() -> unit {
     kaku port_base = 42500;
     kaku attempt = listen(loopback(port_base), 4);
     kaku port = port_base;
-    aida (attempt.error != mu && port < port_base + 50) { port = port + 1; attempt = listen(loopback(port), 4); }
+    aida (attempt.error != mu && port < port_base + 50) {
+        port = port + 1;
+        attempt = listen(loopback(port), 4);
+    }
     kaku maybe = attempt.listener;
-    moshi (maybe == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (maybe == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku listener = maybe;
     kaku held: []AsyncListener = [];
     kaku count = 0;
@@ -296,7 +369,12 @@ waza test_high_slot_socket_is_not_a_directory() -> unit {
     testing.expect(!runtime.dir_next(listener.handle), "a socket in a low slot is not a directory either");
     kaku closed = 0;
     kaku at = 0;
-    aida (at < len(held)) { moshi (close_listener(held[at]).error == mu) { closed = closed + 1; } at = at + 1; }
+    aida (at < len(held)) {
+        moshi (close_listener(held[at]).error == mu) {
+            closed = closed + 1;
+        }
+        at = at + 1;
+    }
     testing.expect(closed == len(held), "every listener closes and frees its slot");
     close_listener(listener);
     kaku again = listen(loopback(port2), 1);
@@ -328,9 +406,15 @@ waza test_many_simultaneous_connections() -> unit {
     kaku port_base = 42700;
     kaku attempt = listen(loopback(port_base), 256);
     kaku port = port_base;
-    aida (attempt.error != mu && port < port_base + 50) { port = port + 1; attempt = listen(loopback(port), 256); }
+    aida (attempt.error != mu && port < port_base + 50) {
+        port = port + 1;
+        attempt = listen(loopback(port), 256);
+    }
     kaku maybe_listener = attempt.listener;
-    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (maybe_listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku listener = maybe_listener;
     kaku clients: []AsyncConnection = [];
     kaku total = 100;
@@ -355,7 +439,10 @@ waza test_many_simultaneous_connections() -> unit {
     aida (index < total) {
         kaku accepted = accept(listener);
         kaku tries = 0;
-        aida (accepted.pending && tries < 5000000) { accepted = accept(listener); tries = tries + 1; }
+        aida (accepted.pending && tries < 5000000) {
+            accepted = accept(listener);
+            tries = tries + 1;
+        }
         kaku maybe_server = accepted.connection;
         moshi (maybe_server != mu) { array.push(servers, maybe_server); }
         index = index + 1;
@@ -375,12 +462,20 @@ waza test_many_simultaneous_connections() -> unit {
         kaku buffer: []uint8 = [uint8(255)];
         kaku got = read_wait(servers[index], buffer, 0, 1);
         kaku which = int64(buffer[0]);
-        moshi (got.error == mu && got.count == 1 && which < total) { seen[which] = seen[which] + 1; matched = matched + 1; }
+        moshi (got.error == mu && got.count == 1 && which < total) {
+            seen[which] = seen[which] + 1;
+            matched = matched + 1;
+        }
         index = index + 1;
     }
     kaku distinct = 0;
     index = 0;
-    aida (index < total) { moshi (seen[index] == 1) { distinct = distinct + 1; } index = index + 1; }
+    aida (index < total) {
+        moshi (seen[index] == 1) {
+            distinct = distinct + 1;
+        }
+        index = index + 1;
+    }
     testing.expect(matched == total && distinct == total, "every connection delivered its own byte exactly once");
     index = 0;
     kaku closed = 0;
@@ -399,15 +494,24 @@ waza test_cancelled_connects_do_not_leak() -> unit {
     kaku port_base = 42800;
     kaku attempt = listen(loopback(port_base), 256);
     kaku port = port_base;
-    aida (attempt.error != mu && port < port_base + 50) { port = port + 1; attempt = listen(loopback(port), 256); }
+    aida (attempt.error != mu && port < port_base + 50) {
+        port = port + 1;
+        attempt = listen(loopback(port), 256);
+    }
     kaku maybe_listener = attempt.listener;
-    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (maybe_listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku listener = maybe_listener;
     kaku round = 0;
     kaku failures = 0;
     aida (round < 600) {
         kaku maybe = connect_started(port);
-        moshi (maybe == mu) { failures = failures + 1; round = 600; }
+        moshi (maybe == mu) {
+            failures = failures + 1;
+            round = 600;
+        }
         moshi (maybe != mu) {
             moshi (close(maybe).error != mu) { failures = failures + 1; }
         }
@@ -436,7 +540,11 @@ waza test_cancelled_connects_do_not_leak() -> unit {
         more = accept(listener);
     }
     kaku fresh = connect_started(port);
-    moshi (fresh == mu) { testing.expect(iie, "a fresh connect still works"); close_listener(listener); kaesu; }
+    moshi (fresh == mu) {
+        testing.expect(iie, "a fresh connect still works");
+        close_listener(listener);
+        kaesu;
+    }
     kaku conn = fresh;
     testing.expect(finish_wait(conn).error == mu, "the table still hands out handles after the cancellations");
     close(conn);
@@ -449,16 +557,31 @@ waza test_peer_close_with_unread_data_is_a_reset() -> unit {
     kaku port_base = 42900;
     kaku attempt = listen(loopback(port_base), 4);
     kaku port = port_base;
-    aida (attempt.error != mu && port < port_base + 50) { port = port + 1; attempt = listen(loopback(port), 4); }
+    aida (attempt.error != mu && port < port_base + 50) {
+        port = port + 1;
+        attempt = listen(loopback(port), 4);
+    }
     kaku maybe_listener = attempt.listener;
-    moshi (maybe_listener == mu) { testing.expect(iie, "listener"); kaesu; }
+    moshi (maybe_listener == mu) {
+        testing.expect(iie, "listener");
+        kaesu;
+    }
     kaku listener = maybe_listener;
     kaku pair = make_pair(listener, port);
     kaku maybe_client = pair.client;
     kaku maybe_server = pair.server;
-    moshi (maybe_client == mu) { testing.expect(iie, "pair"); close_listener(listener); kaesu; }
+    moshi (maybe_client == mu) {
+        testing.expect(iie, "pair");
+        close_listener(listener);
+        kaesu;
+    }
     kaku client = maybe_client;
-    moshi (maybe_server == mu) { testing.expect(iie, "pair"); close(client); close_listener(listener); kaesu; }
+    moshi (maybe_server == mu) {
+        testing.expect(iie, "pair");
+        close(client);
+        close_listener(listener);
+        kaesu;
+    }
     kaku server = maybe_server;
     kaku data: []uint8 = [uint8(1), uint8(2), uint8(3)];
     testing.expect(write(client, data, 0, 3).count == 3, "the client sends data the server never reads");

@@ -1,0 +1,39 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// C 看不到 Mio 的引用，GC 也不会扫描 C 内存。这里让 Mio 数组、字符串和 C 堆指针交错存活，
+// 配合 --gc-stress 在几乎每次分配时回收：C 调用前后 Mio 对象都必须完好，C 指针保持稳定。
+waza new_pointer(x: int64) -> cptr = c "mio_new";
+waza load(p: cptr) -> int64 = c "mio_load";
+waza store(p: cptr, x: int64) -> unit = c "mio_store";
+waza free(p: cptr) -> unit = c "free";
+waza add(a: int32, b: int32) -> int32 = c "mio_add";
+
+waza churn(n: int64) -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < n) {
+        kaku scratch = [i, i + 1, i + 2];
+        total = total + scratch[1];
+        i = i + 1;
+    }
+    kaesu total;
+}
+
+kaku keep = [11, 22, 33];
+kaku label = string.concat("alpha", "beta");
+kaku handle = new_pointer(5);
+kaku round = 0;
+kaku ok = hai;
+aida (round < 200) {
+    kaku local = [round, round * 2];
+    store(handle, load(handle) + int64(add(1, 1)));
+    ok = ok && churn(20) == 210;
+    ok = ok && local[1] == round * 2 && keep[2] == 33;
+    round = round + 1;
+}
+chant(ok);
+chant(keep[0] + keep[1] + keep[2]);
+chant(label == "alphabeta");
+chant(load(handle));
+free(handle);

@@ -2,39 +2,60 @@
 // owns gc_begin/gc_end; no frame is read after gc_end. Snapshot storage is owned
 // by that coordinator and must contain (capacity+2) words. Overflow fails closed
 // BEFORE invoking the heap operation. No foreign stack links are modified.
-koukai teisu gc_collect_stopped_operation=201;
-koukai teisu gc_heap_initialize_operation=202;
-koukai teisu gc_allocate_stopped_operation=203;
-waza gc_snapshot_root_program(capacity:int64) -> ir.Function {
+koukai teisu gc_collect_stopped_operation = 201;
+koukai teisu gc_heap_initialize_operation = 202;
+koukai teisu gc_allocate_stopped_operation = 203;
+waza gc_snapshot_root_program(capacity: int64) -> ir.Function {
     // ctx, value, snapshot. The third visitor argument is opaque to the walker.
-    kaku f=ir.function("gc_snapshot_root");
-    ir.put(f,ir.load,10,2,0,8);tconstant(f,11,capacity);
-    ir.put(f,ir.less_unsigned,11,10,11,0);ir.branch(f,ir.zero,11,"overflow");
-    tconstant(f,11,8);ir.put(f,ir.multiply,11,10,11,0);
-    ir.put(f,ir.add,11,2,11,0);ir.put(f,ir.store,0,11,1,16);
-    tconstant(f,11,1);ir.put(f,ir.add,10,10,11,0);ir.put(f,ir.store,0,2,10,8);treturn(f,0);
-    ir.branch(f,ir.label,0,"overflow");treturn(f,5);kaesu f;
+    kaku f = ir.function("gc_snapshot_root");
+    ir.put(f, ir.load, 10, 2, 0, 8);
+    tconstant(f, 11, capacity);
+    ir.put(f, ir.less_unsigned, 11, 10, 11, 0);
+    ir.branch(f, ir.zero, 11, "overflow");
+    tconstant(f, 11, 8);
+    ir.put(f, ir.multiply, 11, 10, 11, 0);
+    ir.put(f, ir.add, 11, 2, 11, 0);
+    ir.put(f, ir.store, 0, 11, 1, 16);
+    tconstant(f, 11, 1);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.put(f, ir.store, 0, 2, 10, 8);
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "overflow");
+    treturn(f, 5);
+    kaesu f;
 }
 waza gc_collect_stopped_program() -> ir.Function {
     // ctx, heap, snapshot, major. This does NOT acquire the handshake itself:
     // the caller may need to inspect/modify the stopped heap in the same epoch.
-    kaku f=ir.function("gc_collect_stopped");tprepare(f);
-    tconstant(f,10,0);ir.put(f,ir.store,0,2,10,0);ir.put(f,ir.store,0,2,10,8);
-    ir.invoke_function(f,"gc_scan_roots",10,[0,2]);ir.branch(f,ir.nonzero,10,"failed");
-    ir.call(f,gc_collect_stopped_operation,10,[1,2,3]);
-    ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,10,0,0);kaesu f;
+    kaku f = ir.function("gc_collect_stopped");
+    tprepare(f);
+    tconstant(f, 10, 0);
+    ir.put(f, ir.store, 0, 2, 10, 0);
+    ir.put(f, ir.store, 0, 2, 10, 8);
+    ir.invoke_function(f, "gc_scan_roots", 10, [0, 2]);
+    ir.branch(f, ir.nonzero, 10, "failed");
+    ir.call(f, gc_collect_stopped_operation, 10, [1, 2, 3]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 10, 0, 0);
+    kaesu f;
 }
 waza gc_allocate_stopped_program() -> ir.Function {
     // ctx, heap, snapshot, payload bytes, layout. Initialization/publication of
     // the returned object must finish before the caller releases this epoch.
-    kaku f=ir.function("gc_allocate_stopped");tprepare(f);
-    tconstant(f,10,0);ir.put(f,ir.store,0,2,10,0);ir.put(f,ir.store,0,2,10,8);
-    ir.invoke_function(f,"gc_scan_roots",10,[0,2]);ir.branch(f,ir.nonzero,10,"failed");
-    ir.call(f,gc_allocate_stopped_operation,10,[1,2,3,4]);
-    ir.put(f,ir.result,0,10,0,0);
+    kaku f = ir.function("gc_allocate_stopped");
+    tprepare(f);
+    tconstant(f, 10, 0);
+    ir.put(f, ir.store, 0, 2, 10, 0);
+    ir.put(f, ir.store, 0, 2, 10, 8);
+    ir.invoke_function(f, "gc_scan_roots", 10, [0, 2]);
+    ir.branch(f, ir.nonzero, 10, "failed");
+    ir.call(f, gc_allocate_stopped_operation, 10, [1, 2, 3, 4]);
+    ir.put(f, ir.result, 0, 10, 0, 0);
     // Allocation failure is NULL, never an error code that resembles a pointer.
-    ir.branch(f,ir.label,0,"failed");treturn(f,0);kaesu f;
+    ir.branch(f, ir.label, 0, "failed");
+    treturn(f, 0);
+    kaesu f;
 }
-koukai waza stopped_heap_program(capacity:int64) -> []ir.Function {
-    kaesu [gc_snapshot_root_program(capacity),gc_collect_stopped_program(),gc_allocate_stopped_program()];
+koukai waza stopped_heap_program(capacity: int64) -> []ir.Function {
+    kaesu [gc_snapshot_root_program(capacity), gc_collect_stopped_program(), gc_allocate_stopped_program()];
 }

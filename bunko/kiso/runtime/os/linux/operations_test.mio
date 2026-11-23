@@ -15,18 +15,26 @@ waza test_capabilities_are_truthful_and_fail_closed() -> unit {
 }
 
 waza test_binding_table_is_consistent() -> unit {
-    kaku all = bindings(); kaku i = 0; kaku numbers = syscall_numbers();
+    kaku all = bindings();
+    kaku i = 0;
+    kaku numbers = syscall_numbers();
     testing.expect(len(numbers) == slot_count, "slot table matches slot count");
     aida (i < len(all)) {
         kaku b = all[i];
         testing.expect(b.slot >= 0 && b.slot < slot_count && len(b.arguments) <= 6 && b.result_bits == 64, "binding is encodable on System V");
-        kaku j = 0; aida (j < i) { testing.expect(all[j].operation != b.operation, "operation bound once"); j = j + 1; }
+        kaku j = 0;
+        aida (j < i) {
+            testing.expect(all[j].operation != b.operation, "operation bound once");
+            j = j + 1;
+        }
         i = i + 1;
     }
 }
 
 waza test_image_requires_defined_entry_and_valid_data() -> unit {
-    kaku f = ir.function("main"); ir.put(f, ir.constant, 1, 0, 0, 7); ir.put(f, ir.result, 0, 1, 0, 0);
+    kaku f = ir.function("main");
+    ir.put(f, ir.constant, 1, 0, 0, 7);
+    ir.put(f, ir.result, 0, 1, 0, 0);
     testing.expect(executable([f], bindings(), "missing", 0).error == "UNDEFINED_RUNTIME_ENTRY", "entry must exist");
     testing.expect(executable([f], bindings(), "main", -1).error == "INVALID_RUNTIME_DATA", "negative data rejected");
     kaku ok = executable([f], bindings(), "main", 0);
@@ -45,7 +53,12 @@ waza test_capabilities_match_the_generic_descriptor() -> unit {
 
 waza defined(functions: []ir.Function, name: string) -> bool {
     kaku i = 0;
-    aida (i < len(functions)) { moshi (functions[i].name == name) { kaesu hai; } i = i + 1; }
+    aida (i < len(functions)) {
+        moshi (functions[i].name == name) {
+            kaesu hai;
+        }
+        i = i + 1;
+    }
     kaesu iie;
 }
 
@@ -57,10 +70,12 @@ waza test_darwin_condition_functions_are_not_defined() -> unit {
     testing.expect(defined(functions, "platform_now") && defined(functions, "platform_futex_wait") && defined(functions, "platform_futex_wake") && defined(functions, "platform_futex_wake_all"), "clock and futex functions exist");
     testing.expect(defined(functions, "platform_reserve") && defined(functions, "platform_commit") && defined(functions, "platform_decommit") && defined(functions, "platform_release") && defined(functions, "platform_protect"), "virtual-memory functions exist");
     // Portable code written for Darwin (calls platform_wait) fails validation instead of mis-lowering.
-    kaku portable = ir.function("portable_wait"); ir.invoke_function(portable, "platform_wait", 3, [0, 1, 2]);
+    kaku portable = ir.function("portable_wait");
+    ir.invoke_function(portable, "platform_wait", 3, [0, 1, 2]);
     kaku c = x86_64.assembler();
     testing.expect(amd64.emit_program(c, [portable], bindings(), slot_count, "t") == "UNDEFINED_RUNTIME_FUNCTION" && len(c.bytes) == 0, "a Darwin-style wait fails closed");
-    kaku signal = ir.function("signal"); ir.call(signal, 12, 1, [0]);
+    kaku signal = ir.function("signal");
+    ir.call(signal, 12, 1, [0]);
     testing.expect(amd64.emit_program(c, [signal], bindings(), slot_count, "t") == "NOT_SUPPORTED_RUNTIME_OPERATION" && len(c.bytes) == 0, "the Darwin condition-signal operation is not bound");
 }
 
@@ -74,7 +89,8 @@ waza test_platform_functions_lower_with_the_bindings() -> unit {
 // which no single-threaded test can observe, so the constant is checked in the IR itself.
 waza test_wake_all_requests_int_max_waiters() -> unit {
     kaku functions = platform_program();
-    kaku found = iie; kaku i = 0;
+    kaku found = iie;
+    kaku i = 0;
     aida (i < len(functions)) {
         moshi (functions[i].name == "platform_futex_wake_all") {
             kaku s = 0;
@@ -96,10 +112,16 @@ waza test_thread_slots_and_functions_exist() -> unit {
     testing.expect(clone_thread_flags == 4001536, "CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM|SETTLS|PARENT_SETTID|CHILD_CLEARTID");
     kaku functions = platform_program();
     kaku wanted = ["platform_thread_stack", "platform_thread_stack_release", "platform_thread_create", "platform_thread_join", "platform_thread_id", "platform_tls_set", "platform_tls_get"];
-    kaku found = 0; kaku i = 0;
+    kaku found = 0;
+    kaku i = 0;
     aida (i < len(wanted)) {
         kaku j = 0;
-        aida (j < len(functions)) { moshi (functions[j].name == wanted[i]) { found = found + 1; } j = j + 1; }
+        aida (j < len(functions)) {
+            moshi (functions[j].name == wanted[i]) {
+                found = found + 1;
+            }
+            j = j + 1;
+        }
         i = i + 1;
     }
     testing.expect(found == len(wanted), "every thread primitive is defined exactly once");

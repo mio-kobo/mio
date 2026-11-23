@@ -1,36 +1,80 @@
 // Darwin/AArch64 instruction adapter for neutral typed prewrite semantics.
 // Preserve every live operand; x14 is only a private argument carrier.
-waza emit_old_typed_prewrite(c:arm64.Assembler,base:int64,offset:int64) -> unit {
- moshi(!old_mark_proto_enabled(c)){kaesu;}
- emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(14,31,0));
- emit(c,arm64.add_imm_x(14,base,offset,iie));arm64.assembler_bl(c,"old_satb_slot");
- emit(c,arm64.ldr_x(14,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));
+waza emit_old_typed_prewrite(c: arm64.Assembler, base: int64, offset: int64) -> unit {
+    moshi (!old_mark_proto_enabled(c)) { kaesu; }
+    emit(c, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(c, arm64.str_x(14, 31, 0));
+    emit(c, arm64.add_imm_x(14, base, offset, iie));
+    arm64.assembler_bl(c, "old_satb_slot");
+    emit(c, arm64.ldr_x(14, 31, 0));
+    emit(c, arm64.add_imm_x(31, 31, 16, iie));
 }
-waza emit_old_release_store(c:arm64.Assembler,value:int64,base:int64,offset:int64) -> unit {
- moshi(!old_mark_proto_enabled(c)){emit(c,arm64.str_x(value,base,offset));kaesu;}
- emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(14,31,0));
- emit(c,arm64.add_imm_x(14,base,offset,iie));emit(c,arm64.stlr_x(value,14));
- emit(c,arm64.ldr_x(14,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));
+waza emit_old_release_store(c: arm64.Assembler, value: int64, base: int64, offset: int64) -> unit {
+    moshi (!old_mark_proto_enabled(c)) {
+        emit(c, arm64.str_x(value, base, offset));
+        kaesu;
+    }
+    emit(c, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(c, arm64.str_x(14, 31, 0));
+    emit(c, arm64.add_imm_x(14, base, offset, iie));
+    emit(c, arm64.stlr_x(value, 14));
+    emit(c, arm64.ldr_x(14, 31, 0));
+    emit(c, arm64.add_imm_x(31, 31, 16, iie));
 }
-waza emit_old_satb_adapter(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
- emit_old_bulk_adapter(c,p,first);
- attached_save(c,"old_satb_slot");move_x(c,1,14);old_control(c,p,first,0);arm64.assembler_cbz_x(c,0,"old_satb_no_state");wr_imports(c,p,first);wr_call(c,"gc_old_prewrite");arm64.assembler_label(c,"old_satb_no_state");attached_restore(c);
- attached_save(c,"old_remember_header");move_x(c,0,14);wr_imports(c,p,first);wr_call(c,"gc_old_remember_header");attached_restore(c);
+waza emit_old_satb_adapter(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> unit {
+    emit_old_bulk_adapter(c, p, first);
+    attached_save(c, "old_satb_slot");
+    move_x(c, 1, 14);
+    old_control(c, p, first, 0);
+    arm64.assembler_cbz_x(c, 0, "old_satb_no_state");
+    wr_imports(c, p, first);
+    wr_call(c, "gc_old_prewrite");
+    arm64.assembler_label(c, "old_satb_no_state");
+    attached_restore(c);
+    attached_save(c, "old_remember_header");
+    move_x(c, 0, 14);
+    wr_imports(c, p, first);
+    wr_call(c, "gc_old_remember_header");
+    attached_restore(c);
 }
 // Terminal error packet for this explicit development mode. Preserve the
 // originating status/return PC before the exit syscall; no managed dereference.
-waza emit_old_error_diagnostic(c:arm64.Assembler) -> unit {
- emit(c,arm64.sub_imm_x(31,31,128,iie));
- kaku registers=[0,30,23,7,19,20,21,22,24,25,26,27,28];kaku i=0;
- aida(i<len(registers)){emit(c,arm64.str_x(registers[i],31,(i+1)*8));i=i+1;}
- emit(c,arm64.add_imm_x(9,31,128,iie));emit(c,arm64.str_x(9,31,112));
- wr_num(c,9,1330398546);emit(c,arm64.str_x(9,31,0));wr_num(c,9,1);emit(c,arm64.str_x(9,31,120));
- wr_num(c,0,2);emit(c,arm64.add_imm_x(1,31,0,iie));wr_num(c,2,128);wr_num(c,16,4);emit(c,arm64.svc(128));
+waza emit_old_error_diagnostic(c: arm64.Assembler) -> unit {
+    emit(c, arm64.sub_imm_x(31, 31, 128, iie));
+    kaku registers = [0, 30, 23, 7, 19, 20, 21, 22, 24, 25, 26, 27, 28];
+    kaku i = 0;
+    aida (i<len(registers)) {
+        emit(c, arm64.str_x(registers[i], 31, (i + 1) * 8));
+        i = i + 1;
+    }
+    emit(c, arm64.add_imm_x(9, 31, 128, iie));
+    emit(c, arm64.str_x(9, 31, 112));
+    wr_num(c, 9, 1330398546);
+    emit(c, arm64.str_x(9, 31, 0));
+    wr_num(c, 9, 1);
+    emit(c, arm64.str_x(9, 31, 120));
+    wr_num(c, 0, 2);
+    emit(c, arm64.add_imm_x(1, 31, 0, iie));
+    wr_num(c, 2, 128);
+    wr_num(c, 16, 4);
+    emit(c, arm64.svc(128));
 }
 
 // Native operand movement only; aligned copy/clear and prewrite ordering are
 // neutral IR. Runtime helpers preserve all user registers and their caller LR.
-waza emit_old_bulk_adapter(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
- attached_save(c,"old_bulk_copy");move_x(c,3,2);move_x(c,2,1);move_x(c,1,0);old_control(c,p,first,0);wr_imports(c,p,first);wr_call(c,"gc_copy_reference_slots");attached_restore(c);
- attached_save(c,"old_bulk_clear");move_x(c,1,11);old_control(c,p,first,0);wr_imports(c,p,first);wr_call(c,"gc_clear_reference_slots");attached_restore(c);
+waza emit_old_bulk_adapter(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> unit {
+    attached_save(c, "old_bulk_copy");
+    move_x(c, 3, 2);
+    move_x(c, 2, 1);
+    move_x(c, 1, 0);
+    old_control(c, p, first, 0);
+    wr_imports(c, p, first);
+    wr_call(c, "gc_copy_reference_slots");
+    attached_restore(c);
+    attached_save(c, "old_bulk_clear");
+    move_x(c, 1, 11);
+    old_control(c, p, first, 0);
+    wr_imports(c, p, first);
+    wr_call(c, "gc_clear_reference_slots");
+    attached_restore(c);
 }
