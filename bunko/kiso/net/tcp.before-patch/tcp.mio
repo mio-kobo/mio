@@ -16,13 +16,29 @@ koukai sentaku TcpError {
     Other(string);
 }
 
-koukai kata IPv4Address { octets: []uint8; port: int64; }
+koukai kata IPv4Address {
+    octets: []uint8;
+    port: int64;
+}
 koukai kata Connection { handle: resource; }
 koukai kata Listener { handle: resource; }
-koukai kata ConnectionResult { connection: Connection?; error: TcpError?; }
-koukai kata ListenerResult { listener: Listener?; error: TcpError?; }
-koukai kata ReadResult { count: int64; eof: bool; error: TcpError?; }
-koukai kata WriteResult { count: int64; error: TcpError?; }
+koukai kata ConnectionResult {
+    connection: Connection?;
+    error: TcpError?;
+}
+koukai kata ListenerResult {
+    listener: Listener?;
+    error: TcpError?;
+}
+koukai kata ReadResult {
+    count: int64;
+    eof: bool;
+    error: TcpError?;
+}
+koukai kata WriteResult {
+    count: int64;
+    error: TcpError?;
+}
 koukai kata UnitResult { error: TcpError?; }
 
 koukai waza ipv4(a: uint8, b: uint8, c: uint8, d: uint8, port: int64) -> IPv4Address {
@@ -192,14 +208,14 @@ waza io_error(failure: TcpError?) -> io.IoError? {
 
 koukai waza reader(connection: Connection) -> io.Reader {
     kaesu io.Reader { read: waza (destination: []uint8, offset: int64, length: int64) -> io.ReadResult {
-        kaku result = read(connection, destination, offset, length);
-        kaesu io.ReadResult { count: result.count, eof: result.eof, error: io_error(result.error) };
-    } };
+            kaku result = read(connection, destination, offset, length);
+            kaesu io.ReadResult { count: result.count, eof: result.eof, error: io_error(result.error) };
+        } };
 }
 
 koukai waza writer(connection: Connection) -> io.Writer {
     kaesu io.Writer { write: waza (source: []uint8, offset: int64, length: int64) -> io.WriteResult {
-        kaku result = write(connection, source, offset, length);
-        kaesu io.WriteResult { count: result.count, error: io_error(result.error) };
-    } };
+            kaku result = write(connection, source, offset, length);
+            kaesu io.WriteResult { count: result.count, error: io_error(result.error) };
+        } };
 }

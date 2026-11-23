@@ -11,104 +11,266 @@ yobu "kiso/math";
 yobu "kiso/string";
 // Native evidence builder, not a replacement managed collector. Raw data holds
 // only this ABI smoke's thread state. The entire image/link/sign pipeline is Mio.
-waza emit(c:arm64.Assembler, i:arm64.Instruction) -> unit { moshi(arm64.assembler_emit(c,i)!=mu){math.fail("encoding failed");} }
-waza number(c:arm64.Assembler, r:int64, n:int64) -> unit {
-    emit(c,arm64.movz_x(r,n-(n/65536)*65536,0));moshi(n>=65536){emit(c,arm64.movk_x(r,n/65536,1));}
+waza emit(c: arm64.Assembler, i: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, i) != mu) { math.fail("encoding failed"); } }
+waza number(c: arm64.Assembler, r: int64, n: int64) -> unit {
+    emit(c, arm64.movz_x(r, n - (n / 65536) * 65536, 0));
+    moshi (n >= 65536) {
+        emit(c, arm64.movk_x(r, n / 65536, 1));
+    }
 }
-waza address(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,kind:int64,offset:int64) -> unit {
-    kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));
-    array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.AddressTarget {kind:kind},target_offset:offset,register:r});
+waza address(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, kind: int64, offset: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.AddressTarget { kind: kind }, target_offset: offset, register: r });
 }
-waza call(c:arm64.Assembler,slot:int64) -> unit {moshi(aarch64.emit_import_call(c,19,slot,darwin.thread_symbol_count)!=""){math.fail("thread ABI call failure");}}
-waza checked(c:arm64.Assembler,slot:int64) -> unit {call(c,slot);arm64.assembler_cbnz_x(c,0,"fail");}
-waza count(c:arm64.Assembler,label:string) -> unit {
-    number(c,20,100000);arm64.assembler_label(c,label);
-    emit(c,arm64.add_imm_x(0,19,264,iie));number(c,1,1);
-    kaku op=gc.RuntimeOp {kind:gc.atomic_add,address:0,value:1,expected:2,result:3,status:4,order:gc.acq_rel,failure_order:gc.relaxed,alignment:8,epoch:0};
-    moshi(aarch64.emit_atomic(c,op)!=""){math.fail("atomic lowering failed");}
-    emit(c,arm64.sub_imm_x(20,20,1,iie));arm64.assembler_cbnz_x(c,20,label);
+waza call(c: arm64.Assembler, slot: int64) -> unit {
+    moshi (aarch64.emit_import_call(c, 19, slot, darwin.thread_symbol_count) != "") {
+        math.fail("thread ABI call failure");
+    }
 }
-waza cas(c:arm64.Assembler) -> unit {
-    kaku op=gc.RuntimeOp {kind:gc.atomic_cas,address:0,value:1,expected:2,result:3,status:4,order:gc.seq_cst,failure_order:gc.seq_cst,alignment:8,epoch:0};
-    moshi(aarch64.emit_atomic(c,op)!=""){math.fail("CAS lowering failed");}
+waza checked(c: arm64.Assembler, slot: int64) -> unit {
+    call(c, slot);
+    arm64.assembler_cbnz_x(c, 0, "fail");
 }
-waza messages(c:arm64.Assembler, producer:bool) -> unit {
-    kaku label="consumer";moshi(producer){label="producer";}
-    kaku again=string.concat(label,"_again");kaku wait=string.concat(label,"_wait");
-    number(c,20,1);arm64.assembler_label(c,again);
-    moshi(producer){emit(c,arm64.str_x(20,19,456));emit(c,arm64.add_imm_x(9,19,448,iie));number(c,10,1);emit(c,arm64.stlr_x(10,9));}
-    number(c,21,10000000);arm64.assembler_label(c,wait);
-    emit(c,arm64.add_imm_x(9,19,448,iie));emit(c,arm64.ldar_x(10,9));
-    kaku expected=1;moshi(producer){expected=0;}
-    emit(c,arm64.cmp_imm_x(10,expected,iie));arm64.assembler_b_cond(c,0,string.concat(label,"_visible"));
-    emit(c,arm64.sub_imm_x(21,21,1,iie));arm64.assembler_cbz_x(c,21,"fail");arm64.assembler_b(c,wait);
-    arm64.assembler_label(c,string.concat(label,"_visible"));
-    kaku payload=456;moshi(producer){payload=464;}
-    emit(c,arm64.ldr_x(10,19,payload));emit(c,arm64.cmp_x(10,20));arm64.assembler_b_cond(c,1,"fail");
-    moshi(!producer){emit(c,arm64.str_x(20,19,464));emit(c,arm64.add_imm_x(9,19,448,iie));emit(c,arm64.stlr_x(31,9));}
-    emit(c,arm64.add_imm_x(20,20,1,iie));number(c,10,10001);emit(c,arm64.cmp_x(20,10));arm64.assembler_b_cond(c,3,again);
+waza count(c: arm64.Assembler, label: string) -> unit {
+    number(c, 20, 100000);
+    arm64.assembler_label(c, label);
+    emit(c, arm64.add_imm_x(0, 19, 264, iie));
+    number(c, 1, 1);
+    kaku op = gc.RuntimeOp {
+        kind: gc.atomic_add, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.acq_rel, failure_order: gc.relaxed, alignment: 8, epoch: 0 };
+    moshi (aarch64.emit_atomic(c, op) != "") { math.fail("atomic lowering failed"); }
+    emit(c, arm64.sub_imm_x(20, 20, 1, iie));
+    arm64.assembler_cbnz_x(c, 20, label);
+}
+waza cas(c: arm64.Assembler) -> unit {
+    kaku op = gc.RuntimeOp {
+        kind: gc.atomic_cas, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.seq_cst, failure_order: gc.seq_cst, alignment: 8, epoch: 0 };
+    moshi (aarch64.emit_atomic(c, op) != "") { math.fail("CAS lowering failed"); }
+}
+waza messages(c: arm64.Assembler, producer: bool) -> unit {
+    kaku label = "consumer";
+    moshi (producer) {
+        label = "producer";
+    }
+    kaku again = string.concat(label, "_again");
+    kaku wait = string.concat(label, "_wait");
+    number(c, 20, 1);
+    arm64.assembler_label(c, again);
+    moshi (producer) {
+        emit(c, arm64.str_x(20, 19, 456));
+        emit(c, arm64.add_imm_x(9, 19, 448, iie));
+        number(c, 10, 1);
+        emit(c, arm64.stlr_x(10, 9));
+    }
+    number(c, 21, 10000000);
+    arm64.assembler_label(c, wait);
+    emit(c, arm64.add_imm_x(9, 19, 448, iie));
+    emit(c, arm64.ldar_x(10, 9));
+    kaku expected = 1;
+    moshi (producer) {
+        expected = 0;
+    }
+    emit(c, arm64.cmp_imm_x(10, expected, iie));
+    arm64.assembler_b_cond(c, 0, string.concat(label, "_visible"));
+    emit(c, arm64.sub_imm_x(21, 21, 1, iie));
+    arm64.assembler_cbz_x(c, 21, "fail");
+    arm64.assembler_b(c, wait);
+    arm64.assembler_label(c, string.concat(label, "_visible"));
+    kaku payload = 456;
+    moshi (producer) {
+        payload = 464;
+    }
+    emit(c, arm64.ldr_x(10, 19, payload));
+    emit(c, arm64.cmp_x(10, 20));
+    arm64.assembler_b_cond(c, 1, "fail");
+    moshi (!producer) {
+        emit(c, arm64.str_x(20, 19, 464));
+        emit(c, arm64.add_imm_x(9, 19, 448, iie));
+        emit(c, arm64.stlr_x(31, 9));
+    }
+    emit(c, arm64.add_imm_x(20, 20, 1, iie));
+    number(c, 10, 10001);
+    emit(c, arm64.cmp_x(20, 10));
+    arm64.assembler_b_cond(c, 3, again);
 }
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)<2 || len(args)>3){math.fail("expected output path [timeout]");}
-    kaku timeout=iie;moshi(len(args)==3){moshi(args[2]!="timeout"){math.fail("invalid smoke mode");}timeout=hai;}
-    kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];
-    emit(c,arm64.sub_imm_x(31,31,64,iie));emit(c,arm64.str_x(30,31,0));
-    address(c,patches,19,2,0);
-    call(c,2);emit(c,arm64.str_x(0,19,280)); // main identity
-    emit(c,arm64.add_imm_x(0,19,288,iie));number(c,1,0);checked(c,3); // TLS key
-    emit(c,arm64.ldr_x(0,19,288));number(c,1,123);checked(c,4);
-    emit(c,arm64.add_imm_x(0,19,256,iie));number(c,1,0);
+    kaku args = os.arguments();
+    moshi (len(args)<2 || len(args)>3) {
+        math.fail("expected output path [timeout]");
+    }
+    kaku timeout = iie;
+    moshi (len(args) == 3) {
+        moshi (args[2] != "timeout") {
+            math.fail("invalid smoke mode");
+        }
+        timeout = hai;
+    }
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    emit(c, arm64.sub_imm_x(31, 31, 64, iie));
+    emit(c, arm64.str_x(30, 31, 0));
+    address(c, patches, 19, 2, 0);
+    call(c, 2);
+    emit(c, arm64.str_x(0, 19, 280)); // main identity
+    emit(c, arm64.add_imm_x(0, 19, 288, iie));
+    number(c, 1, 0);
+    checked(c, 3); // TLS key
+    emit(c, arm64.ldr_x(0, 19, 288));
+    number(c, 1, 123);
+    checked(c, 4);
+    emit(c, arm64.add_imm_x(0, 19, 256, iie));
+    number(c, 1, 0);
     // Save create arguments while initializing the wait primitives.
-    emit(c,arm64.add_imm_x(0,19,320,iie));number(c,1,0);checked(c,9);
-    emit(c,arm64.add_imm_x(0,19,384,iie));number(c,1,0);checked(c,12);
-    emit(c,arm64.add_imm_x(0,19,320,iie));checked(c,10);
-    emit(c,arm64.add_imm_x(0,19,256,iie));number(c,1,0);
-    kaku worker_patch=len(patches);address(c,patches,2,0,0);emit(c,arm64.add_imm_x(3,19,0,iie));checked(c,0);
-    arm64.assembler_label(c,"wait_ready");emit(c,arm64.ldr_x(0,19,432));arm64.assembler_cbnz_x(c,0,"ready");
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    number(c, 1, 0);
+    checked(c, 9);
+    emit(c, arm64.add_imm_x(0, 19, 384, iie));
+    number(c, 1, 0);
+    checked(c, 12);
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    checked(c, 10);
+    emit(c, arm64.add_imm_x(0, 19, 256, iie));
+    number(c, 1, 0);
+    kaku worker_patch = len(patches);
+    address(c, patches, 2, 0, 0);
+    emit(c, arm64.add_imm_x(3, 19, 0, iie));
+    checked(c, 0);
+    arm64.assembler_label(c, "wait_ready");
+    emit(c, arm64.ldr_x(0, 19, 432));
+    arm64.assembler_cbnz_x(c, 0, "ready");
     // Relative timeout bounds missing wake/worker failure. Recheck predicate.
-    number(c,0,1);emit(c,arm64.str_x(0,31,16));emit(c,arm64.str_x(31,31,24));
-    emit(c,arm64.add_imm_x(0,19,384,iie));emit(c,arm64.add_imm_x(1,19,320,iie));emit(c,arm64.add_imm_x(2,31,16,iie));checked(c,13);arm64.assembler_b(c,"wait_ready");
-    arm64.assembler_label(c,"ready");emit(c,arm64.ldr_x(0,19,440));number(c,1,424242);emit(c,arm64.cmp_x(0,1));arm64.assembler_b_cond(c,1,"fail");
-    emit(c,arm64.add_imm_x(0,19,320,iie));checked(c,11);
-    count(c,"main_count");
-    messages(c,hai);
-    emit(c,arm64.ldr_x(0,19,256));emit(c,arm64.add_imm_x(1,19,296,iie));checked(c,1);
-    emit(c,arm64.ldr_x(0,19,296));emit(c,arm64.cmp_imm_x(0,456,iie));arm64.assembler_b_cond(c,1,"fail");
-    emit(c,arm64.ldr_x(0,19,264));number(c,1,200000);emit(c,arm64.cmp_x(0,1));arm64.assembler_b_cond(c,1,"fail");
-    emit(c,arm64.ldr_x(0,19,288));call(c,5);emit(c,arm64.cmp_imm_x(0,123,iie));arm64.assembler_b_cond(c,1,"fail");
-    emit(c,arm64.ldr_x(0,19,288));checked(c,6);
-    emit(c,arm64.add_imm_x(0,19,384,iie));checked(c,15);
-    emit(c,arm64.add_imm_x(0,19,320,iie));checked(c,16);
-    number(c,0,6);emit(c,arm64.add_imm_x(1,31,16,iie));checked(c,17);
-    emit(c,arm64.ldr_x(0,31,16));emit(c,arm64.ldr_x(1,31,24));emit(c,arm64.orr_x(0,0,1));arm64.assembler_cbz_x(c,0,"fail");
+    number(c, 0, 1);
+    emit(c, arm64.str_x(0, 31, 16));
+    emit(c, arm64.str_x(31, 31, 24));
+    emit(c, arm64.add_imm_x(0, 19, 384, iie));
+    emit(c, arm64.add_imm_x(1, 19, 320, iie));
+    emit(c, arm64.add_imm_x(2, 31, 16, iie));
+    checked(c, 13);
+    arm64.assembler_b(c, "wait_ready");
+    arm64.assembler_label(c, "ready");
+    emit(c, arm64.ldr_x(0, 19, 440));
+    number(c, 1, 424242);
+    emit(c, arm64.cmp_x(0, 1));
+    arm64.assembler_b_cond(c, 1, "fail");
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    checked(c, 11);
+    count(c, "main_count");
+    messages(c, hai);
+    emit(c, arm64.ldr_x(0, 19, 256));
+    emit(c, arm64.add_imm_x(1, 19, 296, iie));
+    checked(c, 1);
+    emit(c, arm64.ldr_x(0, 19, 296));
+    emit(c, arm64.cmp_imm_x(0, 456, iie));
+    arm64.assembler_b_cond(c, 1, "fail");
+    emit(c, arm64.ldr_x(0, 19, 264));
+    number(c, 1, 200000);
+    emit(c, arm64.cmp_x(0, 1));
+    arm64.assembler_b_cond(c, 1, "fail");
+    emit(c, arm64.ldr_x(0, 19, 288));
+    call(c, 5);
+    emit(c, arm64.cmp_imm_x(0, 123, iie));
+    arm64.assembler_b_cond(c, 1, "fail");
+    emit(c, arm64.ldr_x(0, 19, 288));
+    checked(c, 6);
+    emit(c, arm64.add_imm_x(0, 19, 384, iie));
+    checked(c, 15);
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    checked(c, 16);
+    number(c, 0, 6);
+    emit(c, arm64.add_imm_x(1, 31, 16, iie));
+    checked(c, 17);
+    emit(c, arm64.ldr_x(0, 31, 16));
+    emit(c, arm64.ldr_x(1, 31, 24));
+    emit(c, arm64.orr_x(0, 0, 1));
+    arm64.assembler_cbz_x(c, 0, "fail");
     // Strong CAS mismatch must not store; success returns old value and flag.
-    emit(c,arm64.add_imm_x(0,19,264,iie));number(c,1,99);number(c,2,1);cas(c);
-    number(c,1,200000);emit(c,arm64.cmp_x(0,1));arm64.assembler_b_cond(c,1,"fail");arm64.assembler_cbnz_x(c,3,"fail");
-    emit(c,arm64.add_imm_x(0,19,264,iie));number(c,1,99);number(c,2,200000);cas(c);
-    emit(c,arm64.cmp_imm_x(3,1,iie));arm64.assembler_b_cond(c,1,"fail");emit(c,arm64.ldr_x(0,19,264));emit(c,arm64.cmp_imm_x(0,99,iie));arm64.assembler_b_cond(c,1,"fail");
-    call(c,18);emit(c,arm64.cmp_imm_x(0,4095,iie));arm64.assembler_b_cond(c,3,"fail");
-    number(c,0,1);address(c,patches,1,1,0);number(c,2,18);call(c,8);
-    number(c,0,0);call(c,7);
-    arm64.assembler_label(c,"fail");number(c,0,71);call(c,7);
-    kaku worker=len(c.words)*4;
-    kaku fix=patches[worker_patch];patches[worker_patch]=macho.AddressPatch {at_word:fix.at_word,add_at_word:fix.add_at_word,target:fix.target,target_offset:worker,register:fix.register};
+    emit(c, arm64.add_imm_x(0, 19, 264, iie));
+    number(c, 1, 99);
+    number(c, 2, 1);
+    cas(c);
+    number(c, 1, 200000);
+    emit(c, arm64.cmp_x(0, 1));
+    arm64.assembler_b_cond(c, 1, "fail");
+    arm64.assembler_cbnz_x(c, 3, "fail");
+    emit(c, arm64.add_imm_x(0, 19, 264, iie));
+    number(c, 1, 99);
+    number(c, 2, 200000);
+    cas(c);
+    emit(c, arm64.cmp_imm_x(3, 1, iie));
+    arm64.assembler_b_cond(c, 1, "fail");
+    emit(c, arm64.ldr_x(0, 19, 264));
+    emit(c, arm64.cmp_imm_x(0, 99, iie));
+    arm64.assembler_b_cond(c, 1, "fail");
+    call(c, 18);
+    emit(c, arm64.cmp_imm_x(0, 4095, iie));
+    arm64.assembler_b_cond(c, 3, "fail");
+    number(c, 0, 1);
+    address(c, patches, 1, 1, 0);
+    number(c, 2, 18);
+    call(c, 8);
+    number(c, 0, 0);
+    call(c, 7);
+    arm64.assembler_label(c, "fail");
+    number(c, 0, 71);
+    call(c, 7);
+    kaku worker = len(c.words) * 4;
+    kaku fix = patches[worker_patch];
+    patches[worker_patch] = macho.AddressPatch {
+        at_word: fix.at_word, add_at_word: fix.add_at_word, target: fix.target, target_offset: worker, register: fix.register };
     // pthread start routine obeys public AAPCS64. Preserve all used callee saves.
-    emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(19,31,0));emit(c,arm64.str_x(20,31,8));emit(c,arm64.str_x(30,31,16));emit(c,arm64.str_x(21,31,24));
-    emit(c,arm64.add_imm_x(19,0,0,iie));call(c,2);emit(c,arm64.ldr_x(1,19,280));emit(c,arm64.cmp_x(0,1));arm64.assembler_b_cond(c,0,"fail");
-    emit(c,arm64.ldr_x(0,19,288));number(c,1,456);checked(c,4);
-    moshi(timeout){number(c,0,456);arm64.assembler_b(c,"worker_return");}
-    emit(c,arm64.add_imm_x(0,19,320,iie));checked(c,10);
-    number(c,0,424242);emit(c,arm64.str_x(0,19,440));number(c,0,1);emit(c,arm64.str_x(0,19,432));
-    emit(c,arm64.add_imm_x(0,19,384,iie));checked(c,14);
-    emit(c,arm64.add_imm_x(0,19,320,iie));checked(c,11);
-    count(c,"worker_count");messages(c,iie);
-    emit(c,arm64.ldr_x(0,19,288));call(c,5);emit(c,arm64.cmp_imm_x(0,456,iie));arm64.assembler_b_cond(c,1,"fail");
-    arm64.assembler_label(c,"worker_return");emit(c,arm64.ldr_x(21,31,24));emit(c,arm64.ldr_x(19,31,0));emit(c,arm64.ldr_x(20,31,8));emit(c,arm64.ldr_x(30,31,16));emit(c,arm64.add_imm_x(31,31,32,iie));emit(c,arm64.ret());
-    kaku words=arm64.assembler_assemble(c);moshi(words.error!=mu){math.fail("assembly failure");}
-    kaku image=darwin.executable(macho.ImageSpec {words:words.words,constants:[116,104,114,101,97,100,45,115,109,111,107,101,45,112,97,115,115,10],globals:128,patches:patches},
+    emit(c, arm64.sub_imm_x(31, 31, 32, iie));
+    emit(c, arm64.str_x(19, 31, 0));
+    emit(c, arm64.str_x(20, 31, 8));
+    emit(c, arm64.str_x(30, 31, 16));
+    emit(c, arm64.str_x(21, 31, 24));
+    emit(c, arm64.add_imm_x(19, 0, 0, iie));
+    call(c, 2);
+    emit(c, arm64.ldr_x(1, 19, 280));
+    emit(c, arm64.cmp_x(0, 1));
+    arm64.assembler_b_cond(c, 0, "fail");
+    emit(c, arm64.ldr_x(0, 19, 288));
+    number(c, 1, 456);
+    checked(c, 4);
+    moshi (timeout) {
+        number(c, 0, 456);
+        arm64.assembler_b(c, "worker_return");
+    }
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    checked(c, 10);
+    number(c, 0, 424242);
+    emit(c, arm64.str_x(0, 19, 440));
+    number(c, 0, 1);
+    emit(c, arm64.str_x(0, 19, 432));
+    emit(c, arm64.add_imm_x(0, 19, 384, iie));
+    checked(c, 14);
+    emit(c, arm64.add_imm_x(0, 19, 320, iie));
+    checked(c, 11);
+    count(c, "worker_count");
+    messages(c, iie);
+    emit(c, arm64.ldr_x(0, 19, 288));
+    call(c, 5);
+    emit(c, arm64.cmp_imm_x(0, 456, iie));
+    arm64.assembler_b_cond(c, 1, "fail");
+    arm64.assembler_label(c, "worker_return");
+    emit(c, arm64.ldr_x(21, 31, 24));
+    emit(c, arm64.ldr_x(19, 31, 0));
+    emit(c, arm64.ldr_x(20, 31, 8));
+    emit(c, arm64.ldr_x(30, 31, 16));
+    emit(c, arm64.add_imm_x(31, 31, 32, iie));
+    emit(c, arm64.ret());
+    kaku words = arm64.assembler_assemble(c);
+    moshi (words.error != mu) {
+        math.fail("assembly failure");
+    }
+    kaku image = darwin.executable(macho.ImageSpec { words: words.words, constants: [116, 104, 114, 101, 97, 100, 45, 115, 109, 111, 107, 101, 45, 112, 97, 115, 115, 10], globals: 128, patches: patches },
         darwin.thread_symbols());
-    moshi(image.error!=""){math.fail(image.error);}
-    kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){math.fail(signed.error);}
-    moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){math.fail("write failed");}
+    moshi (image.error != "") { math.fail(image.error); }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        math.fail(signed.error);
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) { math.fail("write failed"); }
 }
 main();

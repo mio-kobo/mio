@@ -1,26 +1,57 @@
 yobu "kiso/fs";
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku phase=0;kaku read_ok=0;kaku write_ok=0;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku phase = 0;
+kaku read_ok = 0;
+kaku write_ok = 0;
 waza reader() -> unit {
-    kaku buffer=array.make[uint8](131072,uint8(0));phase=1;
-    kaku opened=fs.open_read("build/m19ef-worker-fifo");
-    kaku file=opened.file;moshi(file==mu){read_ok=-1;kaesu;}
-    kaku got=fs.read(file,buffer,0,1);kaku closed=fs.close(file);
-    moshi(got.error==mu && got.count==1 && buffer[0]==uint8(90) && closed.error==mu){read_ok=1;}sore{read_ok=-2;}
+    kaku buffer = array.make[uint8](131072, uint8(0));
+    phase = 1;
+    kaku opened = fs.open_read("build/m19ef-worker-fifo");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        read_ok = -1;
+        kaesu;
+    }
+    kaku got = fs.read(file, buffer, 0, 1);
+    kaku closed = fs.close(file);
+    moshi (got.error == mu && got.count == 1 && buffer[0] == uint8(90) && closed.error == mu) {
+        read_ok = 1;
+    } sore {
+        read_ok = -2;
+    }
 }
 waza writer() -> unit {
-    aida(phase<2){kaku waited=rt_wait(1000000);}
-    kaku opened=fs.open_write("build/m19ef-worker-fifo");
-    kaku file=opened.file;moshi(file==mu){write_ok=-1;kaesu;}
-    kaku sent=fs.write(file,[uint8(90)],0,1);kaku closed=fs.close(file);
-    moshi(sent.error==mu && sent.count==1 && closed.error==mu){write_ok=1;}sore{write_ok=-2;}
+    aida (phase<2) { kaku waited = rt_wait(1000000); }
+    kaku opened = fs.open_write("build/m19ef-worker-fifo");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        write_ok = -1;
+        kaesu;
+    }
+    kaku sent = fs.write(file, [uint8(90)], 0, 1);
+    kaku closed = fs.close(file);
+    moshi (sent.error == mu && sent.count == 1 && closed.error == mu) {
+        write_ok = 1;
+    } sore {
+        write_ok = -2;
+    }
 }
-kaku a=rt_start(reader);kaku b=rt_start(writer);
-aida(phase<1){kaku waited=rt_wait(1000000);}
-kaku i=0;aida(i<100){kaku occupied=rt_collect(i-(i/2)*2);i=i+1;}
-phase=2;kaku ja=rt_join(a);kaku jb=rt_join(b);
-chant(read_ok);chant(write_ok);chant(ja+jb);chant(rt_collect(1));
+kaku a = rt_start(reader);
+kaku b = rt_start(writer);
+aida (phase<1) { kaku waited = rt_wait(1000000); }
+kaku i = 0;
+aida (i<100) {
+    kaku occupied = rt_collect(i - (i / 2) * 2);
+    i = i + 1;
+}
+phase = 2;
+kaku ja = rt_join(a);
+kaku jb = rt_join(b);
+chant(read_ok);
+chant(write_ok);
+chant(ja + jb);
+chant(rt_collect(1));

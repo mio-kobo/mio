@@ -1,36 +1,49 @@
 yobu "kiso/testing";
 yobu "kiso/aot/sign";
 waza test_public_ABI_link_and_signature_bounds() -> unit {
-    kaku spec=macho.ImageSpec {words:[uint32(3596551104)],constants:[],globals:8,patches:[]};
-    testing.expect(executable(spec,[]).error!="", "empty dynamic import list rejected");
-    testing.expect(executable(spec,["pthread_self"]).error!="", "Mach-O external symbol spelling checked");
-    kaku linked=executable(spec,["_pthread_self"]);
-    testing.expect(linked.error=="", "public ABI import stream generated");
-    testing.expect(sign.adhoc(linked.bytes).error!="", "legacy signer never silently signs foreign LINKEDIT payload");
-    testing.expect(sign.adhoc_linked(linked.bytes).error=="", "explicit linked signature preserves dyld stream");
+    kaku spec = macho.ImageSpec { words: [uint32(3596551104)], constants: [], globals: 8, patches: [] };
+    testing.expect(executable(spec, []).error != "", "empty dynamic import list rejected");
+    testing.expect(executable(spec, ["pthread_self"]).error != "", "Mach-O external symbol spelling checked");
+    kaku linked = executable(spec, ["_pthread_self"]);
+    testing.expect(linked.error == "", "public ABI import stream generated");
+    testing.expect(sign.adhoc(linked.bytes).error != "", "legacy signer never silently signs foreign LINKEDIT payload");
+    testing.expect(sign.adhoc_linked(linked.bytes).error == "", "explicit linked signature preserves dyld stream");
     // A binding payload may exceed one Mach-O page even with one import.
-    kaku long_name="_";aida(len(string.to_bytes(long_name))<20000){long_name=string.concat(long_name,long_name);}
-    kaku large=executable(spec,[long_name]);testing.expect(large.error=="", "large binding stream emitted");
-    kaku cursor=32;kaku ci=0;kaku covered=iie;
-    aida(ci<get32(large.bytes,16)){
-        moshi(get32(large.bytes,cursor)==25 && large.bytes[cursor+10]==uint8(76)){
-            kaku payload=get32(large.bytes,cursor+48);kaku vm=get32(large.bytes,cursor+32);
-            testing.expect(payload>16384 && vm>=payload && vm-payload<16384, "LINKEDIT virtual extent covers complete multi-page payload");covered=hai;
-        }
-        cursor=cursor+get32(large.bytes,cursor+4);ci=ci+1;
+    kaku long_name = "_";
+    aida (len(string.to_bytes(long_name))<20000) {
+        long_name = string.concat(long_name, long_name);
     }
-    testing.expect(covered && sign.adhoc_linked(large.bytes).error=="", "multi-page payload survives native signing");
-    kaku static=macho.executable(spec);
-    testing.expect(static.error==mu && sign.adhoc(static.bytes).error=="", "legacy static signature remains available");
-    testing.expect(target.concurrent_error(capabilities())!="", "thread smoke cannot enable unimplemented multi-mutator collector");
-    testing.expect(len(thread_symbols())==thread_symbol_count, "OS symbol table is data, with explicit count");
+    kaku large = executable(spec, [long_name]);
+    testing.expect(large.error == "", "large binding stream emitted");
+    kaku cursor = 32;
+    kaku ci = 0;
+    kaku covered = iie;
+    aida (ci<get32(large.bytes, 16)) {
+        moshi (get32(large.bytes, cursor) == 25 && large.bytes[cursor + 10] == uint8(76)) {
+            kaku payload = get32(large.bytes, cursor + 48);
+            kaku vm = get32(large.bytes, cursor + 32);
+            testing.expect(payload>16384 && vm >= payload && vm - payload<16384, "LINKEDIT virtual extent covers complete multi-page payload");
+            covered = hai;
+        }
+        cursor = cursor + get32(large.bytes, cursor + 4);
+        ci = ci + 1;
+    }
+    testing.expect(covered && sign.adhoc_linked(large.bytes).error == "", "multi-page payload survives native signing");
+    kaku static = macho.executable(spec);
+    testing.expect(static.error == mu && sign.adhoc(static.bytes).error == "", "legacy static signature remains available");
+    testing.expect(target.concurrent_error(capabilities()) != "", "thread smoke cannot enable unimplemented multi-mutator collector");
+    testing.expect(len(thread_symbols()) == thread_symbol_count, "OS symbol table is data, with explicit count");
 }
 
 waza test_imports_are_appended_after_all_user_globals() -> unit {
-    kaku spec=macho.ImageSpec {words:[uint32(3596551104)],constants:[],globals:2052,patches:[]};
-    kaku image=executable_appended(spec,thread_symbols(),128);
-    testing.expect(image.error=="" && sign.adhoc_linked(image.bytes).error=="", "full globals coexist with runtime imports and storage");
-    kaku layout=macho.plan(4,0,2052+thread_symbol_count+128);kaku i=0;
-    aida(i<2052*8){testing.expect(image.bytes[layout.data_offset+i]==uint8(0), "linker cannot overwrite any user/private global");i=i+1;}
-    testing.expect(executable_appended(spec,thread_symbols(),1048577).error!="", "runtime extension fails closed at its bound");
+    kaku spec = macho.ImageSpec { words: [uint32(3596551104)], constants: [], globals: 2052, patches: [] };
+    kaku image = executable_appended(spec, thread_symbols(), 128);
+    testing.expect(image.error == "" && sign.adhoc_linked(image.bytes).error == "", "full globals coexist with runtime imports and storage");
+    kaku layout = macho.plan(4, 0, 2052 + thread_symbol_count + 128);
+    kaku i = 0;
+    aida (i<2052 * 8) {
+        testing.expect(image.bytes[layout.data_offset + i] == uint8(0), "linker cannot overwrite any user/private global");
+        i = i + 1;
+    }
+    testing.expect(executable_appended(spec, thread_symbols(), 1048577).error != "", "runtime extension fails closed at its bound");
 }

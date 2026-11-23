@@ -1,36 +1,12 @@
 yobu "kiso/array";
 yobu "mio/sys/socket";
 
-// Portable readiness reactor. The OS-independent contract is five operations:
-//
-//   submit(reactor, handle, interest) -> SubmitResult   watch a nonblocking socket handle; returns an Operation
-//   update(reactor, operation, handle, interest)        change the interest of a live operation
-//   poll(reactor, timeout_ms, max)    -> PollResult     the ONLY blocking call; returns ready Events
-//   cancel(reactor, operation, handle)                  stop watching; later events of the operation are never delivered
-//   wake(reactor)                                       make a pending or future poll return (thread-safe by construction: it only
-//                                                       adds to an eventfd counter)
-//   close(reactor)                                      release every native resource
-//
-// Backend: Linux AMD64 level-triggered epoll plus an eventfd (docs/async-networking.md). Other targets fail closed
-// (an explicit error from open). A kqueue backend (readiness, same contract) and an IOCP backend (completion: the adapter
-// owns the OVERLAPPED and the buffer until the completion packet is dequeued, including after cancellation) are planned, not
-// implemented.
-//
-// Contract:
-//  * Every Operation has a unique id (never reused within a reactor) and a generation: `slot` is recycled, `generation` is not.
-//    The kernel only ever sees generation * 1048576 + slot + 1 (token 0 is the internal wake-up descriptor).
-//  * poll drops events whose generation no longer matches a live operation (cancelled operation, reused descriptor, in-flight
-//    kernel event) and counts them in PollResult.stale: a cancelled or stale operation never reaches a new owner.
-//  * An Event delivered by one poll can be cancelled by the caller before it is handled; check `current(reactor, event)` first.
-//  * cancel always releases the slot, even if the socket was already closed (the kernel dropped the registration when the
-//    descriptor closed). Cancel BEFORE closing the resource where possible; either order is memory-safe.
-//  * While an operation is pending the reactor keeps its socket handle reachable (a managed reference in `handles`).
-//  * Raw file descriptors are never exposed: sockets and the reactor itself are opaque, generation-checked handles.
-//  * Level-triggered: a descriptor stays ready until its owner drains it to EAGAIN, so no readiness is lost between polls.
-//    No busy polling: poll(-1) sleeps in the kernel until an event or a wake; poll(n) waits at most n ms; EINTR (signal) returns
-//    zero events early and is never an error, callers simply poll again.
-//  * wakes coalesce: any number of wakes before a poll produce one `woken`.
-//  * close invalidates every Operation; closing twice reports Closed.
+// 跨平台就绪态事件反应器（Readiness Reactor）：
+// 提供 submit / update / poll / cancel / wake / close 五项核心契约。
+// 当前后端为 Linux AMD64 水平触发（Level-triggered）epoll + eventfd（参见 docs/async-networking.md）；
+// 其余未实现平台在 open() 时安全失败（返回 ReactorError.Unsupported）。
+// 每个 Operation 绑定唯一 id 与单调递增的 generation（slot 可复用，generation 永不回绕复用），
+// 从而在 poll/cancel 竞态下自动丢弃过期内核事件（计入 PollResult.stale），避免误投递。
 
 koukai teisu readable = 1;
 koukai teisu writable = 2;
@@ -49,13 +25,45 @@ koukai sentaku ReactorError {
 // (a managed reference that keeps the socket reachable while the operation is pending; a free slot holds the reactor's own poll
 // handle as a placeholder).
 koukai kata Watched { handle: resource; }
-koukai kata Reactor { poll_handle: resource; wake_handle: resource; generations: []int64; active: []bool; free: []int64; ids: []int64; counter: []int64; handles: []Watched; }
-koukai kata Operation { id: int64; slot: int64; generation: int64; }
+koukai kata Reactor {
+    poll_handle: resource;
+    wake_handle: resource;
+    generations: []int64;
+    active: []bool;
+    free: []int64;
+    ids: []int64;
+    counter: []int64;
+    handles: []Watched;
+}
+koukai kata Operation {
+    id: int64;
+    slot: int64;
+    generation: int64;
+}
 // interest events: readable/writable report readiness; error and hangup are reported whatever the interest was.
-koukai kata Event { operation: int64; slot: int64; generation: int64; readable: bool; writable: bool; error: bool; hangup: bool; }
-koukai kata OpenResult { reactor: Reactor?; error: ReactorError?; }
-koukai kata SubmitResult { operation: Operation?; error: ReactorError?; }
-koukai kata PollResult { events: []Event; woken: bool; stale: int64; error: ReactorError?; }
+koukai kata Event {
+    operation: int64;
+    slot: int64;
+    generation: int64;
+    readable: bool;
+    writable: bool;
+    error: bool;
+    hangup: bool;
+}
+koukai kata OpenResult {
+    reactor: Reactor?;
+    error: ReactorError?;
+}
+koukai kata SubmitResult {
+    operation: Operation?;
+    error: ReactorError?;
+}
+koukai kata PollResult {
+    events: []Event;
+    woken: bool;
+    stale: int64;
+    error: ReactorError?;
+}
 koukai kata UnitResult { error: ReactorError?; }
 
 waza error_from(code: uint8, message: string) -> ReactorError? {
@@ -113,24 +121,36 @@ koukai waza open() -> OpenResult {
     kaku wake_handle = socket.reactor_open(1);
     message = socket.status(wake_handle, status);
     failure = error_from(status[0], message);
-    moshi (failure != mu) { release(poll_handle); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
+    moshi (failure != mu) {
+        release(poll_handle);
+        release(wake_handle);
+        kaesu OpenResult {
+            reactor: mu, error: failure };
+    }
     message = socket.reactor_ctl(poll_handle, wake_handle, pack(1, readable, 0), status);
     failure = error_from(status[0], message);
-    moshi (failure != mu) { release(poll_handle); release(wake_handle); kaesu OpenResult { reactor: mu, error: failure }; }
+    moshi (failure != mu) {
+        release(poll_handle);
+        release(wake_handle);
+        kaesu OpenResult {
+            reactor: mu, error: failure };
+    }
     kaku generations: []int64 = [];
     kaku active: []bool = [];
     kaku free: []int64 = [];
     kaku ids: []int64 = [];
     kaku counter: []int64 = [0];
     kaku handles: []Watched = [];
-    kaesu OpenResult { reactor: Reactor { poll_handle: poll_handle, wake_handle: wake_handle, generations: generations, active: active, free: free, ids: ids, counter: counter, handles: handles }, error: mu };
+    kaesu OpenResult {
+        reactor: Reactor {
+            poll_handle: poll_handle, wake_handle: wake_handle, generations: generations, active: active, free: free, ids: ids, counter: counter, handles: handles }, error: mu };
 }
 
 // An operation is live while its slot is active and both generation and id match.
 koukai waza live(reactor: Reactor, operation: Operation) -> bool {
     kaesu operation.slot >= 0 && operation.slot < len(reactor.generations)
-        && reactor.active[operation.slot] && reactor.generations[operation.slot] == operation.generation
-        && reactor.ids[operation.slot] == operation.id;
+    && reactor.active[operation.slot] && reactor.generations[operation.slot] == operation.generation
+    && reactor.ids[operation.slot] == operation.id;
 }
 
 // current reports whether an Event returned by poll still belongs to a live operation (it may have been cancelled since).
@@ -249,7 +269,7 @@ koukai waza poll(reactor: Reactor, timeout_ms: int64, max: int64) -> PollResult 
                 moshi (!live(reactor, operation)) { stale = stale + 1; }
                 moshi (live(reactor, operation)) {
                     array.push(events, Event { operation: operation.id, slot: slot, generation: generation, readable: mask - (mask / 2) * 2 == 1,
-                        writable: (mask / 2) - (mask / 4) * 2 == 1, error: (mask / 4) - (mask / 8) * 2 == 1, hangup: (mask / 8) - (mask / 16) * 2 == 1 });
+                            writable: (mask / 2) - (mask / 4) * 2 == 1, error: (mask / 4) - (mask / 8) * 2 == 1, hangup: (mask / 8) - (mask / 16) * 2 == 1 });
                 }
             }
         }
@@ -276,7 +296,13 @@ koukai waza close(reactor: Reactor) -> UnitResult {
     release(reactor.wake_handle);
     kaku slot = 0;
     aida (slot < len(reactor.generations)) {
-        moshi (reactor.active[slot]) { reactor.active[slot] = iie; reactor.generations[slot] = reactor.generations[slot] + 1; reactor.ids[slot] = 0; reactor.handles[slot] = Watched { handle: reactor.poll_handle }; }
+        moshi (reactor.active[slot]) {
+            reactor.active[slot] = iie;
+            reactor.generations[slot] = reactor.generations[slot] + 1;
+            reactor.ids[slot] = 0;
+            reactor.handles[slot] = Watched {
+                handle: reactor.poll_handle };
+        }
         slot = slot + 1;
     }
     kaesu UnitResult { error: failure };

@@ -40,8 +40,8 @@ class SeedIdentityTests(unittest.TestCase):
                 identity = seed_identity(kind)
                 self.assertEqual((identity.tag, identity.release_id, identity.asset_id,
                                   identity.asset_name, identity.sha256), pin)
-        binary = Path(__file__).resolve().parents[2] / 'bootstrap/seeds/gf4' / expected[GF4][3]
-        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), expected[GF4][4])
+        binary = Path(__file__).resolve().parents[2] / 'bootstrap/seeds/native-v21' / expected[NATIVE_V21][3]
+        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), expected[NATIVE_V21][4])
 
 
 class TrustedSeedTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class TrustedSeedTests(unittest.TestCase):
             patcher = patch(target, return_value=value) if 'platform.' in target else patch(target, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        for target in ('trusted_seed.download_seed', 'trusted_seed.run'):
+        for target in ('trusted_seed.download_seed', 'trusted_seed.run', 'trusted_seed.verify_macho_arm64'):
             patcher = patch(target)
             mocked = patcher.start()
             self.addCleanup(patcher.stop)
@@ -141,6 +141,21 @@ class TrustedSeedTests(unittest.TestCase):
         self.assertEqual(self.verify(local_seed=self.root / 'override', kind=NATIVE_V21)[0], 1)
         self.assertEqual(self.verify(dict(HOSTED, GITHUB_EVENT_NAME='pull_request'), kind=NATIVE_V21)[0], 1)
         self.download_seed.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_local_native_seed_verifies_pin_arch_and_signature(self):
+        local = self.root / 'local-native'
+        local.write_bytes(BYTES)
+        non_actions = {k: v for k, v in HOSTED.items() if k != 'GITHUB_ACTIONS'}
+        # GF4 or wrong bytes must be rejected when native-v21 is requested.
+        result, report = self.verify(env=non_actions, local_seed=local, kind=NATIVE_V21)
+        self.assertEqual((result, report['checks'][-1]['name']), (1, 'seed-pin'))
+        self.run.assert_not_called()
+        # Wrong Mach-O architecture must be rejected before codesign/execution.
+        self.verify_macho_arm64.side_effect = ValueError('seed binary is not a darwin-arm64 Mach-O executable')
+        with patch('seed_evidence.NATIVE_V21_SEED_SHA256', HASH):
+            result, report = self.verify(env=non_actions, local_seed=local, kind=NATIVE_V21)
+        self.assertEqual((result, report['checks'][-1]['name']), (1, 'seed-arch'))
         self.run.assert_not_called()
 
     def test_native_checks_pin_attestation_and_signature_before_execution(self):

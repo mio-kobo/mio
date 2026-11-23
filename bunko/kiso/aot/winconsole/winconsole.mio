@@ -5,77 +5,100 @@ yobu "kiso/array";
 // Bounded Windows console image generator, not source-language lowering.
 koukai teisu io_failure_exit = 111;
 koukai teisu maximum_message_size = 1048576;
-koukai kata BuildResult { bytes:[]uint8; error:string; }
-
-waza failure(message:string) -> BuildResult { kaesu BuildResult {bytes:[],error:message}; }
-waza import_call(code:x86_64.Assembler, patches:[]pe.Patch, index:int64) -> unit {
-    kaku at=len(code.bytes);
-    x86_64.mov_ri(code,x86_64.r11,0);
-    array.push(patches,pe.Patch {section:pe.text_section,offset:at+2,kind:pe.va64,target:pe.import_section,target_offset:index});
-    x86_64.call_memory(code,x86_64.r11,0);
-}
-waza finish(code:x86_64.Assembler, patches:[]pe.Patch, message:[]uint8, symbols:[]string, stack:int64, prolog:int64) -> BuildResult {
-    kaku assembled=x86_64.assemble(code);
-    moshi(assembled.error!=""){kaesu failure(assembled.error);}
-    kaku image=pe.executable(pe.ImageSpec {text:assembled.bytes,rdata:message,data:[],zero_fill:0,entry:0,
-        imports:[pe.ImportLibrary {name:"KERNEL32.dll",symbols:symbols}],patches:patches,
-        unwind:[pe.UnwindFunction {begin:0,end:len(assembled.bytes),prolog_size:prolog,stack_size:stack,stack_offset:prolog}]});
-    moshi(image.error!=mu){kaesu failure("PE_IMAGE_ERROR");}
-    kaesu BuildResult {bytes:image.bytes,error:""};
+koukai kata BuildResult {
+    bytes: []uint8;
+    error: string;
 }
 
-koukai waza exit_executable(exit_code:int64) -> BuildResult {
-    moshi(exit_code<0 || exit_code>255){kaesu failure("INVALID_EXIT_CODE");}
-    kaku code=x86_64.assembler();kaku patches:[]pe.Patch=[];
+waza failure(message: string) -> BuildResult { kaesu BuildResult { bytes: [], error: message }; }
+waza import_call(code: x86_64.Assembler, patches: []pe.Patch, index: int64) -> unit {
+    kaku at = len(code.bytes);
+    x86_64.mov_ri(code, x86_64.r11, 0);
+    array.push(patches, pe.Patch { section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.import_section, target_offset: index });
+    x86_64.call_memory(code, x86_64.r11, 0);
+}
+waza finish(code: x86_64.Assembler, patches: []pe.Patch, message: []uint8, symbols: []string, stack: int64, prolog: int64) -> BuildResult {
+    kaku assembled = x86_64.assemble(code);
+    moshi (assembled.error != "") { kaesu failure(assembled.error); }
+    kaku image = pe.executable(pe.ImageSpec { text: assembled.bytes, rdata: message, data: [], zero_fill: 0, entry: 0,
+            imports: [pe.ImportLibrary { name: "KERNEL32.dll", symbols: symbols }], patches: patches,
+            unwind: [pe.UnwindFunction { begin: 0, end: len(assembled.bytes), prolog_size: prolog, stack_size: stack, stack_offset: prolog }] });
+    moshi (image.error != mu) { kaesu failure("PE_IMAGE_ERROR"); }
+    kaesu BuildResult { bytes: image.bytes, error: "" };
+}
+
+koukai waza exit_executable(exit_code: int64) -> BuildResult {
+    moshi (exit_code<0 || exit_code>255) { kaesu failure("INVALID_EXIT_CODE"); }
+    kaku code = x86_64.assembler();
+    kaku patches: []pe.Patch = [];
     // Entry RSP is 8 mod 16. 32-byte outgoing shadow space + alignment.
-    x86_64.sub_ri(code,x86_64.rsp,40);kaku prolog=len(code.bytes);
-    x86_64.mov_ri(code,x86_64.rcx,exit_code);import_call(code,patches,0);
+    x86_64.sub_ri(code, x86_64.rsp, 40);
+    kaku prolog = len(code.bytes);
+    x86_64.mov_ri(code, x86_64.rcx, exit_code);
+    import_call(code, patches, 0);
     // ExitProcess does not return; retain a valid epilog if it ever does.
-    x86_64.add_ri(code,x86_64.rsp,40);x86_64.ret(code);
-    kaesu finish(code,patches,[],["ExitProcess"],40,prolog);
+    x86_64.add_ri(code, x86_64.rsp, 40);
+    x86_64.ret(code);
+    kaesu finish(code, patches, [], ["ExitProcess"], 40, prolog);
 }
 
 // Synchronous inherited stdout only; output is bytes, without encoding/newline conversion.
 // Uses volatile registers exclusively; state survives API calls in local stack slots.
-koukai waza stdout_executable(message:[]uint8, exit_code:int64) -> BuildResult {
-    moshi(exit_code<0 || exit_code>255){kaesu failure("INVALID_EXIT_CODE");}
-    moshi(len(message)>maximum_message_size){kaesu failure("MESSAGE_TOO_LARGE");}
-    moshi(len(message)==0){kaesu exit_executable(exit_code);}
-    kaku code=x86_64.assembler();kaku patches:[]pe.Patch=[];
+koukai waza stdout_executable(message: []uint8, exit_code: int64) -> BuildResult {
+    moshi (exit_code<0 || exit_code>255) { kaesu failure("INVALID_EXIT_CODE"); }
+    moshi (len(message)>maximum_message_size) { kaesu failure("MESSAGE_TOO_LARGE"); }
+    moshi (len(message) == 0) { kaesu exit_executable(exit_code); }
+    kaku code = x86_64.assembler();
+    kaku patches: []pe.Patch = [];
     // [0,32) shadow space, +32 fifth argument, +40 zero-extended DWORD
     // bytes-written, +48 handle, +56 cursor, +64 remaining. Total 72 aligns calls.
-    x86_64.sub_ri(code,x86_64.rsp,72);kaku prolog=len(code.bytes);
-    x86_64.mov_ri(code,x86_64.rcx,4294967285); // DWORD STD_OUTPUT_HANDLE (-11)
-    import_call(code,patches,0);
-    x86_64.test_rr(code,x86_64.rax,x86_64.rax);x86_64.jcc(code,x86_64.cc_e,"failure");
-    x86_64.cmp_ri(code,x86_64.rax,-1);x86_64.jcc(code,x86_64.cc_e,"failure");
-    x86_64.mov_store(code,x86_64.rsp,48,x86_64.rax);
-    kaku at=len(code.bytes);x86_64.mov_ri(code,x86_64.rdx,0);
-    array.push(patches,pe.Patch {section:pe.text_section,offset:at+2,kind:pe.va64,target:pe.rdata_section,target_offset:0});
-    x86_64.mov_store(code,x86_64.rsp,56,x86_64.rdx);
-    x86_64.mov_ri(code,x86_64.r8,len(message));x86_64.mov_store(code,x86_64.rsp,64,x86_64.r8);
-    x86_64.label(code,"write");
-    x86_64.mov_load(code,x86_64.rcx,x86_64.rsp,48);
-    x86_64.mov_load(code,x86_64.rdx,x86_64.rsp,56);
-    x86_64.mov_load(code,x86_64.r8,x86_64.rsp,64);
-    x86_64.lea(code,x86_64.r9,x86_64.rsp,40);
-    x86_64.mov_ri(code,x86_64.rax,0);
-    x86_64.mov_store(code,x86_64.rsp,40,x86_64.rax);
-    x86_64.mov_store(code,x86_64.rsp,32,x86_64.rax); // lpOverlapped = NULL
-    import_call(code,patches,1);
-    x86_64.zero_extend_eax(code);x86_64.test_rr(code,x86_64.rax,x86_64.rax);
-    x86_64.jcc(code,x86_64.cc_e,"failure");
-    x86_64.mov_load(code,x86_64.rax,x86_64.rsp,40);
-    x86_64.test_rr(code,x86_64.rax,x86_64.rax);x86_64.jcc(code,x86_64.cc_e,"failure");
-    x86_64.mov_load(code,x86_64.r8,x86_64.rsp,64);
-    x86_64.cmp_rr(code,x86_64.rax,x86_64.r8);x86_64.jcc(code,x86_64.cc_a,"failure");
-    x86_64.sub_rr(code,x86_64.r8,x86_64.rax);x86_64.mov_store(code,x86_64.rsp,64,x86_64.r8);
-    x86_64.mov_load(code,x86_64.rdx,x86_64.rsp,56);
-    x86_64.add_rr(code,x86_64.rdx,x86_64.rax);x86_64.mov_store(code,x86_64.rsp,56,x86_64.rdx);
-    x86_64.test_rr(code,x86_64.r8,x86_64.r8);x86_64.jcc(code,x86_64.cc_ne,"write");
-    x86_64.mov_ri(code,x86_64.rcx,exit_code);x86_64.jmp(code,"exit");
-    x86_64.label(code,"failure");x86_64.mov_ri(code,x86_64.rcx,io_failure_exit);
-    x86_64.label(code,"exit");import_call(code,patches,2);
-    x86_64.add_ri(code,x86_64.rsp,72);x86_64.ret(code);
-    kaesu finish(code,patches,message,["GetStdHandle","WriteFile","ExitProcess"],72,prolog);
+    x86_64.sub_ri(code, x86_64.rsp, 72);
+    kaku prolog = len(code.bytes);
+    x86_64.mov_ri(code, x86_64.rcx, 4294967285); // DWORD STD_OUTPUT_HANDLE (-11)
+    import_call(code, patches, 0);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "failure");
+    x86_64.cmp_ri(code, x86_64.rax, -1);
+    x86_64.jcc(code, x86_64.cc_e, "failure");
+    x86_64.mov_store(code, x86_64.rsp, 48, x86_64.rax);
+    kaku at = len(code.bytes);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    array.push(patches, pe.Patch { section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.rdata_section, target_offset: 0 });
+    x86_64.mov_store(code, x86_64.rsp, 56, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.r8, len(message));
+    x86_64.mov_store(code, x86_64.rsp, 64, x86_64.r8);
+    x86_64.label(code, "write");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rsp, 48);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsp, 56);
+    x86_64.mov_load(code, x86_64.r8, x86_64.rsp, 64);
+    x86_64.lea(code, x86_64.r9, x86_64.rsp, 40);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.mov_store(code, x86_64.rsp, 40, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rsp, 32, x86_64.rax); // lpOverlapped = NULL
+    import_call(code, patches, 1);
+    x86_64.zero_extend_eax(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "failure");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rsp, 40);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "failure");
+    x86_64.mov_load(code, x86_64.r8, x86_64.rsp, 64);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_a, "failure");
+    x86_64.sub_rr(code, x86_64.r8, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rsp, 64, x86_64.r8);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rsp, 56);
+    x86_64.add_rr(code, x86_64.rdx, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rsp, 56, x86_64.rdx);
+    x86_64.test_rr(code, x86_64.r8, x86_64.r8);
+    x86_64.jcc(code, x86_64.cc_ne, "write");
+    x86_64.mov_ri(code, x86_64.rcx, exit_code);
+    x86_64.jmp(code, "exit");
+    x86_64.label(code, "failure");
+    x86_64.mov_ri(code, x86_64.rcx, io_failure_exit);
+    x86_64.label(code, "exit");
+    import_call(code, patches, 2);
+    x86_64.add_ri(code, x86_64.rsp, 72);
+    x86_64.ret(code);
+    kaesu finish(code, patches, message, ["GetStdHandle", "WriteFile", "ExitProcess"], 72, prolog);
 }

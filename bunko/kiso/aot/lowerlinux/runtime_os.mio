@@ -85,6 +85,11 @@ waza emit_os_runtime(code: x86_64.Assembler) -> unit {
 
     // rt.os_exit: rdi = status
     x86_64.label(code, "rt.os_exit");
+    moshi (cabi_enabled(code)) {
+        // C 模式：经 libc exit 冲刷 C stdio；exit 要求 RSP 16 字节对齐。
+        x86_64.and_ri(code, x86_64.rsp, -16);
+        x86_64.call_external(code, "exit");
+    }
     x86_64.mov_eax_imm(code, 231);
     x86_64.syscall(code);
 
@@ -259,26 +264,42 @@ waza emit_os_real_path(code: x86_64.Assembler) -> unit {
     x86_64.mov_load8(code, x86_64.rcx, x86_64.rax, 0);
     x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
     x86_64.jcc(code, x86_64.cc_ne, "rt.os_real_path.open");
-    x86_64.mov_ri(code, x86_64.rdx, 47); x86_64.mov_store8(code, x86_64.rbp, -64, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 112); x86_64.mov_store8(code, x86_64.rbp, -63, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 114); x86_64.mov_store8(code, x86_64.rbp, -62, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 111); x86_64.mov_store8(code, x86_64.rbp, -61, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 99); x86_64.mov_store8(code, x86_64.rbp, -60, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 47); x86_64.mov_store8(code, x86_64.rbp, -59, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 115); x86_64.mov_store8(code, x86_64.rbp, -58, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 101); x86_64.mov_store8(code, x86_64.rbp, -57, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 108); x86_64.mov_store8(code, x86_64.rbp, -56, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 102); x86_64.mov_store8(code, x86_64.rbp, -55, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 47); x86_64.mov_store8(code, x86_64.rbp, -54, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 101); x86_64.mov_store8(code, x86_64.rbp, -53, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 120); x86_64.mov_store8(code, x86_64.rbp, -52, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 101); x86_64.mov_store8(code, x86_64.rbp, -51, x86_64.rdx);
-    x86_64.mov_ri(code, x86_64.rdx, 0); x86_64.mov_store8(code, x86_64.rbp, -50, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 47);
+    x86_64.mov_store8(code, x86_64.rbp, -64, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 112);
+    x86_64.mov_store8(code, x86_64.rbp, -63, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 114);
+    x86_64.mov_store8(code, x86_64.rbp, -62, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 111);
+    x86_64.mov_store8(code, x86_64.rbp, -61, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 99);
+    x86_64.mov_store8(code, x86_64.rbp, -60, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 47);
+    x86_64.mov_store8(code, x86_64.rbp, -59, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 115);
+    x86_64.mov_store8(code, x86_64.rbp, -58, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 101);
+    x86_64.mov_store8(code, x86_64.rbp, -57, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 108);
+    x86_64.mov_store8(code, x86_64.rbp, -56, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 102);
+    x86_64.mov_store8(code, x86_64.rbp, -55, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 47);
+    x86_64.mov_store8(code, x86_64.rbp, -54, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 101);
+    x86_64.mov_store8(code, x86_64.rbp, -53, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 120);
+    x86_64.mov_store8(code, x86_64.rbp, -52, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 101);
+    x86_64.mov_store8(code, x86_64.rbp, -51, x86_64.rdx);
+    x86_64.mov_ri(code, x86_64.rdx, 0);
+    x86_64.mov_store8(code, x86_64.rbp, -50, x86_64.rdx);
     x86_64.lea(code, x86_64.rdi, x86_64.rbp, -64);
     x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -8);
     x86_64.mov_load(code, x86_64.rdx, x86_64.rsi, 16);
     x86_64.mov_load(code, x86_64.rsi, x86_64.rsi, 40);
-    x86_64.mov_eax_imm(code, 89); x86_64.syscall(code);
+    x86_64.mov_eax_imm(code, 89);
+    x86_64.syscall(code);
     x86_64.jmp(code, "rt.os_real_path.done");
     x86_64.label(code, "rt.os_real_path.open");
     x86_64.mov_rr(code, x86_64.rdi, x86_64.rax);
@@ -474,7 +495,6 @@ waza emit_os_spawn(code: x86_64.Assembler) -> unit {
     x86_64.mov_eax_imm(code, 231);
     x86_64.syscall(code);
 }
-
 
 // rt.os_redirect: rdi = path string, rsi = target descriptor -> rax = 1 when the file was opened for writing
 // (O_WRONLY|O_CREAT|O_TRUNC, mode 0600) and installed as that descriptor, else 0. Used in the child before exec.

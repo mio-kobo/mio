@@ -11,52 +11,147 @@ yobu "kiso/os";
 yobu "kiso/string";
 // Actual calling-thread attachment, acquisition failures, duplicate attach and
 // reuse. This witness creates no worker and must never count fake create/join.
-waza n(f:ir.Function,r:int64,value:int64) -> unit {ir.put(f,ir.constant,r,0,0,value);}
-waza load(f:ir.Function,r:int64,offset:int64) -> unit {ir.put(f,ir.load,r,0,0,offset);}
-waza set(f:ir.Function,offset:int64,value:int64) -> unit {n(f,31,value);ir.put(f,ir.store,0,0,31,offset);}
-waza ok(f:ir.Function,r:int64) -> unit {ir.branch(f,ir.nonzero,r,"fail");}
-waza eq(f:ir.Function,a:int64,b:int64) -> unit {ir.put(f,ir.equal,30,a,b,0);ir.branch(f,ir.zero,30,"fail");}
-waza balanced(f:ir.Function) -> unit {
-    load(f,10,gc.thread_acquisitions);load(f,11,gc.thread_releases);eq(f,10,11);
-    load(f,10,gc.thread_owns_key);ok(f,10);load(f,10,gc.thread_owns_mutex);ok(f,10);load(f,10,gc.thread_owns_condition);ok(f,10);load(f,10,gc.thread_member);ok(f,10);
+waza n(f: ir.Function, r: int64, value: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, value); }
+waza load(f: ir.Function, r: int64, offset: int64) -> unit { ir.put(f, ir.load, r, 0, 0, offset); }
+waza set(f: ir.Function, offset: int64, value: int64) -> unit {
+    n(f, 31, value);
+    ir.put(f, ir.store, 0, 0, 31, offset);
+}
+waza ok(f: ir.Function, r: int64) -> unit { ir.branch(f, ir.nonzero, r, "fail"); }
+waza eq(f: ir.Function, a: int64, b: int64) -> unit {
+    ir.put(f, ir.equal, 30, a, b, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
+waza balanced(f: ir.Function) -> unit {
+    load(f, 10, gc.thread_acquisitions);
+    load(f, 11, gc.thread_releases);
+    eq(f, 10, 11);
+    load(f, 10, gc.thread_owns_key);
+    ok(f, 10);
+    load(f, 10, gc.thread_owns_mutex);
+    ok(f, 10);
+    load(f, 10, gc.thread_owns_condition);
+    ok(f, 10);
+    load(f, 10, gc.thread_member);
+    ok(f, 10);
 }
 waza run() -> ir.Function {
-    kaku f=ir.function("run");load(f,31,gc.thread_imports);ir.put(f,ir.imports,0,31,0,0);
-    set(f,gc.thread_version,3);ir.put(f,ir.address,10,0,0,288);ir.put(f,ir.store,0,0,10,gc.thread_mutex);ir.put(f,ir.address,10,0,0,352);ir.put(f,ir.store,0,0,10,gc.thread_condition);
-    ir.put(f,ir.address,20,0,0,400);ir.put(f,ir.store,0,0,20,gc.thread_registry);n(f,1,3);ir.put(f,ir.store,0,20,1,0);
+    kaku f = ir.function("run");
+    load(f, 31, gc.thread_imports);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
+    set(f, gc.thread_version, 3);
+    ir.put(f, ir.address, 10, 0, 0, 288);
+    ir.put(f, ir.store, 0, 0, 10, gc.thread_mutex);
+    ir.put(f, ir.address, 10, 0, 0, 352);
+    ir.put(f, ir.store, 0, 0, 10, gc.thread_condition);
+    ir.put(f, ir.address, 20, 0, 0, 400);
+    ir.put(f, ir.store, 0, 0, 20, gc.thread_registry);
+    n(f, 1, 3);
+    ir.put(f, ir.store, 0, 20, 1, 0);
     // Version mismatch must not acquire a resource.
-    set(f,gc.thread_version,2);ir.invoke_function(f,"thread_attach",1,[0]);ir.branch(f,ir.zero,1,"fail");balanced(f);set(f,gc.thread_version,3);
-    kaku faults=[ir.tls_create,ir.mutex_create,ir.condition_create,gc.tls_set,gc.tls_get];kaku i=0;
-    aida(i<len(faults)){
-        set(f,gc.thread_fault_operation,faults[i]);set(f,gc.thread_fault_error,77);
-        ir.invoke_function(f,"thread_attach",1,[0]);ir.branch(f,ir.zero,1,"fail");balanced(f);
-        ir.put(f,ir.load,10,20,0,8);ok(f,10);load(f,10,gc.thread_owns_handle);ok(f,10);i=i+1;
+    set(f, gc.thread_version, 2);
+    ir.invoke_function(f, "thread_attach", 1, [0]);
+    ir.branch(f, ir.zero, 1, "fail");
+    balanced(f);
+    set(f, gc.thread_version, 3);
+    kaku faults = [ir.tls_create, ir.mutex_create, ir.condition_create, gc.tls_set, gc.tls_get];
+    kaku i = 0;
+    aida (i<len(faults)) {
+        set(f, gc.thread_fault_operation, faults[i]);
+        set(f, gc.thread_fault_error, 77);
+        ir.invoke_function(f, "thread_attach", 1, [0]);
+        ir.branch(f, ir.zero, 1, "fail");
+        balanced(f);
+        ir.put(f, ir.load, 10, 20, 0, 8);
+        ok(f, 10);
+        load(f, 10, gc.thread_owns_handle);
+        ok(f, 10);
+        i = i + 1;
     }
-    i=0;aida(i<2){
-        ir.invoke_function(f,"thread_attach",1,[0]);ok(f,1);
-        load(f,2,gc.thread_key);ir.call(f,gc.tls_get,3,[2]);eq(f,3,0);
-        ir.call(f,gc.thread_identity,3,[]);load(f,4,gc.thread_identity_value);eq(f,3,4);
-        ir.invoke_function(f,"thread_attach",1,[0]);ir.branch(f,ir.zero,1,"fail");
-        ir.invoke_function(f,"thread_leave",1,[0]);ok(f,1);ir.invoke_function(f,"thread_close",1,[0]);ok(f,1);balanced(f);i=i+1;
+    i = 0; aida (i<2) {
+        ir.invoke_function(f, "thread_attach", 1, [0]);
+        ok(f, 1);
+        load(f, 2, gc.thread_key);
+        ir.call(f, gc.tls_get, 3, [2]);
+        eq(f, 3, 0);
+        ir.call(f, gc.thread_identity, 3, []);
+        load(f, 4, gc.thread_identity_value);
+        eq(f, 3, 4);
+        ir.invoke_function(f, "thread_attach", 1, [0]);
+        ir.branch(f, ir.zero, 1, "fail");
+        ir.invoke_function(f, "thread_leave", 1, [0]);
+        ok(f, 1);
+        ir.invoke_function(f, "thread_close", 1, [0]);
+        ok(f, 1);
+        balanced(f);
+        i = i + 1;
     }
-    ir.put(f,ir.address,21,0,0,480);kaku fields=[gc.thread_registrations,gc.thread_exits,gc.thread_acquisitions,gc.thread_releases,gc.thread_starts,gc.thread_joins,gc.thread_member,gc.thread_fault_count];
-    kaku expected=[2,2,15,15,0,0,0,5];i=0;
-    aida(i<len(fields)){load(f,1,fields[i]);n(f,2,expected[i]);eq(f,1,2);ir.put(f,ir.store,0,21,1,i*8);i=i+1;}
-    n(f,2,64);ir.call(f,103,3,[21,2]);n(f,2,64);eq(f,3,2);n(f,1,0);ir.call(f,gc.abort_runtime,2,[1]);
-    ir.branch(f,ir.label,0,"fail");n(f,1,90);ir.call(f,gc.abort_runtime,2,[1]);kaesu f;
+    ir.put(f, ir.address, 21, 0, 0, 480);
+    kaku fields = [gc.thread_registrations, gc.thread_exits, gc.thread_acquisitions, gc.thread_releases, gc.thread_starts, gc.thread_joins, gc.thread_member, gc.thread_fault_count];
+    kaku expected = [2, 2, 15, 15, 0, 0, 0, 5];
+    i = 0;
+    aida (i<len(fields)) {
+        load(f, 1, fields[i]);
+        n(f, 2, expected[i]);
+        eq(f, 1, 2);
+        ir.put(f, ir.store, 0, 21, 1, i * 8);
+        i = i + 1;
+    }
+    n(f, 2, 64);
+    ir.call(f, 103, 3, [21, 2]);
+    n(f, 2, 64);
+    eq(f, 3, 2);
+    n(f, 1, 0);
+    ir.call(f, gc.abort_runtime, 2, [1]);
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 1, 90);
+    ir.call(f, gc.abort_runtime, 2, [1]);
+    kaesu f;
 }
-waza fatal(message:string) -> unit {fs.write_all("/dev/stderr",string.to_bytes(message));os.exit(1);}
+waza fatal(message: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(message));
+    os.exit(1);
+}
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)!=2){fatal("output path");kaesu;}
-    kaku functions=gc.cooperative_thread_program(hai);array.append_all(functions,gc.safepoint_program(16));array.append_all(functions,darwin.thread_platform_program());array.push(functions,run());
-    kaku bindings=darwin.thread_bindings();array.push(bindings,ir.Binding {operation:gc.gc_visit_root_operation,slot:7,arguments:[-2],result_bits:64});
-    kaku c=arm64.assembler();kaku p:[]macho.AddressPatch=[];
-    kaku at=len(c.words);arm64.assembler_emit(c,arm64.movz_x(7,0,0));arm64.assembler_emit(c,arm64.movz_x(7,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:0,register:7});
-    arm64.assembler_emit(c,arm64.add_imm_x(0,7,darwin.thread_symbol_count*8,iie));arm64.assembler_emit(c,arm64.str_x(7,0,gc.thread_imports));arm64.assembler_bl(c,"attach_run");
-    kaku error=aarch64.emit_program(c,functions,bindings,darwin.thread_symbol_count,"attach");moshi(error!=""){fatal(error);}
-    kaku words=arm64.assembler_assemble(c);moshi(words.error!=mu){fatal("assembly");}
-    kaku linked=darwin.executable_appended(macho.ImageSpec {words:words.words,constants:[],globals:0,patches:p},darwin.thread_symbols(),68);moshi(linked.error!=""){fatal(linked.error);}
-    kaku signed=sign.adhoc_linked(linked.bytes);moshi(signed.error!=""){fatal(signed.error);}
-    moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){fatal("write");}
+    kaku args = os.arguments();
+    moshi (len(args) != 2) {
+        fatal("output path");
+        kaesu;
+    }
+    kaku functions = gc.cooperative_thread_program(hai);
+    array.append_all(functions, gc.safepoint_program(16));
+    array.append_all(functions, darwin.thread_platform_program());
+    array.push(functions, run());
+    kaku bindings = darwin.thread_bindings();
+    array.push(bindings, ir.Binding {
+            operation: gc.gc_visit_root_operation, slot: 7, arguments: [-2], result_bits: 64 });
+    kaku c = arm64.assembler();
+    kaku p: []macho.AddressPatch = [];
+    kaku at = len(c.words);
+    arm64.assembler_emit(c, arm64.movz_x(7, 0, 0));
+    arm64.assembler_emit(c, arm64.movz_x(7, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: 0, register: 7 });
+    arm64.assembler_emit(c, arm64.add_imm_x(0, 7, darwin.thread_symbol_count * 8, iie));
+    arm64.assembler_emit(c, arm64.str_x(7, 0, gc.thread_imports));
+    arm64.assembler_bl(c, "attach_run");
+    kaku error = aarch64.emit_program(c, functions, bindings, darwin.thread_symbol_count, "attach");
+    moshi (error != "") {
+        fatal(error);
+    }
+    kaku words = arm64.assembler_assemble(c);
+    moshi (words.error != mu) {
+        fatal("assembly");
+    }
+    kaku linked = darwin.executable_appended(macho.ImageSpec {
+            words: words.words, constants: [], globals: 0, patches: p }, darwin.thread_symbols(), 68);
+    moshi (linked.error != "") {
+        fatal(linked.error);
+    }
+    kaku signed = sign.adhoc_linked(linked.bytes);
+    moshi (signed.error != "") {
+        fatal(signed.error);
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) { fatal("write"); }
 }
 main();

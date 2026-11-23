@@ -3,25 +3,84 @@
 // No pointer buffer is dropped or fabricated. Counter104 is published before
 // pending bit42; the independent marker retries a real heap walk if publication
 // is still in flight. Mutator pause protects heap-layout changes during walks.
-koukai teisu old_deferred_bit=4398046511104;
+koukai teisu old_deferred_bit = 4398046511104;
 waza old_defer_program() -> ir.Function {
- kaku f=ir.function("gc_old_defer");ir.put(f,ir.address,20,0,0,104);tconstant(f,21,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:22,left:20,right:21,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});
- tconstant(f,6,16);ir.put(f,ir.subtract,10,1,6,0);tconstant(f,14,0);
- ir.branch(f,ir.label,0,"defer_cas");ir.put(f,ir.acquire_load,11,10,0,0);old_bit(f,11,12,old_deferred_bit);ir.branch(f,ir.nonzero,12,"invalid");tconstant(f,12,old_deferred_bit);ir.put(f,ir.add,12,11,12,0);
- array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:13,left:10,right:12,immediate:0,name:"",arguments:[11],order:acq_rel,failure_order:acquire});ir.put(f,ir.equal,13,13,11,0);ir.branch(f,ir.nonzero,13,"done");tconstant(f,6,1);ir.put(f,ir.add,14,14,6,0);tconstant(f,6,1024);ir.put(f,ir.less_unsigned,6,14,6,0);ir.branch(f,ir.nonzero,6,"defer_cas");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);old_error(f,5);treturn(f,4);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_defer");
+    ir.put(f, ir.address, 20, 0, 0, 104);
+    tconstant(f, 21, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 22, left: 20, right: 21, immediate: 0, name: "", arguments: [], order: acq_rel, failure_order: relaxed });
+    tconstant(f, 6, 16);
+    ir.put(f, ir.subtract, 10, 1, 6, 0);
+    tconstant(f, 14, 0);
+    ir.branch(f, ir.label, 0, "defer_cas");
+    ir.put(f, ir.acquire_load, 11, 10, 0, 0);
+    old_bit(f, 11, 12, old_deferred_bit);
+    ir.branch(f, ir.nonzero, 12, "invalid");
+    tconstant(f, 12, old_deferred_bit);
+    ir.put(f, ir.add, 12, 11, 12, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 13, left: 10, right: 12, immediate: 0, name: "", arguments: [11], order: acq_rel, failure_order: acquire });
+    ir.put(f, ir.equal, 13, 13, 11, 0);
+    ir.branch(f, ir.nonzero, 13, "done");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.add, 14, 14, 6, 0);
+    tconstant(f, 6, 1024);
+    ir.put(f, ir.less_unsigned, 6, 14, 6, 0);
+    ir.branch(f, ir.nonzero, 6, "defer_cas");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_reoffer_program() -> ir.Function {
- // ctx,owned header. The only marker calls this during a real overflow walk.
- // Clear bit42 only after successful queue publication. No other consumer can
- // revisit this header until this function returns, so it cannot duplicate it.
- kaku f=ir.function("gc_old_reoffer");ir.put(f,ir.acquire_load,10,1,0,0);old_bit(f,10,11,old_deferred_bit);ir.branch(f,ir.zero,11,"done");
- ir.put(f,ir.load,16,0,0,112);ir.put(f,ir.address,17,1,0,16);ir.invoke_function(f,"gc_work_offer",5,[0,16,17]);ir.branch(f,ir.zero,5,"published");tcheck(f,5,1,"done");tcheck(f,5,2,"done");ir.branch(f,ir.jump,0,"failed");
- ir.branch(f,ir.label,0,"published");tconstant(f,14,0);
- ir.branch(f,ir.label,0,"clear_cas");ir.put(f,ir.acquire_load,10,1,0,0);old_bit(f,10,11,old_deferred_bit);ir.branch(f,ir.zero,11,"invalid");tconstant(f,11,old_deferred_bit);ir.put(f,ir.subtract,11,10,11,0);
- array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:12,left:1,right:11,immediate:0,name:"",arguments:[10],order:acq_rel,failure_order:acquire});ir.put(f,ir.equal,12,12,10,0);ir.branch(f,ir.nonzero,12,"cleared");tconstant(f,6,1);ir.put(f,ir.add,14,14,6,0);tconstant(f,6,1024);ir.put(f,ir.less_unsigned,6,14,6,0);ir.branch(f,ir.nonzero,6,"clear_cas");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"cleared");ir.put(f,ir.address,20,0,0,104);tconstant(f,21,-1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:22,left:20,right:21,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});ir.branch(f,ir.zero,22,"invalid");
- ir.branch(f,ir.label,0,"done");treturn(f,0);
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");old_error(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // ctx,owned header. The only marker calls this during a real overflow walk.
+    // Clear bit42 only after successful queue publication. No other consumer can
+    // revisit this header until this function returns, so it cannot duplicate it.
+    kaku f = ir.function("gc_old_reoffer");
+    ir.put(f, ir.acquire_load, 10, 1, 0, 0);
+    old_bit(f, 10, 11, old_deferred_bit);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.load, 16, 0, 0, 112);
+    ir.put(f, ir.address, 17, 1, 0, 16);
+    ir.invoke_function(f, "gc_work_offer", 5, [0, 16, 17]);
+    ir.branch(f, ir.zero, 5, "published");
+    tcheck(f, 5, 1, "done");
+    tcheck(f, 5, 2, "done");
+    ir.branch(f, ir.jump, 0, "failed");
+    ir.branch(f, ir.label, 0, "published");
+    tconstant(f, 14, 0);
+    ir.branch(f, ir.label, 0, "clear_cas");
+    ir.put(f, ir.acquire_load, 10, 1, 0, 0);
+    old_bit(f, 10, 11, old_deferred_bit);
+    ir.branch(f, ir.zero, 11, "invalid");
+    tconstant(f, 11, old_deferred_bit);
+    ir.put(f, ir.subtract, 11, 10, 11, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 12, left: 1, right: 11, immediate: 0, name: "", arguments: [10], order: acq_rel, failure_order: acquire });
+    ir.put(f, ir.equal, 12, 12, 10, 0);
+    ir.branch(f, ir.nonzero, 12, "cleared");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.add, 14, 14, 6, 0);
+    tconstant(f, 6, 1024);
+    ir.put(f, ir.less_unsigned, 6, 14, 6, 0);
+    ir.branch(f, ir.nonzero, 6, "clear_cas");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "cleared");
+    ir.put(f, ir.address, 20, 0, 0, 104);
+    tconstant(f, 21, -1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 22, left: 20, right: 21, immediate: 0, name: "", arguments: [], order: acq_rel, failure_order: relaxed });
+    ir.branch(f, ir.zero, 22, "invalid");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    old_error(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }

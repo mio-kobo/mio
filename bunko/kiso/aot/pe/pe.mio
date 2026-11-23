@@ -1,7 +1,8 @@
 yobu "kiso/array";
 yobu "kiso/string";
 
-// PE32+ image writer only: no instruction selection, host I/O or linker process.
+// 纯 Mio 实现的 Windows PE32+ 可执行映像生成器：仅负责段布局、导入表（IAT）、重定位与 xdata/pdata 展开信息编码，
+// 不涉及指令选择、宿主 I/O 或外部链接器进程。
 koukai teisu text_section = 1;
 koukai teisu rdata_section = 2;
 koukai teisu data_section = 3;
@@ -15,315 +16,679 @@ koukai teisu section_alignment = 4096;
 koukai teisu maximum_image_size = 67108864;
 
 koukai sentaku PEError {
-    EmptyText; InvalidEntry; ImageTooLarge; InvalidImport; InvalidPatch; InvalidUnwind;
+    EmptyText;
+    InvalidEntry;
+    ImageTooLarge;
+    InvalidImport;
+    InvalidPatch;
+    InvalidUnwind;
 }
-koukai kata ImportLibrary { name:string; symbols:[]string; }
+koukai kata ImportLibrary {
+    name: string;
+    symbols: []string;
+}
 // Source offsets are within initialized bytes. Target offsets are within the
 // virtual section; import_section instead uses a flattened zero-based IAT index.
-koukai kata Patch { section:int64; offset:int64; kind:int64; target:int64; target_offset:int64; }
+koukai kata Patch {
+    section: int64;
+    offset: int64;
+    kind: int64;
+    target: int64;
+    target_offset: int64;
+}
 // Bounded unwind model: no frame pointer, handlers or nonvolatile saves yet.
 // stack_offset is the offset AFTER the single stack allocation instruction.
-koukai kata UnwindFunction { begin:int64; end:int64; prolog_size:int64; stack_size:int64; stack_offset:int64; }
+koukai kata UnwindFunction {
+    begin: int64;
+    end: int64;
+    prolog_size: int64;
+    stack_size: int64;
+    stack_offset: int64;
+}
 // Frame-pointer function: `push rbp` (offsets are AFTER each instruction), `mov rbp,rsp`, optional
 // `sub rsp,alloc_size`. alloc_size==0 means no allocation and alloc_offset must be 0.
 // Unwind recovers RSP from RBP (FrameOffset 0), so later dynamic pushes and `and rsp,-16` are covered.
-koukai kata FrameFunction { begin:int64; end:int64; push_offset:int64; set_offset:int64; alloc_offset:int64; alloc_size:int64; }
+koukai kata FrameFunction {
+    begin: int64;
+    end: int64;
+    push_offset: int64;
+    set_offset: int64;
+    alloc_offset: int64;
+    alloc_size: int64;
+}
 koukai kata ImageSpec {
-    text:[]uint8; rdata:[]uint8; data:[]uint8; zero_fill:int64; entry:int64;
-    imports:[]ImportLibrary; patches:[]Patch; unwind:[]UnwindFunction;
+    text: []uint8;
+    rdata: []uint8;
+    data: []uint8;
+    zero_fill: int64;
+    entry: int64;
+    imports: []ImportLibrary;
+    patches: []Patch;
+    unwind: []UnwindFunction;
 }
-koukai kata Section { kind:int64; name:string; rva:int64; offset:int64; virtual_size:int64; raw_size:int64; flags:int64; }
-koukai kata Layout { headers_size:int64; image_size:int64; file_size:int64; sections:[]Section; iat_rva:int64; iat_size:int64; }
-koukai kata ImageResult { bytes:[]uint8; layout:Layout; error:PEError?; }
+koukai kata Section {
+    kind: int64;
+    name: string;
+    rva: int64;
+    offset: int64;
+    virtual_size: int64;
+    raw_size: int64;
+    flags: int64;
+}
+koukai kata Layout {
+    headers_size: int64;
+    image_size: int64;
+    file_size: int64;
+    sections: []Section;
+    iat_rva: int64;
+    iat_size: int64;
+}
+koukai kata ImageResult {
+    bytes: []uint8;
+    layout: Layout;
+    error: PEError?;
+}
 
-kata LibraryLayout { lookup:int64; iat:int64; name:int64; hints:[]int64; }
-kata Imports { size:int64; iat:int64; iat_size:int64; libraries:[]LibraryLayout; slots:[]int64; }
+kata LibraryLayout {
+    lookup: int64;
+    iat: int64;
+    name: int64;
+    hints: []int64;
+}
+kata Imports {
+    size: int64;
+    iat: int64;
+    iat_size: int64;
+    libraries: []LibraryLayout;
+    slots: []int64;
+}
 
-waza align(value:int64, boundary:int64) -> int64 { kaesu ((value+boundary-1)/boundary)*boundary; }
-waza empty_layout() -> Layout { kaesu Layout {headers_size:0,image_size:0,file_size:0,sections:[],iat_rva:0,iat_size:0}; }
-waza failure(error:PEError) -> ImageResult { kaesu ImageResult {bytes:[],layout:empty_layout(),error:error}; }
-waza put(bytes:[]uint8, at:int64, width:int64, value:int64) -> unit {
-    kaku i=0; kaku rest=value;
-    aida(i<width){bytes[at+i]=uint8(rest-(rest/256)*256);rest=rest/256;i=i+1;}
+waza align(value: int64, boundary: int64) -> int64 { kaesu ((value + boundary - 1) / boundary) * boundary; }
+waza empty_layout() -> Layout { kaesu Layout { headers_size: 0, image_size: 0, file_size: 0, sections: [], iat_rva: 0, iat_size: 0 }; }
+waza failure(error: PEError) -> ImageResult { kaesu ImageResult { bytes: [], layout: empty_layout(), error: error }; }
+waza put(bytes: []uint8, at: int64, width: int64, value: int64) -> unit {
+    kaku i = 0;
+    kaku rest = value;
+    aida (i<width) {
+        bytes[at + i] = uint8(rest - (rest / 256) * 256);
+        rest = rest / 256;
+        i = i + 1;
+    }
 }
-waza copy_bytes(bytes:[]uint8, at:int64, source:[]uint8) -> unit {
-    kaku i=0;aida(i<len(source)){bytes[at+i]=source[i];i=i+1;}
+waza copy_bytes(bytes: []uint8, at: int64, source: []uint8) -> unit {
+    kaku i = 0;
+    aida (i<len(source)) {
+        bytes[at + i] = source[i];
+        i = i + 1;
+    }
 }
-waza ascii_name(name:string) -> bool {
-    kaku bytes=string.to_bytes(name);
-    moshi(len(bytes)==0 || len(bytes)>255){kaesu iie;}
-    kaku i=0;aida(i<len(bytes)){moshi(bytes[i]<uint8(33) || bytes[i]>uint8(126)){kaesu iie;}i=i+1;}
+waza ascii_name(name: string) -> bool {
+    kaku bytes = string.to_bytes(name);
+    moshi (len(bytes) == 0 || len(bytes)>255) { kaesu iie; }
+    kaku i = 0;
+    aida (i<len(bytes)) {
+        moshi (bytes[i]<uint8(33) || bytes[i]>uint8(126)) {
+            kaesu iie;
+        }
+        i = i + 1;
+    }
     kaesu hai;
 }
-waza valid_imports(libraries:[]ImportLibrary) -> bool {
-    moshi(len(libraries)>256){kaesu iie;}
-    kaku total=0;kaku i=0;
-    aida(i<len(libraries)){
-        kaku lib=libraries[i];moshi(!ascii_name(lib.name) || len(lib.symbols)==0 || len(lib.symbols)>4096-total){kaesu iie;}
-        kaku j=0;aida(j<i){moshi(libraries[j].name==lib.name){kaesu iie;}j=j+1;}
-        j=0;aida(j<len(lib.symbols)){
-            moshi(!ascii_name(lib.symbols[j])){kaesu iie;}
-            kaku k=0;aida(k<j){moshi(lib.symbols[k]==lib.symbols[j]){kaesu iie;}k=k+1;}
-            j=j+1;
-        }total=total+len(lib.symbols);i=i+1;
-    }kaesu hai;
+waza valid_imports(libraries: []ImportLibrary) -> bool {
+    moshi (len(libraries)>256) { kaesu iie; }
+    kaku total = 0;
+    kaku i = 0;
+    aida (i<len(libraries)) {
+        kaku lib = libraries[i];
+        moshi (!ascii_name(lib.name) || len(lib.symbols) == 0 || len(lib.symbols)>4096 - total) {
+            kaesu iie;
+        }
+        kaku j = 0;
+        aida (j<i) {
+            moshi (libraries[j].name == lib.name) {
+                kaesu iie;
+            }
+            j = j + 1;
+        }
+        j = 0; aida (j<len(lib.symbols)) {
+            moshi (!ascii_name(lib.symbols[j])) { kaesu iie; }
+            kaku k = 0;
+            aida (k<j) {
+                moshi (lib.symbols[k] == lib.symbols[j]) {
+                    kaesu iie;
+                }
+                k = k + 1;
+            }
+            j = j + 1;
+        }
+        total = total + len(lib.symbols);
+        i = i + 1;
+    } kaesu hai;
 }
-waza plan_imports(libraries:[]ImportLibrary) -> Imports {
-    kaku result=Imports {size:0,iat:0,iat_size:0,libraries:[],slots:[]};
-    moshi(len(libraries)==0){kaesu result;}
-    kaku at=align((len(libraries)+1)*20,8);kaku i=0;
-    aida(i<len(libraries)){
-        array.push(result.libraries,LibraryLayout {lookup:at,iat:0,name:0,hints:[]});
-        at=at+(len(libraries[i].symbols)+1)*8;i=i+1;
+waza plan_imports(libraries: []ImportLibrary) -> Imports {
+    kaku result = Imports { size: 0, iat: 0, iat_size: 0, libraries: [], slots: [] };
+    moshi (len(libraries) == 0) { kaesu result; }
+    kaku at = align((len(libraries) + 1) * 20, 8);
+    kaku i = 0;
+    aida (i<len(libraries)) {
+        array.push(result.libraries, LibraryLayout { lookup: at, iat: 0, name: 0, hints: [] });
+        at = at + (len(libraries[i].symbols) + 1) * 8;
+        i = i + 1;
     }
-    kaku iat=at;i=0;
-    aida(i<len(libraries)){
-        kaku entry=result.libraries[i];result.libraries[i]=LibraryLayout {lookup:entry.lookup,iat:at,name:0,hints:[]};kaku j=0;
-        aida(j<len(libraries[i].symbols)){array.push(result.slots,at+j*8);j=j+1;}
-        at=at+(len(libraries[i].symbols)+1)*8;i=i+1;
+    kaku iat = at;
+    i = 0;
+    aida (i<len(libraries)) {
+        kaku entry = result.libraries[i];
+        result.libraries[i] = LibraryLayout {
+            lookup: entry.lookup, iat: at, name: 0, hints: [] };
+        kaku j = 0;
+        aida (j<len(libraries[i].symbols)) {
+            array.push(result.slots, at + j * 8);
+            j = j + 1;
+        }
+        at = at + (len(libraries[i].symbols) + 1) * 8;
+        i = i + 1;
     }
-    kaku iat_size=at-iat;i=0;
-    aida(i<len(libraries)){
-        kaku entry=result.libraries[i];result.libraries[i]=LibraryLayout {lookup:entry.lookup,iat:entry.iat,name:at,hints:entry.hints};at=at+len(string.to_bytes(libraries[i].name))+1;kaku j=0;
-        aida(j<len(libraries[i].symbols)){
-            at=align(at,2);array.push(result.libraries[i].hints,at);
-            at=at+2+len(string.to_bytes(libraries[i].symbols[j]))+1;j=j+1;
-        }i=i+1;
-    }kaesu Imports {size:at,iat:iat,iat_size:iat_size,libraries:result.libraries,slots:result.slots};
+    kaku iat_size = at - iat;
+    i = 0;
+    aida (i<len(libraries)) {
+        kaku entry = result.libraries[i];
+        result.libraries[i] = LibraryLayout {
+            lookup: entry.lookup, iat: entry.iat, name: at, hints: entry.hints };
+        at = at + len(string.to_bytes(libraries[i].name)) + 1;
+        kaku j = 0;
+        aida (j<len(libraries[i].symbols)) {
+            at = align(at, 2);
+            array.push(result.libraries[i].hints, at);
+            at = at + 2 + len(string.to_bytes(libraries[i].symbols[j])) + 1;
+            j = j + 1;
+        } i = i + 1;
+    } kaesu Imports { size: at, iat: iat, iat_size: iat_size, libraries: result.libraries, slots: result.slots };
 }
-waza unwind_size(functions:[]UnwindFunction) -> int64 {
-    kaku size=0;kaku i=0;
-    aida(i<len(functions)){size=size+4;moshi(functions[i].stack_size>0){size=size+4;}i=i+1;}kaesu size;
-}
-waza frame_slots(f:FrameFunction) -> int64 {
-    kaku slots=2;moshi(f.alloc_size>128){slots=4;}moshi(f.alloc_size>0 && f.alloc_size<=128){slots=3;}
-    moshi(slots==3){slots=4;}kaesu slots;
-}
-waza frame_size(frames:[]FrameFunction) -> int64 {
-    kaku size=0;kaku i=0;aida(i<len(frames)){size=size+4+frame_slots(frames[i])*2;i=i+1;}kaesu size;
-}
-waza valid_frames(frames:[]FrameFunction, text_size:int64) -> bool {
-    moshi(len(frames)>4096){kaesu iie;}kaku previous=0;kaku i=0;
-    aida(i<len(frames)){
-        kaku f=frames[i];
-        moshi(f.begin<previous || f.end<=f.begin || f.end>text_size){kaesu iie;}
-        moshi(f.push_offset<=0 || f.set_offset<=f.push_offset){kaesu iie;}
-        moshi(f.alloc_size<0 || f.alloc_size>524280 || f.alloc_size-(f.alloc_size/8)*8!=0){kaesu iie;}
-        moshi(f.alloc_size==0 && f.alloc_offset!=0){kaesu iie;}
-        moshi(f.alloc_size>0 && f.alloc_offset<=f.set_offset){kaesu iie;}
-        kaku prolog=f.set_offset;moshi(f.alloc_size>0){prolog=f.alloc_offset;}
-        moshi(prolog>255 || prolog>f.end-f.begin){kaesu iie;}
-        previous=f.end;i=i+1;
-    }kaesu hai;
-}
-waza valid_unwind(functions:[]UnwindFunction, text_size:int64) -> bool {
-    moshi(len(functions)>4096){kaesu iie;}kaku previous=0;kaku i=0;
-    aida(i<len(functions)){
-        kaku f=functions[i];
-        moshi(f.begin<previous || f.end<=f.begin || f.end>text_size || f.prolog_size<0 || f.prolog_size>255 || f.prolog_size>f.end-f.begin){kaesu iie;}
-        moshi(f.stack_size<0 || f.stack_size>524280 || f.stack_size-(f.stack_size/8)*8!=0){kaesu iie;}
-        moshi(f.stack_size==0 && f.stack_offset!=0){kaesu iie;}
-        moshi(f.stack_size>0 && (f.stack_offset<=0 || f.stack_offset>f.prolog_size)){kaesu iie;}
-        previous=f.end;i=i+1;
-    }kaesu hai;
-}
-waza add_section(layout:Layout, kind:int64, name:string, size:int64, virtual_size:int64, flags:int64) -> Layout {
-    kaku raw=align(size,file_alignment);kaku at=layout.file_size;moshi(size==0){at=0;}
-    array.push(layout.sections,Section {kind:kind,name:name,rva:layout.image_size,offset:at,virtual_size:virtual_size,raw_size:raw,flags:flags});
-    kaesu Layout {headers_size:layout.headers_size,file_size:layout.file_size+raw,image_size:align(layout.image_size+virtual_size,section_alignment),sections:layout.sections,iat_rva:layout.iat_rva,iat_size:layout.iat_size};
-}
-waza section(layout:Layout, kind:int64) -> Section {
-    kaku i=0;aida(i<len(layout.sections)){moshi(layout.sections[i].kind==kind){kaesu layout.sections[i];}i=i+1;}
-    kaesu Section {kind:0,name:"",rva:0,offset:0,virtual_size:0,raw_size:0,flags:0};
-}
-waza source_size(spec:ImageSpec, kind:int64) -> int64 {
-    moshi(kind==text_section){kaesu len(spec.text);}
-    moshi(kind==rdata_section){kaesu len(spec.rdata);}
-    moshi(kind==data_section){kaesu len(spec.data);}kaesu -1;
-}
-waza patch_target(p:Patch, layout:Layout, imports:Imports) -> int64 {
-    kaku target=section(layout,p.target);
-    moshi(p.target==import_section){
-        moshi(p.target_offset<0 || p.target_offset>=len(imports.slots)){kaesu -1;}
-        kaesu target.rva+imports.slots[p.target_offset];
+waza unwind_size(functions: []UnwindFunction) -> int64 {
+    kaku size = 0;
+    kaku i = 0;
+    aida (i<len(functions)) {
+        size = size + 4;
+        moshi (functions[i].stack_size>0) {
+            size = size + 4;
+        }
+        i = i + 1;
     }
-    moshi(p.target<text_section || p.target>data_section || target.kind==0 || p.target_offset<0 || p.target_offset>=target.virtual_size){kaesu -1;}
-    kaesu target.rva+p.target_offset;
+    kaesu size;
 }
-waza valid_patches(spec:ImageSpec, layout:Layout, imports:Imports) -> bool {
-    kaku i=0;aida(i<len(spec.patches)){
-        kaku p=spec.patches[i];kaku width=4;moshi(p.kind==va64){width=8;}
-        kaku size=source_size(spec,p.section);
-        moshi(p.kind<rva32 || p.kind>va64 || p.offset<0 || p.offset>size || width>size-p.offset || patch_target(p,layout,imports)<0){kaesu iie;}
-        kaku j=0;aida(j<i){kaku q=spec.patches[j];kaku other=4;moshi(q.kind==va64){other=8;}
-            moshi(p.section==q.section && p.offset<q.offset+other && q.offset<p.offset+width){kaesu iie;}j=j+1;
-        }i=i+1;
-    }kaesu hai;
+waza frame_slots(f: FrameFunction) -> int64 {
+    kaku slots = 2;
+    moshi (f.alloc_size>128) {
+        slots = 4;
+    }
+    moshi (f.alloc_size>0 && f.alloc_size <= 128) {
+        slots = 3;
+    }
+    moshi (slots == 3) {
+        slots = 4;
+    }
+    kaesu slots;
+}
+waza frame_size(frames: []FrameFunction) -> int64 {
+    kaku size = 0;
+    kaku i = 0;
+    aida (i<len(frames)) {
+        size = size + 4 + frame_slots(frames[i]) * 2;
+        i = i + 1;
+    }
+    kaesu size;
+}
+waza valid_frames(frames: []FrameFunction, text_size: int64) -> bool {
+    moshi (len(frames)>4096) {
+        kaesu iie;
+    }
+    kaku previous = 0;
+    kaku i = 0;
+    aida (i<len(frames)) {
+        kaku f = frames[i];
+        moshi (f.begin<previous || f.end <= f.begin || f.end>text_size) { kaesu iie; }
+        moshi (f.push_offset <= 0 || f.set_offset <= f.push_offset) { kaesu iie; }
+        moshi (f.alloc_size<0 || f.alloc_size>524280 || f.alloc_size - (f.alloc_size / 8) * 8 != 0) { kaesu iie; }
+        moshi (f.alloc_size == 0 && f.alloc_offset != 0) { kaesu iie; }
+        moshi (f.alloc_size>0 && f.alloc_offset <= f.set_offset) { kaesu iie; }
+        kaku prolog = f.set_offset;
+        moshi (f.alloc_size>0) {
+            prolog = f.alloc_offset;
+        }
+        moshi (prolog>255 || prolog>f.end - f.begin) { kaesu iie; }
+        previous = f.end;
+        i = i + 1;
+    } kaesu hai;
+}
+waza valid_unwind(functions: []UnwindFunction, text_size: int64) -> bool {
+    moshi (len(functions)>4096) {
+        kaesu iie;
+    }
+    kaku previous = 0;
+    kaku i = 0;
+    aida (i<len(functions)) {
+        kaku f = functions[i];
+        moshi (f.begin<previous || f.end <= f.begin || f.end>text_size || f.prolog_size<0 || f.prolog_size>255 || f.prolog_size>f.end - f.begin) {
+            kaesu iie;
+        }
+        moshi (f.stack_size<0 || f.stack_size>524280 || f.stack_size - (f.stack_size / 8) * 8 != 0) { kaesu iie; }
+        moshi (f.stack_size == 0 && f.stack_offset != 0) { kaesu iie; }
+        moshi (f.stack_size>0 && (f.stack_offset <= 0 || f.stack_offset>f.prolog_size)) { kaesu iie; }
+        previous = f.end;
+        i = i + 1;
+    } kaesu hai;
+}
+waza add_section(layout: Layout, kind: int64, name: string, size: int64, virtual_size: int64, flags: int64) -> Layout {
+    kaku raw = align(size, file_alignment);
+    kaku at = layout.file_size;
+    moshi (size == 0) {
+        at = 0;
+    }
+    array.push(layout.sections, Section {
+            kind: kind, name: name, rva: layout.image_size, offset: at, virtual_size: virtual_size, raw_size: raw, flags: flags });
+    kaesu Layout {
+        headers_size: layout.headers_size, file_size: layout.file_size + raw, image_size: align(layout.image_size + virtual_size, section_alignment), sections: layout.sections, iat_rva: layout.iat_rva, iat_size: layout.iat_size };
+}
+waza section(layout: Layout, kind: int64) -> Section {
+    kaku i = 0;
+    aida (i<len(layout.sections)) {
+        moshi (layout.sections[i].kind == kind) {
+            kaesu layout.sections[i];
+        }
+        i = i + 1;
+    }
+    kaesu Section { kind: 0, name: "", rva: 0, offset: 0, virtual_size: 0, raw_size: 0, flags: 0 };
+}
+waza source_size(spec: ImageSpec, kind: int64) -> int64 {
+    moshi (kind == text_section) { kaesu len(spec.text); }
+    moshi (kind == rdata_section) { kaesu len(spec.rdata); }
+    moshi (kind == data_section) {
+        kaesu len(spec.data);
+    }
+    kaesu -1;
+}
+waza patch_target(p: Patch, layout: Layout, imports: Imports) -> int64 {
+    kaku target = section(layout, p.target);
+    moshi (p.target == import_section) {
+        moshi (p.target_offset<0 || p.target_offset >= len(imports.slots)) { kaesu -1; }
+        kaesu target.rva + imports.slots[p.target_offset];
+    }
+    moshi (p.target<text_section || p.target>data_section || target.kind == 0 || p.target_offset<0 || p.target_offset >= target.virtual_size) {
+        kaesu -1;
+    }
+    kaesu target.rva + p.target_offset;
+}
+waza valid_patches(spec: ImageSpec, layout: Layout, imports: Imports) -> bool {
+    kaku i = 0; aida (i<len(spec.patches)) {
+        kaku p = spec.patches[i];
+        kaku width = 4;
+        moshi (p.kind == va64) {
+            width = 8;
+        }
+        kaku size = source_size(spec, p.section);
+        moshi (p.kind<rva32 || p.kind>va64 || p.offset<0 || p.offset>size || width>size - p.offset || patch_target(p, layout, imports)<0) {
+            kaesu iie;
+        }
+        kaku j = 0;
+        aida (j<i) {
+            kaku q = spec.patches[j];
+            kaku other = 4;
+            moshi (q.kind == va64) {
+                other = 8;
+            }
+            moshi (p.section == q.section && p.offset<q.offset + other && q.offset<p.offset + width) {
+                kaesu iie;
+            }
+            j = j + 1;
+        } i = i + 1;
+    } kaesu hai;
 }
 // Sort relocation RVAs independently of patch input order. Each page block has
 // a DWORD-sized header and an even number of WORDs, padded with ABSOLUTE (0).
-waza relocation_bytes(spec:ImageSpec, layout:Layout) -> []uint8 {
-    kaku addresses:[]int64=[];kaku i=0;
-    aida(i<len(spec.patches)){
-        kaku p=spec.patches[i];moshi(p.kind==va64){array.push(addresses,section(layout,p.section).rva+p.offset);}
-        i=i+1;
-    }
-    i=1;aida(i<len(addresses)){kaku j=i;aida(j>0 && addresses[j]<addresses[j-1]){kaku value=addresses[j];addresses[j]=addresses[j-1];addresses[j-1]=value;j=j-1;}i=i+1;}
-    kaku bytes:[]uint8=[];i=0;
-    aida(i<len(addresses)){
-        kaku page=(addresses[i]/4096)*4096;kaku end=i;
-        aida(end<len(addresses) && (addresses[end]/4096)*4096==page){end=end+1;}
-        kaku size=align(8+(end-i)*2,4);kaku start=len(bytes);kaku n=0;
-        aida(n<size){array.push(bytes,uint8(0));n=n+1;}
-        put(bytes,start,4,page);put(bytes,start+4,4,size);n=0;
-        aida(i<end){put(bytes,start+8+n*2,2,40960+addresses[i]-page);n=n+1;i=i+1;}
-    }kaesu bytes;
-}
-waza emit_imports(bytes:[]uint8, spec:ImageSpec, layout:Layout, imports:Imports) -> unit {
-    moshi(imports.size==0){kaesu;}kaku s=section(layout,import_section);kaku i=0;
-    aida(i<len(spec.imports)){
-        kaku lib=spec.imports[i];kaku entry=imports.libraries[i];kaku at=s.offset+i*20;
-        put(bytes,at,4,s.rva+entry.lookup);put(bytes,at+12,4,s.rva+entry.name);put(bytes,at+16,4,s.rva+entry.iat);
-        copy_bytes(bytes,s.offset+entry.name,string.to_bytes(lib.name));kaku j=0;
-        aida(j<len(lib.symbols)){
-            put(bytes,s.offset+entry.lookup+j*8,8,s.rva+entry.hints[j]);
-            put(bytes,s.offset+entry.iat+j*8,8,s.rva+entry.hints[j]);
-            copy_bytes(bytes,s.offset+entry.hints[j]+2,string.to_bytes(lib.symbols[j]));j=j+1;
-        }i=i+1;
-    }
-}
-waza emit_unwind(bytes:[]uint8, spec:ImageSpec, layout:Layout) -> unit {
-    kaku pdata=section(layout,5);kaku xdata=section(layout,6);kaku text=section(layout,text_section);kaku offset=0;kaku i=0;
-    aida(i<len(spec.unwind)){
-        kaku f=spec.unwind[i];kaku at=xdata.offset+offset;
-        put(bytes,pdata.offset+i*12,4,text.rva+f.begin);put(bytes,pdata.offset+i*12+4,4,text.rva+f.end);put(bytes,pdata.offset+i*12+8,4,xdata.rva+offset);
-        put(bytes,at,1,1);put(bytes,at+1,1,f.prolog_size);offset=offset+4;
-        moshi(f.stack_size>0){
-            put(bytes,at+4,1,f.stack_offset);
-            moshi(f.stack_size<=128){put(bytes,at+2,1,1);put(bytes,at+5,1,2+((f.stack_size-8)/8)*16);}
-            sore{put(bytes,at+2,1,2);put(bytes,at+5,1,1);put(bytes,at+6,2,f.stack_size/8);}
-            offset=offset+4;
-        }i=i+1;
-    }
-}
-waza emit_frames(bytes:[]uint8, spec:ImageSpec, frames:[]FrameFunction, layout:Layout) -> unit {
-    kaku pdata=section(layout,5);kaku xdata=section(layout,6);kaku text=section(layout,text_section);kaku offset=0;kaku i=0;
-    aida(i<len(frames)){
-        kaku f=frames[i];kaku at=xdata.offset+offset;kaku slots=frame_slots(f);
-        put(bytes,pdata.offset+i*12,4,text.rva+f.begin);put(bytes,pdata.offset+i*12+4,4,text.rva+f.end);put(bytes,pdata.offset+i*12+8,4,xdata.rva+offset);
-        kaku prolog=f.set_offset;kaku count=2;moshi(f.alloc_size>0){prolog=f.alloc_offset;count=3;}moshi(f.alloc_size>128){count=4;}
-        put(bytes,at,1,1);put(bytes,at+1,1,prolog);put(bytes,at+2,1,count);put(bytes,at+3,1,5);
-        kaku c=at+4;
-        moshi(f.alloc_size>0){
-            put(bytes,c,1,f.alloc_offset);
-            moshi(f.alloc_size<=128){put(bytes,c+1,1,2+((f.alloc_size-8)/8)*16);c=c+2;}
-            sore{put(bytes,c+1,1,1);put(bytes,c+2,2,f.alloc_size/8);c=c+4;}
+waza relocation_bytes(spec: ImageSpec, layout: Layout) -> []uint8 {
+    kaku addresses: []int64 = [];
+    kaku i = 0;
+    aida (i<len(spec.patches)) {
+        kaku p = spec.patches[i];
+        moshi (p.kind == va64) {
+            array.push(addresses, section(layout, p.section).rva + p.offset);
         }
-        put(bytes,c,1,f.set_offset);put(bytes,c+1,1,3);c=c+2;
-        put(bytes,c,1,f.push_offset);put(bytes,c+1,1,5*16);
-        offset=offset+4+slots*2;i=i+1;
+        i = i + 1;
+    }
+    i = 1;
+    aida (i<len(addresses)) {
+        kaku j = i;
+        aida (j>0 && addresses[j]<addresses[j - 1]) {
+            kaku value = addresses[j];
+            addresses[j] = addresses[j - 1];
+            addresses[j - 1] = value;
+            j = j - 1;
+        }
+        i = i + 1;
+    }
+    kaku bytes: []uint8 = [];
+    i = 0;
+    aida (i<len(addresses)) {
+        kaku page = (addresses[i] / 4096) * 4096;
+        kaku end = i;
+        aida (end<len(addresses) && (addresses[end] / 4096) * 4096 == page) { end = end + 1; }
+        kaku size = align(8 + (end - i) * 2, 4);
+        kaku start = len(bytes);
+        kaku n = 0;
+        aida (n<size) {
+            array.push(bytes, uint8(0));
+            n = n + 1;
+        }
+        put(bytes, start, 4, page);
+        put(bytes, start + 4, 4, size);
+        n = 0;
+        aida (i<end) {
+            put(bytes, start + 8 + n * 2, 2, 40960 + addresses[i] - page);
+            n = n + 1;
+            i = i + 1;
+        }
+    } kaesu bytes;
+}
+waza emit_imports(bytes: []uint8, spec: ImageSpec, layout: Layout, imports: Imports) -> unit {
+    moshi (imports.size == 0) {
+        kaesu;
+    }
+    kaku s = section(layout, import_section);
+    kaku i = 0;
+    aida (i<len(spec.imports)) {
+        kaku lib = spec.imports[i];
+        kaku entry = imports.libraries[i];
+        kaku at = s.offset + i * 20;
+        put(bytes, at, 4, s.rva + entry.lookup);
+        put(bytes, at + 12, 4, s.rva + entry.name);
+        put(bytes, at + 16, 4, s.rva + entry.iat);
+        copy_bytes(bytes, s.offset + entry.name, string.to_bytes(lib.name));
+        kaku j = 0;
+        aida (j<len(lib.symbols)) {
+            put(bytes, s.offset + entry.lookup + j * 8, 8, s.rva + entry.hints[j]);
+            put(bytes, s.offset + entry.iat + j * 8, 8, s.rva + entry.hints[j]);
+            copy_bytes(bytes, s.offset + entry.hints[j] + 2, string.to_bytes(lib.symbols[j]));
+            j = j + 1;
+        } i = i + 1;
     }
 }
-waza directory(bytes:[]uint8, index:int64, rva:int64, size:int64) -> unit {put(bytes,264+index*8,4,rva);put(bytes,268+index*8,4,size);}
+waza emit_unwind(bytes: []uint8, spec: ImageSpec, layout: Layout) -> unit {
+    kaku pdata = section(layout, 5);
+    kaku xdata = section(layout, 6);
+    kaku text = section(layout, text_section);
+    kaku offset = 0;
+    kaku i = 0;
+    aida (i<len(spec.unwind)) {
+        kaku f = spec.unwind[i];
+        kaku at = xdata.offset + offset;
+        put(bytes, pdata.offset + i * 12, 4, text.rva + f.begin);
+        put(bytes, pdata.offset + i * 12 + 4, 4, text.rva + f.end);
+        put(bytes, pdata.offset + i * 12 + 8, 4, xdata.rva + offset);
+        put(bytes, at, 1, 1);
+        put(bytes, at + 1, 1, f.prolog_size);
+        offset = offset + 4;
+        moshi (f.stack_size>0) {
+            put(bytes, at + 4, 1, f.stack_offset);
+            moshi (f.stack_size <= 128) {
+                put(bytes, at + 2, 1, 1);
+                put(bytes, at + 5, 1, 2 + ((f.stack_size - 8) / 8) * 16);
+            }
+            sore {
+                put(bytes, at + 2, 1, 2);
+                put(bytes, at + 5, 1, 1);
+                put(bytes, at + 6, 2, f.stack_size / 8);
+            }
+            offset = offset + 4;
+        } i = i + 1;
+    }
+}
+waza emit_frames(bytes: []uint8, spec: ImageSpec, frames: []FrameFunction, layout: Layout) -> unit {
+    kaku pdata = section(layout, 5);
+    kaku xdata = section(layout, 6);
+    kaku text = section(layout, text_section);
+    kaku offset = 0;
+    kaku i = 0;
+    aida (i<len(frames)) {
+        kaku f = frames[i];
+        kaku at = xdata.offset + offset;
+        kaku slots = frame_slots(f);
+        put(bytes, pdata.offset + i * 12, 4, text.rva + f.begin);
+        put(bytes, pdata.offset + i * 12 + 4, 4, text.rva + f.end);
+        put(bytes, pdata.offset + i * 12 + 8, 4, xdata.rva + offset);
+        kaku prolog = f.set_offset;
+        kaku count = 2;
+        moshi (f.alloc_size>0) {
+            prolog = f.alloc_offset;
+            count = 3;
+        }
+        moshi (f.alloc_size>128) {
+            count = 4;
+        }
+        put(bytes, at, 1, 1);
+        put(bytes, at + 1, 1, prolog);
+        put(bytes, at + 2, 1, count);
+        put(bytes, at + 3, 1, 5);
+        kaku c = at + 4;
+        moshi (f.alloc_size>0) {
+            put(bytes, c, 1, f.alloc_offset);
+            moshi (f.alloc_size <= 128) {
+                put(bytes, c + 1, 1, 2 + ((f.alloc_size - 8) / 8) * 16);
+                c = c + 2;
+            }
+            sore {
+                put(bytes, c + 1, 1, 1);
+                put(bytes, c + 2, 2, f.alloc_size / 8);
+                c = c + 4;
+            }
+        }
+        put(bytes, c, 1, f.set_offset);
+        put(bytes, c + 1, 1, 3);
+        c = c + 2;
+        put(bytes, c, 1, f.push_offset);
+        put(bytes, c + 1, 1, 5 * 16);
+        offset = offset + 4 + slots * 2;
+        i = i + 1;
+    }
+}
+waza directory(bytes: []uint8, index: int64, rva: int64, size: int64) -> unit {
+    put(bytes, 264 + index * 8, 4, rva);
+    put(bytes, 268 + index * 8, 4, size);
+}
 
-koukai waza executable(spec:ImageSpec) -> ImageResult { kaesu executable_framed(spec,[]); }
+koukai waza executable(spec: ImageSpec) -> ImageResult { kaesu executable_framed(spec, []); }
 
 // Like executable, with unwind data for frame-pointer functions. A spec uses either spec.unwind or frames, not both.
-koukai waza executable_framed(spec:ImageSpec, frames:[]FrameFunction) -> ImageResult { kaesu executable_sized(spec,frames,1048576); }
+koukai waza executable_framed(spec: ImageSpec, frames: []FrameFunction) -> ImageResult { kaesu executable_sized(spec, frames, 1048576); }
 
 // stack_reserve is the PE SizeOfStackReserve of the main thread (a multiple of 65536, at most 1 GiB).
-koukai waza executable_sized(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64) -> ImageResult { kaesu executable_placed(spec,frames,stack_reserve,0); }
+koukai waza executable_sized(spec: ImageSpec, frames: []FrameFunction, stack_reserve: int64) -> ImageResult {
+    kaesu executable_placed(spec, frames, stack_reserve, 0);
+}
 
 // data_rva > 0 places .data at that RVA (a multiple of 4096, not below the end of .text/.rdata), so generated code may
 // embed absolute data addresses (image_base + data_rva) as constants. 4096 is special: .data comes first, directly after the
 // headers, so there is no RVA gap and .text follows it. 0 keeps the sequential layout.
 koukai teisu machine_amd64 = 34404;
 koukai teisu machine_arm64 = 43620;
-koukai waza executable_placed(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64, data_rva:int64) -> ImageResult { kaesu executable_machine(spec,frames,stack_reserve,data_rva,machine_amd64); }
+koukai waza executable_placed(spec: ImageSpec, frames: []FrameFunction, stack_reserve: int64, data_rva: int64) -> ImageResult {
+    kaesu executable_machine(spec, frames, stack_reserve, data_rva, machine_amd64);
+}
 
 // COFF machine type: IMAGE_FILE_MACHINE_AMD64 (0x8664) or IMAGE_FILE_MACHINE_ARM64 (0xAA64). Any other value fails closed.
-koukai waza executable_machine(spec:ImageSpec, frames:[]FrameFunction, stack_reserve:int64, data_rva:int64, machine:int64) -> ImageResult {
-    moshi(machine!=machine_amd64 && machine!=machine_arm64){kaesu failure(PEError.InvalidEntry());}
-    moshi(data_rva<0 || data_rva-(data_rva/4096)*4096!=0 || data_rva>maximum_image_size){kaesu failure(PEError.InvalidEntry());}
-    moshi(stack_reserve<65536 || stack_reserve>1073741824 || stack_reserve-(stack_reserve/65536)*65536!=0){kaesu failure(PEError.ImageTooLarge());}
-    moshi(len(frames)>0 && len(spec.unwind)>0){kaesu failure(PEError.InvalidUnwind());}
-    moshi(!valid_frames(frames,len(spec.text))){kaesu failure(PEError.InvalidUnwind());}
-    kaku unwind_count=len(spec.unwind)+len(frames);
-    moshi(len(spec.text)==0){kaesu failure(PEError.EmptyText());}
-    moshi(spec.entry<0 || spec.entry>=len(spec.text)){kaesu failure(PEError.InvalidEntry());}
+koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_reserve: int64, data_rva: int64, machine: int64) -> ImageResult {
+    moshi (machine != machine_amd64 && machine != machine_arm64) { kaesu failure(PEError.InvalidEntry()); }
+    moshi (data_rva<0 || data_rva - (data_rva / 4096) * 4096 != 0 || data_rva>maximum_image_size) { kaesu failure(PEError.InvalidEntry()); }
+    moshi (stack_reserve<65536 || stack_reserve>1073741824 || stack_reserve - (stack_reserve / 65536) * 65536 != 0) {
+        kaesu failure(PEError.ImageTooLarge());
+    }
+    moshi (len(frames)>0 && len(spec.unwind)>0) { kaesu failure(PEError.InvalidUnwind()); }
+    moshi (!valid_frames(frames, len(spec.text))) { kaesu failure(PEError.InvalidUnwind()); }
+    kaku unwind_count = len(spec.unwind) + len(frames);
+    moshi (len(spec.text) == 0) { kaesu failure(PEError.EmptyText()); }
+    moshi (spec.entry<0 || spec.entry >= len(spec.text)) { kaesu failure(PEError.InvalidEntry()); }
     // Validate bounds before addition/alignment/allocation. Every intermediate
     // after these checks is far below both signed-int64 and PE DWORD limits.
-    moshi(len(spec.text)>maximum_image_size || len(spec.rdata)>maximum_image_size || len(spec.data)>maximum_image_size || spec.zero_fill<0 || spec.zero_fill>maximum_image_size-len(spec.data)){kaesu failure(PEError.ImageTooLarge());}
-    moshi(!valid_imports(spec.imports)){kaesu failure(PEError.InvalidImport());}
-    moshi(!valid_unwind(spec.unwind,len(spec.text))){kaesu failure(PEError.InvalidUnwind());}
-    moshi(len(spec.patches)>4096){kaesu failure(PEError.InvalidPatch());}
-    kaku imports=plan_imports(spec.imports);kaku count=1;kaku has_relocations=iie;kaku i=0;
-    moshi(len(spec.rdata)>0){count=count+1;}
-    moshi(len(spec.data)+spec.zero_fill>0){count=count+1;}
-    moshi(imports.size>0){count=count+1;}
-    moshi(unwind_count>0){count=count+2;}
-    aida(i<len(spec.patches)){moshi(spec.patches[i].kind==va64){has_relocations=hai;}i=i+1;}
-    moshi(has_relocations){count=count+1;}
-    kaku headers=align(392+count*40,file_alignment);
-    kaku layout=Layout {headers_size:headers,image_size:4096,file_size:headers,sections:[],iat_rva:0,iat_size:imports.iat_size};
+    moshi (len(spec.text)>maximum_image_size || len(spec.rdata)>maximum_image_size || len(spec.data)>maximum_image_size || spec.zero_fill<0 || spec.zero_fill>maximum_image_size - len(spec.data)) {
+        kaesu failure(PEError.ImageTooLarge());
+    }
+    moshi (!valid_imports(spec.imports)) { kaesu failure(PEError.InvalidImport()); }
+    moshi (!valid_unwind(spec.unwind, len(spec.text))) { kaesu failure(PEError.InvalidUnwind()); }
+    moshi (len(spec.patches)>4096) { kaesu failure(PEError.InvalidPatch()); }
+    kaku imports = plan_imports(spec.imports);
+    kaku count = 1;
+    kaku has_relocations = iie;
+    kaku i = 0;
+    moshi (len(spec.rdata)>0) { count = count + 1; }
+    moshi (len(spec.data) + spec.zero_fill>0) { count = count + 1; }
+    moshi (imports.size>0) { count = count + 1; }
+    moshi (unwind_count>0) { count = count + 2; }
+    aida (i<len(spec.patches)) {
+        moshi (spec.patches[i].kind == va64) {
+            has_relocations = hai;
+        }
+        i = i + 1;
+    }
+    moshi (has_relocations) { count = count + 1; }
+    kaku headers = align(392 + count * 40, file_alignment);
+    kaku layout = Layout { headers_size: headers, image_size: 4096, file_size: headers, sections: [], iat_rva: 0, iat_size: imports.iat_size };
     // data_rva == 4096 puts .data FIRST (right after the headers, no RVA gap), so its address is a constant independent of code size.
-    kaku data_first=data_rva==4096;
-    moshi(data_first && len(spec.data)+spec.zero_fill>0){
-        kaku first_flags=3221225536;moshi(len(spec.data)==0){first_flags=3221225600;}
-        layout=add_section(layout,data_section,".data",len(spec.data),len(spec.data)+spec.zero_fill,first_flags);
+    kaku data_first = data_rva == 4096;
+    moshi (data_first && len(spec.data) + spec.zero_fill>0) {
+        kaku first_flags = 3221225536;
+        moshi (len(spec.data) == 0) {
+            first_flags = 3221225600;
+        }
+        layout = add_section(layout, data_section, ".data", len(spec.data), len(spec.data) + spec.zero_fill, first_flags);
     }
-    layout=add_section(layout,text_section,".text",len(spec.text),len(spec.text),1610612768);
-    moshi(len(spec.rdata)>0){layout=add_section(layout,rdata_section,".rdata",len(spec.rdata),len(spec.rdata),1073741888);}
-    moshi(!data_first && len(spec.data)+spec.zero_fill>0){
-        moshi(data_rva>0 && data_rva<layout.image_size){kaesu failure(PEError.ImageTooLarge());}
-        moshi(data_rva>0){layout=Layout {headers_size:layout.headers_size,image_size:data_rva,file_size:layout.file_size,sections:layout.sections,iat_rva:layout.iat_rva,iat_size:layout.iat_size};}
-        kaku flags=3221225536;moshi(len(spec.data)==0){flags=3221225600;}
-        layout=add_section(layout,data_section,".data",len(spec.data),len(spec.data)+spec.zero_fill,flags);
+    layout = add_section(layout, text_section, ".text", len(spec.text), len(spec.text), 1610612768);
+    moshi (len(spec.rdata)>0) { layout = add_section(layout, rdata_section, ".rdata", len(spec.rdata), len(spec.rdata), 1073741888); }
+    moshi (!data_first && len(spec.data) + spec.zero_fill>0) {
+        moshi (data_rva>0 && data_rva<layout.image_size) { kaesu failure(PEError.ImageTooLarge()); }
+        moshi (data_rva>0) {
+            layout = Layout {
+                headers_size: layout.headers_size, image_size: data_rva, file_size: layout.file_size, sections: layout.sections, iat_rva: layout.iat_rva, iat_size: layout.iat_size };
+        }
+        kaku flags = 3221225536;
+        moshi (len(spec.data) == 0) {
+            flags = 3221225600;
+        }
+        layout = add_section(layout, data_section, ".data", len(spec.data), len(spec.data) + spec.zero_fill, flags);
     }
-    moshi(imports.size>0){layout=add_section(layout,import_section,".idata",imports.size,imports.size,3221225536);layout=Layout {headers_size:layout.headers_size,image_size:layout.image_size,file_size:layout.file_size,sections:layout.sections,iat_rva:section(layout,import_section).rva+imports.iat,iat_size:imports.iat_size};}
-    moshi(unwind_count>0){
-        kaku xsize=unwind_size(spec.unwind)+frame_size(frames);
-        layout=add_section(layout,5,".pdata",unwind_count*12,unwind_count*12,1073741888);
-        layout=add_section(layout,6,".xdata",xsize,xsize,1073741888);
+    moshi (imports.size>0) {
+        layout = add_section(layout, import_section, ".idata", imports.size, imports.size, 3221225536);
+        layout = Layout {
+            headers_size: layout.headers_size, image_size: layout.image_size, file_size: layout.file_size, sections: layout.sections, iat_rva: section(layout, import_section).rva + imports.iat, iat_size: imports.iat_size };
     }
-    moshi(!valid_patches(spec,layout,imports)){kaesu failure(PEError.InvalidPatch());}
-    kaku relocations=relocation_bytes(spec,layout);
-    moshi(has_relocations){layout=add_section(layout,7,".reloc",len(relocations),len(relocations),1107296320);}
-    moshi(layout.file_size>maximum_image_size || layout.image_size>maximum_image_size){kaesu failure(PEError.ImageTooLarge());}
-    kaku bytes=array.make[uint8](layout.file_size,uint8(0));
+    moshi (unwind_count>0) {
+        kaku xsize = unwind_size(spec.unwind) + frame_size(frames);
+        layout = add_section(layout, 5, ".pdata", unwind_count * 12, unwind_count * 12, 1073741888);
+        layout = add_section(layout, 6, ".xdata", xsize, xsize, 1073741888);
+    }
+    moshi (!valid_patches(spec, layout, imports)) { kaesu failure(PEError.InvalidPatch()); }
+    kaku relocations = relocation_bytes(spec, layout);
+    moshi (has_relocations) { layout = add_section(layout, 7, ".reloc", len(relocations), len(relocations), 1107296320); }
+    moshi (layout.file_size>maximum_image_size || layout.image_size>maximum_image_size) { kaesu failure(PEError.ImageTooLarge()); }
+    kaku bytes = array.make[uint8](layout.file_size, uint8(0));
     // DOS header and a real DOS exit stub, PE signature, COFF header.
-    put(bytes,0,2,23117);put(bytes,2,2,128);put(bytes,4,2,1);put(bytes,8,2,4);
-    put(bytes,10,2,16);put(bytes,12,2,65535);put(bytes,16,2,256);put(bytes,24,2,64);put(bytes,60,4,128);
-    copy_bytes(bytes,64,[184,1,76,205,33]);
-    put(bytes,128,4,17744);put(bytes,132,2,machine);put(bytes,134,2,count);put(bytes,148,2,240);
-    kaku characteristics=35;moshi(has_relocations){characteristics=34;}put(bytes,150,2,characteristics);
-    kaku text=section(layout,text_section);kaku initialized=0;kaku uninitialized=0;i=0;
-    aida(i<len(layout.sections)){kaku s=layout.sections[i];moshi(s.kind!=text_section){initialized=initialized+s.raw_size;}
-        moshi(s.virtual_size>s.raw_size){uninitialized=uninitialized+s.virtual_size-s.raw_size;}i=i+1;
+    put(bytes, 0, 2, 23117);
+    put(bytes, 2, 2, 128);
+    put(bytes, 4, 2, 1);
+    put(bytes, 8, 2, 4);
+    put(bytes, 10, 2, 16);
+    put(bytes, 12, 2, 65535);
+    put(bytes, 16, 2, 256);
+    put(bytes, 24, 2, 64);
+    put(bytes, 60, 4, 128);
+    copy_bytes(bytes, 64, [184, 1, 76, 205, 33]);
+    put(bytes, 128, 4, 17744);
+    put(bytes, 132, 2, machine);
+    put(bytes, 134, 2, count);
+    put(bytes, 148, 2, 240);
+    kaku characteristics = 35;
+    moshi (has_relocations) {
+        characteristics = 34;
     }
-    put(bytes,152,2,523);put(bytes,156,4,text.raw_size);put(bytes,160,4,initialized);put(bytes,164,4,uninitialized);
-    put(bytes,168,4,text.rva+spec.entry);put(bytes,172,4,text.rva);put(bytes,176,8,image_base);
-    put(bytes,184,4,section_alignment);put(bytes,188,4,file_alignment);
-    put(bytes,192,2,6);put(bytes,200,2,6);put(bytes,208,4,layout.image_size);put(bytes,212,4,headers);
-    put(bytes,220,2,3);kaku dll_flags=256;moshi(has_relocations){dll_flags=352;}put(bytes,222,2,dll_flags);
-    put(bytes,224,8,stack_reserve);put(bytes,232,8,4096);put(bytes,240,8,1048576);put(bytes,248,8,4096);put(bytes,260,4,16);
-    moshi(imports.size>0){directory(bytes,1,section(layout,import_section).rva,(len(spec.imports)+1)*20);directory(bytes,12,layout.iat_rva,layout.iat_size);}
-    moshi(unwind_count>0){directory(bytes,3,section(layout,5).rva,unwind_count*12);}
-    moshi(has_relocations){directory(bytes,5,section(layout,7).rva,len(relocations));}
-    i=0;aida(i<len(layout.sections)){
-        kaku s=layout.sections[i];kaku at=392+i*40;copy_bytes(bytes,at,string.to_bytes(s.name));
-        put(bytes,at+8,4,s.virtual_size);put(bytes,at+12,4,s.rva);put(bytes,at+16,4,s.raw_size);put(bytes,at+20,4,s.offset);put(bytes,at+36,4,s.flags);i=i+1;
+    put(bytes, 150, 2, characteristics);
+    kaku text = section(layout, text_section);
+    kaku initialized = 0;
+    kaku uninitialized = 0;
+    i = 0;
+    aida (i<len(layout.sections)) {
+        kaku s = layout.sections[i];
+        moshi (s.kind != text_section) {
+            initialized = initialized + s.raw_size;
+        }
+        moshi (s.virtual_size>s.raw_size) {
+            uninitialized = uninitialized + s.virtual_size - s.raw_size;
+        }
+        i = i + 1;
     }
-    copy_bytes(bytes,text.offset,spec.text);
-    moshi(len(spec.rdata)>0){copy_bytes(bytes,section(layout,rdata_section).offset,spec.rdata);}
-    moshi(len(spec.data)>0){copy_bytes(bytes,section(layout,data_section).offset,spec.data);}
-    emit_imports(bytes,spec,layout,imports);emit_unwind(bytes,spec,layout);emit_frames(bytes,spec,frames,layout);
-    moshi(has_relocations){copy_bytes(bytes,section(layout,7).offset,relocations);}
-    i=0;aida(i<len(spec.patches)){
-        kaku p=spec.patches[i];kaku source=section(layout,p.section);kaku value=patch_target(p,layout,imports);kaku width=4;
-        moshi(p.kind==va64){width=8;value=image_base+value;}
-        moshi(p.kind==rel32){value=value-(source.rva+p.offset+4);moshi(value<0){value=value+4294967296;}}
-        put(bytes,source.offset+p.offset,width,value);i=i+1;
+    put(bytes, 152, 2, 523);
+    put(bytes, 156, 4, text.raw_size);
+    put(bytes, 160, 4, initialized);
+    put(bytes, 164, 4, uninitialized);
+    put(bytes, 168, 4, text.rva + spec.entry);
+    put(bytes, 172, 4, text.rva);
+    put(bytes, 176, 8, image_base);
+    put(bytes, 184, 4, section_alignment);
+    put(bytes, 188, 4, file_alignment);
+    put(bytes, 192, 2, 6);
+    put(bytes, 200, 2, 6);
+    put(bytes, 208, 4, layout.image_size);
+    put(bytes, 212, 4, headers);
+    put(bytes, 220, 2, 3);
+    kaku dll_flags = 256;
+    moshi (has_relocations) {
+        dll_flags = 352;
     }
-    kaesu ImageResult {bytes:bytes,layout:layout,error:mu};
+    put(bytes, 222, 2, dll_flags);
+    put(bytes, 224, 8, stack_reserve);
+    put(bytes, 232, 8, 4096);
+    put(bytes, 240, 8, 1048576);
+    put(bytes, 248, 8, 4096);
+    put(bytes, 260, 4, 16);
+    moshi (imports.size>0) {
+        directory(bytes, 1, section(layout, import_section).rva, (len(spec.imports) + 1) * 20);
+        directory(bytes, 12, layout.iat_rva, layout.iat_size);
+    }
+    moshi (unwind_count>0) { directory(bytes, 3, section(layout, 5).rva, unwind_count * 12); }
+    moshi (has_relocations) { directory(bytes, 5, section(layout, 7).rva, len(relocations)); }
+    i = 0; aida (i<len(layout.sections)) {
+        kaku s = layout.sections[i];
+        kaku at = 392 + i * 40;
+        copy_bytes(bytes, at, string.to_bytes(s.name));
+        put(bytes, at + 8, 4, s.virtual_size);
+        put(bytes, at + 12, 4, s.rva);
+        put(bytes, at + 16, 4, s.raw_size);
+        put(bytes, at + 20, 4, s.offset);
+        put(bytes, at + 36, 4, s.flags);
+        i = i + 1;
+    }
+    copy_bytes(bytes, text.offset, spec.text);
+    moshi (len(spec.rdata)>0) { copy_bytes(bytes, section(layout, rdata_section).offset, spec.rdata); }
+    moshi (len(spec.data)>0) { copy_bytes(bytes, section(layout, data_section).offset, spec.data); }
+    emit_imports(bytes, spec, layout, imports);
+    emit_unwind(bytes, spec, layout);
+    emit_frames(bytes, spec, frames, layout);
+    moshi (has_relocations) { copy_bytes(bytes, section(layout, 7).offset, relocations); }
+    i = 0; aida (i<len(spec.patches)) {
+        kaku p = spec.patches[i];
+        kaku source = section(layout, p.section);
+        kaku value = patch_target(p, layout, imports);
+        kaku width = 4;
+        moshi (p.kind == va64) {
+            width = 8;
+            value = image_base + value;
+        }
+        moshi (p.kind == rel32) {
+            value = value - (source.rva + p.offset + 4);
+            moshi (value<0) {
+                value = value + 4294967296;
+            }
+        }
+        put(bytes, source.offset + p.offset, width, value);
+        i = i + 1;
+    }
+    kaesu ImageResult { bytes: bytes, layout: layout, error: mu };
 }

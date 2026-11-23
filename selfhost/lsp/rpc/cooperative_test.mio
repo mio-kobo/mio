@@ -4,40 +4,59 @@ yobu "kiso/array";
 yobu "kiso/fs";
 
 waza same_frame(left: []uint8, right: []uint8) -> bool {
-    moshi(len(left)!=len(right)){kaesu iie;}
-    kaku at=0;aida(at<len(left)){moshi(left[at]!=right[at]){kaesu iie;}at=at+1;}kaesu hai;
+    moshi (len(left) != len(right)) { kaesu iie; }
+    kaku at = 0;
+    aida (at<len(left)) {
+        moshi (left[at] != right[at]) {
+            kaesu iie;
+        }
+        at = at + 1;
+    }
+    kaesu hai;
 }
 
 waza test_rpc_same_read_pending_cancel_is_serviced_without_reordering() -> unit {
-    kaku state=session("/tmp","");request(state,"{\"id\":0,\"method\":\"initialize\"}");
-    kaku opened=fs.open_read("/dev/null");kaku file=opened.file;
-    moshi(file==mu){testing.fail("open transport fixture");kaesu;}
-    kaku io=transport(file,file);
-    kaku first=string.to_bytes("{\"id\":1,\"method\":\"textDocument/hover\"}");
-    kaku last=string.to_bytes("{\"method\":\"textDocument/didChange\",\"params\":{}}");
-    array.push(io.pending,first);
-    array.push(io.pending,string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}"));
-    array.push(io.pending,last);
-    service_pending_cancellations(state,io);
-    testing.expect(has_cancelled(state,"1"),"same-read cancellation reaches active request before reply");
-    testing.expect(len(io.pending)==2 && same_frame(io.pending[0],first) && same_frame(io.pending[1],last),"other frames preserve exact payload and order");
-    testing.expect(io.cancellation_scanned[0]==2,"unchanged backlog is not reparsed at compiler checkpoints");
-    remove_cancelled(state,"1");service_pending_cancellations(state,io);
-    testing.expect(!has_cancelled(state,"1"),"already consumed cancellation is not replayed");
-    take_pending(io);testing.expect(io.cancellation_scanned[0]==1,"dequeue adjusts cursor");
-    array.push(io.pending,string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":\"next\"}}"));
-    service_pending_cancellations(state,io);
-    testing.expect(has_cancelled(state,"\"next\"") && len(io.pending)==1 && io.cancellation_scanned[0]==1,"later cancellation is serviced after prior dequeue");
+    kaku state = session("/tmp", "");
+    request(state, "{\"id\":0,\"method\":\"initialize\"}");
+    kaku opened = fs.open_read("/dev/null");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        testing.fail("open transport fixture");
+        kaesu;
+    }
+    kaku io = transport(file, file);
+    kaku first = string.to_bytes("{\"id\":1,\"method\":\"textDocument/hover\"}");
+    kaku last = string.to_bytes("{\"method\":\"textDocument/didChange\",\"params\":{}}");
+    array.push(io.pending, first);
+    array.push(io.pending, string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}"));
+    array.push(io.pending, last);
+    service_pending_cancellations(state, io);
+    testing.expect(has_cancelled(state, "1"), "same-read cancellation reaches active request before reply");
+    testing.expect(len(io.pending) == 2 && same_frame(io.pending[0], first) && same_frame(io.pending[1], last), "other frames preserve exact payload and order");
+    testing.expect(io.cancellation_scanned[0] == 2, "unchanged backlog is not reparsed at compiler checkpoints");
+    remove_cancelled(state, "1");
+    service_pending_cancellations(state, io);
+    testing.expect(!has_cancelled(state, "1"), "already consumed cancellation is not replayed");
+    take_pending(io);
+    testing.expect(io.cancellation_scanned[0] == 1, "dequeue adjusts cursor");
+    array.push(io.pending, string.to_bytes("{\"method\":\"$/cancelRequest\",\"params\":{\"id\":\"next\"}}"));
+    service_pending_cancellations(state, io);
+    testing.expect(has_cancelled(state, "\"next\"") && len(io.pending) == 1 && io.cancellation_scanned[0] == 1, "later cancellation is serviced after prior dequeue");
     fs.close(file);
 }
 
 waza test_rpc_pending_cancel_request_and_malformed_payload_stay_queued() -> unit {
-    kaku state=session("/tmp","");kaku opened=fs.open_read("/dev/null");kaku file=opened.file;
-    moshi(file==mu){testing.fail("open transport fixture");kaesu;}
-    kaku io=transport(file,file);
-    array.push(io.pending,string.to_bytes("{\"id\":9,\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}"));
-    array.push(io.pending,string.to_bytes("{"));
-    service_pending_cancellations(state,io);
-    testing.expect(len(io.pending)==2 && len(state.cancelled)==0,"only valid cancellation notifications bypass ordered dispatch");
+    kaku state = session("/tmp", "");
+    kaku opened = fs.open_read("/dev/null");
+    kaku file = opened.file;
+    moshi (file == mu) {
+        testing.fail("open transport fixture");
+        kaesu;
+    }
+    kaku io = transport(file, file);
+    array.push(io.pending, string.to_bytes("{\"id\":9,\"method\":\"$/cancelRequest\",\"params\":{\"id\":1}}"));
+    array.push(io.pending, string.to_bytes("{"));
+    service_pending_cancellations(state, io);
+    testing.expect(len(io.pending) == 2 && len(state.cancelled) == 0, "only valid cancellation notifications bypass ordered dispatch");
     fs.close(file);
 }

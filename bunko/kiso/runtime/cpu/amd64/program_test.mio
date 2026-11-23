@@ -1,45 +1,70 @@
 yobu "kiso/testing";
 yobu "kiso/array";
 waza test_runtime_IR_rejects_undefined_calls_before_emission() -> unit {
-    kaku f = ir.function("main"); ir.call(f, 6, 1, [0, 1, 2]); kaku c = x86_64.assembler();
+    kaku f = ir.function("main");
+    ir.call(f, 6, 1, [0, 1, 2]);
+    kaku c = x86_64.assembler();
     testing.expect(emit_program(c, [f], [], 0, "test") != "" && len(c.bytes) == 0, "missing OS capability fails closed before machine code");
-    kaku bad = ir.function("bad"); ir.invoke_function(bad, "missing", 1, []);
+    kaku bad = ir.function("bad");
+    ir.invoke_function(bad, "missing", 1, []);
     testing.expect(emit_program(c, [bad], [], 0, "test") != "" && len(c.bytes) == 0, "unresolved runtime function rejected");
-    kaku good = ir.function("leaf"); ir.put(good, ir.constant, 1, 0, 0, 42); ir.put(good, ir.result, 0, 1, 0, 0);
+    kaku good = ir.function("leaf");
+    ir.put(good, ir.constant, 1, 0, 0, 42);
+    ir.put(good, ir.result, 0, 1, 0, 0);
     testing.expect(emit_program(c, [good], [], 0, "leaf") == "" && x86_64.assemble(c).error == "", "target-neutral scalar function lowers without OS bindings");
 }
 
 waza test_runtime_IR_invalid_labels_orders_and_ABI_are_rejected_atomically() -> unit {
-    kaku c = x86_64.assembler(); kaku duplicate = ir.function("duplicate"); ir.branch(duplicate, ir.label, 0, "a"); ir.branch(duplicate, ir.label, 0, "a");
+    kaku c = x86_64.assembler();
+    kaku duplicate = ir.function("duplicate");
+    ir.branch(duplicate, ir.label, 0, "a");
+    ir.branch(duplicate, ir.label, 0, "a");
     testing.expect(emit_program(c, [duplicate], [], 0, "duplicate") == "DUPLICATE_RUNTIME_LABEL" && len(c.bytes) == 0, "duplicate labels rejected before output");
-    kaku cas = ir.function("bad_cas"); ir.put(cas, ir.compare_exchange, 1, 0, 2, 0);
+    kaku cas = ir.function("bad_cas");
+    ir.put(cas, ir.compare_exchange, 1, 0, 2, 0);
     testing.expect(emit_program(c, [cas], [], 0, "bad") != "" && len(c.bytes) == 0, "missing CAS expected operand rejected before output");
-    kaku call = ir.function("bad_abi"); ir.call(call, 100, 1, [0]);
-    testing.expect(emit_program(c, [call], [ir.Binding { operation: 100, slot: 0, arguments: [0], result_bits: 16 }], 1, "bad") == "INVALID_RUNTIME_BINDING" && len(c.bytes) == 0, "unsupported native return width is explicit");
-    kaku wide = ir.function("seven"); ir.call(wide, 100, 1, [0, 0, 0, 0, 0, 0, 0]);
-    testing.expect(emit_program(c, [wide], [ir.Binding { operation: 100, slot: 0, arguments: [0, 0, 0, 0, 0, 0, 0], result_bits: 64 }], 1, "bad") == "INVALID_RUNTIME_BINDING" && len(c.bytes) == 0, "System V passes at most six register arguments to public ABI");
+    kaku call = ir.function("bad_abi");
+    ir.call(call, 100, 1, [0]);
+    testing.expect(emit_program(c, [call], [ir.Binding {
+                    operation: 100, slot: 0, arguments: [0], result_bits: 16 }
+            ], 1, "bad") == "INVALID_RUNTIME_BINDING" && len(c.bytes) == 0, "unsupported native return width is explicit");
+    kaku wide = ir.function("seven");
+    ir.call(wide, 100, 1, [0, 0, 0, 0, 0, 0, 0]);
+    testing.expect(emit_program(c, [wide], [ir.Binding {
+                    operation: 100, slot: 0, arguments: [0, 0, 0, 0, 0, 0, 0], result_bits: 64 }
+            ], 1, "bad") == "INVALID_RUNTIME_BINDING" && len(c.bytes) == 0, "System V passes at most six register arguments to public ABI");
 }
 
 waza test_atomic_operations_are_x86_TSO_correct() -> unit {
     kaku c = x86_64.assembler();
-    testing.expect(emit_atomic(c, gc.RuntimeOp { kind: gc.atomic_add, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.seq_cst, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "", "fetch_add emitted");
+    testing.expect(emit_atomic(c, gc.RuntimeOp {
+                kind: gc.atomic_add, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.seq_cst, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "", "fetch_add emitted");
     kaku bytes = x86_64.assemble(c).bytes;
     testing.expect(len(bytes) == 3 + 9 && bytes[3] == uint8(240), "mov rax,rsi; lock xadd [rdi],rax");
     kaku d = x86_64.assembler();
-    testing.expect(emit_atomic(d, gc.RuntimeOp { kind: gc.fence, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.acquire, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "" && len(d.bytes) == 0, "acquire fence is a compiler barrier on TSO");
+    testing.expect(emit_atomic(d, gc.RuntimeOp {
+                kind: gc.fence, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.acquire, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "" && len(d.bytes) == 0, "acquire fence is a compiler barrier on TSO");
     kaku e = x86_64.assembler();
-    testing.expect(emit_atomic(e, gc.RuntimeOp { kind: gc.fence, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.seq_cst, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "" && len(e.bytes) == 3, "seq_cst fence is MFENCE");
-    testing.expect(emit_atomic(e, gc.RuntimeOp { kind: gc.thread_start, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.relaxed, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "INVALID_RUNTIME_OP", "non-atomic operations rejected");
+    testing.expect(emit_atomic(e, gc.RuntimeOp {
+                kind: gc.fence, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.seq_cst, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "" && len(e.bytes) == 3, "seq_cst fence is MFENCE");
+    testing.expect(emit_atomic(e, gc.RuntimeOp {
+                kind: gc.thread_start, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.relaxed, failure_order: gc.relaxed, alignment: 8, epoch: 0 }) == "INVALID_RUNTIME_OP", "non-atomic operations rejected");
 }
 
 waza same(actual: []uint8, expected: []int64) -> bool {
     moshi (len(actual) != len(expected)) { kaesu iie; }
     kaku i = 0;
-    aida (i < len(expected)) { moshi (int64(actual[i]) != expected[i]) { kaesu iie; } i = i + 1; }
+    aida (i < len(expected)) {
+        moshi (int64(actual[i]) != expected[i]) {
+            kaesu iie;
+        }
+        i = i + 1;
+    }
     kaesu hai;
 }
 waza op(kind: int64, order: int64, failure_order: int64) -> gc.RuntimeOp {
-    kaesu gc.RuntimeOp { kind: kind, address: 0, value: 1, expected: 2, result: 3, status: 4, order: order, failure_order: failure_order, alignment: 8, epoch: 0 };
+    kaesu gc.RuntimeOp {
+        kind: kind, address: 0, value: 1, expected: 2, result: 3, status: 4, order: order, failure_order: failure_order, alignment: 8, epoch: 0 };
 }
 waza atomic_bytes(o: gc.RuntimeOp) -> []uint8 {
     kaku c = x86_64.assembler();
@@ -83,55 +108,84 @@ waza rejected(f: ir.Function) -> string {
     kaesu problem;
 }
 waza test_malformed_steps_are_rejected_before_emission() -> unit {
-    kaku bad = ir.function("bad_kind"); ir.put(bad, 26, 1, 0, 0, 0);
+    kaku bad = ir.function("bad_kind");
+    ir.put(bad, 26, 1, 0, 0, 0);
     testing.expect(rejected(bad) == "UNSUPPORTED_RUNTIME_STEP", "a step kind beyond what this lowering implements");
-    bad = ir.function("zero_kind"); ir.put(bad, 0, 1, 0, 0, 0);
+    bad = ir.function("zero_kind");
+    ir.put(bad, 0, 1, 0, 0, 0);
     testing.expect(rejected(bad) == "UNSUPPORTED_RUNTIME_STEP", "step kind 0");
-    bad = ir.function("reg32"); ir.put(bad, ir.copy, 32, 0, 0, 0);
+    bad = ir.function("reg32");
+    ir.put(bad, ir.copy, 32, 0, 0, 0);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "virtual register 32 as destination");
-    bad = ir.function("reg_neg"); ir.put(bad, ir.copy, 1, -1, 0, 0);
+    bad = ir.function("reg_neg");
+    ir.put(bad, ir.copy, 1, -1, 0, 0);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "negative virtual register");
-    bad = ir.function("scratch_big"); ir.put(bad, ir.scratch_address, 1, 0, 0, 64);
+    bad = ir.function("scratch_big");
+    ir.put(bad, ir.scratch_address, 1, 0, 0, 64);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "scratch offset beyond the 64-byte scratch area");
-    bad = ir.function("scratch_odd"); ir.put(bad, ir.scratch_address, 1, 0, 0, 4);
+    bad = ir.function("scratch_odd");
+    ir.put(bad, ir.scratch_address, 1, 0, 0, 4);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "scratch offset not a multiple of 8");
-    bad = ir.function("load_far"); ir.put(bad, ir.load, 1, 0, 0, 32768);
+    bad = ir.function("load_far");
+    ir.put(bad, ir.load, 1, 0, 0, 32768);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "load displacement above 32760");
-    bad = ir.function("load_neg"); ir.put(bad, ir.load, 1, 0, 0, -8);
+    bad = ir.function("load_neg");
+    ir.put(bad, ir.load, 1, 0, 0, -8);
     testing.expect(rejected(bad) == "INVALID_RUNTIME_STEP", "negative load displacement");
     kaku callee = ir.function("callee");
-    kaku eight = ir.function("eight"); ir.invoke_function(eight, "callee", 1, [0, 0, 0, 0, 0, 0, 0, 0]);
+    kaku eight = ir.function("eight");
+    ir.invoke_function(eight, "callee", 1, [0, 0, 0, 0, 0, 0, 0, 0]);
     kaku c = x86_64.assembler();
     testing.expect(emit_program(c, [eight, callee], [], 0, "t") == "INVALID_RUNTIME_STEP" && len(c.bytes) == 0, "eight invoke arguments would overwrite r10");
-    kaku seven = ir.function("seven"); ir.invoke_function(seven, "callee", 1, [0, 1, 2, 3, 4, 5, 6]);
+    kaku seven = ir.function("seven");
+    ir.invoke_function(seven, "callee", 1, [0, 1, 2, 3, 4, 5, 6]);
     c = x86_64.assembler();
     testing.expect(emit_program(c, [seven, callee], [], 0, "t") == "" && x86_64.assemble(c).error == "", "seven invoke arguments are accepted");
-    kaku star = ir.function("reserved_label"); ir.branch(star, ir.label, 0, "__anything");
+    kaku star = ir.function("reserved_label");
+    ir.branch(star, ir.label, 0, "__anything");
     testing.expect(rejected(star) == "RESERVED_RUNTIME_LABEL", "labels starting with __ are reserved for the lowering");
-    kaku empty = ir.function("empty_name"); ir.branch(empty, ir.jump, 0, "");
+    kaku empty = ir.function("empty_name");
+    ir.branch(empty, ir.jump, 0, "");
     testing.expect(rejected(empty) == "INVALID_RUNTIME_STEP", "jump without a label name");
-    kaku cas = ir.function("cas_args"); array.push(cas.steps, ir.Step { kind: ir.compare_exchange, destination: 1, left: 0, right: 2, immediate: 0, name: "", arguments: [], order: gc.seq_cst, failure_order: gc.relaxed });
+    kaku cas = ir.function("cas_args");
+    array.push(cas.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 1, left: 0, right: 2, immediate: 0, name: "", arguments: [], order: gc.seq_cst, failure_order: gc.relaxed });
     testing.expect(rejected(cas) == "INVALID_CAS_ARGUMENT", "compare_exchange without its expected operand");
-    kaku order = ir.function("order"); array.push(order.steps, ir.Step { kind: ir.compare_exchange, destination: 1, left: 0, right: 2, immediate: 0, name: "", arguments: [3], order: gc.relaxed, failure_order: gc.seq_cst });
+    kaku order = ir.function("order");
+    array.push(order.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 1, left: 0, right: 2, immediate: 0, name: "", arguments: [3], order: gc.relaxed, failure_order: gc.seq_cst });
     testing.expect(rejected(order) == "INVALID_RUNTIME_ATOMIC_ORDER", "failure order stronger than the success order");
 }
 
 // Encoder errors recorded while emitting are returned, not left for assemble().
 waza test_encoder_errors_are_surfaced() -> unit {
-    kaku c = x86_64.assembler(); x86_64.mov_rr(c, 16, 0);
-    kaku good = ir.function("fine"); ir.put(good, ir.constant, 1, 0, 0, 1); ir.put(good, ir.result, 0, 1, 0, 0);
+    kaku c = x86_64.assembler();
+    x86_64.mov_rr(c, 16, 0);
+    kaku good = ir.function("fine");
+    ir.put(good, ir.constant, 1, 0, 0, 1);
+    ir.put(good, ir.result, 0, 1, 0, 0);
     testing.expect(emit_program(c, [good], [], 0, "t") == "INVALID_REGISTER", "an error already recorded by the encoder is reported");
 }
 
 // Function entries and per-function labels live in separate, unambiguous namespaces.
 waza test_label_namespaces_do_not_collide() -> unit {
     // ("a_b", "c") and ("a", "b_c") produced the same name under the old <function>_<label> scheme.
-    kaku f1 = ir.function("a_b"); ir.branch(f1, ir.label, 0, "c"); ir.branch(f1, ir.jump, 0, "c"); ir.put(f1, ir.result, 0, 1, 0, 0);
-    kaku f2 = ir.function("a"); ir.branch(f2, ir.label, 0, "b_c"); ir.branch(f2, ir.jump, 0, "b_c"); ir.put(f2, ir.result, 0, 1, 0, 0);
+    kaku f1 = ir.function("a_b");
+    ir.branch(f1, ir.label, 0, "c");
+    ir.branch(f1, ir.jump, 0, "c");
+    ir.put(f1, ir.result, 0, 1, 0, 0);
+    kaku f2 = ir.function("a");
+    ir.branch(f2, ir.label, 0, "b_c");
+    ir.branch(f2, ir.jump, 0, "b_c");
+    ir.put(f2, ir.result, 0, 1, 0, 0);
     // A user label that looks like an internal division label, in a function that also divides.
-    kaku f3 = ir.function("divides"); ir.branch(f3, ir.label, 0, "div_zero_0"); ir.put(f3, ir.divide_unsigned, 1, 2, 3, 0); ir.put(f3, ir.result, 0, 1, 0, 0);
+    kaku f3 = ir.function("divides");
+    ir.branch(f3, ir.label, 0, "div_zero_0");
+    ir.put(f3, ir.divide_unsigned, 1, 2, 3, 0);
+    ir.put(f3, ir.result, 0, 1, 0, 0);
     // A function whose name equals another function's "<function>_<label>".
-    kaku f4 = ir.function("a_b_c"); ir.put(f4, ir.result, 0, 1, 0, 0);
+    kaku f4 = ir.function("a_b_c");
+    ir.put(f4, ir.result, 0, 1, 0, 0);
     kaku c = x86_64.assembler();
     testing.expect(emit_program(c, [f1, f2, f3, f4], [], 0, "t") == "", "emission succeeds");
     testing.expect(x86_64.assemble(c).error == "", "no duplicate or unresolved label");

@@ -1,27 +1,34 @@
 yobu "kiso/testing";
 waza test_strong_CAS_and_RMW_lowering() -> unit {
-    kaku code=arm64.assembler();
-    kaku op=gc.RuntimeOp {kind:gc.atomic_cas,address:0,value:1,expected:2,result:3,status:4,order:gc.acq_rel,failure_order:gc.acquire,alignment:8,epoch:0};
-    testing.expect(emit_atomic(code,op)=="", "strong CAS accepted");
-    kaku words=arm64.assembler_assemble(code);
-    testing.expect(words.error==mu, "retry/mismatch/done labels resolve");
-    testing.expect(words.words[1]==arm64.ldxr_x(0,9,hai).word, "CAS acquire exclusive load");
-    testing.expect(words.words[5]==arm64.stxr_x(10,1,9,hai).word, "CAS release exclusive store");
+    kaku code = arm64.assembler();
+    kaku op = gc.RuntimeOp {
+        kind: gc.atomic_cas, address: 0, value: 1, expected: 2, result: 3, status: 4, order: gc.acq_rel, failure_order: gc.acquire, alignment: 8, epoch: 0 };
+    testing.expect(emit_atomic(code, op) == "", "strong CAS accepted");
+    kaku words = arm64.assembler_assemble(code);
+    testing.expect(words.error == mu, "retry/mismatch/done labels resolve");
+    testing.expect(words.words[1] == arm64.ldxr_x(0, 9, hai).word, "CAS acquire exclusive load");
+    testing.expect(words.words[5] == arm64.stxr_x(10, 1, 9, hai).word, "CAS release exclusive store");
     // Mismatch path must clear exclusive reservation; successful RMW retries
     // through an actual backward branch rather than reporting spurious failure.
-    kaku clear=iie;kaku i=0;
-    aida(i<len(words.words)){moshi(words.words[i]==arm64.clrex().word){clear=hai;}i=i+1;}
+    kaku clear = iie;
+    kaku i = 0;
+    aida (i<len(words.words)) {
+        moshi (words.words[i] == arm64.clrex().word) {
+            clear = hai;
+        }
+        i = i + 1;
+    }
     testing.expect(clear, "CAS mismatch clears exclusive monitor");
-    kaku before=len(code.words);
-    testing.expect(emit_atomic(code,gc.operation(gc.thread_start))!="" && len(code.words)==before, "OS op rejected without partial machine code");
-    testing.expect(emit_atomic(code,gc.operation(gc.atomic_add))=="", "base-ISA fetch-add available without LSE");
-    testing.expect(arm64.assembler_assemble(code).error==mu, "multiple operations have unique labels");
+    kaku before = len(code.words);
+    testing.expect(emit_atomic(code, gc.operation(gc.thread_start)) != "" && len(code.words) == before, "OS op rejected without partial machine code");
+    testing.expect(emit_atomic(code, gc.operation(gc.atomic_add)) == "", "base-ISA fetch-add available without LSE");
+    testing.expect(arm64.assembler_assemble(code).error == mu, "multiple operations have unique labels");
 }
 
 waza test_native_import_call_register_contract() -> unit {
-    kaku code=arm64.assembler();
-    testing.expect(emit_import_call(code,18,0,19)!="" && len(code.words)==0, "platform register never used as import table");
-    testing.expect(emit_import_call(code,19,19,19)!="" && len(code.words)==0, "import slot bounds checked before emission");
-    testing.expect(emit_import_call(code,19,1,19)=="", "CPU adapter emits native indirect call");
-    testing.expect(code.words[0]==arm64.ldr_x(16,19,8).word && code.words[1]==arm64.blr_x(16).word, "OS-independent table load/call encoding");
+    kaku code = arm64.assembler();
+    testing.expect(emit_import_call(code, 18, 0, 19) != "" && len(code.words) == 0, "platform register never used as import table");
+    testing.expect(emit_import_call(code, 19, 19, 19) != "" && len(code.words) == 0, "import slot bounds checked before emission");
+    testing.expect(emit_import_call(code, 19, 1, 19) == "", "CPU adapter emits native indirect call");
+    testing.expect(code.words[0] == arm64.ldr_x(16, 19, 8).word && code.words[1] == arm64.blr_x(16).word, "OS-independent table load/call encoding");
 }

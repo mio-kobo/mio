@@ -1,23 +1,29 @@
 // Ordinary language code: no registry, Root, TLS or safepoint calls.
 yobu "kiso/array";
-kata Node {value:int64; items:[]int64;}
-waza descend(depth:int64,node:Node) -> int64 {
-    moshi(depth==0){kaesu node.items[0]+node.value;}
-    kaku noise=Node {value:depth,items:[depth,depth+1]};
-    kaesu descend(depth-1,node)+noise.items[0]-depth;
+kata Node {
+    value: int64;
+    items: []int64;
 }
-waza exercise(rounds:int64) -> int64 {
-    kaku node=Node {value:100,items:[23,24]};
-    kaku retained:Node?=node;
-    kaku delta=7;
-    kaku callback=waza(value:int64) -> int64 {kaesu value+delta+node.items[0];};
-    kaku i=0;kaku sum=0;
-    aida(i<rounds){
-        kaku temp=Node {value:i,items:[i,i+1]};
-        sum=sum+descend(5,node)+callback(temp.items[0])-i;
-        i=i+1;
+waza descend(depth: int64, node: Node) -> int64 {
+    moshi (depth == 0) { kaesu node.items[0] + node.value; }
+    kaku noise = Node { value: depth, items: [depth, depth + 1] };
+    kaesu descend(depth - 1, node) + noise.items[0] - depth;
+}
+waza exercise(rounds: int64) -> int64 {
+    kaku node = Node { value: 100, items: [23, 24] };
+    kaku retained: Node?= node;
+    kaku delta = 7;
+    kaku callback = waza (value: int64) -> int64 {
+        kaesu value + delta + node.items[0];
+    };
+    kaku i = 0;
+    kaku sum = 0;
+    aida (i<rounds) {
+        kaku temp = Node { value: i, items: [i, i + 1] };
+        sum = sum + descend(5, node) + callback(temp.items[0]) - i;
+        i = i + 1;
     }
-    moshi(retained==mu){kaesu -1;}
-    kaesu sum+retained.value;
+    moshi (retained == mu) { kaesu -1; }
+    kaesu sum + retained.value;
 }
 chant(exercise(100));

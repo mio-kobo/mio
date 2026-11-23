@@ -32,7 +32,10 @@ koukai waza build_linux_mochi_with_options(data: []uint8, gc_stress: bool) -> Na
     kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
-    kaku threshold = 33554432; moshi (gc_stress) { threshold = abi.gc_stress_threshold_bytes; }
+    kaku threshold = 33554432;
+    moshi (gc_stress) {
+        threshold = abi.gc_stress_threshold_bytes;
+    }
     kaku lowered = lowerlinux.compile_with_gc_threshold(file, threshold);
     moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
     kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
@@ -41,21 +44,33 @@ koukai waza build_linux_mochi_with_options(data: []uint8, gc_stress: bool) -> Na
 koukai waza build_linux_test(data: []uint8) -> NativeBuildResult {
     kaku linked = link_test_packet(data);
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
-    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku file = linked.file;
+    moshi (file == mu) {
+        kaesu NativeBuildResult {
+            bytes: [], error: "E_IR missing test module" };
+    }
+    // 含 C 声明的测试包：与 mio build 相同的 System V 降级和系统链接（libc 默认链接，没有用户库参数）。
+    moshi (has_c_declarations(file)) { kaesu build_linux_c_file(file, iie, []); }
     kaku lowered = lowerlinux.compile(file);
     moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
     kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
 }
 
-koukai kata LinkedTest { file: mochi.File?; error: string; }
+koukai kata LinkedTest {
+    file: mochi.File?;
+    error: string;
+}
 
 // The test image reports through the packet channel: every testing report call is bound to report_packet (added as a
 // body-less function when the module has none). Shared by the Linux and Windows test images.
 koukai waza link_test_packet(data: []uint8) -> LinkedTest {
-    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu LinkedTest { file: mu, error: "E_IR invalid test module" }; }
     moshi (file == mu) { kaesu LinkedTest { file: mu, error: "E_IR missing test module" }; }
-    kaku functions: []mochi.Function = []; kaku at = 0; kaku found = iie;
+    kaku functions: []mochi.Function = [];
+    kaku at = 0;
+    kaku found = iie;
     kaku normal = "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
     kaku packet = "$mma::mio/testing/runtime::report_packet::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
     aida (at < len(file.functions)) {
@@ -65,11 +80,12 @@ koukai waza link_test_packet(data: []uint8) -> LinkedTest {
             fn = mochi.Function { id: fn.id, name: packet, name_bytes: string.to_bytes(packet), parameter_count: fn.parameter_count,
                 local_count: fn.local_count, returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
         }
-        array.push(functions, fn); at = at + 1;
+        array.push(functions, fn);
+        at = at + 1;
     }
     moshi (!found) {
         array.push(functions, mochi.Function { id: len(functions), name: packet, name_bytes: string.to_bytes(packet), parameter_count: 2,
-            local_count: 2, returns_value: iie, captures: [], instructions: [] });
+                local_count: 2, returns_value: iie, captures: [], instructions: [] });
     }
     kaku linked = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count,
         instructions: file.instructions, functions: functions };
@@ -79,7 +95,8 @@ koukai waza link_test_packet(data: []uint8) -> LinkedTest {
 // The host decides which native format a test image must have: /proc exists on Linux and not on macOS; Windows is
 // recognised by its system directory (SystemRoot), which neither Unix host has.
 waza contains_text(data: []uint8, needle: string) -> bool {
-    kaku wanted = string.to_bytes(needle); kaku at = 0;
+    kaku wanted = string.to_bytes(needle);
+    kaku at = 0;
     aida (at + len(wanted) <= len(data)) {
         kaku i = 0;
         aida (i < len(wanted) && data[at + i] == wanted[i]) { i = i + 1; }
@@ -114,7 +131,10 @@ koukai waza host_target() -> string {
 // Parent directory for the private run/test directories: /tmp on Unix hosts; on Windows the user's TEMP (or TMP)
 // directory, because "/tmp" is not a system directory there.
 koukai waza temporary_root() -> string {
-    kaku temp_host = host_target(); moshi (temp_host != "windows-amd64" && temp_host != "windows-arm64") { kaesu "/tmp"; }
+    kaku temp_host = host_target();
+    moshi (temp_host != "windows-amd64" && temp_host != "windows-arm64") {
+        kaesu "/tmp";
+    }
     kaku names: []string = ["TEMP", "TMP"];
     kaku at = 0;
     aida (at < len(names)) {
@@ -143,20 +163,23 @@ koukai waza build_linux_arm64_source(root: string, entry: string, bunko_root: st
 }
 
 koukai waza build_linux_arm64_mochi(data: []uint8, gc_stress: bool) -> NativeBuildResult {
-    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
     kaesu build_linux_arm64_file(file, gc_stress);
 }
 
 waza build_linux_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
+    moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
     kaku lowered = lower.compile_linux_arm64(file, 1073741824, gc_stress);
     kaku problem = lowered.error;
     moshi (problem != mu) {
         kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
         kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
     }
-    kaku image = linuxarm64.image(macho.ImageSpec { words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches });
+    kaku image = linuxarm64.image(macho.ImageSpec {
+            words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches });
     moshi (image.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_ELF ", image.error) }; }
     kaesu NativeBuildResult { bytes: image.bytes, error: "" };
 }
@@ -164,7 +187,11 @@ waza build_linux_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildRes
 koukai waza build_linux_arm64_test(data: []uint8) -> NativeBuildResult {
     kaku linked = link_test_packet(data);
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
-    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku file = linked.file;
+    moshi (file == mu) {
+        kaesu NativeBuildResult {
+            bytes: [], error: "E_IR missing test module" };
+    }
     kaesu build_linux_arm64_file(file, iie);
 }
 
@@ -176,14 +203,18 @@ koukai waza build_darwin_amd64_source(root: string, entry: string, bunko_root: s
 }
 
 koukai waza build_darwin_amd64_mochi(data: []uint8, gc_stress: bool) -> NativeBuildResult {
-    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
     kaesu build_darwin_amd64_file(file, gc_stress);
 }
 
 waza build_darwin_amd64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
-    kaku threshold = 33554432; moshi (gc_stress) { threshold = abi.gc_stress_threshold_bytes; }
+    kaku threshold = 33554432;
+    moshi (gc_stress) {
+        threshold = abi.gc_stress_threshold_bytes;
+    }
     kaku lowered = lowerlinux.compile_darwin_amd64(file, threshold);
     moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
     kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };
@@ -192,7 +223,11 @@ waza build_darwin_amd64_file(file: mochi.File, gc_stress: bool) -> NativeBuildRe
 koukai waza build_darwin_amd64_test(data: []uint8) -> NativeBuildResult {
     kaku linked = link_test_packet(data);
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
-    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku file = linked.file;
+    moshi (file == mu) {
+        kaesu NativeBuildResult {
+            bytes: [], error: "E_IR missing test module" };
+    }
     kaesu build_darwin_amd64_file(file, iie);
 }
 
@@ -238,13 +273,15 @@ koukai waza build_windows_arm64_source(root: string, entry: string, bunko_root: 
 }
 
 koukai waza build_windows_arm64_mochi(data: []uint8, gc_stress: bool) -> NativeBuildResult {
-    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
     kaesu build_windows_arm64_file(file, gc_stress);
 }
 
 waza build_windows_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildResult {
+    moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
     kaku lowered = lower.compile_windows_arm64(file, 1073741824, gc_stress);
     kaku problem = lowered.error;
     moshi (problem != mu) {
@@ -253,7 +290,8 @@ waza build_windows_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildR
     }
     kaku entry = winarm64.start_word(lowered.labels);
     moshi (entry < 0) { kaesu NativeBuildResult { bytes: [], error: "E_PE missing the Windows entry routine" }; }
-    kaku image = winarm64.image(macho.ImageSpec { words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches }, entry, lower.windows_imports());
+    kaku image = winarm64.image(macho.ImageSpec {
+            words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches }, entry, lower.windows_imports());
     moshi (image.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_PE ", image.error) }; }
     kaesu NativeBuildResult { bytes: image.bytes, error: "" };
 }
@@ -261,6 +299,10 @@ waza build_windows_arm64_file(file: mochi.File, gc_stress: bool) -> NativeBuildR
 koukai waza build_windows_arm64_test(data: []uint8) -> NativeBuildResult {
     kaku linked = link_test_packet(data);
     moshi (linked.error != "") { kaesu NativeBuildResult { bytes: [], error: linked.error }; }
-    kaku file = linked.file; moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
+    kaku file = linked.file;
+    moshi (file == mu) {
+        kaesu NativeBuildResult {
+            bytes: [], error: "E_IR missing test module" };
+    }
     kaesu build_windows_arm64_file(file, iie);
 }

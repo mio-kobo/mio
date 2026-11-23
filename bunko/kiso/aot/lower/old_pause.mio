@@ -1,17 +1,64 @@
 // Experimental adapter, under native validation. Control belongs to the
 // stopped Mutator epoch. Wrapper return values never forge a successful pause.
-waza emit_old_pause_adapter(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
- attached_save(c,"old_stress_minor");old_control(c,p,first,0);wr_num(c,9,0);arm64.assembler_cbz_x(c,0,"old_stress_minor_result");wr_imports(c,p,first);arm64.assembler_bl(c,"attached_gc_old_stress_minor");move_x(c,9,0);
- arm64.assembler_label(c,"old_stress_minor_result");emit(c,arm64.str_x(9,31,88));attached_restore(c);
+waza emit_old_pause_adapter(c: arm64.Assembler, p: []macho.AddressPatch, first: int64) -> unit {
+    attached_save(c, "old_stress_minor");
+    old_control(c, p, first, 0);
+    wr_num(c, 9, 0);
+    arm64.assembler_cbz_x(c, 0, "old_stress_minor_result");
+    wr_imports(c, p, first);
+    arm64.assembler_bl(c, "attached_gc_old_stress_minor");
+    move_x(c, 9, 0);
+    arm64.assembler_label(c, "old_stress_minor_result");
+    emit(c, arm64.str_x(9, 31, 88));
+    attached_restore(c);
 
- kaku labels=["old_pause_heap","old_resume_heap","old_note_minor","old_pause_epoch"];kaku functions=["gc_old_pause","gc_old_resume","gc_old_note_minor","gc_old_pause_epoch"];kaku i=0;
- aida(i<4){attached_save(c,labels[i]);old_control(c,p,first,0);kaku done=string.concat(labels[i],"_done");arm64.assembler_cbz_x(c,0,done);wr_imports(c,p,first);wr_call(c,functions[i]);arm64.assembler_label(c,done);attached_restore(c);i=i+1;}
- attached_save(c,"old_promoted_publish");move_x(c,1,14);old_control(c,p,first,0);arm64.assembler_cbz_x(c,0,"old_promoted_no_state");wr_imports(c,p,first);wr_call(c,"gc_old_promoted");arm64.assembler_label(c,"old_promoted_no_state");attached_restore(c);
- attached_save(c,"old_major_active");old_control(c,p,first,0);wr_num(c,9,0);arm64.assembler_cbz_x(c,0,"old_major_active_result");emit(c,arm64.add_imm_x(9,0,144,iie));emit(c,arm64.ldar_x(9,9));emit(c,arm64.cmp_imm_x(9,2,iie));emit(c,arm64.cset_w(9,0));
- moshi(old_sweep_enabled(c)){arm64.assembler_cbnz_x(c,9,"old_major_active_result");emit(c,arm64.add_imm_x(9,0,712,iie));emit(c,arm64.ldar_x(9,9));emit(c,arm64.cmp_imm_x(9,2,iie));emit(c,arm64.cset_w(9,0));}
- arm64.assembler_label(c,"old_major_active_result");emit(c,arm64.str_x(9,31,88));attached_restore(c);
+    kaku labels = ["old_pause_heap", "old_resume_heap", "old_note_minor", "old_pause_epoch"];
+    kaku functions = ["gc_old_pause", "gc_old_resume", "gc_old_note_minor", "gc_old_pause_epoch"];
+    kaku i = 0;
+    aida (i<4) {
+        attached_save(c, labels[i]);
+        old_control(c, p, first, 0);
+        kaku done = string.concat(labels[i], "_done");
+        arm64.assembler_cbz_x(c, 0, done);
+        wr_imports(c, p, first);
+        wr_call(c, functions[i]);
+        arm64.assembler_label(c, done);
+        attached_restore(c);
+        i = i + 1;
+    }
+    attached_save(c, "old_promoted_publish");
+    move_x(c, 1, 14);
+    old_control(c, p, first, 0);
+    arm64.assembler_cbz_x(c, 0, "old_promoted_no_state");
+    wr_imports(c, p, first);
+    wr_call(c, "gc_old_promoted");
+    arm64.assembler_label(c, "old_promoted_no_state");
+    attached_restore(c);
+    attached_save(c, "old_major_active");
+    old_control(c, p, first, 0);
+    wr_num(c, 9, 0);
+    arm64.assembler_cbz_x(c, 0, "old_major_active_result");
+    emit(c, arm64.add_imm_x(9, 0, 144, iie));
+    emit(c, arm64.ldar_x(9, 9));
+    emit(c, arm64.cmp_imm_x(9, 2, iie));
+    emit(c, arm64.cset_w(9, 0));
+    moshi (old_sweep_enabled(c)) {
+        arm64.assembler_cbnz_x(c, 9, "old_major_active_result");
+        emit(c, arm64.add_imm_x(9, 0, 712, iie));
+        emit(c, arm64.ldar_x(9, 9));
+        emit(c, arm64.cmp_imm_x(9, 2, iie));
+        emit(c, arm64.cset_w(9, 0));
+    }
+    arm64.assembler_label(c, "old_major_active_result");
+    emit(c, arm64.str_x(9, 31, 88));
+    attached_restore(c);
 }
-waza emit_old_promoted_publish(c:arm64.Assembler,payload:int64) -> unit {
- moshi(!old_mark_proto_enabled(c)){kaesu;}
- emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(14,31,0));move_x(c,14,payload);arm64.assembler_bl(c,"old_promoted_publish");emit(c,arm64.ldr_x(14,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));
+waza emit_old_promoted_publish(c: arm64.Assembler, payload: int64) -> unit {
+    moshi (!old_mark_proto_enabled(c)) { kaesu; }
+    emit(c, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(c, arm64.str_x(14, 31, 0));
+    move_x(c, 14, payload);
+    arm64.assembler_bl(c, "old_promoted_publish");
+    emit(c, arm64.ldr_x(14, 31, 0));
+    emit(c, arm64.add_imm_x(31, 31, 16, iie));
 }

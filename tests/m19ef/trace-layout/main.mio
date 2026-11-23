@@ -1,58 +1,281 @@
-yobu "kiso/runtime/gc";yobu "kiso/runtime/ir";yobu "kiso/runtime/os/darwin";yobu "kiso/runtime/cpu/aarch64";
-yobu "kiso/aot/arm64";yobu "kiso/aot/lower";yobu "kiso/aot/macho";yobu "kiso/aot/sign";yobu "kiso/array";yobu "kiso/fs";yobu "kiso/os";
+yobu "kiso/runtime/gc";
+yobu "kiso/runtime/ir";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/runtime/cpu/aarch64";
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
 // Actual production-heap field-scanner witness. This is a low-level layout
 // unit fixture, not ordinary-code roots or concurrent Old Mark acceptance.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza eq(f:ir.Function,r:int64,v:int64) -> unit {n(f,30,v);ir.put(f,ir.equal,30,r,30,0);ir.branch(f,ir.zero,30,"fail");}
-waza val(f:ir.Function,off:int64,v:int64) -> unit {n(f,28,v);ir.put(f,ir.store,0,22,28,off);}
-waza allocate(f:ir.Function,size:int64,kind:int64) -> unit {
- n(f,26,size);n(f,27,kind);ir.call(f,203,22,[20,21,26,27]);ir.branch(f,ir.zero,22,"fail");
- ir.put(f,ir.load,28,21,0,8);n(f,29,8);ir.put(f,ir.multiply,29,28,29,0);ir.put(f,ir.add,29,21,29,0);ir.put(f,ir.store,0,29,22,16);n(f,29,1);ir.put(f,ir.add,28,28,29,0);ir.put(f,ir.store,0,21,28,8);
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza eq(f: ir.Function, r: int64, v: int64) -> unit {
+    n(f, 30, v);
+    ir.put(f, ir.equal, 30, r, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
 }
-waza scan(f:ir.Function,expected:int64,available:int64,result:int64,visits:int64) -> unit {
- n(f,28,0);ir.put(f,ir.store,0,0,28,16);ir.put(f,ir.store,0,0,expected,24);n(f,26,available);ir.invoke_function(f,"gc_trace_object",5,[0,22,26]);eq(f,5,result);ir.put(f,ir.load,5,0,0,16);eq(f,5,visits);
- ir.put(f,ir.load,5,0,0,48);n(f,28,1);ir.put(f,ir.add,5,5,28,0);ir.put(f,ir.store,0,0,5,48);
+waza val(f: ir.Function, off: int64, v: int64) -> unit {
+    n(f, 28, v);
+    ir.put(f, ir.store, 0, 22, 28, off);
+}
+waza allocate(f: ir.Function, size: int64, kind: int64) -> unit {
+    n(f, 26, size);
+    n(f, 27, kind);
+    ir.call(f, 203, 22, [20, 21, 26, 27]);
+    ir.branch(f, ir.zero, 22, "fail");
+    ir.put(f, ir.load, 28, 21, 0, 8);
+    n(f, 29, 8);
+    ir.put(f, ir.multiply, 29, 28, 29, 0);
+    ir.put(f, ir.add, 29, 21, 29, 0);
+    ir.put(f, ir.store, 0, 29, 22, 16);
+    n(f, 29, 1);
+    ir.put(f, ir.add, 28, 28, 29, 0);
+    ir.put(f, ir.store, 0, 21, 28, 8);
+}
+waza scan(f: ir.Function, expected: int64, available: int64, result: int64, visits: int64) -> unit {
+    n(f, 28, 0);
+    ir.put(f, ir.store, 0, 0, 28, 16);
+    ir.put(f, ir.store, 0, 0, expected, 24);
+    n(f, 26, available);
+    ir.invoke_function(f, "gc_trace_object", 5, [0, 22, 26]);
+    eq(f, 5, result);
+    ir.put(f, ir.load, 5, 0, 0, 16);
+    eq(f, 5, visits);
+    ir.put(f, ir.load, 5, 0, 0, 48);
+    n(f, 28, 1);
+    ir.put(f, ir.add, 5, 5, 28, 0);
+    ir.put(f, ir.store, 0, 0, 5, 48);
 }
 waza visitor() -> ir.Function {
- kaku f=ir.function("visit");ir.put(f,ir.load,2,0,0,24);ir.put(f,ir.equal,2,2,1,0);ir.branch(f,ir.zero,2,"fail");ir.put(f,ir.load,2,0,0,16);n(f,3,1);ir.put(f,ir.add,2,2,3,0);ir.put(f,ir.store,0,0,2,16);ir.put(f,ir.load,2,0,0,32);ir.put(f,ir.result,0,2,0,0);
- ir.branch(f,ir.label,0,"fail");n(f,2,85);ir.call(f,102,3,[2]);kaesu f;
+    kaku f = ir.function("visit");
+    ir.put(f, ir.load, 2, 0, 0, 24);
+    ir.put(f, ir.equal, 2, 2, 1, 0);
+    ir.branch(f, ir.zero, 2, "fail");
+    ir.put(f, ir.load, 2, 0, 0, 16);
+    n(f, 3, 1);
+    ir.put(f, ir.add, 2, 2, 3, 0);
+    ir.put(f, ir.store, 0, 0, 2, 16);
+    ir.put(f, ir.load, 2, 0, 0, 32);
+    ir.put(f, ir.result, 0, 2, 0, 0);
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 2, 85);
+    ir.call(f, 102, 3, [2]);
+    kaesu f;
 }
 waza run() -> ir.Function {
- kaku f=ir.function("run");ir.call(f,202,20,[]);ir.branch(f,ir.zero,20,"fail");ir.put(f,ir.address,21,0,0,128);
- allocate(f,16,105);val(f,0,6);ir.put(f,ir.copy,23,22,0,0);ir.put(f,ir.store,0,22,23,8);scan(f,23,16,0,0);
- allocate(f,16,105);val(f,0,262);ir.put(f,ir.store,0,22,23,8);scan(f,23,16,0,1);
- n(f,28,17);ir.put(f,ir.store,0,0,28,32);scan(f,23,16,17,1);n(f,28,0);ir.put(f,ir.store,0,0,28,32);
- // Bit63 and the next bitmap word; all numeric slots contain a real address.
- allocate(f,568,100);val(f,0,1);val(f,8,65);val(f,16,65);val(f,24,2);val(f,32,-9223372036854775807-1);val(f,40,1);
- kaku i=0;aida(i<65){ir.put(f,ir.store,0,22,23,48+i*8);i=i+1;}scan(f,23,576,0,2);scan(f,23,567,4,0);
- val(f,24,3);scan(f,23,576,4,0);val(f,24,2);
- allocate(f,56,107);val(f,0,8);val(f,8,0);val(f,16,2);val(f,24,1);val(f,32,1);ir.put(f,ir.store,0,22,23,40);ir.put(f,ir.store,0,22,23,48);scan(f,23,64,0,1);
- allocate(f,48,102);val(f,0,67587);val(f,8,2);val(f,16,2);val(f,24,0);ir.put(f,ir.store,0,22,23,32);ir.put(f,ir.store,0,22,23,40);scan(f,23,48,0,0);val(f,24,1);scan(f,23,48,0,2);val(f,8,3);scan(f,23,48,4,0);val(f,8,2);ir.put(f,ir.copy,25,22,0,0);
- allocate(f,48,101);val(f,0,2);val(f,8,2);val(f,16,2);val(f,24,8);val(f,32,1);ir.put(f,ir.store,0,22,25,40);scan(f,25,48,0,1);
- // Real descriptors: pointer words, numeric words and bytes, plus bad low kind.
- val(f,0,67586);scan(f,25,48,0,1);val(f,0,2050);scan(f,25,48,0,1);val(f,0,258);scan(f,25,48,0,1);val(f,0,67587);scan(f,25,48,4,0);
- allocate(f,32,104);val(f,0,5);val(f,8,2);ir.put(f,ir.store,0,22,23,16);ir.put(f,ir.store,0,22,23,24);scan(f,23,32,0,2);ir.put(f,ir.copy,24,22,0,0);
- allocate(f,48,103);val(f,0,4);val(f,8,0);val(f,16,0);val(f,24,0);val(f,32,0);ir.put(f,ir.store,0,22,24,40);scan(f,24,48,0,1);
- allocate(f,32,106);val(f,0,7);ir.put(f,ir.store,0,22,23,8);scan(f,23,32,0,0);
- n(f,28,16);ir.put(f,ir.subtract,29,22,28,0);ir.put(f,ir.load,27,29,0,0);n(f,28,999);ir.put(f,ir.store,0,29,28,0);scan(f,23,32,4,0);n(f,28,16);ir.put(f,ir.subtract,29,22,28,0);ir.put(f,ir.store,0,29,27,0);
- allocate(f,131104,102);val(f,0,2051);val(f,8,16384);val(f,16,16384);val(f,24,0);scan(f,23,131104,0,0);
- ir.put(f,ir.load,5,20,0,gc.los_count);eq(f,5,1);
- // Roots are deliberately removed only after every scan. No freed payload read.
- // Existing LOS accounting is object span(payload+16), excluding its32B prefix.
- n(f,28,0);ir.put(f,ir.store,0,21,28,8);n(f,2,1);ir.call(f,201,5,[20,21,2]);eq(f,5,0);ir.put(f,ir.load,5,20,0,gc.los_count);eq(f,5,0);ir.put(f,ir.load,5,20,0,304);eq(f,5,0);ir.put(f,ir.load,5,20,0,gc.los_reclaimed);eq(f,5,131120);
- ir.put(f,ir.load,5,0,0,48);eq(f,5,20);ir.put(f,ir.address,1,0,0,48);n(f,2,8);ir.call(f,103,5,[1,2]);eq(f,5,8);n(f,1,0);ir.put(f,ir.result,0,1,0,0);
- ir.branch(f,ir.label,0,"fail");ir.put(f,ir.store,0,0,5,56);ir.put(f,ir.address,1,0,0,16);n(f,2,48);ir.call(f,103,5,[1,2]);n(f,1,86);ir.call(f,102,2,[1]);kaesu f;
+    kaku f = ir.function("run");
+    ir.call(f, 202, 20, []);
+    ir.branch(f, ir.zero, 20, "fail");
+    ir.put(f, ir.address, 21, 0, 0, 128);
+    allocate(f, 16, 105);
+    val(f, 0, 6);
+    ir.put(f, ir.copy, 23, 22, 0, 0);
+    ir.put(f, ir.store, 0, 22, 23, 8);
+    scan(f, 23, 16, 0, 0);
+    allocate(f, 16, 105);
+    val(f, 0, 262);
+    ir.put(f, ir.store, 0, 22, 23, 8);
+    scan(f, 23, 16, 0, 1);
+    n(f, 28, 17);
+    ir.put(f, ir.store, 0, 0, 28, 32);
+    scan(f, 23, 16, 17, 1);
+    n(f, 28, 0);
+    ir.put(f, ir.store, 0, 0, 28, 32);
+    // Bit63 and the next bitmap word; all numeric slots contain a real address.
+    allocate(f, 568, 100);
+    val(f, 0, 1);
+    val(f, 8, 65);
+    val(f, 16, 65);
+    val(f, 24, 2);
+    val(f, 32, -9223372036854775807 - 1);
+    val(f, 40, 1);
+    kaku i = 0;
+    aida (i<65) {
+        ir.put(f, ir.store, 0, 22, 23, 48 + i * 8);
+        i = i + 1;
+    }
+    scan(f, 23, 576, 0, 2);
+    scan(f, 23, 567, 4, 0);
+    val(f, 24, 3);
+    scan(f, 23, 576, 4, 0);
+    val(f, 24, 2);
+    allocate(f, 56, 107);
+    val(f, 0, 8);
+    val(f, 8, 0);
+    val(f, 16, 2);
+    val(f, 24, 1);
+    val(f, 32, 1);
+    ir.put(f, ir.store, 0, 22, 23, 40);
+    ir.put(f, ir.store, 0, 22, 23, 48);
+    scan(f, 23, 64, 0, 1);
+    allocate(f, 48, 102);
+    val(f, 0, 67587);
+    val(f, 8, 2);
+    val(f, 16, 2);
+    val(f, 24, 0);
+    ir.put(f, ir.store, 0, 22, 23, 32);
+    ir.put(f, ir.store, 0, 22, 23, 40);
+    scan(f, 23, 48, 0, 0);
+    val(f, 24, 1);
+    scan(f, 23, 48, 0, 2);
+    val(f, 8, 3);
+    scan(f, 23, 48, 4, 0);
+    val(f, 8, 2);
+    ir.put(f, ir.copy, 25, 22, 0, 0);
+    allocate(f, 48, 101);
+    val(f, 0, 2);
+    val(f, 8, 2);
+    val(f, 16, 2);
+    val(f, 24, 8);
+    val(f, 32, 1);
+    ir.put(f, ir.store, 0, 22, 25, 40);
+    scan(f, 25, 48, 0, 1);
+    // Real descriptors: pointer words, numeric words and bytes, plus bad low kind.
+    val(f, 0, 67586);
+    scan(f, 25, 48, 0, 1);
+    val(f, 0, 2050);
+    scan(f, 25, 48, 0, 1);
+    val(f, 0, 258);
+    scan(f, 25, 48, 0, 1);
+    val(f, 0, 67587);
+    scan(f, 25, 48, 4, 0);
+    allocate(f, 32, 104);
+    val(f, 0, 5);
+    val(f, 8, 2);
+    ir.put(f, ir.store, 0, 22, 23, 16);
+    ir.put(f, ir.store, 0, 22, 23, 24);
+    scan(f, 23, 32, 0, 2);
+    ir.put(f, ir.copy, 24, 22, 0, 0);
+    allocate(f, 48, 103);
+    val(f, 0, 4);
+    val(f, 8, 0);
+    val(f, 16, 0);
+    val(f, 24, 0);
+    val(f, 32, 0);
+    ir.put(f, ir.store, 0, 22, 24, 40);
+    scan(f, 24, 48, 0, 1);
+    allocate(f, 32, 106);
+    val(f, 0, 7);
+    ir.put(f, ir.store, 0, 22, 23, 8);
+    scan(f, 23, 32, 0, 0);
+    n(f, 28, 16);
+    ir.put(f, ir.subtract, 29, 22, 28, 0);
+    ir.put(f, ir.load, 27, 29, 0, 0);
+    n(f, 28, 999);
+    ir.put(f, ir.store, 0, 29, 28, 0);
+    scan(f, 23, 32, 4, 0);
+    n(f, 28, 16);
+    ir.put(f, ir.subtract, 29, 22, 28, 0);
+    ir.put(f, ir.store, 0, 29, 27, 0);
+    allocate(f, 131104, 102);
+    val(f, 0, 2051);
+    val(f, 8, 16384);
+    val(f, 16, 16384);
+    val(f, 24, 0);
+    scan(f, 23, 131104, 0, 0);
+    ir.put(f, ir.load, 5, 20, 0, gc.los_count);
+    eq(f, 5, 1);
+    // Roots are deliberately removed only after every scan. No freed payload read.
+    // Existing LOS accounting is object span(payload+16), excluding its32B prefix.
+    n(f, 28, 0);
+    ir.put(f, ir.store, 0, 21, 28, 8);
+    n(f, 2, 1);
+    ir.call(f, 201, 5, [20, 21, 2]);
+    eq(f, 5, 0);
+    ir.put(f, ir.load, 5, 20, 0, gc.los_count);
+    eq(f, 5, 0);
+    ir.put(f, ir.load, 5, 20, 0, 304);
+    eq(f, 5, 0);
+    ir.put(f, ir.load, 5, 20, 0, gc.los_reclaimed);
+    eq(f, 5, 131120);
+    ir.put(f, ir.load, 5, 0, 0, 48);
+    eq(f, 5, 20);
+    ir.put(f, ir.address, 1, 0, 0, 48);
+    n(f, 2, 8);
+    ir.call(f, 103, 5, [1, 2]);
+    eq(f, 5, 8);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    ir.branch(f, ir.label, 0, "fail");
+    ir.put(f, ir.store, 0, 0, 5, 56);
+    ir.put(f, ir.address, 1, 0, 0, 16);
+    n(f, 2, 48);
+    ir.call(f, 103, 5, [1, 2]);
+    n(f, 1, 86);
+    ir.call(f, 102, 2, [1]);
+    kaesu f;
 }
-waza emit(c:arm64.Assembler,x:arm64.Instruction) -> unit {arm64.assembler_emit(c,x);}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,off:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:off,register:r});}
+waza emit(c: arm64.Assembler, x: arm64.Instruction) -> unit { arm64.assembler_emit(c, x); }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, off: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: off, register: r });
+}
 waza main() -> unit {
- kaku functions=gc.trace_program();array.push(functions,visitor());array.push(functions,run());kaku bindings=darwin.thread_bindings();
- kaku ops=[202,203,201,gc.gc_trace_edge_operation];kaku arguments:[][]int64=[[],[0,1,2,3],[0,1,2],[0,1]];kaku i=0;
- aida(i<4){array.push(bindings,ir.Binding {operation:ops[i],slot:21+i,arguments:arguments[i],result_bits:64});i=i+1;}
- kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];addr(c,patches,7,0);addr(c,patches,0,200);kaku names=["stw_heap_init","stw_heap_alloc","stw_heap_collect","rt_visit"];kaku ats:[]int64=[];i=0;
- aida(i<4){array.push(ats,len(c.words));emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,7,(21+i)*8));i=i+1;}
- arm64.assembler_bl(c,"rt_run");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));kaku error=aarch64.emit_program(c,functions,bindings,25,"rt");moshi(error!=""){chant(error);os.exit(2);}
- lower.emit_stopped_heap_adapter(c,1048576);i=0;aida(i<4){kaku ins=arm64.adr(9,(arm64.assembler_label_word(c,names[i])-ats[i])*4);moshi(ins.error!=mu){os.exit(3);}c.words[ats[i]]=ins.word;i=i+1;}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(4);}kaku image=darwin.executable_appended(macho.ImageSpec {words:assembled.words,constants:[],globals:0,patches:patches},darwin.thread_symbols(),128);moshi(image.error!=""){chant(image.error);os.exit(5);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){os.exit(6);}kaku args=os.arguments();fs.write_all(args[1],signed.bytes);os.chmod(args[1],448);
+    kaku functions = gc.trace_program();
+    array.push(functions, visitor());
+    array.push(functions, run());
+    kaku bindings = darwin.thread_bindings();
+    kaku ops = [202, 203, 201, gc.gc_trace_edge_operation];
+    kaku arguments: [][]int64 = [[], [0, 1, 2, 3], [0, 1, 2], [0, 1]];
+    kaku i = 0;
+    aida (i<4) {
+        array.push(bindings, ir.Binding {
+                operation: ops[i], slot: 21 + i, arguments: arguments[i], result_bits: 64 });
+        i = i + 1;
+    }
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    addr(c, patches, 7, 0);
+    addr(c, patches, 0, 200);
+    kaku names = ["stw_heap_init", "stw_heap_alloc", "stw_heap_collect", "rt_visit"];
+    kaku ats: []int64 = [];
+    i = 0;
+    aida (i<4) {
+        array.push(ats, len(c.words));
+        emit(c, arm64.movz_x(9, 0, 0));
+        emit(c, arm64.str_x(9, 7, (21 + i) * 8));
+        i = i + 1;
+    }
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.movz_x(16, 1, 0));
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, bindings, 25, "rt");
+    moshi (error != "") {
+        chant(error);
+        os.exit(2);
+    }
+    lower.emit_stopped_heap_adapter(c, 1048576);
+    i = 0;
+    aida (i<4) {
+        kaku ins = arm64.adr(9, (arm64.assembler_label_word(c, names[i]) - ats[i]) * 4);
+        moshi (ins.error != mu) {
+            os.exit(3);
+        }
+        c.words[ats[i]] = ins.word;
+        i = i + 1;
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(4);
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 0, patches: patches }, darwin.thread_symbols(), 128);
+    moshi (image.error != "") {
+        chant(image.error);
+        os.exit(5);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(6);
+    }
+    kaku args = os.arguments();
+    fs.write_all(args[1], signed.bytes);
+    os.chmod(args[1], 448);
 }
 main();

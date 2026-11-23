@@ -1,0 +1,117 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/x86_64";
+yobu "kiso/testing";
+
+// 原型串与 selfhost 代码生成一致："$cabi::符号:返回类型参数类型..."，类型码见 cabi.type_code。
+waza prototype(name: string, result: string, parameters: string, count: int64, returns_value: bool) -> cabi.Signature {
+    kaesu cabi.signature(string.concat("$cabi::", string.concat(name, string.concat(":", string.concat(result, parameters)))), count, returns_value);
+}
+
+waza kinds(layout: Layout) -> []int64 {
+    kaku result: []int64 = [];
+    kaku at = 0;
+    aida (at < len(layout.placements)) { array.push(result, layout.placements[at].class); at = at + 1; }
+    kaesu result;
+}
+
+waza same(left: []int64, right: []int64) -> bool {
+    moshi (len(left) != len(right)) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(left)) { moshi (left[at] != right[at]) { kaesu iie; } at = at + 1; }
+    kaesu hai;
+}
+
+// double f(int64_t a, double b, int32_t c, float d)：整数组和 SSE 组各自计数。
+waza test_integer_and_sse_banks_are_independent() -> unit {
+    kaku layout = classify(prototype("f", "j", "gjei", 4, hai));
+    testing.expect(same(kinds(layout), [class_integer, class_sse, class_integer, class_sse]), "classes follow the type, not the position");
+    testing.expect(layout.placements[0].index == 0 && layout.placements[2].index == 1, "integer registers RDI, RSI in order");
+    testing.expect(layout.placements[1].index == 0 && layout.placements[3].index == 1, "SSE registers XMM0, XMM1 in order");
+    testing.expect(layout.gp_registers == 2 && layout.sse_registers == 2 && layout.stack_slots == 0, "no stack arguments");
+    testing.expect(stack_bytes(layout) == 0, "no stack area");
+}
+
+waza test_seventh_integer_argument_goes_to_the_stack() -> unit {
+    kaku layout = classify(prototype("g", "e", "ggggggggg", 9, hai));
+    testing.expect(layout.gp_registers == 6 && layout.sse_registers == 0 && layout.stack_slots == 3, "six registers then three stack slots");
+    testing.expect(layout.placements[5].class == class_integer && layout.placements[5].index == 5, "sixth integer argument is R9");
+    testing.expect(layout.placements[6].class == class_memory && layout.placements[6].index == 0, "seventh argument at RSP+0");
+    testing.expect(layout.placements[8].class == class_memory && layout.placements[8].index == 2, "ninth argument at RSP+16");
+    testing.expect(stack_bytes(layout) == 32, "three 8-byte slots round up to 32 bytes (16-byte multiple)");
+}
+
+waza test_ninth_floating_argument_goes_to_the_stack() -> unit {
+    kaku layout = classify(prototype("h", "j", "jjjjjjjjj", 9, hai));
+    testing.expect(layout.sse_registers == 8 && layout.gp_registers == 0 && layout.stack_slots == 1, "eight XMM registers then one stack slot");
+    testing.expect(layout.placements[8].class == class_memory && layout.placements[8].index == 0, "ninth double at RSP+0");
+    testing.expect(stack_bytes(layout) == 16, "one slot rounds up to 16 bytes");
+}
+
+// 一个组耗尽不影响另一个组：整数参数上栈时浮点参数仍然用 XMM，反之亦然。
+waza test_exhausted_bank_does_not_spill_the_other() -> unit {
+    kaku layout = classify(prototype("i", "j", "ggggggggjj", 10, hai));
+    testing.expect(layout.placements[6].class == class_memory && layout.placements[7].class == class_memory, "seventh and eighth integers on the stack");
+    testing.expect(layout.placements[8].class == class_sse && layout.placements[8].index == 0, "first double still in XMM0");
+    testing.expect(layout.placements[9].class == class_sse && layout.placements[9].index == 1, "second double in XMM1");
+    kaku floats = classify(prototype("k", "j", "jjjjjjjjjgg", 11, hai));
+    testing.expect(floats.placements[8].class == class_memory && floats.placements[9].class == class_integer && floats.placements[10].index == 1, "integers use RDI, RSI while doubles spill");
+}
+
+waza test_every_stack_argument_takes_one_eight_byte_slot() -> unit {
+    // 十二个 float：前八个在 XMM0–XMM7，其余四个每个占一个 8 字节槽，与类型大小无关。
+    kaku layout = classify(prototype("l", "i", "iiiiiiiiiiii", 12, hai));
+    testing.expect(layout.stack_slots == 4 && stack_bytes(layout) == 32, "four slots of eight bytes");
+    testing.expect(layout.placements[11].index == 3, "slot index counts arguments, not bytes");
+    kaku narrow = classify(prototype("m", "v", "ggggggabcd", 10, iie));
+    testing.expect(narrow.stack_slots == 4 && narrow.placements[9].index == 3, "int8, uint8, int16, uint16 still take a full slot each");
+}
+
+waza test_no_arguments_and_void() -> unit {
+    kaku layout = classify(prototype("n", "e", "", 0, hai));
+    testing.expect(len(layout.placements) == 0 && stack_bytes(layout) == 0, "no arguments, no stack area");
+}
+
+waza test_narrow_integer_extension_descriptors() -> unit {
+    testing.expect(extension(97) == 12 && extension(99) == 13 && extension(101) == 14, "signed 8, 16, 32 sign-extend");
+    testing.expect(extension(98) == 15 && extension(100) == 16 && extension(102) == 17, "unsigned 8, 16, 32 zero-extend");
+    testing.expect(extension(108) == 15, "bool is an unsigned byte");
+    testing.expect(extension(103) == 0 && extension(104) == 0 && extension(107) == 0 && extension(105) == 0 && extension(106) == 0, "64-bit, pointer and float need no extension");
+}
+
+waza bytes_equal(actual: []uint8, expected: []int64) -> bool {
+    moshi (len(actual) != len(expected)) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(expected)) { moshi (int64(actual[at]) != expected[at]) { kaesu iie; } at = at + 1; }
+    kaesu hai;
+}
+
+// int32_t f(int32_t a, int32_t b)：golden 编码，Intel 语法：
+//   and rsp,-16 ; mov rdi,[rbp+24] ; shl rdi,32 ; sar rdi,32 ; mov rsi,[rbp+16] ; shl rsi,32 ; sar rsi,32 ; call f ; shl rax,32 ; sar rax,32
+waza test_bridge_encoding_and_external_relocation() -> unit {
+    kaku code = x86_64.assembler();
+    kaku problem = emit_c_bridge(code, prototype("f", "e", "ee", 2, hai), 2);
+    testing.expect(problem == "", "bridge emitted");
+    kaku linked = x86_64.assemble_linked(code);
+    testing.expect(linked.error == "" && len(linked.externals) == 1, "one external call");
+    testing.expect(linked.externals[0].symbol == "f", "relocation names the C symbol");
+    kaku at = linked.externals[0].at;
+    testing.expect(int64(linked.bytes[at - 1]) == 232, "rel32 follows the CALL opcode");
+    testing.expect(int64(linked.bytes[at]) == 0 && int64(linked.bytes[at + 1]) == 0 && int64(linked.bytes[at + 2]) == 0 && int64(linked.bytes[at + 3]) == 0, "rel32 left zero for the linker");
+    // and rsp, -16 是第一条指令：48 81 E4 F0 FF FF FF
+    testing.expect(bytes_equal([linked.bytes[0], linked.bytes[1], linked.bytes[2], linked.bytes[3], linked.bytes[4], linked.bytes[5], linked.bytes[6]], [72, 129, 228, 240, 255, 255, 255]), "stack realignment first");
+}
+
+waza test_bridge_rejects_mismatched_prototype() -> unit {
+    kaku code = x86_64.assembler();
+    testing.expect(emit_c_bridge(code, prototype("f", "e", "ee", 2, hai), 3) == "INVALID_C_PROTOTYPE", "arity mismatch");
+    testing.expect(emit_c_bridge(code, cabi.signature("ordinary", 0, iie), 0) == "INVALID_C_PROTOTYPE", "not a C declaration");
+}
+
+waza test_unresolved_external_is_an_error_without_a_linker() -> unit {
+    kaku code = x86_64.assembler();
+    x86_64.call_external(code, "puts");
+    testing.expect(x86_64.assemble(code).error == "UNRESOLVED_EXTERNAL", "plain assemble refuses external calls");
+    testing.expect(len(x86_64.assemble_linked(code).externals) == 1, "assemble_linked reports them");
+}

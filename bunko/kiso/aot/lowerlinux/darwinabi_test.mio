@@ -2,16 +2,28 @@ yobu "kiso/encoding/mochi";
 yobu "kiso/testing";
 
 waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
-    kaku value = 0; kaku scale = 1; kaku i = 0;
-    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) {
+        value = value + int64(bytes[at + i]) * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
     kaesu value;
 }
 
 waza empty_program() -> mochi.File { kaesu mochi.File { version: 14, constants: [], global_count: 0, instructions: [], functions: [] }; }
 
 waza count_syscalls(bytes: []uint8) -> int64 {
-    kaku at = 0; kaku count = 0;
-    aida (at + 1 < len(bytes)) { moshi (bytes[at] == uint8(15) && bytes[at + 1] == uint8(5)) { count = count + 1; } at = at + 1; }
+    kaku at = 0;
+    kaku count = 0;
+    aida (at + 1 < len(bytes)) {
+        moshi (bytes[at] == uint8(15) && bytes[at + 1] == uint8(5)) {
+            count = count + 1;
+        }
+        at = at + 1;
+    }
     kaesu count;
 }
 
@@ -47,8 +59,14 @@ waza test_darwin_lowering_is_deterministic_and_rejects_bad_thresholds() -> unit 
     kaku a = compile_darwin_amd64(empty_program(), 33554432);
     kaku b = compile_darwin_amd64(empty_program(), 33554432);
     testing.expect(len(a.bytes) == len(b.bytes) && len(a.bytes) > 8192, "same size");
-    kaku same = hai; kaku at = 0;
-    aida (at < len(a.bytes)) { moshi (a.bytes[at] != b.bytes[at]) { same = iie; } at = at + 1; }
+    kaku same = hai;
+    kaku at = 0;
+    aida (at < len(a.bytes)) {
+        moshi (a.bytes[at] != b.bytes[at]) {
+            same = iie;
+        }
+        at = at + 1;
+    }
     testing.expect(same, "byte-identical output");
     testing.expect(compile_darwin_amd64(empty_program(), 100).error != "", "a GC threshold below 4096 fails closed");
 }

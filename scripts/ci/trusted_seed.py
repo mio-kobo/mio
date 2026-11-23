@@ -11,8 +11,8 @@ from urllib.error import URLError
 
 from native_platforms import (ROOT, Report, brief, cli_build,
                               cli_chain, run, sha256, verify_host)
-from seed_source import SeedUnavailable, download_seed
-from seed_evidence import (CROSS_TARGETS, GF4, GF4_SEED_SHA256, SEED_KINDS, SEED_LOGS,
+from seed_source import SeedUnavailable, download_seed, verify_macho_arm64
+from seed_evidence import (ACTIVE_SEED_KIND, CROSS_TARGETS, GF4, SEED_KINDS, SEED_LOGS,
                            REPOSITORY, WORKFLOW, release_context, seed_identity, seed_record,
                            stable_version, valid_run)
 
@@ -23,14 +23,12 @@ from seed_evidence import (CROSS_TARGETS, GF4, GF4_SEED_SHA256, SEED_KINDS, SEED
 SEED_BUILD_TIMEOUT = 7200
 
 
-def verify(output, local_seed=None, kind=GF4):
+def verify(output, local_seed=None, kind=ACTIVE_SEED_KIND):
     identity = seed_identity(kind)
+    default_sha = seed_identity(ACTIVE_SEED_KIND).sha256
     report = Report('darwin-arm64', output, require_seed=True)
     report.data.update(schema_version=2, suite=f'trusted-{kind}-distribution',
-                       seed=dict(status='NOT_RUN', sha256=identity.sha256 if identity else GF4_SEED_SHA256))
-    if local_seed is not None and kind != GF4:
-        report.check('seed-source', 'FAIL', 'host', 'local replay is only available for frozen GF4')
-        return 1
+                       seed=dict(status='NOT_RUN', sha256=identity.sha256 if identity else default_sha))
     inputs = report.data.get('distribution_input', {})
     version = inputs.get('version', '')
     source = report.data['source_sha']
@@ -67,15 +65,16 @@ def verify(output, local_seed=None, kind=GF4):
     try:
         if local_seed is None:
             if identity is None:
-                raise SeedUnavailable('no approved immutable Mio release asset for the frozen GF4 executable')
+                raise SeedUnavailable(f'no approved immutable Mio release asset for {kind}')
             download_seed(identity, seed)
             report.data['seed'].update(seed_record(identity, kind), status='NOT_RUN')
             report.check('seed-source', 'PASS', 'host')
         else:
             if not local_seed.is_file():
-                raise SeedUnavailable('local replay requires the original frozen GF4 executable')
+                raise SeedUnavailable(f'local seed executable not found: {local_seed}')
             shutil.copyfile(local_seed, seed)
-            report.data['seed']['source'] = 'local-replay'
+            report.data['seed']['source'] = 'local-seed'
+            report.check('seed-source', 'PASS', 'host')
     except (SeedUnavailable, URLError, TimeoutError) as error:
         reason = str(error) if isinstance(error, SeedUnavailable) else 'seed source could not be reached'
         report.check('seed-source', 'NOT_RUN', 'host', reason)
@@ -88,6 +87,11 @@ def verify(output, local_seed=None, kind=GF4):
 
     report.data['seed']['status'] = 'FAIL'
     if not report.check('seed-pin', 'PASS' if sha256(seed) == report.data['seed']['sha256'] else 'FAIL', 'host'):
+        return 1
+    try:
+        verify_macho_arm64(seed)
+    except ValueError as error:
+        report.check('seed-arch', 'FAIL', 'host', str(error))
         return 1
     if local_seed is None:
         code, out, err, _ = run(report, 'seed-release-attestation',
@@ -143,8 +147,8 @@ def verify(output, local_seed=None, kind=GF4):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--seed', choices=SEED_KINDS, default=GF4)
-    parser.add_argument('--local-seed', type=Path, help='Independent frozen GF4 replay outside GitHub Actions only')
+    parser.add_argument('--seed', choices=SEED_KINDS, default=ACTIVE_SEED_KIND)
+    parser.add_argument('--local-seed', type=Path, help='Local seed executable outside GitHub Actions only (verified against pinned SHA-256 and signature)')
     args = parser.parse_args()
     result = verify(args.output, args.local_seed, args.seed)
     (args.output / 'report.json').rename(args.output / f'trusted-{args.seed}-report.json')
