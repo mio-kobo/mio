@@ -27,6 +27,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -1349,9 +1350,32 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / ("mio-A" + suffix)
-    code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
-    ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
-    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+    if target == "linux-arm64":
+        # The small untyped bootstrap compiler exhausts its 1 GiB arena while
+        # analyzing the Full CLI's embedded source table. Bootstrap the existing
+        # Core variant first, then use its typed native frontend to build Full.
+        # Full self-build fixed points and every subsequent check still run.
+        source = Path(tempfile.mkdtemp(prefix="bootstrap-core-source-", dir=work))
+        shutil.copytree(ROOT / "selfhost", source / "selfhost")
+        shutil.copytree(ROOT / "bunko", source / "bunko")
+        (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
+        core_bootstrap = work / "mio-bootstrap-core"
+        code, out, err, seconds = run(report, "cli-core-bootstrap", [paths["B"]],
+                                      stdin=("selfhost/cli\n%s\n" % core_bootstrap).encode(), cwd=source)
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and core_bootstrap.is_file()
+        if not report.check("cli-core-bootstrap", "PASS" if ok else "FAIL", "native",
+                            "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+            return finish(report)
+        os.chmod(core_bootstrap, 0o755)
+        report.hashes["cli-core-bootstrap"] = sha256(core_bootstrap)
+        ok, reason, seconds = cli_build(report, "cli-A", core_bootstrap, "selfhost/cli", target, cli_a)
+        built_by = "native-core-bootstrap"
+    else:
+        code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
+        reason = "exit %s: %s" % (code, brief(err or out))
+        built_by = "compiler-B"
+    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else reason, built_by=built_by):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
