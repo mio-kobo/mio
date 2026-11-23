@@ -467,6 +467,9 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
             moshi (type_kind_code(env.result.types[left].kind) == 12 && declared_nullable_operand(env, file_id, node.children[1])) { nil_ok = hai; }
             moshi (type_kind_code(env.result.types[right].kind) == 12 && declared_nullable_operand(env, file_id, node.children[0])) { nil_ok = hai; }
             moshi (left != right && !nil_ok) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], left, right, "equality operands must have the same type"); kaesu 0; }
+            // Equality is not defined on mu itself, unit, or arrays (the Go reference frontend rejects them as well).
+            kaku equality_kind = type_kind_code(env.result.types[left].kind);
+            moshi (left == right && (equality_kind == 12 || equality_kind == 13 || equality_kind == 15)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "equality is not defined for these operands"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, builtin_type(env, "bool"));
         }
         moshi (node.operator == 20 || node.operator == 21) {

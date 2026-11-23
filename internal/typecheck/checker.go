@@ -387,11 +387,11 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 				return KindBool, nil
 
 			default:
-				return KindInvalid, fmt.Errorf(
-					"operator %s does not support %s operands",
-					n.Operator,
-					left,
-				)
+				cause := fmt.Errorf("operator %s does not support %s operands", n.Operator, left)
+				if left == KindNil || left == KindUnit || left.IsArray() {
+					return KindInvalid, typeDiagnostic("E0302", "这些操作数不支持相等比较", n.Span(), left.String(), right.String(), cause)
+				}
+				return KindInvalid, cause
 			}
 
 		// 逻辑运算
