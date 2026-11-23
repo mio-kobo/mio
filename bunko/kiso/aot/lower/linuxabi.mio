@@ -122,6 +122,60 @@ waza lx_errno(c: arm64.Assembler) -> unit {
 waza lx_save_pair(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { lx(c, arm64.stp_x(a, b, 31, offset)); }
 waza lx_load_pair(c: arm64.Assembler, a: int64, b: int64, offset: int64) -> unit { lx(c, arm64.ldp_x(a, b, 31, offset)); }
 
+// Translate the shared worker bridge's compare-and-wait and wake operations.
+// Linux futexes compare the low 32 bits of the aligned little-endian word.
+// Check the entire word first; a concurrent change to only its high bits is
+// covered by the caller's wake and by its bounded timeout and predicate retry.
+waza lx_worker_word_wait(c: arm64.Assembler) -> unit {
+    lx_label(c, "lx_worker_wait");
+    lx(c, arm64.cmp_imm_x(0, 5, iie));
+    lx_bcc(c, 1, "lx_worker_invalid");
+    lx(c, arm64.ldar_x(9, 1));
+    lx(c, arm64.cmp_x(9, 2));
+    lx_bcc(c, 1, "lx_worker_word_changed");
+
+    // ulock uses microseconds; the worker waits are positive and subsecond.
+    lx_li(c, 9, 1000000);
+    lx(c, arm64.cmp_x(3, 9));
+    lx_bcc(c, 2, "lx_worker_invalid");
+    lx_cbz(c, 3, "lx_worker_invalid");
+    lx_li(c, 9, 1000);
+    lx(c, arm64.mul_x(10, 3, 9));
+    lx(c, arm64.str_x(31, 31, 144));
+    lx(c, arm64.str_x(10, 31, 152));
+    lx_mov(c, 0, 1);
+    lx_li(c, 1, 128); // FUTEX_WAIT_PRIVATE
+    lx(c, arm64.add_imm_x(3, 31, 144, iie));
+    lx_li(c, 8, 98);
+    lx(c, arm64.svc(0));
+    // EAGAIN means the value changed before the kernel queued the waiter.
+    lx(c, arm64.cmn_imm_x(0, 11, iie));
+    lx_bcc(c, 1, "lx_norm");
+    lx_label(c, "lx_worker_word_changed");
+    lx_li(c, 0, 0);
+    lx_b(c, "lx_norm");
+
+    lx_label(c, "lx_worker_wake");
+    lx_li(c, 2, 1);
+    lx(c, arm64.cmp_imm_x(0, 5, iie));
+    lx_bcc(c, 0, "lx_worker_do_wake");
+    lx(c, arm64.cmp_imm_x(0, 261, iie));
+    lx_bcc(c, 1, "lx_worker_invalid");
+    lx_li(c, 2, 2147483647);
+    lx_label(c, "lx_worker_do_wake");
+    lx_mov(c, 0, 1);
+    lx_li(c, 1, 129); // FUTEX_WAKE_PRIVATE
+    lx_li(c, 8, 98);
+    lx(c, arm64.svc(0));
+    lx_cbnz(c, 0, "lx_norm");
+    lx_li(c, 0, -2); // Darwin returns ENOENT when there are no waiters.
+    lx_b(c, "lx_norm");
+
+    lx_label(c, "lx_worker_invalid");
+    lx_li(c, 0, -22);
+    lx_b(c, "lx_norm");
+}
+
 koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
     lx_label(c, "linux_syscall");
     lx(c, arm64.sub_imm_x(31, 31, 288, iie));
@@ -150,8 +204,14 @@ koukai waza emit_linux_abi_runtime(c: arm64.Assembler) -> unit {
         lx_dispatch(c, calls[at], names[at], at);
         at = at + 1;
     }
+    kaku worker = arm64.assembler_label_word(c, "linux_thread_abi") >= 0;
+    moshi (worker) {
+        lx_dispatch(c, 515, "lx_worker_wait", len(calls));
+        lx_dispatch(c, 516, "lx_worker_wake", len(calls) + 1);
+    }
     lx_li(c, 0, -38);
     lx_b(c, "lx_norm");
+    moshi (worker) { lx_worker_word_wait(c); }
 
     // ---- common completion
     lx_label(c, "lx_svc");
