@@ -1,0 +1,12 @@
+// Must NOT compile (E0705): a struct that holds an array reaches mutable state even though the struct itself is immutable.
+yobu "kiso/thread";
+
+kata Packet { id: int64; payload: []int64; }
+
+waza run() -> int64 {
+    kaku channel = thread.channel_new[Packet](1, Packet { id: -1, payload: [] });
+    kaku packet = Packet { id: 1, payload: [1, 2] };
+    thread.send[Packet](channel, packet);
+    kaesu 0;
+}
+chant(run());

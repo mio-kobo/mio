@@ -1,0 +1,46 @@
+// The send boundary accepts exactly what is safe to share: scalars, strings, immutable structs of scalars, nullable scalars, the
+// synchronized Channel handle itself (coordination), and a mutable graph transferred with yuzuru; a failed send hands the payload back.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Point { x: int64; y: int64; }
+kata Bag { items: []int64; }
+kata Handle { channel: thread.Channel<int64>; }
+
+waza run() -> int64 {
+    kaku numbers = thread.channel_new[int64](4, 0);
+    thread.send[int64](numbers, 7);
+    kaku n = 5;
+    thread.send[int64](numbers, n + 1);
+    chant(thread.receive[int64](numbers).item + thread.receive[int64](numbers).item);
+
+    kaku words = thread.channel_new[string](1, "");
+    thread.send[string](words, "hello");
+    chant(thread.receive[string](words).item);
+
+    kaku points = thread.channel_new[Point](1, Point { x: 0, y: 0 });
+    kaku p = Point { x: 3, y: 4 };
+    thread.send[Point](points, p);
+    kaku got = thread.receive[Point](points).item;
+    chant(got.x * got.x + got.y * got.y);
+
+    kaku handles = thread.channel_new[Handle](1, Handle { channel: numbers });
+    thread.send[Handle](handles, Handle { channel: numbers });
+    kaku shared = thread.receive[Handle](handles).item.channel;
+    thread.send[int64](shared, 9);
+    chant(thread.receive[int64](numbers).item);
+
+    kaku bags = thread.channel_new[Bag](1, Bag { items: [] });
+    kaku bag = Bag { items: [1, 2, 3] };
+    kaku sent = thread.send[Bag](bags, yuzuru bag);
+    chant(sent.sent);
+    chant(len(thread.receive[Bag](bags).item.items));
+
+    thread.close[Bag](bags);
+    kaku late = Bag { items: [4, 5] };
+    kaku rejected = thread.send[Bag](bags, yuzuru late);
+    chant(rejected.sent);
+    chant(len(rejected.back.items));
+    kaesu 0;
+}
+run();
