@@ -1,0 +1,111 @@
+yobu "../../tests/ffi/linux-amd64-dynamic/ffi";
+yobu "kiso/convert";
+yobu "kiso/os";
+yobu "kiso/string";
+
+// Linux AMD64 FFI micro-benchmark. Load time, symbol resolution and call time are measured separately.
+// Build:  mio build benchmarks/ffi/linux_ffi_bench.mio -L <libdir> -lmio_math --rpath <libdir> -o linux_ffi_bench
+// Run:    MIO_FFI_LIBDIR=<libdir> ./linux_ffi_bench
+
+waza clock_gettime(clock: int32, spec: []uint8) -> int32 = c "clock_gettime";
+waza direct_add(a: int32, b: int32) -> int32 = c "mio_add";
+waza raw_add(f: cptr, a: int32, b: int32) -> int32 = c "mio_ffi_indirect";
+
+// CLOCK_MONOTONIC in nanoseconds
+waza now_ns(spec: []uint8) -> int64 {
+    clock_gettime(int32(1), spec);
+    kaku seconds = 0;
+    kaku nanos = 0;
+    kaku i = 7;
+    aida (i >= 0) { seconds = seconds * 256 + int64(spec[i]); nanos = nanos * 256 + int64(spec[8 + i]); i = i - 1; }
+    kaesu seconds * 1000000000 + nanos;
+}
+
+waza native_add(a: int32, b: int32) -> int32 { kaesu a + b; }
+
+waza report(label: string, total_ns: int64, count: int64) -> unit {
+    kaku per_op_ps = total_ns * 1000 / count;
+    chant(string.concat("RESULT ", string.concat(label, string.concat(" total_ns=", string.concat(convert.format_int(total_ns),
+                        string.concat(" ops=", string.concat(convert.format_int(count), string.concat(" ps_per_op=", convert.format_int(per_op_ps)))))))));
+}
+
+kaku spec: []uint8 = [uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0)];
+kaku path = string.concat(os.getenv("MIO_FFI_LIBDIR"), "/libmio_math.so");
+// a byte-identical copy that nothing links against, so loads below really map and unmap the file
+kaku cold_path = os.getenv("MIO_FFI_COLD_LIB");
+
+// 1. first load (cold: the file is mapped and relocated for the first time in this process)
+kaku t0 = now_ns(spec);
+kaku lib = ffi.open(cold_path);
+kaku t1 = now_ns(spec);
+report("first_load", t1 - t0, 1);
+
+// 2. first symbol resolution
+t0 = now_ns(spec);
+kaku add = ffi.symbol(lib, "mio_add", "i:ii");
+t1 = now_ns(spec);
+report("first_symbol_resolution", t1 - t0, 1);
+
+// 3. repeated symbol resolution
+kaku n = 100000;
+kaku i = 0;
+t0 = now_ns(spec);
+aida (i < n) { ffi.symbol(lib, "mio_add", "i:ii"); i = i + 1; }
+t1 = now_ns(spec);
+report("repeated_symbol_resolution", t1 - t0, n);
+
+// 4. warm load + unload cycle (library already mapped by `lib`, reference counted)
+n = 1000;
+i = 0;
+t0 = now_ns(spec);
+aida (i < n) { kaku c = ffi.open(cold_path); ffi.close(c); i = i + 1; }
+t1 = now_ns(spec);
+report("warm_load_unload_cycle", t1 - t0, n);
+ffi.close(lib);
+
+// 5. cold load + unload cycle (nothing else holds the file, so every close really unloads it)
+n = 1000;
+i = 0;
+t0 = now_ns(spec);
+aida (i < n) { kaku c = ffi.open(cold_path); ffi.close(c); i = i + 1; }
+t1 = now_ns(spec);
+report("cold_load_unload_cycle", t1 - t0, n);
+
+// 6. hot path: 10,000,000 calls each; the sum keeps the calls live and is checked
+lib = ffi.open(path);
+add = ffi.symbol(lib, "mio_add", "i:ii");
+n = 10000000;
+kaku sum = 0;
+t0 = now_ns(spec);
+i = 0;
+aida (i < n) { sum = sum + int64(native_add(int32(i), int32(1))); i = i + 1; }
+t1 = now_ns(spec);
+report("hot_mio_native_call", t1 - t0, n);
+kaku expected = sum;
+
+sum = 0;
+t0 = now_ns(spec);
+i = 0;
+aida (i < n) { sum = sum + int64(direct_add(int32(i), int32(1))); i = i + 1; }
+t1 = now_ns(spec);
+report("hot_c_call_link_time_plt", t1 - t0, n);
+moshi (sum != expected) { chant("MISMATCH direct"); os.exit(1); }
+
+sum = 0;
+kaku address = add.address;
+t0 = now_ns(spec);
+i = 0;
+aida (i < n) { sum = sum + int64(raw_add(address, int32(i), int32(1))); i = i + 1; }
+t1 = now_ns(spec);
+report("hot_ffi_indirect_ungated", t1 - t0, n);
+moshi (sum != expected) { chant("MISMATCH indirect"); os.exit(1); }
+
+sum = 0;
+t0 = now_ns(spec);
+i = 0;
+aida (i < n) { sum = sum + int64(ffi.call_i_ii(add, int32(i), int32(1))); i = i + 1; }
+t1 = now_ns(spec);
+report("hot_ffi_gated_call", t1 - t0, n);
+moshi (sum != expected) { chant("MISMATCH gated"); os.exit(1); }
+ffi.close(lib);
+chant("DONE");

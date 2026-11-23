@@ -1049,7 +1049,7 @@ koukai kata ScalarExport { id: int64; signature: cabi.Signature; }
 // Stage A uses untyped Mochi. Materialize one element so its analysis
 // learns the nested signature shape even in compilers without dylib support.
 waza empty_scalar_exports() -> []ScalarExport {
-    kaku prototype = cabi.Signature { symbol: "", result: 0, parameters: [0], valid: iie };
+    kaku prototype = cabi.Signature { symbol: "", result: 0, parameters: [0], valid: iie, indirect: iie };
     kaku exports = [ScalarExport { id: -1, signature: prototype }];
     array.truncate(exports, 0);
     kaesu exports;
@@ -1215,7 +1215,7 @@ waza analyze_types_from(file: mochi.File, trace: bool, exports: []ScalarExport) 
             moshi (declaration.valid && len(slots) >= function.parameter_count) {
                 kaku parameter = 0;
                 aida (parameter < function.parameter_count) {
-                    constrain_c_scalar(arena, slots[parameter], declaration.parameters[parameter]);
+                    moshi (declaration.parameters[parameter] != 109) { constrain_c_scalar(arena, slots[parameter], declaration.parameters[parameter]); }
                     parameter = parameter + 1;
                 }
                 moshi (function.returns_value) { constrain_c_scalar(arena, result, declaration.result); }

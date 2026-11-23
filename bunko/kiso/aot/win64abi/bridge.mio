@@ -13,6 +13,11 @@ waza plan_failure(plan: ImportPlan, error: string) -> ImportPlan { kaesu ImportP
 waza dll_key(name: string) -> string {
     kaesu win64c.dll_identity(name);
 }
+waza import_parts(name: string) -> []string {
+    kaku p = win64c.parts(name);
+    moshi (dll_key(p[1]) == "mio.dynamic.dll") { p[1] = "mio_native_ffi.dll"; p[2] = "mio_ffi_dispatch"; }
+    kaesu p;
+}
 waza less(a: string, b: string) -> bool {
     kaku x = string.to_bytes(a); kaku y = string.to_bytes(b); kaku i = 0;
     aida (i < len(x) && i < len(y)) { moshi (x[i] != y[i]) { kaesu x[i] < y[i]; } i = i + 1; }
@@ -55,7 +60,7 @@ koukai waza imports(file: mochi.File, reached: []bool, base: []pe.ImportLibrary)
     }
     i = 0;
     aida (i < len(order)) {
-        kaku id = order[i]; kaku p = win64c.parts(file.functions[id].name); kaku lib = 0;
+        kaku id = order[i]; kaku p = import_parts(file.functions[id].name); kaku lib = 0;
         aida (lib < len(plan.libraries) && dll_key(plan.libraries[lib].name) != dll_key(p[1])) { lib = lib + 1; }
         moshi (lib == len(plan.libraries)) { array.push(plan.libraries, pe.ImportLibrary { name: p[1], symbols: [] }); }
         kaku symbols = plan.libraries[lib].symbols; kaku symbol = 0;
@@ -66,7 +71,7 @@ koukai waza imports(file: mochi.File, reached: []bool, base: []pe.ImportLibrary)
     // 新符号可能插入已有 Runtime DLL，所以必须在完成合并后统一计算扁平 IAT 索引。
     i = 0;
     aida (i < len(order)) {
-        kaku id = order[i]; kaku p = win64c.parts(file.functions[id].name); kaku lib = 0; kaku slot = 0;
+        kaku id = order[i]; kaku p = import_parts(file.functions[id].name); kaku lib = 0; kaku slot = 0;
         aida (lib < len(plan.libraries)) {
             kaku symbols = plan.libraries[lib].symbols; kaku j = 0;
             aida (j < len(symbols)) { moshi (dll_key(plan.libraries[lib].name) == dll_key(p[1]) && symbols[j] == p[2]) { plan.slots[id] = slot + j; } j = j + 1; }
@@ -111,32 +116,57 @@ waza normalize(code: x86_64.Assembler, name: string) -> unit {
 // Mio 的参数在操作数栈上，C 则使用按位置编号的 GPR/XMM 与 32 字节 Shadow Space。
 // 这不是 System V：RDI/RSI 在 Win64 必须保留；此桥只写 volatile 寄存器与已保存的 RBP。
 // 活跃 Mio 值留在调用者栈/局部槽，C 不可回调或获得 GC 地址，因此不会改变根链。
+waza call_import(code: x86_64.Assembler, patches: []pe.Patch, slot: int64) -> unit {
+    x86_64.byte(code, 255); x86_64.byte(code, 21); kaku at = len(code.bytes);
+    x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
+    array.push(patches, pe.Patch { section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: -slot - 1 });
+}
 koukai waza emit(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.FrameFunction, f: mochi.Function, label: string, slot: int64) -> unit {
     kaku p = win64c.parts(f.name); kaku count = f.parameter_count;
+    kaku dynamic = dll_key(p[1]) == "mio.dynamic.dll";
+    kaku skip = 0; moshi (dynamic) { skip = 1; }
+    kaku native_count = count - skip;
     x86_64.label(code, label); kaku begin = len(code.bytes);
     x86_64.push_r(code, x86_64.rbp); x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
     // 操作数深度可为奇数，不能假设进入此桥时已按 C ABI 对齐。
     // RBP 是展开锚点，后续动态对齐不计入固定 ALLOC，也不伪造栈分配展开码。
     x86_64.and_ri(code, x86_64.rsp, -16);
-    kaku area = 32; moshi (count > 4) { area = area + (count - 4) * 8; }
-    area = ((area + 15) / 16) * 16; x86_64.sub_ri(code, x86_64.rsp, area);
+    kaku area = 32; moshi (native_count > 4) { area = area + (native_count - 4) * 8; }
+    area = ((area + 15) / 16) * 16;
+    // Two private slots after outgoing arguments hold target and result.
+    kaku private_slot = area; moshi (dynamic) { area = area + 16; }
+    x86_64.sub_ri(code, x86_64.rsp, area);
+    moshi (dynamic) {
+        kaku parameters: []string = []; kaku j = 5;
+        aida (j < len(p)) { array.push(parameters, p[j]); j = j + 1; }
+        x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 16 + (count - 1) * 8);
+        x86_64.mov_ri(code, x86_64.rdx, win64c.native_signature(p[3], parameters));
+        x86_64.mov_ri(code, x86_64.r8, 0); call_import(code, patches, slot);
+        x86_64.mov_store(code, x86_64.rsp, private_slot, x86_64.rax);
+    }
     kaku registers: []int64 = [x86_64.rcx, x86_64.rdx, x86_64.r8, x86_64.r9]; kaku i = 0;
-    aida (i < count) {
-        x86_64.mov_load(code, x86_64.rax, x86_64.rbp, 16 + (count - 1 - i) * 8); normalize(code, p[4 + i]);
+    aida (i < native_count) {
+        x86_64.mov_load(code, x86_64.rax, x86_64.rbp, 16 + (count - 1 - i - skip) * 8); normalize(code, p[4 + i + skip]);
         moshi (i < 4) {
             // 浮点寄存器编号由参数位置决定，不能分别计数整数和浮点参数。
-            moshi (p[4 + i] == "float32") { x86_64.movd_xmm_r(code, i, x86_64.rax); }
-            sore { moshi (p[4 + i] == "float64") { x86_64.movq_xmm_r(code, i, x86_64.rax); }
+            moshi (p[4 + i + skip] == "float32") { x86_64.movd_xmm_r(code, i, x86_64.rax); }
+            sore { moshi (p[4 + i + skip] == "float64") { x86_64.movq_xmm_r(code, i, x86_64.rax); }
                 sore { x86_64.mov_rr(code, registers[i], x86_64.rax); } }
         } sore { x86_64.mov_store(code, x86_64.rsp, 32 + (i - 4) * 8, x86_64.rax); }
         i = i + 1;
     }
-    x86_64.byte(code, 255); x86_64.byte(code, 21); kaku at = len(code.bytes);
-    x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
-    array.push(patches, pe.Patch { section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: -slot - 1 });
+    moshi (dynamic) {
+        x86_64.mov_load(code, x86_64.r11, x86_64.rsp, private_slot); x86_64.call_r(code, x86_64.r11);
+    } sore { call_import(code, patches, slot); }
     moshi (p[3] == "float32") { x86_64.movd_r_xmm(code, x86_64.rax, 0); }
     sore { moshi (p[3] == "float64") { x86_64.movq_r_xmm(code, x86_64.rax, 0); }
         sore { moshi (p[3] != "unit") { normalize(code, p[3]); } } }
+    moshi (dynamic) {
+        x86_64.mov_store(code, x86_64.rsp, private_slot + 8, x86_64.rax);
+        x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, 16 + (count - 1) * 8);
+        x86_64.mov_ri(code, x86_64.rdx, 0); x86_64.mov_ri(code, x86_64.r8, 1); call_import(code, patches, slot);
+        x86_64.mov_load(code, x86_64.rax, x86_64.rsp, private_slot + 8);
+    }
     x86_64.lea(code, x86_64.rsp, x86_64.rbp, 0); x86_64.pop_r(code, x86_64.rbp); x86_64.ret(code);
     array.push(frames, pe.FrameFunction { begin: begin, end: len(code.bytes), push_offset: 1, set_offset: 4, alloc_offset: 0, alloc_size: 0 });
 }

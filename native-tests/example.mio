@@ -1,0 +1,12 @@
+yobu "kiso/ffi";
+yobu "kiso/os";
+
+// First parameter is a checked function token, never a raw function address.
+waza add(function: uint64, a: int32, b: int32) -> int32 = c "mio.dynamic.dll" "add_i32";
+kaku library = ffi.open("./mio_ffi_math.dll");
+moshi (library.error != uint32(0)) { chant(library.error); chant(library.os_error); os.exit(1); }
+kaku function = ffi.symbol(library.handle, "mio_add_i32", "int32", ["int32", "int32"]);
+moshi (function.error != uint32(0)) { ffi.close(library.handle); os.exit(2); }
+chant(add(function.handle, int32(19), int32(23)));
+ffi.release(function.handle);
+ffi.close(library.handle);
