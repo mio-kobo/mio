@@ -1023,6 +1023,33 @@ def darwin_c_abi(report, cli, work):
     report.check("darwin-c-abi", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
 
 
+def linux_dynamic_libraries(report, cli, work):
+    """Linux AMD64 shared-library loading (docs/linux-dynamic-libraries.md), non-required until it has a CI history. tests/ffi/linux-amd64-dynamic/run.py
+    builds the six native modules (math, buffer, state, zlib, SQLite, OpenSSL) and a dependency pair with `cc -fPIC -shared`, inspects them with readelf/nm/ldd,
+    compiles the Mio end-to-end cases with the compiler built from this source (also with --gc-stress), runs them, and checks the static and dynamic ELF layouts
+    and the benchmark. It needs the zlib, SQLite3 and OpenSSL development packages; without them the module build fails and this check FAILs (never skips).
+    Raw logs, report.json and bench.txt land under logs/linux-dynamic-libraries."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    output = report.logs / "linux-dynamic-libraries"
+    code, out, err, seconds = run(report, "linux-dynamic-libraries-run", [sys.executable, ROOT / "tests/ffi/linux-amd64-dynamic/run.py", "--mio", str(cli), "--output", str(output), "--bench"], timeout=3600)
+    try:
+        results = json.loads((output / "report.json").read_text(encoding="utf-8"))["results"]
+    except (OSError, ValueError, KeyError) as problem:
+        report.check("linux-dynamic-libraries", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)), required=False)
+        return
+    failed = [item["name"] for item in results if item.get("status") != "PASS"]
+    passed = [item["name"] for item in results if item.get("status") == "PASS"]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if failed:
+        problems.append("FAIL: %s" % ", ".join(failed))
+    if not passed:
+        problems.append("no check passed")
+    report.check("linux-dynamic-libraries", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + "%d PASS, %d FAIL" % (len(passed), len(failed)), required=False)
+
+
 def linux_c_abi(report, cli, work):
     """Linux x86-64 (System V AMD64) C ABI acceptance (docs/linux-amd64-c-ffi.md), non-required until it has a CI history. tests/ffi/linux-amd64/run.py
     compiles real C fixtures with the host GCC (and Clang when installed) into objects, a static archive and a shared library, links them into Mio
@@ -1345,6 +1372,7 @@ def linux(args, target="linux-amd64"):
     contract(report, cli, target, reference=str(refvm), suite="differential")
     if target == "linux-amd64":
         linux_c_abi(report, cli, work / "linux-c-abi")
+        linux_dynamic_libraries(report, cli, work / "linux-dynamic-libraries")
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")
