@@ -48,7 +48,7 @@ waza slice(data: []uint8, first: int64, end: int64) -> string {
 }
 waza value_of(option: string, prefix: string) -> string { kaesu slice(string.to_bytes(option), string.byte_len(prefix), string.byte_len(option)); }
 waza takes_value(option: string) -> bool {
-    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--stdin-filepath" || link_option(option);
+    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--soname" || option == "--linker" || option == "--stdin-filepath" || link_option(option);
 }
 
 waza link_option(option: string) -> bool {
@@ -100,6 +100,30 @@ waza add_link_option(options: []string, option: string, value: string, target: s
 }
 
 // --link/-L/-l/-F/-framework/--rpath 的校验依赖 --target，而 --target 可以出现在它们之后，所以先排队、解析完再统一校验。
+// `mio build --shared a b c`: several module directories become one shared library through a generated facade
+// package that imports each of them by absolute path (the modules themselves are compiled, not copied). Returns the
+// private directory holding facade.mio, or an E_OPTIONS message.
+waza shared_facade(entries: []string) -> string {
+    kaku text = "";
+    kaku at = 0;
+    aida (at < len(entries)) {
+        kaku found = os.canonical_path(entries[at]);
+        moshi (found == mu) { kaesu string.concat("E_OPTIONS several inputs must be module directories: ", entries[at]); }
+        kaku resolved = found;
+        moshi (!fs.is_dir(resolved)) { kaesu string.concat("E_OPTIONS several inputs must be module directories: ", entries[at]); }
+        moshi (string.contains(resolved, "\"") || string.contains(resolved, "\\")) { kaesu "E_OPTIONS unsupported character in a module path"; }
+        text = string.concat(text, string.concat("yobu \"", string.concat(resolved, "\";\n")));
+        at = at + 1;
+    }
+    kaku directory = string.concat(pipeline.temporary_root(), string.concat("/mio-facade-", convert.format_int(os.pid())));
+    kaku created = fs.create_dir(directory);
+    moshi (created.error != mu) { kaesu "E_OPTIONS cannot create the module facade directory"; }
+    moshi (os.chmod(directory, 448) != 0) { os.remove_dir(directory); kaesu "E_OPTIONS cannot protect the module facade directory"; }
+    kaku written = fs.write_all(string.concat(directory, "/facade.mio"), string.to_bytes(text));
+    moshi (written.error != mu) { os.remove_dir(directory); kaesu "E_OPTIONS cannot write the module facade"; }
+    kaesu directory;
+}
+
 waza queue_link(queue: []string, option: string, value: string) -> unit {
     array.push(queue, option);
     array.push(queue, value);
@@ -221,7 +245,7 @@ waza run() -> unit {
         fail(error_message("E_COMMAND", i18n.key_err_unknown_command, command), 2); kaesu;
     }
     kaku opts=diagnostic.Options {format:"human",color:color,verbose:iie,lang:language,theme:selected_theme};
-    kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku link_options: []string = []; kaku link_raw: []string = []; kaku at = 2;
+    kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku link_options: []string = []; kaku link_raw: []string = []; kaku shared = iie; kaku soname = ""; kaku linker = ""; kaku emit_object = iie; kaku entries: []string = []; kaku at = 2;
     aida (at < len(args)) {
         kaku option = args[at];
         moshi (option == "--") {
@@ -269,6 +293,22 @@ waza run() -> unit {
             queue_link(link_raw, option, args[at + 1]);
             at = at + 2; tsuzuku;
         }
+        moshi (option == "--shared") { shared = hai; at = at + 1; tsuzuku; }
+        moshi (option == "--emit=object") { emit_object = hai; at = at + 1; tsuzuku; }
+        moshi (option == "--soname" || option == "--linker" || string.has_prefix(option, "--soname=") || string.has_prefix(option, "--linker=")) {
+            kaku name = "--soname"; moshi (string.has_prefix(option, "--linker")) { name = "--linker"; }
+            kaku value = "";
+            moshi (option == name) {
+                moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, name), 2); kaesu; }
+                value = args[at + 1]; at = at + 2;
+            } sore {
+                value = value_of(option, string.concat(name, "="));
+                moshi (value == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, name), 2); kaesu; }
+                at = at + 1;
+            }
+            moshi (name == "--soname") { soname = value; } sore { linker = value; }
+            tsuzuku;
+        }
         moshi (option == "--emit-symbols") {
             moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--emit-symbols"), 2); kaesu; }
             symbols = args[at + 1]; at = at + 2; tsuzuku;
@@ -281,8 +321,14 @@ waza run() -> unit {
         }
         sore { moshi (option == "--emit=mochi") { emit_mochi = hai; } sore { moshi (option == "--gc-stress") { gc_stress = hai; } sore { moshi (option == "--observe") { observe = hai; }
         sore { moshi (string.has_prefix(option, "-")) { fail(error_message("E_OPTIONS", i18n.key_err_unknown_option, option), 2); kaesu; }
-        sore { moshi (entry != "") { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; } entry = option; } } } } }
+        sore { array.push(entries, option); } } } } }
         at = at + 1;
+    }
+    moshi (len(entries) > 1 && !shared) { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; }
+    moshi (len(entries) >= 1) { entry = entries[0]; }
+    moshi (!shared && (soname != "" || linker != "" || emit_object)) { fail("E_OPTIONS --soname, --linker and --emit=object require --shared", 2); kaesu; }
+    moshi (shared && (command != "build" || emit_mochi || (target != "linux-amd64") || (emit_object && (soname != "" || linker != "" || len(link_raw) != 0)))) {
+        fail("E_OPTIONS --shared applies only to `mio build --target linux-amd64` (not --emit=mochi); --emit=object takes no link options", 2); kaesu;
     }
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
@@ -318,6 +364,19 @@ waza run() -> unit {
         kaesu;
     }
     kaku compiled = pipeline.NativeBuildResult { bytes: [], error: "" };
+    kaku facade = "";
+    moshi (shared) {
+        moshi (len(entries) > 1) {
+            facade = shared_facade(entries);
+            moshi (string.has_prefix(facade, "E_")) { fail(facade, 2); kaesu; }
+            entry = string.concat(facade, "/facade.mio");
+        }
+        kaku shared_options = pipeline.SharedOptions { soname: soname, linker: linker, link_options: link_options, verbose: opts.verbose, object_only: emit_object };
+        compiled = pipeline.build_shared_source(".", entry, bunko, gc_stress, shared_options, output);
+        moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
+        moshi (compiled.error != "") { source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis)); kaesu; }
+    }
+    sore {
     moshi (command == "exec" || command == "disasm") {
         kaku input = fs.read_all(entry);
         moshi (input.error != mu) { fail(error_message("E_IO", i18n.key_err_read_mochi, ""), 1); kaesu; }
@@ -337,6 +396,7 @@ waza run() -> unit {
         moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi_linked(input.data, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } } }
     }
     sore { moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_linked(".", entry, bunko, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_linked(".", entry, bunko, gc_stress, observe, symbols, link_options); } } } } } }
+    }
     moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {

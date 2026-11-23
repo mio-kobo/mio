@@ -1,0 +1,298 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/elfrel";
+yobu "kiso/aot/lowerlinux";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/runtime/abi";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+
+// Linux x86-64 shared-library build (`mio build --shared`).
+//
+// Mio does everything up to the object file: frontend, typed lowering in position-independent mode
+// (lowerlinux.compile_shared), the ET_REL object (kiso/aot/elfrel). The system linker performs only the final ET_DYN
+// link, with an argv vector (never a shell string); Mio then verifies the file it produced (verify_shared).
+// A pure Mio module links with the raw linker (`ld`/`ld.lld`) and no CRT or libc; libraries are linked only when they
+// are declared (`--link`, `-l`, `-L`, `--rpath`). The linker is reached through `link_shared`, the single seam where a
+// future Mio native linker (`--linker native`, reserved) replaces the system one.
+
+koukai kata SharedOptions {
+    // DT_SONAME; empty = the base name of the output file.
+    soname: string;
+    // Explicit linker program (path or name found on PATH); empty = detect. "native" is reserved.
+    linker: string;
+    // Driver-style library arguments from --link/-L/-l/--rpath, in the order given.
+    link_options: []string;
+    // Print the reproducible link command even on success.
+    verbose: bool;
+    // Return the relocatable object (ET_REL) instead of linking.
+    object_only: bool;
+}
+
+waza shared_error(message: string) -> NativeBuildResult { kaesu NativeBuildResult { bytes: [], error: message }; }
+
+koukai waza build_shared_source(root: string, entry: string, bunko_root: string, gc_stress: bool, options: SharedOptions, output: string) -> NativeBuildResult {
+    kaku checked = frontend.compile_source_target(root, entry, bunko_root, hai);
+    moshi (checked.error != "") { kaesu NativeBuildResult { bytes: [], error: checked.error }; }
+    kaesu build_shared_mochi(checked.bytes, gc_stress, options, output);
+}
+
+koukai waza build_shared_mochi(data: []uint8, gc_stress: bool, options: SharedOptions, output: string) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu shared_error("E_IR frontend produced invalid Mochi"); }
+    moshi (file == mu) { kaesu shared_error("E_IR frontend returned no module"); }
+    moshi (host_target() != "linux-amd64") { kaesu shared_error("E_SHARED shared-library generation requires a linux-amd64 host: the linker and loader of the target are needed"); }
+    kaku threshold = 33554432;
+    moshi (gc_stress) { threshold = abi.gc_stress_threshold_bytes; }
+    kaku lowered = lowerlinux.compile_shared(file, threshold);
+    moshi (lowered.error != "") {
+        moshi (string.has_prefix(lowered.error, "E_")) { kaesu shared_error(lowered.error); }
+        kaesu shared_error(string.concat("E_LOWER ", lowered.error));
+    }
+    kaku object = shared_object(lowered);
+    moshi (object.error != "") { kaesu shared_error(string.concat("E_ELF ", object.error)); }
+    moshi (options.object_only) { kaesu NativeBuildResult { bytes: object.bytes, error: "" }; }
+    kaesu link_shared(object.bytes, options, output);
+}
+
+// The ET_REL object of a lowered shared module: PC32 relocations against .bss for every data-area reference and PLT32
+// against the undefined symbol for every declared external C call. Exports are the only global definitions.
+koukai waza shared_object(lowered: lowerlinux.SharedLowerResult) -> elfrel.ObjectResult {
+    kaku exports: []elfrel.ObjectExport = [];
+    kaku at = 0;
+    aida (at < len(lowered.exports)) {
+        kaku entry = lowered.exports[at];
+        array.push(exports, elfrel.ObjectExport { symbol: entry.symbol, offset: entry.offset, size: entry.size });
+        at = at + 1;
+    }
+    kaku locals: []elfrel.ObjectExport = [];
+    at = 0;
+    aida (at < len(lowered.locals)) {
+        kaku entry = lowered.locals[at];
+        array.push(locals, elfrel.ObjectExport { symbol: entry.symbol, offset: entry.offset, size: entry.size });
+        at = at + 1;
+    }
+    kaku relocations: []elfrel.Relocation = [];
+    at = 0;
+    aida (at < len(lowered.data_refs)) {
+        kaku ref = lowered.data_refs[at];
+        array.push(relocations, elfrel.Relocation { at: ref.at, kind: elfrel.r_x86_64_pc32, symbol: "", addend: ref.offset - 4 });
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(lowered.externals)) {
+        kaku call = lowered.externals[at];
+        array.push(relocations, elfrel.Relocation { at: call.at, kind: elfrel.r_x86_64_plt32, symbol: call.symbol, addend: -4 });
+        at = at + 1;
+    }
+    kaesu elfrel.object(elfrel.ObjectSpec { code: lowered.bytes, bss_size: lowered.bss_size, exports: exports, locals: locals, relocations: relocations });
+}
+
+waza base_name(path: string) -> string {
+    kaku bytes = string.to_bytes(path);
+    kaku start = 0;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(47)) { start = at + 1; }
+        at = at + 1;
+    }
+    kaku piece: []uint8 = [];
+    at = start;
+    aida (at < len(bytes)) { array.push(piece, bytes[at]); at = at + 1; }
+    kaku name = string.from_utf8(piece);
+    moshi (name == mu) { kaesu ""; }
+    kaesu name;
+}
+
+// A linker that takes ld-style arguments (GNU ld, GNU gold, LLD) as opposed to a compiler driver (cc, gcc, clang).
+waza raw_linker(path: string) -> bool {
+    kaku name = base_name(path);
+    kaesu string.has_prefix(name, "ld");
+}
+
+// Candidate linkers in order of preference: explicit --linker, MIO_LD, then the raw linkers, then the C drivers.
+waza find_shared_linker(requested: string) -> string {
+    moshi (requested != "") {
+        moshi (string.contains(requested, "/")) { moshi (fs.is_file(requested)) { kaesu requested; } kaesu ""; }
+        kaesu search_path(requested);
+    }
+    kaku names: []string = [os.getenv("MIO_LD")];
+    kaku at = 0;
+    aida (at < len(names)) {
+        kaku name = names[at];
+        moshi (name != "") {
+            moshi (string.contains(name, "/")) { moshi (fs.is_file(name)) { kaesu name; } }
+            sore { kaku found = search_path(name); moshi (found != "") { kaesu found; } }
+        }
+        at = at + 1;
+    }
+    kaku defaults: []string = ["ld.lld", "ld"];
+    at = 0;
+    aida (at < len(defaults)) {
+        kaku found = search_path(defaults[at]);
+        moshi (found != "") { kaesu found; }
+        at = at + 1;
+    }
+    kaesu find_c_driver();
+}
+
+// Driver-style link options (`-Xlinker -rpath -Xlinker dir`, `-lname`, `-Ldir`, files) to raw-linker arguments.
+waza raw_link_arguments(options: []string) -> []string {
+    kaku out: []string = [];
+    kaku at = 0;
+    aida (at < len(options)) {
+        moshi (options[at] == "-Xlinker") {
+            moshi (at + 1 < len(options)) { array.push(out, options[at + 1]); }
+            at = at + 2;
+            tsuzuku;
+        }
+        array.push(out, options[at]);
+        at = at + 1;
+    }
+    kaesu out;
+}
+
+// Reproducible rendering of the argument vector (POSIX shell quoting for display only; it is never run by a shell).
+waza render_command(arguments: []string) -> string {
+    kaku text = "";
+    kaku at = 0;
+    aida (at < len(arguments)) {
+        kaku argument = arguments[at];
+        kaku plain = len(string.to_bytes(argument)) > 0;
+        kaku bytes = string.to_bytes(argument);
+        kaku i = 0;
+        aida (i < len(bytes)) {
+            kaku b = int64(bytes[i]);
+            moshi (!((b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 45 || b == 95 || b == 46 || b == 47 || b == 61 || b == 44 || b == 43 || b == 58)) { plain = iie; }
+            i = i + 1;
+        }
+        moshi (!plain) { argument = string.concat("'", string.concat(argument, "'")); }
+        moshi (at > 0) { text = string.concat(text, " "); }
+        text = string.concat(text, argument);
+        at = at + 1;
+    }
+    kaesu text;
+}
+
+waza write_log(text: string) -> unit { fs.write_all("/dev/stderr", string.to_bytes(string.concat(text, "\n"))); }
+
+// The single linking seam: the system linker today; `--linker native` is reserved for a Mio linker.
+koukai waza link_shared(object: []uint8, options: SharedOptions, output: string) -> NativeBuildResult {
+    moshi (options.linker == "native") {
+        kaesu shared_error("E_SHARED_LINKER the Mio native linker is reserved and not implemented yet; omit --linker to use the system linker");
+    }
+    kaku linker = find_shared_linker(options.linker);
+    moshi (linker == "") {
+        moshi (options.linker != "") { kaesu shared_error(string.concat("E_SHARED_LINKER linker not found: ", options.linker)); }
+        kaesu shared_error("E_SHARED_LINKER no linker found: install binutils (ld), lld or a C compiler driver, or pass --linker <path> or set MIO_LD");
+    }
+    kaku directory = string.concat(temporary_root(), string.concat("/mio-shared-", convert.format_int(os.pid())));
+    kaku created = fs.create_dir(directory);
+    moshi (created.error != mu) { kaesu shared_error("E_SHARED cannot create a private link directory"); }
+    moshi (os.chmod(directory, 448) != 0) { os.remove_dir(directory); kaesu shared_error("E_SHARED cannot protect the link directory"); }
+    kaku result = link_in_directory(object, options, output, linker, directory);
+    os.remove(string.concat(directory, "/module.o"));
+    os.remove(string.concat(directory, "/library.so"));
+    os.remove_dir(directory);
+    kaesu result;
+}
+
+waza link_in_directory(object: []uint8, options: SharedOptions, output: string, linker: string, directory: string) -> NativeBuildResult {
+    kaku object_path = string.concat(directory, "/module.o");
+    kaku library_path = string.concat(directory, "/library.so");
+    kaku written = fs.write_all(object_path, object);
+    moshi (written.error != mu) { kaesu shared_error("E_SHARED cannot write the linker input"); }
+    kaku soname = options.soname;
+    moshi (soname == "") { soname = base_name(output); }
+    moshi (soname == "" || string.contains(soname, ",") || string.has_prefix(soname, "-")) { kaesu shared_error("E_SHARED invalid SONAME"); }
+    kaku arguments: []string = [];
+    moshi (raw_linker(linker)) {
+        // No CRT, no libc: a pure Mio module has no startup code and no dependency. -z defs / --no-undefined makes any
+        // unresolved symbol a link error, -z text forbids text relocations, -z noexecstack keeps the stack non-executable.
+        array.append_all(arguments, [linker, "-shared", "-soname", soname, "-z", "noexecstack", "-z", "relro", "-z", "now", "-z", "text",
+            "--no-undefined", "--hash-style=gnu", "-o", library_path, object_path]);
+        array.append_all(arguments, raw_link_arguments(options.link_options));
+    } sore {
+        // -nostdlib: the driver adds neither CRT files nor libc, only what is declared.
+        array.append_all(arguments, [linker, "-shared", "-nostdlib", string.concat("-Wl,-soname,", soname), "-Wl,-z,noexecstack",
+            "-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,text", "-Wl,--no-undefined", "-Wl,--hash-style=gnu", "-o", library_path, object_path]);
+        array.append_all(arguments, options.link_options);
+    }
+    moshi (options.verbose) { write_log(string.concat("mio: link: ", render_command(arguments))); }
+    // The linker's own diagnostics stay on stderr; its exit status decides.
+    kaku status = os.spawn(linker, arguments);
+    moshi (status != 0) {
+        write_log(string.concat("mio: link command: ", render_command(arguments)));
+        kaesu shared_error(string.concat("E_SHARED_LINK linker ", string.concat(linker, string.concat(" failed with status ", convert.format_int(status)))));
+    }
+    kaku linked = fs.read_all(library_path);
+    moshi (linked.error != mu || len(linked.data) == 0) { kaesu shared_error("E_SHARED_LINK cannot read the linked shared object"); }
+    kaku problem = verify_shared(linked.data, soname);
+    moshi (problem != "") { kaesu shared_error(problem); }
+    kaesu NativeBuildResult { bytes: linked.data, error: "" };
+}
+
+// ---- Verification of the linked file (the part of "mio verifies what it produced" that needs no external tool).
+
+waza word_at(data: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) {
+        value = value + int64(data[at + i]) * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
+    kaesu value;
+}
+
+// Checks ELF64 little-endian ET_DYN EM_X86_64, a PT_DYNAMIC, a non-executable PT_GNU_STACK, no segment that is both
+// writable and executable, no text relocations (DT_TEXTREL, DF_TEXTREL) and a DT_SONAME. Returns "" when all hold.
+koukai waza verify_shared(data: []uint8, soname: string) -> string {
+    moshi (len(data) < 64) { kaesu "E_SHARED_VERIFY file too small for an ELF header"; }
+    moshi (data[0] != uint8(127) || data[1] != uint8(69) || data[2] != uint8(76) || data[3] != uint8(70)) { kaesu "E_SHARED_VERIFY not an ELF file"; }
+    moshi (data[4] != uint8(2) || data[5] != uint8(1) || data[6] != uint8(1)) { kaesu "E_SHARED_VERIFY not ELFCLASS64 little-endian version 1"; }
+    moshi (word_at(data, 16, 2) != 3) { kaesu "E_SHARED_VERIFY not ET_DYN"; }
+    moshi (word_at(data, 18, 2) != 62) { kaesu "E_SHARED_VERIFY not EM_X86_64"; }
+    kaku phoff = word_at(data, 32, 8);
+    kaku phentsize = word_at(data, 54, 2);
+    kaku phnum = word_at(data, 56, 2);
+    moshi (phentsize != 56 || phoff < 64 || phoff + phnum * 56 > len(data)) { kaesu "E_SHARED_VERIFY invalid program header table"; }
+    kaku dynamic_offset = -1;
+    kaku dynamic_size = 0;
+    kaku stack_seen = iie;
+    kaku at = 0;
+    aida (at < phnum) {
+        kaku header = phoff + at * 56;
+        kaku kind = word_at(data, header, 4);
+        kaku flags = word_at(data, header + 4, 4);
+        // PF_X = 1, PF_W = 2
+        moshi (kind == 1 && flags - (flags / 4) * 4 == 3) { kaesu "E_SHARED_VERIFY a PT_LOAD segment is writable and executable"; }
+        moshi (kind == 2) { dynamic_offset = word_at(data, header + 8, 8); dynamic_size = word_at(data, header + 32, 8); }
+        moshi (kind == 1685382481) {
+            stack_seen = hai;
+            moshi (flags - (flags / 2) * 2 == 1) { kaesu "E_SHARED_VERIFY the stack is executable (PT_GNU_STACK has PF_X)"; }
+        }
+        at = at + 1;
+    }
+    moshi (!stack_seen) { kaesu "E_SHARED_VERIFY missing PT_GNU_STACK (the loader would assume an executable stack)"; }
+    moshi (dynamic_offset < 0 || dynamic_offset + dynamic_size > len(data)) { kaesu "E_SHARED_VERIFY missing PT_DYNAMIC"; }
+    kaku soname_found = iie;
+    at = 0;
+    aida (at + 16 <= dynamic_size) {
+        kaku tag = word_at(data, dynamic_offset + at, 8);
+        kaku value = word_at(data, dynamic_offset + at + 8, 8);
+        moshi (tag == 0) { nukeru; }
+        moshi (tag == 22) { kaesu "E_SHARED_VERIFY text relocations (DT_TEXTREL): the code is not position independent"; }
+        // DT_FLAGS (30): DF_TEXTREL = 4
+        moshi (tag == 30 && (value / 4) - ((value / 4) / 2) * 2 == 1) { kaesu "E_SHARED_VERIFY text relocations (DF_TEXTREL): the code is not position independent"; }
+        moshi (tag == 14) { soname_found = hai; }
+        at = at + 16;
+    }
+    moshi (!soname_found) { kaesu string.concat("E_SHARED_VERIFY missing DT_SONAME ", soname); }
+    kaesu "";
+}
