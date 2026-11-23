@@ -27,6 +27,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -458,6 +459,19 @@ def windows_ffi_checks(report, cli):
     except (OSError, ValueError, KeyError):
         pass
     report.check("windows-c-ffi", status, "native", detail)
+    dynamic = report.output / "windows-dynamic-ffi"
+    code, out, err, _ = run(report, "windows-dynamic-ffi", [sys.executable, ROOT / "native-tests/run.py", "--mio", cli, "--output", dynamic, "--check-embedded"], timeout=1800)
+    detail = brief(err or out)
+    status = "FAIL"
+    try:
+        result = json.loads((dynamic / "report.json").read_text(encoding="utf-8"))
+        failures = [c for c in result["checks"] if c["status"] == "FAIL"]
+        status = "PASS" if code == 0 and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+        report.hashes["windows-dynamic-ffi"] = result.get("hashes", {})
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("windows-dynamic-ffi", status, "native", detail)
 
 
 def windows_tcp_pe(report, image, label):
@@ -997,6 +1011,19 @@ def darwin_c_abi(report, cli, work):
     named in the reason and never counted as a pass. The raw log of every command lands under logs/c-abi."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
+    shared = report.logs / "shared-c-fixtures"
+    code, out, err, _ = run(report, "darwin-shared-native-fixtures", [sys.executable, ROOT / "native-tests/darwin.py", "--mio", cli, "--output", shared], timeout=1800)
+    status, detail = "FAIL", brief(err or out)
+    try:
+        checks = json.loads((shared / "report.json").read_text(encoding="utf-8"))["checks"]
+        needed = {"Mio dylib calls normal", "Mio dylib calls gc-stress"}
+        passed = {c["name"] for c in checks if c["status"] == "PASS"}
+        failures = [c for c in checks if c["status"] != "PASS" and c["name"] != "Darwin runtime token loader"]
+        status = "PASS" if code == 0 and needed <= passed and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("darwin-shared-native-fixtures", status, "native", detail)
     output = report.logs / "c-abi"
     code, out, err, seconds = run(report, "darwin-c-abi-run", [sys.executable, ROOT / "tests/ffi/darwin-arm64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
     try:
@@ -1323,9 +1350,32 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / ("mio-A" + suffix)
-    code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
-    ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
-    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+    if target == "linux-arm64":
+        # The small untyped bootstrap compiler exhausts its 1 GiB arena while
+        # analyzing the Full CLI's embedded source table. Bootstrap the existing
+        # Core variant first, then use its typed native frontend to build Full.
+        # Full self-build fixed points and every subsequent check still run.
+        source = Path(tempfile.mkdtemp(prefix="bootstrap-core-source-", dir=work))
+        shutil.copytree(ROOT / "selfhost", source / "selfhost")
+        shutil.copytree(ROOT / "bunko", source / "bunko")
+        (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
+        core_bootstrap = work / "mio-bootstrap-core"
+        code, out, err, seconds = run(report, "cli-core-bootstrap", [paths["B"]],
+                                      stdin=("selfhost/cli\n%s\n" % core_bootstrap).encode(), cwd=source)
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and core_bootstrap.is_file()
+        if not report.check("cli-core-bootstrap", "PASS" if ok else "FAIL", "native",
+                            "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+            return finish(report)
+        os.chmod(core_bootstrap, 0o755)
+        report.hashes["cli-core-bootstrap"] = sha256(core_bootstrap)
+        ok, reason, seconds = cli_build(report, "cli-A", core_bootstrap, "selfhost/cli", target, cli_a)
+        built_by = "native-core-bootstrap"
+    else:
+        code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
+        reason = "exit %s: %s" % (code, brief(err or out))
+        built_by = "compiler-B"
+    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else reason, built_by=built_by):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
