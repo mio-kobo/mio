@@ -1227,7 +1227,9 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
     kaku offset = 0;
     kaku targets = jump_targets(data); kaku held = iie; kaku run = 0;
     aida (offset < len(data)) {
-        arm64.assembler_label(code, block_label(prefix, offset));
+        // Only jump destinations need a bytecode label. Keeping the label for
+        // every instruction exhausts the bootstrap heap on the full CLI.
+        moshi (targets[offset]) { arm64.assembler_label(code, block_label(prefix, offset)); }
         kaku live_depth = len(type_result.blocks[function_id + 1].entry[offset]);
         kaku capacity = 252; moshi (function_id < 0) { capacity = 508; }
         moshi (live_depth > capacity) { kaesu LowerError.FrameTooLarge(); }
@@ -1623,7 +1625,7 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
         }
         offset = offset + instruction_width;
     }
-    arm64.assembler_label(code, block_label(prefix, len(data)));
+    moshi (targets[len(data)]) { arm64.assembler_label(code, block_label(prefix, len(data))); }
     kaesu mu;
 }
 
