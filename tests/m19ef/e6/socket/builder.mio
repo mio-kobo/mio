@@ -2,10 +2,22 @@ yobu "selfhost/pipeline";
 yobu "kiso/os";
 yobu "kiso/fs";
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)!=5){os.exit(64);kaesu;}
-    kaku result=pipeline.build_signed_source(args[1],args[2],args[3]);
-    moshi(result.error!=""){chant(result.error);os.exit(65);kaesu;}
-    kaku written=fs.write_all(args[4],result.bytes);moshi(written.error!=mu){os.exit(66);kaesu;}
-    moshi(os.chmod(args[4],493)!=0){os.exit(67);}
+    kaku args = os.arguments();
+    moshi (len(args) != 5) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku result = pipeline.build_signed_source(args[1], args[2], args[3]);
+    moshi (result.error != "") {
+        chant(result.error);
+        os.exit(65);
+        kaesu;
+    }
+    kaku written = fs.write_all(args[4], result.bytes);
+    moshi (written.error != mu) {
+        os.exit(66);
+        kaesu;
+    }
+    moshi (os.chmod(args[4], 493) != 0) { os.exit(67); }
 }
 main();

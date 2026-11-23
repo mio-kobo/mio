@@ -1,36 +1,101 @@
 yobu "kiso/array";
-kata Node {value:int64;next:Node?;}
-kata Holder {nodes:[]Node;}
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(id:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(op:int64) -> int64 {kaesu 0;}
-kaku dead:Holder?=mu;kaku live:Holder?=mu;
-kaku begin=0;kaku turn=0;kaku failures=0;
+kata Node {
+    value: int64;
+    next: Node?;
+}
+kata Holder { nodes: []Node; }
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(id: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(op: int64) -> int64 { kaesu 0; }
+kaku dead: Holder?= mu;
+kaku live: Holder?= mu;
+kaku begin = 0;
+kaku turn = 0;
+kaku failures = 0;
 waza prepare() -> unit {
- kaku a:[]Node=[];array.reserve(a,400000);kaku i=0;aida(i<400000){array.push(a,Node {value:i,next:mu});i=i+1;}dead=Holder {nodes:a};
- kaku b:[]Node=[];i=0;aida(i<64){array.push(b,Node {value:1000+i,next:mu});i=i+1;}live=Holder {nodes:b};
- i=0;aida(i<8){rt_collect(0);i=i+1;}dead=mu;
+    kaku a: []Node = [];
+    array.reserve(a, 400000);
+    kaku i = 0;
+    aida (i<400000) {
+        array.push(a, Node {
+                value: i, next: mu });
+        i = i + 1;
+    }
+    dead = Holder {
+        nodes: a };
+    kaku b: []Node = [];
+    i = 0;
+    aida (i<64) {
+        array.push(b, Node {
+                value: 1000 + i, next: mu });
+        i = i + 1;
+    }
+    live = Holder {
+        nodes: b };
+    i = 0;
+    aida (i<8) {
+        rt_collect(0);
+        i = i + 1;
+    }
+    dead = mu;
 }
 waza writer() -> unit {
- aida(begin==0){}kaku h=live;moshi(h==mu){failures=1;kaesu;}kaku i=0;
- aida(i<2000){
-  aida(turn!=0){}kaku j=i-(i/64)*64;
-  h.nodes[j]=Node {value:1000+j,next:h.nodes[j]};
-  moshi(i-(i/17)*17==0){rt_collect(0);}
-  moshi(rt_collect(60+(i-(i/2)*2))!=i+1){failures=2;}turn=1;i=i+1;
- }
- aida(turn!=0){}
+    aida (begin == 0) {}
+    kaku h = live;
+    moshi (h == mu) {
+        failures = 1;
+        kaesu;
+    }
+    kaku i = 0;
+    aida (i<2000) {
+        aida (turn != 0) {} kaku j = i - (i / 64) * 64;
+        h.nodes[j] = Node { value: 1000 + j, next: h.nodes[j] };
+        moshi (i - (i / 17) * 17 == 0) { rt_collect(0); }
+        moshi (rt_collect(60 + (i - (i / 2) * 2)) != i + 1) {
+            failures = 2;
+        }
+        turn = 1;
+        i = i + 1;
+    }
+    aida (turn != 0) {}
 }
 waza reader() -> unit {
- aida(begin==0){}kaku i=0;
- aida(i<2000){aida(turn!=1){}moshi(rt_collect(60+(i-(i/2)*2))!=i+1){failures=3;}turn=0;i=i+1;}
+    aida (begin == 0) {} kaku i = 0;
+    aida (i<2000) {
+        aida (turn != 1) {}
+        moshi (rt_collect(60 + (i - (i / 2) * 2)) != i + 1) {
+            failures = 3;
+        }
+        turn = 0;
+        i = i + 1;
+    }
 }
 waza exercise() -> unit {
- prepare();kaku a=rt_start(writer);kaku b=rt_start(reader);chant(rt_collect(2));
- aida(rt_collect(7)<65 && rt_collect(4)==2){rt_wait(10000);}
- chant(rt_collect(3));begin=1;rt_join(a);rt_join(b);chant(rt_collect(30));
- kaku h=live;moshi(h==mu){failures=4;}sore{kaku i=0;aida(i<64){moshi(h.nodes[i].value!=1000+i){failures=5;}i=i+1;}}
- chant(failures);live=mu;
+    prepare();
+    kaku a = rt_start(writer);
+    kaku b = rt_start(reader);
+    chant(rt_collect(2));
+    aida (rt_collect(7)<65 && rt_collect(4) == 2) { rt_wait(10000); }
+    chant(rt_collect(3));
+    begin = 1;
+    rt_join(a);
+    rt_join(b);
+    chant(rt_collect(30));
+    kaku h = live;
+    moshi (h == mu) {
+        failures = 4;
+    } sore {
+        kaku i = 0;
+        aida (i<64) {
+            moshi (h.nodes[i].value != 1000 + i) {
+                failures = 5;
+            }
+            i = i + 1;
+        }
+    }
+    chant(failures);
+    live = mu;
 }
-exercise();chant(rt_collect(1));
+exercise();
+chant(rt_collect(1));

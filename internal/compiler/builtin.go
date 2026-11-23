@@ -200,7 +200,7 @@ func arrayTypeDescriptor(name string) int {
 	}
 	kinds := map[string]value.Kind{
 		"int8": value.KindInt8, "int16": value.KindInt16, "int32": value.KindInt32,
-		"int64": value.KindInt, "uint8": value.KindUint8, "uint16": value.KindUint16,
+		"int64": value.KindInt, "cptr": value.KindInt, "uint64": value.KindInt, "uint8": value.KindUint8, "uint16": value.KindUint16,
 		"uint32": value.KindUint32, "float32": value.KindFloat32, "float64": value.KindFloat,
 		"bool": value.KindBool, "string": value.KindString, "array": value.KindArray,
 		"struct": value.KindStruct, "enum": value.KindEnum, "map": value.KindMap,

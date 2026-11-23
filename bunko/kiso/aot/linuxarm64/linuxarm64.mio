@@ -10,11 +10,19 @@ yobu "kiso/string";
 koukai teisu syscall_write = 64;
 koukai teisu syscall_exit_group = 94;
 
-koukai kata Program { code: []uint8; error: string; }
+koukai kata Program {
+    code: []uint8;
+    error: string;
+}
 
 waza push_word(out: []uint8, word: uint32) -> unit {
-    kaku value = int64(word); kaku i = 0;
-    aida (i < 4) { array.push(out, uint8(value - (value / 256) * 256)); value = value / 256; i = i + 1; }
+    kaku value = int64(word);
+    kaku i = 0;
+    aida (i < 4) {
+        array.push(out, uint8(value - (value / 256) * 256));
+        value = value / 256;
+        i = i + 1;
+    }
 }
 
 // write(1, message, len(message)); exit_group(status). The message bytes follow the code in the same RX segment and are
@@ -37,7 +45,10 @@ koukai waza hello_program(message: string, status: int64) -> Program {
     moshi (assembled.error != mu) { kaesu Program { code: [], error: "ENCODE" }; }
     kaku code: []uint8 = [];
     kaku i = 0;
-    aida (i < len(assembled.words)) { push_word(code, assembled.words[i]); i = i + 1; }
+    aida (i < len(assembled.words)) {
+        push_word(code, assembled.words[i]);
+        i = i + 1;
+    }
     array.append_all(code, text);
     aida (len(code) - (len(code) / 4) * 4 != 0) { array.push(code, uint8(0)); }
     kaesu Program { code: code, error: "" };
@@ -78,7 +89,9 @@ koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult {
     kaku index = 0;
     aida (index < len(spec.patches)) {
         kaku patch = spec.patches[index];
-        moshi (patch.at_word < 0 || patch.at_word >= len(words) || patch.target_offset < 0 || patch.target.kind < 0 || patch.target.kind > 2) { kaesu image_failed("INVALID_PATCH"); }
+        moshi (patch.at_word < 0 || patch.at_word >= len(words) || patch.target_offset < 0 || patch.target.kind < 0 || patch.target.kind > 2) {
+            kaesu image_failed("INVALID_PATCH");
+        }
         kaku target = code_base + patch.target_offset;
         moshi (patch.target.kind == 0 && patch.target_offset >= len(spec.words) * 4) { kaesu image_failed("INVALID_PATCH"); }
         moshi (patch.target.kind == 1) {
@@ -102,7 +115,10 @@ koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult {
     }
     kaku code: []uint8 = array.with_capacity[uint8](len(spec.words) * 4 + len(spec.constants) + 64);
     index = 0;
-    aida (index < len(words)) { push_word(code, words[index]); index = index + 1; }
+    aida (index < len(words)) {
+        push_word(code, words[index]);
+        index = index + 1;
+    }
     aida (len(code) < const_offset) { array.push(code, uint8(0)); }
     array.append_all(code, spec.constants);
     aida (len(code) - (len(code) / 4) * 4 != 0) { array.push(code, uint8(0)); }
@@ -113,7 +129,8 @@ koukai waza image(spec: macho.ImageSpec) -> elf.ImageResult {
     index = 0;
     aida (index < len(sequence)) {
         moshi (sequence[index].error != mu) { kaesu image_failed("ENCODE"); }
-        push_word(code, sequence[index].word); index = index + 1;
+        push_word(code, sequence[index].word);
+        index = index + 1;
     }
     kaesu elf.executable_aarch64(elf.ImageSpec { code: code, entry_offset: start, bss_size: spec.globals * 8 });
 }

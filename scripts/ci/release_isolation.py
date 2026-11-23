@@ -20,7 +20,8 @@ def require(condition, message):
 def source_audit():
     production = (ROOT / "tools/native-ci/main.mio").read_text(encoding="utf-8")
     bundle = production.split("waza bundle_files(", 1)[1].split("waza package_image(", 1)[0]
-    require(set(re.findall(r'Payload\s*\{name:"([^"]+)"', bundle)) == ALLOWED, "release payload allowlist changed")
+    # 兼容 mio fmt 标准空格格式化后的结构体字面量
+    require(set(re.findall(r'Payload\s*\{\s*name:\s*"([^"]+)"', bundle)) == ALLOWED, "release payload allowlist changed")
     require("verify_no_foreign_runtime(image)" in production, "release no-foreign-runtime audit missing")
     policy = (ROOT / "tools/native-ci/production.sb").read_text()
     require('(deny process-exec)' in policy and '(param "SEED")' in policy, "production execution isolation missing")

@@ -11,30 +11,45 @@ koukai teisu aborted = 5;
 // snapshot before evaluating; stale acknowledgements cannot count as parked.
 // A failure enters a non-reclaiming terminal phase. Recovery requires a full
 // join + stop + reinitialize protocol, never a transition directly back to Idle.
-koukai waza next_phase(phase:int64, requested:bool, all_parked:bool,
-    roots_complete:bool, queues_empty:bool, producers_quiet:bool,
-    sweep_complete:bool, readers_quiet:bool, failed:bool) -> int64 {
-    moshi(phase<idle || phase>aborted){kaesu -1;}
-    moshi(failed || phase==aborted){kaesu aborted;}
-    moshi(phase==idle){moshi(requested){kaesu init_handshake;}kaesu idle;}
-    moshi(phase==init_handshake){moshi(all_parked && roots_complete){kaesu concurrent_mark;}kaesu init_handshake;}
-    moshi(phase==concurrent_mark){moshi(queues_empty && producers_quiet){kaesu remark_handshake;}kaesu concurrent_mark;}
-    moshi(phase==remark_handshake){
-        moshi(all_parked && roots_complete && queues_empty && producers_quiet){kaesu concurrent_sweep;}
+koukai waza next_phase(phase: int64, requested: bool, all_parked: bool,
+    roots_complete: bool, queues_empty: bool, producers_quiet: bool,
+    sweep_complete: bool, readers_quiet: bool, failed: bool) -> int64 {
+    moshi (phase<idle || phase>aborted) { kaesu -1; }
+    moshi (failed || phase == aborted) { kaesu aborted; }
+    moshi (phase == idle) {
+        moshi (requested) {
+            kaesu init_handshake;
+        }
+        kaesu idle;
+    }
+    moshi (phase == init_handshake) {
+        moshi (all_parked && roots_complete) {
+            kaesu concurrent_mark;
+        }
+        kaesu init_handshake;
+    }
+    moshi (phase == concurrent_mark) {
+        moshi (queues_empty && producers_quiet) {
+            kaesu remark_handshake;
+        }
+        kaesu concurrent_mark;
+    }
+    moshi (phase == remark_handshake) {
+        moshi (all_parked && roots_complete && queues_empty && producers_quiet) { kaesu concurrent_sweep; }
         kaesu remark_handshake;
     }
-    moshi(sweep_complete && readers_quiet){kaesu idle;}
+    moshi (sweep_complete && readers_quiet) { kaesu idle; }
     kaesu concurrent_sweep;
 }
-koukai waza minor_allowed(phase:int64) -> bool {kaesu phase==idle;}
-koukai waza may_reclaim(phase:int64, proven_dead:bool, readers_quiet:bool, epoch_matches:bool) -> bool {
-    kaesu phase==concurrent_sweep && proven_dead && readers_quiet && epoch_matches;
+koukai waza minor_allowed(phase: int64) -> bool { kaesu phase == idle; }
+koukai waza may_reclaim(phase: int64, proven_dead: bool, readers_quiet: bool, epoch_matches: bool) -> bool {
+    kaesu phase == concurrent_sweep && proven_dead && readers_quiet && epoch_matches;
 }
-koukai waza needs_satb(phase:int64, pointer_slot:bool) -> bool {
-    kaesu pointer_slot && (phase==concurrent_mark || phase==remark_handshake);
+koukai waza needs_satb(phase: int64, pointer_slot: bool) -> bool {
+    kaesu pointer_slot && (phase == concurrent_mark || phase == remark_handshake);
 }
 // Queue exhaustion must request remark/backpressure before overwriting a slot.
 // Until the old reference has been published/drained, the pointer store is held.
-koukai waza pointer_store_allowed(phase:int64, pointer_slot:bool, old_reference_saved:bool) -> bool {
-    kaesu !needs_satb(phase,pointer_slot) || old_reference_saved;
+koukai waza pointer_store_allowed(phase: int64, pointer_slot: bool, old_reference_saved: bool) -> bool {
+    kaesu !needs_satb(phase, pointer_slot) || old_reference_saved;
 }

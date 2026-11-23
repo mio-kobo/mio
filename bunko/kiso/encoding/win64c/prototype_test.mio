@@ -1,0 +1,28 @@
+yobu "kiso/testing";
+
+waza test_windows_c_prototype_boundaries() -> unit {
+    kaku name = key("KERNEL32.dll", "GetCurrentProcessId", "uint32", []);
+    testing.expect(is_external(name), "external protocol marker");
+    testing.expect(!is_external("ordinary"), "ordinary function has no C ABI");
+    kaku p = parts(name);
+    testing.expect(len(p) == 4 && p[1] == "KERNEL32.dll" && p[2] == "GetCurrentProcessId", "lossless metadata");
+    testing.expect(validate(name, 0, hai) == "", "fixed prototype");
+    testing.expect(validate(name, 1, hai) != "", "arity mismatch");
+    testing.expect(validate(name, 0, iie) != "", "result mismatch");
+    testing.expect(validate("$win64c|x.dll|f|unit|string", 1, iie) != "", "GC values are not C parameters");
+    testing.expect(validate("$win64c|x.dll|f|unit|unit", 1, iie) != "", "void cannot be a parameter");
+    testing.expect(validate("$win64c|x.dll|f|string", 0, hai) != "", "GC values are not C results");
+    testing.expect(validate("$win64c|x.dll|f|unit", 257, iie) != "", "bounded stack area");
+    testing.expect(valid_name("x.DLL", hai) && !valid_name("../x.dll", hai), "DLL basename only");
+    testing.expect(!valid_name("", hai) && !valid_name("x", hai) && !valid_name(".dll", hai), "DLL suffix and length");
+    testing.expect(!valid_name("f|g", iie) && !valid_name("f\n", iie), "no delimiter or control characters");
+    testing.expect(dll_identity("KERNEL32.DLL") == "kernel32.dll", "DLL identity is case insensitive");
+    testing.expect(!conflicts(name, key("kernel32.dll", "GetCurrentProcessId", "uint32", [])), "compatible alias");
+    testing.expect(conflicts(name, key("kernel32.dll", "GetCurrentProcessId", "float64", [])), "conflicting return");
+    testing.expect(conflicts(name, key("kernel32.dll", "GetCurrentProcessId", "uint32", ["int64"])), "conflicting arity");
+    testing.expect(!conflicts(name, key("kernel32.dll", "getcurrentprocessid", "float64", [])), "exports are case sensitive");
+    kaku names = ["unit", "int64", "uint64", "cptr", "float64", "float32", "int8", "int16", "int32", "uint8", "uint16", "uint32"];
+    kaku expected = [0, 1, 1, 1, 2, 3, 12, 13, 14, 15, 16, 17]; kaku i = 0;
+    aida (i<len(names)) { testing.expect(descriptor(names[i]) == expected[i], "explicit transport classification"); i = i + 1; }
+    testing.expect(descriptor("bool") == -1 && descriptor("string") == -1, "unsupported types fail closed");
+}

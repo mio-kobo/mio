@@ -3,7 +3,12 @@ yobu "selfhost/resolver";
 
 waza substitution_index(names: []string, name: string) -> int64 {
     kaku index = 0;
-    aida (index < len(names)) { moshi (names[index] == name) { kaesu index; } index = index + 1; }
+    aida (index < len(names)) {
+        moshi (names[index] == name) {
+            kaesu index;
+        }
+        index = index + 1;
+    }
     kaesu -1;
 }
 
@@ -12,7 +17,11 @@ waza infer_type_argument(env: TypeEnvironment, template: int64, actual: int64, n
     kaku code = type_kind_code(info.kind);
     moshi (code == 19) {
         kaku index = substitution_index(names, info.name);
-        moshi (index < 0) { array.push(names, info.name); array.push(types, actual); kaesu hai; }
+        moshi (index < 0) {
+            array.push(names, info.name);
+            array.push(types, actual);
+            kaesu hai;
+        }
         kaesu types[index] == actual;
     }
     moshi (template == actual) { kaesu hai; }
@@ -48,7 +57,7 @@ waza substitute_type(env: TypeEnvironment, type_id: int64, names: []string, type
 // Native code generation uses the same checked substitution operation rather
 // than attempting to recover generic arguments from runtime values.
 koukai waza specialize_type(result: TypeCheckResult, type_id: int64, names: []string, types: []int64) -> int64 {
-    moshi(type_id<0 || type_id>=len(result.types)){kaesu 0;}
+    moshi (type_id<0 || type_id >= len(result.types)) { kaesu 0; }
     kaku info = result.types[type_id];
     kaku code = type_kind_code(info.kind);
     moshi (code == 19) {
@@ -59,13 +68,21 @@ koukai waza specialize_type(result: TypeCheckResult, type_id: int64, names: []st
     moshi (code == 15) { kaesu array_type(result, specialize_type(result, info.element, names, types)); }
     moshi (code == 16) { kaesu nullable_type(result, specialize_type(result, info.element, names, types)); }
     moshi (code == 17) {
-        kaku arguments = array.with_capacity[int64](len(info.arguments)); kaku index = 0;
-        aida (index < len(info.arguments)) { array.push(arguments, specialize_type(result, info.arguments[index], names, types)); index = index + 1; }
+        kaku arguments = array.with_capacity[int64](len(info.arguments));
+        kaku index = 0;
+        aida (index < len(info.arguments)) {
+            array.push(arguments, specialize_type(result, info.arguments[index], names, types));
+            index = index + 1;
+        }
         kaesu named_type(result, info.name, arguments);
     }
     moshi (code == 18) {
-        kaku parameters = array.with_capacity[int64](len(info.parameters)); kaku index = 0;
-        aida (index < len(info.parameters)) { array.push(parameters, specialize_type(result, info.parameters[index], names, types)); index = index + 1; }
+        kaku parameters = array.with_capacity[int64](len(info.parameters));
+        kaku index = 0;
+        aida (index < len(info.parameters)) {
+            array.push(parameters, specialize_type(result, info.parameters[index], names, types));
+            index = index + 1;
+        }
         kaesu function_type(result, parameters, specialize_type(result, info.result, names, types));
     }
     kaesu type_id;
@@ -110,5 +127,7 @@ waza validate_substitution(env: TypeEnvironment, file_id: int64, node_id: int64,
 }
 
 waza record_substitution(env: TypeEnvironment, file_id: int64, node_id: int64, names: []string, types: []int64) -> unit {
-    array.push(env.result.substitutions, TypeSubstitution { node: resolver.NodeRef { file_id: file_id, node_id: node_id }, parameters: array.clone(names), types: array.clone(types) });
+    array.push(env.result.substitutions, TypeSubstitution {
+            node: resolver.NodeRef {
+                file_id: file_id, node_id: node_id }, parameters: array.clone(names), types: array.clone(types) });
 }

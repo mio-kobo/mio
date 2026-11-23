@@ -1,8 +1,17 @@
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku timeouts=0;
-waza worker() -> unit {kaku i=0;aida(i<3){timeouts=timeouts+rt_wait(500000000);i=i+1;}}
-kaku child=rt_start(worker);kaku joined=rt_join(child);
-chant(timeouts);chant(joined);chant(rt_collect(1));
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku timeouts = 0;
+waza worker() -> unit {
+    kaku i = 0;
+    aida (i<3) {
+        timeouts = timeouts + rt_wait(500000000);
+        i = i + 1;
+    }
+}
+kaku child = rt_start(worker);
+kaku joined = rt_join(child);
+chant(timeouts);
+chant(joined);
+chant(rt_collect(1));

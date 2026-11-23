@@ -4,6 +4,7 @@ yobu "kiso/convert";
 yobu "kiso/encoding/json";
 yobu "kiso/string";
 yobu "selfhost/lsp";
+yobu "selfhost/imports";
 
 // Request dispatch is separate from framing, so the same state machine is
 // tested without substituting an alternate server or compiler implementation.
@@ -19,10 +20,12 @@ koukai kata Session {
     schedule: []int64;
     library_root: []string;
     library: []SourceURI;
+    import_indexes: []imports.Index;
+    language: []string;
 }
 koukai kata Reply { messages: []string; stop: bool; status: int64; }
 koukai waza session(root: string, bunko: string) -> Session {
-    kaesu Session {work:progress.context(),documents:lsp.store(),flags:[iie,iie,iie,hai,hai,iie],roots:[root],bunko:[bunko],cancelled:[],dirty:[],cache:[],schedule:[150,0,0],library_root:[""],library:[]};
+    kaesu Session {work:progress.context(),documents:lsp.store(),flags:[iie,iie,iie,hai,hai,iie],roots:[root],bunko:[bunko],cancelled:[],dirty:[],cache:[],schedule:[150,0,0],library_root:[""],library:[],import_indexes:[],language:["en-US"]};
 }
 waza response(id: string, value: string) -> string {
     kaesu string.concat("{\"jsonrpc\":\"2.0\",\"id\":",string.concat(id,string.concat(",\"result\":",string.concat(value,"}"))));
@@ -80,7 +83,7 @@ waza initialize(state: Session, document: json.Document, params: int64, id: stri
     state.flags[0]=hai;
     // These providers share the native frontend and are exercised by the RPC
     // suite. Unsupported rename/formatting/token providers are not advertised.
-    kaesu response(id,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"],\"retriggerCharacters\":[\",\"]}},\"serverInfo\":{\"name\":\"MioCore\",\"version\":\"2.0.0-dev\"}}");
+    kaesu response(id,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.organizeImports\"]},\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"],\"retriggerCharacters\":[\",\"]}},\"serverInfo\":{\"name\":\"MioCore\",\"version\":\"2.0.0-dev\"}}");
 }
 
 koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
@@ -109,6 +112,7 @@ koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
             array.push(messages,notification("window/logMessage","{\"type\":3,\"message\":\"MioCore language server ready.\"}"));
         }
         document_notification(state,document,params,method,messages);
+        moshi(method=="textDocument/didSave" || method=="workspace/didChangeWatchedFiles"){invalidate_imports(state);}
         moshi(method=="workspace/didChangeConfiguration"){configuration_notification(state,document,params,messages);}
         kaesu Reply {messages:messages,stop:iie,status:0};
     }

@@ -579,7 +579,10 @@ waza emit_gc_runtime(code: x86_64.Assembler) -> unit {
 // ---- compile-time side: poll points and frame descriptors ----------------------------------------------------------
 
 waza emit_signed_word(code: x86_64.Assembler, value: int64) -> unit {
-    moshi (value >= 0) { emit_word(code, value); kaesu; }
+    moshi (value >= 0) {
+        emit_word(code, value);
+        kaesu;
+    }
     kaku rest = -(value + 1);
     kaku at = 0;
     aida (at < 8) {
@@ -606,7 +609,9 @@ waza emit_frame_descriptor(code: x86_64.Assembler, file: mochi.File, analysis: t
             moshi (!captured) {
                 kaku node = analysis.locals[function_id][slot];
                 moshi (node >= 0 && types.type_kind(analysis, node) == types.type_unknown) { reference = iie; }
-                moshi (node >= 0 && types.type_kind(analysis, node) != types.type_unknown) { reference = is_reference_node(analysis, node); }
+                moshi (node >= 0 && types.type_kind(analysis, node) != types.type_unknown) {
+                    reference = is_reference_node(analysis, node);
+                }
             }
             moshi (reference) { array.push(offsets, local_disp(parameters, slot)); }
             slot = slot + 1;
@@ -626,7 +631,10 @@ waza emit_frame_descriptor(code: x86_64.Assembler, file: mochi.File, analysis: t
     x86_64.jmp(code, over);
     emit_word(code, len(offsets));
     kaku at = 0;
-    aida (at < len(offsets)) { emit_signed_word(code, offsets[at]); at = at + 1; }
+    aida (at < len(offsets)) {
+        emit_signed_word(code, offsets[at]);
+        at = at + 1;
+    }
     x86_64.label(code, over);
     kaesu "";
 }

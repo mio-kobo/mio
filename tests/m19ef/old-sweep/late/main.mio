@@ -1,37 +1,133 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;next:Node?;}
-kata Holder {nodes:[]Node;}
-kata Late {node:Node;buffer:[]uint8;}
-kaku dead:Holder?=mu;kaku live:Holder?=mu;kaku late:Late?=mu;
-kaku control=0;kaku failures=0;kaku done_b=0;kaku reads=0;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    next: Node?;
+}
+kata Holder { nodes: []Node; }
+kata Late {
+    node: Node;
+    buffer: []uint8;
+}
+kaku dead: Holder?= mu;
+kaku live: Holder?= mu;
+kaku late: Late?= mu;
+kaku control = 0;
+kaku failures = 0;
+kaku done_b = 0;
+kaku reads = 0;
 waza prepare() -> unit {
- kaku garbage:[]Node=[];array.reserve(garbage,2400000);kaku i=0;aida(i<2400000){array.push(garbage,Node {value:i,next:mu});i=i+1;}dead=Holder {nodes:garbage};
- kaku keep:[]Node=[];i=0;aida(i<64){array.push(keep,Node {value:1000+i,next:mu});i=i+1;}live=Holder {nodes:keep};
- i=0;aida(i<8){rt_collect(0);i=i+1;}dead=mu;
+    kaku garbage: []Node = [];
+    array.reserve(garbage, 2400000);
+    kaku i = 0;
+    aida (i<2400000) {
+        array.push(garbage, Node {
+                value: i, next: mu });
+        i = i + 1;
+    }
+    dead = Holder {
+        nodes: garbage };
+    kaku keep: []Node = [];
+    i = 0;
+    aida (i<64) {
+        array.push(keep, Node {
+                value: 1000 + i, next: mu });
+        i = i + 1;
+    }
+    live = Holder {
+        nodes: keep };
+    i = 0;
+    aida (i<8) {
+        rt_collect(0);
+        i = i + 1;
+    }
+    dead = mu;
 }
 waza first() -> unit {
- kaku g=live;moshi(g==mu){failures=1;kaesu;}
- aida(control<2){kaku i=reads-(reads/64)*64;moshi(g.nodes[i].value!=1000+i){failures=2;}reads=reads+1;kaku observed=rt_collect(25);}
+    kaku g = live;
+    moshi (g == mu) {
+        failures = 1;
+        kaesu;
+    }
+    aida (control<2) {
+        kaku i = reads - (reads / 64) * 64;
+        moshi (g.nodes[i].value != 1000 + i) {
+            failures = 2;
+        }
+        reads = reads + 1;
+        kaku observed = rt_collect(25);
+    }
 }
-waza later(node:Node) -> () -> unit {
- kaesu waza() -> unit {
-  kaku buffer=array.make[uint8](131072,uint8(90));late=Late {node:node,buffer:buffer};
-  kaku i=0;aida(i<8){rt_collect(0);moshi(buffer[131071]!=uint8(90) || node.value!=1000){failures=3;}i=i+1;}
-  done_b=1;
- };
+waza later(node: Node) -> () -> unit {
+    kaesu waza () -> unit {
+        kaku buffer = array.make[uint8](131072, uint8(90));
+        late = Late {
+            node: node, buffer: buffer };
+        kaku i = 0;
+        aida (i<8) {
+            rt_collect(0);
+            moshi (buffer[131071] != uint8(90) || node.value != 1000) {
+                failures = 3;
+            }
+            i = i + 1;
+        }
+        done_b = 1;
+    };
 }
 waza exercise() -> unit {
- prepare();kaku a=rt_start(first);kaku started=rt_collect(2);aida(rt_collect(7)<65 && rt_collect(4)==2){rt_wait(10000);}
- kaku marked=rt_collect(3);kaku phase_before=rt_collect(20);kaku g=live;moshi(g==mu){failures=4;kaesu;}
- // Wait on the actual child completion condition, without polling an
- // unrelated Main timeout which receives no wake when done_b changes.
- kaku b=rt_start(later(g.nodes[0]));rt_join(b);kaku phase_after=rt_collect(20);moshi(done_b!=1){failures=7;}
- kaku swept=rt_collect(30);chant(started);chant(marked);chant(phase_before);chant(phase_after);chant(swept);chant(rt_collect(41));chant(rt_collect(42));chant(rt_collect(43));chant(rt_collect(35));
- kaku value=late;moshi(value==mu){failures=5;}sore{moshi(value.buffer[131071]!=uint8(90) || value.node.value!=1000){failures=6;}}
- control=2;rt_join(a);chant(failures);chant(reads);live=mu;late=mu;
+    prepare();
+    kaku a = rt_start(first);
+    kaku started = rt_collect(2);
+    aida (rt_collect(7)<65 && rt_collect(4) == 2) {
+        rt_wait(10000);
+    }
+    kaku marked = rt_collect(3);
+    kaku phase_before = rt_collect(20);
+    kaku g = live;
+    moshi (g == mu) {
+        failures = 4;
+        kaesu;
+    }
+    // Wait on the actual child completion condition, without polling an
+    // unrelated Main timeout which receives no wake when done_b changes.
+    kaku b = rt_start(later(g.nodes[0]));
+    rt_join(b);
+    kaku phase_after = rt_collect(20);
+    moshi (done_b != 1) {
+        failures = 7;
+    }
+    kaku swept = rt_collect(30);
+    chant(started);
+    chant(marked);
+    chant(phase_before);
+    chant(phase_after);
+    chant(swept);
+    chant(rt_collect(41));
+    chant(rt_collect(42));
+    chant(rt_collect(43));
+    chant(rt_collect(35));
+    kaku value = late;
+    moshi (value == mu) {
+        failures = 5;
+    } sore {
+        moshi (value.buffer[131071] != uint8(90) || value.node.value != 1000) {
+            failures = 6;
+        }
+    }
+    control = 2;
+    rt_join(a);
+    chant(failures);
+    chant(reads);
+    live = mu;
+    late = mu;
 }
-exercise();chant(rt_collect(2));chant(rt_collect(3));chant(rt_collect(30));chant(rt_collect(35));chant(rt_collect(38));chant(rt_collect(1));
+exercise();
+chant(rt_collect(2));
+chant(rt_collect(3));
+chant(rt_collect(30));
+chant(rt_collect(35));
+chant(rt_collect(38));
+chant(rt_collect(1));

@@ -3,19 +3,31 @@
 yobu "kiso/thread";
 yobu "kiso/array";
 
-kata Node { id: int64; shared: []int64; links: []Node; }
+kata Node {
+    id: int64;
+    shared: []int64;
+    links: []Node;
+}
 
 waza chain(depth: int64) -> Node {
     kaku head = Node { id: 0, shared: [], links: [] };
     kaku i = 1;
-    aida (i <= depth) { head = Node { id: i, shared: [], links: [head] }; i = i + 1; }
+    aida (i <= depth) {
+        head = Node {
+            id: i, shared: [], links: [head] };
+        i = i + 1;
+    }
     kaesu head;
 }
 
 waza wide(count: int64) -> Node {
     kaku children: []Node = [];
     kaku i = 0;
-    aida (i < count) { array.push(children, Node { id: i, shared: [i], links: [] }); i = i + 1; }
+    aida (i < count) {
+        array.push(children, Node {
+                id: i, shared: [i], links: [] });
+        i = i + 1;
+    }
     kaesu Node { id: -7, shared: [], links: children };
 }
 
@@ -46,12 +58,18 @@ waza run() -> int64 {
     kaku two = thread.receive[Node](channel);
     kaku walk = two.item;
     kaku depth = 0;
-    aida (len(walk.links) > 0) { walk = walk.links[0]; depth = depth + 1; }
+    aida (len(walk.links) > 0) {
+        walk = walk.links[0];
+        depth = depth + 1;
+    }
     chant(depth);
     kaku three = thread.receive[Node](channel);
     kaku total = 0;
     kaku i = 0;
-    aida (i < len(three.item.links)) { total = total + three.item.links[i].id + three.item.links[i].shared[0]; i = i + 1; }
+    aida (i < len(three.item.links)) {
+        total = total + three.item.links[i].id + three.item.links[i].shared[0];
+        i = i + 1;
+    }
     chant(total);
     chant(thread.receive[Node](channel).closed);
     chant(thread.join(handle));

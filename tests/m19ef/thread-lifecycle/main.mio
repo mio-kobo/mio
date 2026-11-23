@@ -11,142 +11,525 @@ yobu "kiso/os";
 yobu "kiso/fs";
 yobu "kiso/string";
 yobu "kiso/convert";
-teisu test_mutex=gc.thread_context_bytes;
-teisu test_condition=test_mutex+darwin.mutex_bytes;
-teisu test_registry=test_condition+darwin.condition_bytes;
-teisu test_stats=512;
-teisu test_keys=640;
-teisu test_second=5120;
-teisu witness_result=test_stats;
-teisu witness_fault=test_stats+8;
-teisu witness_keys_before=test_stats+16;
-teisu witness_keys_after=test_stats+24;
-teisu witness_join_error=test_stats+32;
-teisu witness_rounds=test_stats+40;
-teisu witness_case=test_stats+48;
-teisu witness_tls_error=test_stats+56;
+teisu test_mutex = gc.thread_context_bytes;
+teisu test_condition = test_mutex + darwin.mutex_bytes;
+teisu test_registry = test_condition + darwin.condition_bytes;
+teisu test_stats = 512;
+teisu test_keys = 640;
+teisu test_second = 5120;
+teisu witness_result = test_stats;
+teisu witness_fault = test_stats + 8;
+teisu witness_keys_before = test_stats + 16;
+teisu witness_keys_after = test_stats + 24;
+teisu witness_join_error = test_stats + 32;
+teisu witness_rounds = test_stats + 40;
+teisu witness_case = test_stats + 48;
+teisu witness_tls_error = test_stats + 56;
 // All runtime behavior below is neutral IR, including the assertion program.
 // Only the native image entry/placement and instruction lowering are target code.
-waza put(f:ir.Function,kind:int64,dst:int64,a:int64,b:int64,imm:int64) -> unit {ir.put(f,kind,dst,a,b,imm);}
-waza number(f:ir.Function,dst:int64,value:int64) -> unit {put(f,ir.constant,dst,0,0,value);}
-waza load(f:ir.Function,dst:int64,offset:int64) -> unit {put(f,ir.load,dst,0,0,offset);}
-waza store(f:ir.Function,offset:int64,src:int64) -> unit {put(f,ir.store,0,0,src,offset);}
-waza set(f:ir.Function,offset:int64,value:int64) -> unit {number(f,31,value);store(f,offset,31);}
-waza expect(f:ir.Function,value:int64,expected:int64) -> unit {number(f,30,expected);put(f,ir.equal,30,value,30,0);ir.branch(f,ir.zero,30,"fail");}
-waza expect_pair(f:ir.Function,left:int64,right:int64) -> unit {put(f,ir.equal,30,left,right,0);ir.branch(f,ir.zero,30,"fail");}
-waza finish_fail(f:ir.Function) -> unit {
-    ir.branch(f,ir.label,0,"fail");
-    moshi(f.name=="run"){number(f,31,1024);ir.call(f,103,30,[0,31]);}
-    number(f,31,80);ir.call(f,102,31,[31]);
+waza put(f: ir.Function, kind: int64, dst: int64, a: int64, b: int64, imm: int64) -> unit { ir.put(f, kind, dst, a, b, imm); }
+waza number(f: ir.Function, dst: int64, value: int64) -> unit { put(f, ir.constant, dst, 0, 0, value); }
+waza load(f: ir.Function, dst: int64, offset: int64) -> unit { put(f, ir.load, dst, 0, 0, offset); }
+waza store(f: ir.Function, offset: int64, src: int64) -> unit { put(f, ir.store, 0, 0, src, offset); }
+waza set(f: ir.Function, offset: int64, value: int64) -> unit {
+    number(f, 31, value);
+    store(f, offset, 31);
+}
+waza expect(f: ir.Function, value: int64, expected: int64) -> unit {
+    number(f, 30, expected);
+    put(f, ir.equal, 30, value, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
+waza expect_pair(f: ir.Function, left: int64, right: int64) -> unit {
+    put(f, ir.equal, 30, left, right, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
+waza finish_fail(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "fail");
+    moshi (f.name == "run") {
+        number(f, 31, 1024);
+        ir.call(f, 103, 30, [0, 31]);
+    }
+    number(f, 31, 80);
+    ir.call(f, 102, 31, [31]);
 }
 waza worker() -> ir.Function {
-    kaku f=ir.function("task_worker");load(f,31,gc.thread_imports);put(f,ir.imports,0,31,0,0);ir.invoke_function(f,"thread_enter",1,[0]);ir.branch(f,ir.nonzero,1,"done");
-    number(f,2,1000000000);load(f,3,witness_case);number(f,4,8);put(f,ir.equal,3,3,4,0);ir.branch(f,ir.zero,3,"wait");number(f,2,1000000);
-    ir.branch(f,ir.label,0,"wait");ir.invoke_function(f,"thread_wait",1,[0,2]);
-    load(f,2,gc.thread_user);put(f,ir.store,0,2,1,0);
-    ir.branch(f,ir.zero,1,"leave");number(f,3,1);put(f,ir.equal,3,1,3,0);ir.branch(f,ir.nonzero,3,"leave");ir.invoke_function(f,"thread_record_error",3,[0,1]);
-    ir.branch(f,ir.label,0,"leave");ir.invoke_function(f,"thread_leave",1,[0]);
-    ir.branch(f,ir.label,0,"done");put(f,ir.result,0,1,0,0);kaesu f;
+    kaku f = ir.function("task_worker");
+    load(f, 31, gc.thread_imports);
+    put(f, ir.imports, 0, 31, 0, 0);
+    ir.invoke_function(f, "thread_enter", 1, [0]);
+    ir.branch(f, ir.nonzero, 1, "done");
+    number(f, 2, 1000000000);
+    load(f, 3, witness_case);
+    number(f, 4, 8);
+    put(f, ir.equal, 3, 3, 4, 0);
+    ir.branch(f, ir.zero, 3, "wait");
+    number(f, 2, 1000000);
+    ir.branch(f, ir.label, 0, "wait");
+    ir.invoke_function(f, "thread_wait", 1, [0, 2]);
+    load(f, 2, gc.thread_user);
+    put(f, ir.store, 0, 2, 1, 0);
+    ir.branch(f, ir.zero, 1, "leave");
+    number(f, 3, 1);
+    put(f, ir.equal, 3, 1, 3, 0);
+    ir.branch(f, ir.nonzero, 3, "leave");
+    ir.invoke_function(f, "thread_record_error", 3, [0, 1]);
+    ir.branch(f, ir.label, 0, "leave");
+    ir.invoke_function(f, "thread_leave", 1, [0]);
+    ir.branch(f, ir.label, 0, "done");
+    put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
 }
 waza capacity() -> ir.Function {
-    kaku f=ir.function("tls_capacity");number(f,10,0);put(f,ir.address,11,0,0,test_keys);put(f,ir.scratch_address,12,0,0,0);number(f,13,8);number(f,14,512);
-    ir.branch(f,ir.label,0,"allocate");ir.call(f,ir.tls_create,1,[12]);ir.branch(f,ir.nonzero,1,"release");
-    put(f,ir.less_unsigned,2,10,14,0);ir.branch(f,ir.zero,2,"fail");put(f,ir.load,2,12,0,0);put(f,ir.multiply,3,10,13,0);put(f,ir.add,3,11,3,0);put(f,ir.store,0,3,2,0);
-    number(f,3,1);put(f,ir.add,10,10,3,0);ir.branch(f,ir.jump,0,"allocate");
-    ir.branch(f,ir.label,0,"release");store(f,witness_tls_error,1);ir.branch(f,ir.zero,10,"fail");number(f,15,0);
-    ir.branch(f,ir.label,0,"release_loop");put(f,ir.equal,3,15,10,0);ir.branch(f,ir.nonzero,3,"done");put(f,ir.multiply,3,15,13,0);put(f,ir.add,3,11,3,0);put(f,ir.load,2,3,0,0);ir.call(f,ir.tls_destroy,1,[2]);expect(f,1,0);number(f,3,1);put(f,ir.add,15,15,3,0);ir.branch(f,ir.jump,0,"release_loop");
-    ir.branch(f,ir.label,0,"done");put(f,ir.result,0,10,0,0);finish_fail(f);kaesu f;
+    kaku f = ir.function("tls_capacity");
+    number(f, 10, 0);
+    put(f, ir.address, 11, 0, 0, test_keys);
+    put(f, ir.scratch_address, 12, 0, 0, 0);
+    number(f, 13, 8);
+    number(f, 14, 512);
+    ir.branch(f, ir.label, 0, "allocate");
+    ir.call(f, ir.tls_create, 1, [12]);
+    ir.branch(f, ir.nonzero, 1, "release");
+    put(f, ir.less_unsigned, 2, 10, 14, 0);
+    ir.branch(f, ir.zero, 2, "fail");
+    put(f, ir.load, 2, 12, 0, 0);
+    put(f, ir.multiply, 3, 10, 13, 0);
+    put(f, ir.add, 3, 11, 3, 0);
+    put(f, ir.store, 0, 3, 2, 0);
+    number(f, 3, 1);
+    put(f, ir.add, 10, 10, 3, 0);
+    ir.branch(f, ir.jump, 0, "allocate");
+    ir.branch(f, ir.label, 0, "release");
+    store(f, witness_tls_error, 1);
+    ir.branch(f, ir.zero, 10, "fail");
+    number(f, 15, 0);
+    ir.branch(f, ir.label, 0, "release_loop");
+    put(f, ir.equal, 3, 15, 10, 0);
+    ir.branch(f, ir.nonzero, 3, "done");
+    put(f, ir.multiply, 3, 15, 13, 0);
+    put(f, ir.add, 3, 11, 3, 0);
+    put(f, ir.load, 2, 3, 0, 0);
+    ir.call(f, ir.tls_destroy, 1, [2]);
+    expect(f, 1, 0);
+    number(f, 3, 1);
+    put(f, ir.add, 15, 15, 3, 0);
+    ir.branch(f, ir.jump, 0, "release_loop");
+    ir.branch(f, ir.label, 0, "done");
+    put(f, ir.result, 0, 10, 0, 0);
+    finish_fail(f);
+    kaesu f;
 }
-waza globals_check(write:bool) -> ir.Function {
-    kaku name="check_globals";moshi(write){name="write_globals";}kaku f=ir.function(name);number(f,2,0);number(f,3,2052);number(f,4,8);number(f,5,1000);
-    ir.branch(f,ir.label,0,"loop");put(f,ir.equal,6,2,3,0);ir.branch(f,ir.nonzero,6,"done");put(f,ir.multiply,7,2,4,0);put(f,ir.add,7,0,7,0);put(f,ir.add,8,2,5,0);
-    moshi(write){put(f,ir.store,0,7,8,0);}sore{put(f,ir.load,9,7,0,0);expect_pair(f,8,9);}
-    number(f,9,1);put(f,ir.add,2,2,9,0);ir.branch(f,ir.jump,0,"loop");ir.branch(f,ir.label,0,"done");number(f,1,0);put(f,ir.result,0,1,0,0);finish_fail(f);kaesu f;
-}
-waza run(faults:bool) -> ir.Function {
-    kaku f=ir.function("run");put(f,ir.copy,20,1,0,0);set(f,gc.thread_version,1);set(f,gc.thread_next,123);
-    ir.invoke_function(f,"thread_open",1,[0]);expect(f,1,1);load(f,1,gc.thread_next);expect(f,1,123);set(f,gc.thread_next,0);set(f,gc.thread_version,2);
-    // Caller-owned native context + target opaque buffers, outside all globals.
-    put(f,ir.address,2,0,0,test_mutex);store(f,gc.thread_mutex,2);put(f,ir.address,2,0,0,test_condition);store(f,gc.thread_condition,2);
-    put(f,ir.address,2,0,0,test_registry);store(f,gc.thread_registry,2);number(f,3,2);put(f,ir.store,0,2,3,0);
-    put(f,ir.address,2,0,0,test_stats);store(f,gc.thread_user,2);ir.function_pointer(f,"task_worker",2);store(f,gc.thread_entry,2);
-    ir.invoke_function(f,"write_globals",1,[20]);expect(f,1,0);
-    ir.invoke_function(f,"tls_capacity",21,[0]);store(f,witness_keys_before,21);
-    // Actual public ABI negative: joining the calling thread reports deadlock.
-    ir.call(f,gc.thread_identity,1,[]);number(f,2,0);ir.call(f,gc.thread_join,3,[1,2]);ir.branch(f,ir.zero,3,"fail");store(f,witness_join_error,3);
-    number(f,22,0);number(f,23,0);
-    ir.branch(f,ir.label,0,"cycle");number(f,24,0);number(f,25,0);
-    // Ten cases: success; lifecycle faults; real timeout; TLS lookup mismatch.
-    kaku operations:[]int64=[0,ir.tls_create,ir.mutex_create,ir.condition_create,gc.thread_start,gc.tls_set,gc.thread_join,gc.park,0,gc.tls_get];kaku i=1;
-    aida(i<len(operations)){
-        kaku next=string.concat("case_",convert.format_int(i));number(f,1,i);put(f,ir.equal,1,23,1,0);ir.branch(f,ir.zero,1,next);number(f,24,operations[i]);number(f,25,99);moshi(operations[i]==gc.park){number(f,25,-99);}moshi(operations[i]==0){number(f,25,0);}moshi(operations[i]==gc.tls_get){number(f,25,3);}ir.branch(f,ir.jump,0,"case_ready");ir.branch(f,ir.label,0,next);i=i+1;
+waza globals_check(write: bool) -> ir.Function {
+    kaku name = "check_globals";
+    moshi (write) {
+        name = "write_globals";
     }
-    ir.branch(f,ir.label,0,"case_ready");store(f,gc.thread_fault_operation,24);store(f,gc.thread_fault_error,25);set(f,witness_result,777);store(f,witness_fault,24);store(f,witness_case,23);
-    ir.invoke_function(f,"thread_open",1,[0]);
-    number(f,2,5);put(f,ir.less_unsigned,2,23,2,0);ir.branch(f,ir.zero,2,"open_ok");ir.branch(f,ir.zero,23,"open_ok");expect_pair(f,1,25);ir.branch(f,ir.jump,0,"closed");
-    ir.branch(f,ir.label,0,"open_ok");expect(f,1,0);ir.invoke_function(f,"platform_now",10,[]);ir.branch(f,ir.zero,10,"fail");number(f,11,2000000000);put(f,ir.add,10,10,11,0);
-    ir.branch(f,ir.label,0,"await");number(f,2,8);put(f,ir.equal,2,23,2,0);ir.branch(f,ir.nonzero,2,"await_exit_only");put(f,ir.acquire_load,2,0,0,gc.thread_waiting);ir.branch(f,ir.nonzero,2,"close");
-    ir.branch(f,ir.label,0,"await_exit_only");put(f,ir.acquire_load,2,0,0,gc.thread_state);number(f,3,gc.thread_exited);put(f,ir.equal,3,2,3,0);ir.branch(f,ir.nonzero,3,"close");number(f,3,gc.thread_failed);put(f,ir.equal,3,2,3,0);ir.branch(f,ir.nonzero,3,"close");
-    ir.invoke_function(f,"platform_now",2,[]);put(f,ir.less_unsigned,3,2,10,0);ir.branch(f,ir.zero,3,"fail");ir.branch(f,ir.jump,0,"await");
-    ir.branch(f,ir.label,0,"close");ir.invoke_function(f,"thread_close",1,[0]);expect_pair(f,1,25);
-    ir.branch(f,ir.label,0,"closed");number(f,2,8);put(f,ir.equal,2,23,2,0);ir.branch(f,ir.zero,2,"closed_check");load(f,1,witness_result);expect(f,1,1);
-    ir.branch(f,ir.label,0,"closed_check");load(f,1,gc.thread_state);expect(f,1,gc.thread_closed);
-    load(f,1,gc.thread_acquisitions);load(f,2,gc.thread_releases);expect_pair(f,1,2);load(f,1,gc.thread_starts);load(f,2,gc.thread_joins);expect_pair(f,1,2);load(f,1,gc.thread_registrations);load(f,2,gc.thread_exits);expect_pair(f,1,2);
-    load(f,1,gc.thread_registered);expect(f,1,0);load(f,1,gc.thread_owns_handle);expect(f,1,0);load(f,1,gc.thread_owns_key);expect(f,1,0);load(f,1,gc.thread_owns_mutex);expect(f,1,0);load(f,1,gc.thread_owns_condition);expect(f,1,0);
-    load(f,1,gc.thread_registry);put(f,ir.acquire_load,2,1,0,8);expect(f,2,0);
-    ir.invoke_function(f,"check_globals",1,[20]);expect(f,1,0);
-    number(f,1,1);
-    moshi(faults){put(f,ir.add,23,23,1,0);number(f,2,10);put(f,ir.less_unsigned,2,23,2,0);ir.branch(f,ir.nonzero,2,"cycle");}
-    sore{ir.branch(f,ir.nonzero,23,"production_round_done");number(f,23,8);ir.branch(f,ir.jump,0,"cycle");ir.branch(f,ir.label,0,"production_round_done");}
-    number(f,23,0);put(f,ir.add,22,22,1,0);number(f,2,16);put(f,ir.less_unsigned,2,22,2,0);ir.branch(f,ir.nonzero,2,"cycle");
-    set(f,witness_case,9);set(f,gc.thread_fault_operation,0);ir.invoke_function(f,"thread_open",1,[0]);expect(f,1,0);
-    ir.branch(f,ir.label,0,"quarantine_ready");put(f,ir.acquire_load,1,0,0,gc.thread_waiting);ir.branch(f,ir.zero,1,"quarantine_ready");
-    load(f,26,gc.thread_handle);ir.call(f,gc.thread_identity,27,[]);store(f,gc.thread_handle,27);
-    ir.invoke_function(f,"thread_close",1,[0]);load(f,2,witness_join_error);expect_pair(f,1,2);load(f,1,gc.thread_state);expect(f,1,gc.thread_quarantined);load(f,1,gc.thread_owns_handle);expect(f,1,1);load(f,1,gc.thread_owns_key);expect(f,1,1);
-    store(f,gc.thread_handle,26);ir.invoke_function(f,"thread_close",1,[0]);load(f,2,witness_join_error);expect_pair(f,1,2);load(f,1,gc.thread_state);expect(f,1,gc.thread_closed);load(f,1,gc.thread_acquisitions);load(f,2,gc.thread_releases);expect_pair(f,1,2);
-    // Two simultaneous contexts share a registry, never a shadow/TLS cell.
-    put(f,ir.address,29,0,0,test_second);load(f,2,gc.thread_imports);put(f,ir.store,0,29,2,gc.thread_imports);
-    put(f,ir.address,2,29,0,test_mutex);put(f,ir.store,0,29,2,gc.thread_mutex);put(f,ir.address,2,29,0,test_condition);put(f,ir.store,0,29,2,gc.thread_condition);
-    load(f,2,gc.thread_registry);put(f,ir.store,0,29,2,gc.thread_registry);put(f,ir.address,2,29,0,test_stats);put(f,ir.store,0,29,2,gc.thread_user);
-    ir.function_pointer(f,"task_worker",2);put(f,ir.store,0,29,2,gc.thread_entry);number(f,2,9);put(f,ir.store,0,29,2,witness_case);number(f,2,2);put(f,ir.store,0,29,2,gc.thread_version);
-    ir.invoke_function(f,"thread_open",1,[0]);expect(f,1,0);ir.invoke_function(f,"thread_open",1,[29]);expect(f,1,0);
-    ir.invoke_function(f,"platform_now",10,[]);number(f,11,1000000000);put(f,ir.add,10,10,11,0);
-    ir.branch(f,ir.label,0,"pair_wait");put(f,ir.acquire_load,1,0,0,gc.thread_progress);ir.branch(f,ir.zero,1,"pair_next");put(f,ir.acquire_load,2,29,0,gc.thread_progress);ir.branch(f,ir.zero,2,"pair_next");expect(f,1,gc.thread_parked);expect(f,2,gc.thread_parked);ir.branch(f,ir.jump,0,"pair_ready");
-    ir.branch(f,ir.label,0,"pair_next");ir.invoke_function(f,"platform_now",1,[]);put(f,ir.less_unsigned,1,1,10,0);ir.branch(f,ir.zero,1,"fail");ir.branch(f,ir.jump,0,"pair_wait");
-    ir.branch(f,ir.label,0,"pair_ready");load(f,1,gc.thread_registry);put(f,ir.acquire_load,2,1,0,8);expect(f,2,2);
-    // Deliberate wake without changing the predicate must re-park the worker.
-    load(f,2,gc.thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);expect(f,1,0);load(f,11,gc.thread_waits);load(f,3,gc.thread_condition);ir.call(f,gc.wake,1,[3]);expect(f,1,0);ir.call(f,ir.mutex_unlock,1,[2]);expect(f,1,0);
-    ir.invoke_function(f,"platform_now",10,[]);number(f,3,500000000);put(f,ir.add,10,10,3,0);
-    ir.branch(f,ir.label,0,"repark_wait");load(f,2,gc.thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);expect(f,1,0);load(f,3,gc.thread_waits);put(f,ir.less_unsigned,4,11,3,0);ir.branch(f,ir.nonzero,4,"reparked");ir.call(f,ir.mutex_unlock,1,[2]);expect(f,1,0);ir.invoke_function(f,"platform_now",3,[]);put(f,ir.less_unsigned,4,3,10,0);ir.branch(f,ir.zero,4,"fail");ir.branch(f,ir.jump,0,"repark_wait");
-    ir.branch(f,ir.label,0,"reparked");load(f,1,gc.thread_progress);expect(f,1,gc.thread_parked);load(f,1,gc.thread_stop);expect(f,1,0);ir.call(f,ir.mutex_unlock,1,[2]);expect(f,1,0);
-    ir.invoke_function(f,"registry_lock",1,[0]);expect(f,1,0);load(f,1,gc.thread_registry);put(f,ir.load,2,1,0,32);put(f,ir.equal,3,2,0,0);ir.branch(f,ir.zero,3,"head_is_second");put(f,ir.load,3,2,0,gc.thread_next);expect_pair(f,3,29);ir.branch(f,ir.jump,0,"chain_tail");
-    ir.branch(f,ir.label,0,"head_is_second");expect_pair(f,2,29);put(f,ir.load,3,2,0,gc.thread_next);expect_pair(f,3,0);
-    ir.branch(f,ir.label,0,"chain_tail");put(f,ir.load,4,3,0,gc.thread_next);expect(f,4,0);ir.invoke_function(f,"registry_unlock",1,[0]);expect(f,1,0);
-    load(f,1,gc.thread_identity_value);put(f,ir.load,2,29,0,gc.thread_identity_value);put(f,ir.equal,3,1,2,0);ir.branch(f,ir.nonzero,3,"fail");ir.call(f,gc.thread_identity,3,[]);put(f,ir.equal,4,1,3,0);ir.branch(f,ir.nonzero,4,"fail");put(f,ir.equal,4,2,3,0);ir.branch(f,ir.nonzero,4,"fail");
-    ir.invoke_function(f,"thread_close",1,[0]);expect(f,1,0);load(f,1,gc.thread_registry);put(f,ir.acquire_load,2,1,0,8);expect(f,2,1);
-    ir.invoke_function(f,"thread_close",1,[29]);expect(f,1,0);load(f,1,gc.thread_registry);put(f,ir.acquire_load,2,1,0,8);expect(f,2,0);put(f,ir.acquire_load,2,1,0,32);expect(f,2,0);
-    load(f,1,gc.thread_acquisitions);load(f,2,gc.thread_releases);expect_pair(f,1,2);put(f,ir.load,1,29,0,gc.thread_acquisitions);put(f,ir.load,2,29,0,gc.thread_releases);expect_pair(f,1,2);ir.invoke_function(f,"check_globals",1,[20]);expect(f,1,0);
-    ir.invoke_function(f,"tls_capacity",1,[0]);expect_pair(f,1,21);store(f,witness_keys_after,1);store(f,witness_rounds,22);
-    // Native binary evidence: context288, registry64, task statistics64.
-    number(f,1,288);ir.call(f,103,2,[0,1]);expect(f,2,288);load(f,1,gc.thread_registry);number(f,2,64);ir.call(f,103,3,[1,2]);expect(f,3,64);load(f,1,gc.thread_user);number(f,2,64);ir.call(f,103,3,[1,2]);expect(f,3,64);
-    number(f,1,0);ir.call(f,102,2,[1]);finish_fail(f);kaesu f;
+    kaku f = ir.function(name);
+    number(f, 2, 0);
+    number(f, 3, 2052);
+    number(f, 4, 8);
+    number(f, 5, 1000);
+    ir.branch(f, ir.label, 0, "loop");
+    put(f, ir.equal, 6, 2, 3, 0);
+    ir.branch(f, ir.nonzero, 6, "done");
+    put(f, ir.multiply, 7, 2, 4, 0);
+    put(f, ir.add, 7, 0, 7, 0);
+    put(f, ir.add, 8, 2, 5, 0);
+    moshi (write) {
+        put(f, ir.store, 0, 7, 8, 0);
+    } sore {
+        put(f, ir.load, 9, 7, 0, 0);
+        expect_pair(f, 8, 9);
+    }
+    number(f, 9, 1);
+    put(f, ir.add, 2, 2, 9, 0);
+    ir.branch(f, ir.jump, 0, "loop");
+    ir.branch(f, ir.label, 0, "done");
+    number(f, 1, 0);
+    put(f, ir.result, 0, 1, 0, 0);
+    finish_fail(f);
+    kaesu f;
 }
-waza fail(message:string) -> unit {fs.write_all("/dev/stderr",string.to_bytes(string.concat(message,"\n")));os.exit(1);}
-waza emit(c:arm64.Assembler,x:arm64.Instruction) -> unit {moshi(arm64.assembler_emit(c,x)!=mu){fail("native instruction failed");}}
-waza address(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,offset:int64) -> unit {
-    kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:offset,register:r});
+waza run(faults: bool) -> ir.Function {
+    kaku f = ir.function("run");
+    put(f, ir.copy, 20, 1, 0, 0);
+    set(f, gc.thread_version, 1);
+    set(f, gc.thread_next, 123);
+    ir.invoke_function(f, "thread_open", 1, [0]);
+    expect(f, 1, 1);
+    load(f, 1, gc.thread_next);
+    expect(f, 1, 123);
+    set(f, gc.thread_next, 0);
+    set(f, gc.thread_version, 2);
+    // Caller-owned native context + target opaque buffers, outside all globals.
+    put(f, ir.address, 2, 0, 0, test_mutex);
+    store(f, gc.thread_mutex, 2);
+    put(f, ir.address, 2, 0, 0, test_condition);
+    store(f, gc.thread_condition, 2);
+    put(f, ir.address, 2, 0, 0, test_registry);
+    store(f, gc.thread_registry, 2);
+    number(f, 3, 2);
+    put(f, ir.store, 0, 2, 3, 0);
+    put(f, ir.address, 2, 0, 0, test_stats);
+    store(f, gc.thread_user, 2);
+    ir.function_pointer(f, "task_worker", 2);
+    store(f, gc.thread_entry, 2);
+    ir.invoke_function(f, "write_globals", 1, [20]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "tls_capacity", 21, [0]);
+    store(f, witness_keys_before, 21);
+    // Actual public ABI negative: joining the calling thread reports deadlock.
+    ir.call(f, gc.thread_identity, 1, []);
+    number(f, 2, 0);
+    ir.call(f, gc.thread_join, 3, [1, 2]);
+    ir.branch(f, ir.zero, 3, "fail");
+    store(f, witness_join_error, 3);
+    number(f, 22, 0);
+    number(f, 23, 0);
+    ir.branch(f, ir.label, 0, "cycle");
+    number(f, 24, 0);
+    number(f, 25, 0);
+    // Ten cases: success; lifecycle faults; real timeout; TLS lookup mismatch.
+    kaku operations: []int64 = [0, ir.tls_create, ir.mutex_create, ir.condition_create, gc.thread_start, gc.tls_set, gc.thread_join, gc.park, 0, gc.tls_get];
+    kaku i = 1;
+    aida (i<len(operations)) {
+        kaku next = string.concat("case_", convert.format_int(i));
+        number(f, 1, i);
+        put(f, ir.equal, 1, 23, 1, 0);
+        ir.branch(f, ir.zero, 1, next);
+        number(f, 24, operations[i]);
+        number(f, 25, 99);
+        moshi (operations[i] == gc.park) {
+            number(f, 25, -99);
+        }
+        moshi (operations[i] == 0) {
+            number(f, 25, 0);
+        }
+        moshi (operations[i] == gc.tls_get) {
+            number(f, 25, 3);
+        }
+        ir.branch(f, ir.jump, 0, "case_ready");
+        ir.branch(f, ir.label, 0, next);
+        i = i + 1;
+    }
+    ir.branch(f, ir.label, 0, "case_ready");
+    store(f, gc.thread_fault_operation, 24);
+    store(f, gc.thread_fault_error, 25);
+    set(f, witness_result, 777);
+    store(f, witness_fault, 24);
+    store(f, witness_case, 23);
+    ir.invoke_function(f, "thread_open", 1, [0]);
+    number(f, 2, 5);
+    put(f, ir.less_unsigned, 2, 23, 2, 0);
+    ir.branch(f, ir.zero, 2, "open_ok");
+    ir.branch(f, ir.zero, 23, "open_ok");
+    expect_pair(f, 1, 25);
+    ir.branch(f, ir.jump, 0, "closed");
+    ir.branch(f, ir.label, 0, "open_ok");
+    expect(f, 1, 0);
+    ir.invoke_function(f, "platform_now", 10, []);
+    ir.branch(f, ir.zero, 10, "fail");
+    number(f, 11, 2000000000);
+    put(f, ir.add, 10, 10, 11, 0);
+    ir.branch(f, ir.label, 0, "await");
+    number(f, 2, 8);
+    put(f, ir.equal, 2, 23, 2, 0);
+    ir.branch(f, ir.nonzero, 2, "await_exit_only");
+    put(f, ir.acquire_load, 2, 0, 0, gc.thread_waiting);
+    ir.branch(f, ir.nonzero, 2, "close");
+    ir.branch(f, ir.label, 0, "await_exit_only");
+    put(f, ir.acquire_load, 2, 0, 0, gc.thread_state);
+    number(f, 3, gc.thread_exited);
+    put(f, ir.equal, 3, 2, 3, 0);
+    ir.branch(f, ir.nonzero, 3, "close");
+    number(f, 3, gc.thread_failed);
+    put(f, ir.equal, 3, 2, 3, 0);
+    ir.branch(f, ir.nonzero, 3, "close");
+    ir.invoke_function(f, "platform_now", 2, []);
+    put(f, ir.less_unsigned, 3, 2, 10, 0);
+    ir.branch(f, ir.zero, 3, "fail");
+    ir.branch(f, ir.jump, 0, "await");
+    ir.branch(f, ir.label, 0, "close");
+    ir.invoke_function(f, "thread_close", 1, [0]);
+    expect_pair(f, 1, 25);
+    ir.branch(f, ir.label, 0, "closed");
+    number(f, 2, 8);
+    put(f, ir.equal, 2, 23, 2, 0);
+    ir.branch(f, ir.zero, 2, "closed_check");
+    load(f, 1, witness_result);
+    expect(f, 1, 1);
+    ir.branch(f, ir.label, 0, "closed_check");
+    load(f, 1, gc.thread_state);
+    expect(f, 1, gc.thread_closed);
+    load(f, 1, gc.thread_acquisitions);
+    load(f, 2, gc.thread_releases);
+    expect_pair(f, 1, 2);
+    load(f, 1, gc.thread_starts);
+    load(f, 2, gc.thread_joins);
+    expect_pair(f, 1, 2);
+    load(f, 1, gc.thread_registrations);
+    load(f, 2, gc.thread_exits);
+    expect_pair(f, 1, 2);
+    load(f, 1, gc.thread_registered);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_owns_handle);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_owns_key);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_owns_mutex);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_owns_condition);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_registry);
+    put(f, ir.acquire_load, 2, 1, 0, 8);
+    expect(f, 2, 0);
+    ir.invoke_function(f, "check_globals", 1, [20]);
+    expect(f, 1, 0);
+    number(f, 1, 1);
+    moshi (faults) {
+        put(f, ir.add, 23, 23, 1, 0);
+        number(f, 2, 10);
+        put(f, ir.less_unsigned, 2, 23, 2, 0);
+        ir.branch(f, ir.nonzero, 2, "cycle");
+    }
+    sore {
+        ir.branch(f, ir.nonzero, 23, "production_round_done");
+        number(f, 23, 8);
+        ir.branch(f, ir.jump, 0, "cycle");
+        ir.branch(f, ir.label, 0, "production_round_done");
+    }
+    number(f, 23, 0);
+    put(f, ir.add, 22, 22, 1, 0);
+    number(f, 2, 16);
+    put(f, ir.less_unsigned, 2, 22, 2, 0);
+    ir.branch(f, ir.nonzero, 2, "cycle");
+    set(f, witness_case, 9);
+    set(f, gc.thread_fault_operation, 0);
+    ir.invoke_function(f, "thread_open", 1, [0]);
+    expect(f, 1, 0);
+    ir.branch(f, ir.label, 0, "quarantine_ready");
+    put(f, ir.acquire_load, 1, 0, 0, gc.thread_waiting);
+    ir.branch(f, ir.zero, 1, "quarantine_ready");
+    load(f, 26, gc.thread_handle);
+    ir.call(f, gc.thread_identity, 27, []);
+    store(f, gc.thread_handle, 27);
+    ir.invoke_function(f, "thread_close", 1, [0]);
+    load(f, 2, witness_join_error);
+    expect_pair(f, 1, 2);
+    load(f, 1, gc.thread_state);
+    expect(f, 1, gc.thread_quarantined);
+    load(f, 1, gc.thread_owns_handle);
+    expect(f, 1, 1);
+    load(f, 1, gc.thread_owns_key);
+    expect(f, 1, 1);
+    store(f, gc.thread_handle, 26);
+    ir.invoke_function(f, "thread_close", 1, [0]);
+    load(f, 2, witness_join_error);
+    expect_pair(f, 1, 2);
+    load(f, 1, gc.thread_state);
+    expect(f, 1, gc.thread_closed);
+    load(f, 1, gc.thread_acquisitions);
+    load(f, 2, gc.thread_releases);
+    expect_pair(f, 1, 2);
+    // Two simultaneous contexts share a registry, never a shadow/TLS cell.
+    put(f, ir.address, 29, 0, 0, test_second);
+    load(f, 2, gc.thread_imports);
+    put(f, ir.store, 0, 29, 2, gc.thread_imports);
+    put(f, ir.address, 2, 29, 0, test_mutex);
+    put(f, ir.store, 0, 29, 2, gc.thread_mutex);
+    put(f, ir.address, 2, 29, 0, test_condition);
+    put(f, ir.store, 0, 29, 2, gc.thread_condition);
+    load(f, 2, gc.thread_registry);
+    put(f, ir.store, 0, 29, 2, gc.thread_registry);
+    put(f, ir.address, 2, 29, 0, test_stats);
+    put(f, ir.store, 0, 29, 2, gc.thread_user);
+    ir.function_pointer(f, "task_worker", 2);
+    put(f, ir.store, 0, 29, 2, gc.thread_entry);
+    number(f, 2, 9);
+    put(f, ir.store, 0, 29, 2, witness_case);
+    number(f, 2, 2);
+    put(f, ir.store, 0, 29, 2, gc.thread_version);
+    ir.invoke_function(f, "thread_open", 1, [0]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "thread_open", 1, [29]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "platform_now", 10, []);
+    number(f, 11, 1000000000);
+    put(f, ir.add, 10, 10, 11, 0);
+    ir.branch(f, ir.label, 0, "pair_wait");
+    put(f, ir.acquire_load, 1, 0, 0, gc.thread_progress);
+    ir.branch(f, ir.zero, 1, "pair_next");
+    put(f, ir.acquire_load, 2, 29, 0, gc.thread_progress);
+    ir.branch(f, ir.zero, 2, "pair_next");
+    expect(f, 1, gc.thread_parked);
+    expect(f, 2, gc.thread_parked);
+    ir.branch(f, ir.jump, 0, "pair_ready");
+    ir.branch(f, ir.label, 0, "pair_next");
+    ir.invoke_function(f, "platform_now", 1, []);
+    put(f, ir.less_unsigned, 1, 1, 10, 0);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.branch(f, ir.jump, 0, "pair_wait");
+    ir.branch(f, ir.label, 0, "pair_ready");
+    load(f, 1, gc.thread_registry);
+    put(f, ir.acquire_load, 2, 1, 0, 8);
+    expect(f, 2, 2);
+    // Deliberate wake without changing the predicate must re-park the worker.
+    load(f, 2, gc.thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    expect(f, 1, 0);
+    load(f, 11, gc.thread_waits);
+    load(f, 3, gc.thread_condition);
+    ir.call(f, gc.wake, 1, [3]);
+    expect(f, 1, 0);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "platform_now", 10, []);
+    number(f, 3, 500000000);
+    put(f, ir.add, 10, 10, 3, 0);
+    ir.branch(f, ir.label, 0, "repark_wait");
+    load(f, 2, gc.thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    expect(f, 1, 0);
+    load(f, 3, gc.thread_waits);
+    put(f, ir.less_unsigned, 4, 11, 3, 0);
+    ir.branch(f, ir.nonzero, 4, "reparked");
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "platform_now", 3, []);
+    put(f, ir.less_unsigned, 4, 3, 10, 0);
+    ir.branch(f, ir.zero, 4, "fail");
+    ir.branch(f, ir.jump, 0, "repark_wait");
+    ir.branch(f, ir.label, 0, "reparked");
+    load(f, 1, gc.thread_progress);
+    expect(f, 1, gc.thread_parked);
+    load(f, 1, gc.thread_stop);
+    expect(f, 1, 0);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "registry_lock", 1, [0]);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_registry);
+    put(f, ir.load, 2, 1, 0, 32);
+    put(f, ir.equal, 3, 2, 0, 0);
+    ir.branch(f, ir.zero, 3, "head_is_second");
+    put(f, ir.load, 3, 2, 0, gc.thread_next);
+    expect_pair(f, 3, 29);
+    ir.branch(f, ir.jump, 0, "chain_tail");
+    ir.branch(f, ir.label, 0, "head_is_second");
+    expect_pair(f, 2, 29);
+    put(f, ir.load, 3, 2, 0, gc.thread_next);
+    expect_pair(f, 3, 0);
+    ir.branch(f, ir.label, 0, "chain_tail");
+    put(f, ir.load, 4, 3, 0, gc.thread_next);
+    expect(f, 4, 0);
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_identity_value);
+    put(f, ir.load, 2, 29, 0, gc.thread_identity_value);
+    put(f, ir.equal, 3, 1, 2, 0);
+    ir.branch(f, ir.nonzero, 3, "fail");
+    ir.call(f, gc.thread_identity, 3, []);
+    put(f, ir.equal, 4, 1, 3, 0);
+    ir.branch(f, ir.nonzero, 4, "fail");
+    put(f, ir.equal, 4, 2, 3, 0);
+    ir.branch(f, ir.nonzero, 4, "fail");
+    ir.invoke_function(f, "thread_close", 1, [0]);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_registry);
+    put(f, ir.acquire_load, 2, 1, 0, 8);
+    expect(f, 2, 1);
+    ir.invoke_function(f, "thread_close", 1, [29]);
+    expect(f, 1, 0);
+    load(f, 1, gc.thread_registry);
+    put(f, ir.acquire_load, 2, 1, 0, 8);
+    expect(f, 2, 0);
+    put(f, ir.acquire_load, 2, 1, 0, 32);
+    expect(f, 2, 0);
+    load(f, 1, gc.thread_acquisitions);
+    load(f, 2, gc.thread_releases);
+    expect_pair(f, 1, 2);
+    put(f, ir.load, 1, 29, 0, gc.thread_acquisitions);
+    put(f, ir.load, 2, 29, 0, gc.thread_releases);
+    expect_pair(f, 1, 2);
+    ir.invoke_function(f, "check_globals", 1, [20]);
+    expect(f, 1, 0);
+    ir.invoke_function(f, "tls_capacity", 1, [0]);
+    expect_pair(f, 1, 21);
+    store(f, witness_keys_after, 1);
+    store(f, witness_rounds, 22);
+    // Native binary evidence: context288, registry64, task statistics64.
+    number(f, 1, 288);
+    ir.call(f, 103, 2, [0, 1]);
+    expect(f, 2, 288);
+    load(f, 1, gc.thread_registry);
+    number(f, 2, 64);
+    ir.call(f, 103, 3, [1, 2]);
+    expect(f, 3, 64);
+    load(f, 1, gc.thread_user);
+    number(f, 2, 64);
+    ir.call(f, 103, 3, [1, 2]);
+    expect(f, 3, 64);
+    number(f, 1, 0);
+    ir.call(f, 102, 2, [1]);
+    finish_fail(f);
+    kaesu f;
+}
+waza fail(message: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(message, "\n")));
+    os.exit(1);
+}
+waza emit(c: arm64.Assembler, x: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, x) != mu) { fail("native instruction failed"); } }
+waza address(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, offset: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: offset, register: r });
 }
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)<2 || len(args)>3){fail("output path [production] required");}
-    kaku faults=hai;moshi(len(args)==3){moshi(args[2]!="production"){fail("invalid mode");}faults=iie;}
-    kaku functions=gc.thread_program(faults);array.append_all(functions,darwin.thread_platform_program());array.push(functions,worker());array.push(functions,capacity());array.push(functions,globals_check(hai));array.push(functions,globals_check(iie));array.push(functions,run(faults));
-    kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];
-    address(c,patches,7,2052*8);address(c,patches,0,(2052+darwin.thread_symbol_count)*8);address(c,patches,1,0);emit(c,arm64.str_x(7,0,gc.thread_imports));
-    arm64.assembler_bl(c,"rt_run");emit(c,arm64.ret());
-    kaku error=aarch64.emit_program(c,functions,darwin.thread_bindings(),darwin.thread_symbol_count,"rt");moshi(error!=""){fail(error);}
-    kaku words=arm64.assembler_assemble(c);moshi(words.error!=mu){fail("native assembly failed");}
-    kaku image=darwin.executable_appended(macho.ImageSpec {words:words.words,constants:[],globals:2052,patches:patches},darwin.thread_symbols(),1024);moshi(image.error!=""){fail(image.error);}
-    kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){fail(signed.error);}
-    moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){fail("native output failed");}
+    kaku args = os.arguments();
+    moshi (len(args)<2 || len(args)>3) {
+        fail("output path [production] required");
+    }
+    kaku faults = hai;
+    moshi (len(args) == 3) {
+        moshi (args[2] != "production") {
+            fail("invalid mode");
+        }
+        faults = iie;
+    }
+    kaku functions = gc.thread_program(faults);
+    array.append_all(functions, darwin.thread_platform_program());
+    array.push(functions, worker());
+    array.push(functions, capacity());
+    array.push(functions, globals_check(hai));
+    array.push(functions, globals_check(iie));
+    array.push(functions, run(faults));
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    address(c, patches, 7, 2052 * 8);
+    address(c, patches, 0, (2052 + darwin.thread_symbol_count) * 8);
+    address(c, patches, 1, 0);
+    emit(c, arm64.str_x(7, 0, gc.thread_imports));
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.ret());
+    kaku error = aarch64.emit_program(c, functions, darwin.thread_bindings(), darwin.thread_symbol_count, "rt");
+    moshi (error != "") {
+        fail(error);
+    }
+    kaku words = arm64.assembler_assemble(c);
+    moshi (words.error != mu) {
+        fail("native assembly failed");
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: words.words, constants: [], globals: 2052, patches: patches }, darwin.thread_symbols(), 1024);
+    moshi (image.error != "") {
+        fail(image.error);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        fail(signed.error);
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) { fail("native output failed"); }
 }
 main();

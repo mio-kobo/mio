@@ -1,0 +1,84 @@
+// Allocation-lock stress program (Darwin thread build, MIO_ALLOC_LOCK_STRESS image; also runs unchanged on every other target). Five mutators
+// allocate structs with managed fields, enum values, arrays of structs and linked lists in tight loops while a rolling window of survivors is
+// mutated in place (element stores into older arrays and array growth are Epoch-owning mutations) and every few allocations a collection runs.
+// Each result is compared with the same function run sequentially: a lost, duplicated, torn or half-initialized allocation, or an object
+// freed under a lock-path allocation, changes a total or faults.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Node { value: int64; next: []Node; }
+kata Box { tag: int64; items: []Node; }
+sentaku Shape { Circle(int64); Rect(int64, int64); Empty; }
+
+waza area(s: Shape) -> int64 {
+    awase (s) {
+        baai Circle(r) { kaesu r * r * 3; }
+        baai Rect(w, h) { kaesu w * h; }
+        baai Empty { kaesu 1; }
+    }
+    kaesu -1;
+}
+
+waza churn(seed: int64, rounds: int64) -> int64 {
+    kaku total = 0;
+    kaku keep: []Box = [];
+    kaku round = 0;
+    aida (round < rounds) {
+        kaku head: []Node = [];
+        kaku i = 0;
+        aida (i < 12) {
+            kaku node = Node { value: seed + round + i, next: head };
+            head = [node];
+            kaku shape = Shape.Circle(i);
+            moshi (i - (i / 3) * 3 == 1) { shape = Shape.Rect(i, round); }
+            moshi (i - (i / 3) * 3 == 2) { shape = Shape.Empty(); }
+            total = total + area(shape);
+            i = i + 1;
+        }
+        kaku cursor = head;
+        aida (len(cursor) > 0) { total = total + cursor[0].value; cursor = cursor[0].next; }
+        kaku box = Box { tag: round, items: [Node { value: seed, next: [] }, Node { value: round, next: [] }] };
+        array.push(keep, box);
+        moshi (len(keep) > 24) {
+            kaku old = keep[0];
+            total = total + old.tag + old.items[0].value + old.items[1].value;
+            keep = [keep[len(keep) - 1]];
+        }
+        kaku k = 0;
+        aida (k < len(keep)) {
+            kaku b = keep[k];
+            array.push(b.items, Node { value: round + k, next: head });
+            b.items[0] = Node { value: b.items[0].value + 1, next: head };
+            moshi (len(b.items) > 6) { keep[k] = Box { tag: b.tag + 1, items: [b.items[0]] }; }
+            total = total + b.tag + len(b.items) + b.items[0].value;
+            k = k + 1;
+        }
+        round = round + 1;
+    }
+    kaesu total;
+}
+
+waza w0() -> int64 { kaesu churn(1, 150); }
+waza w1() -> int64 { kaesu churn(2, 150); }
+waza w2() -> int64 { kaesu churn(3, 150); }
+waza w3() -> int64 { kaesu churn(4, 150); }
+
+waza run() -> int64 {
+    kaku h0 = thread.start(w0);
+    kaku h1 = thread.start(w1);
+    kaku h2 = thread.start(w2);
+    kaku h3 = thread.start(w3);
+    kaku own = churn(5, 150);
+    kaku r0 = thread.join(h0);
+    kaku r1 = thread.join(h1);
+    kaku r2 = thread.join(h2);
+    kaku r3 = thread.join(h3);
+    chant(r0 == churn(1, 150));
+    chant(r1 == churn(2, 150));
+    chant(r2 == churn(3, 150));
+    chant(r3 == churn(4, 150));
+    chant(own == churn(5, 150));
+    chant(r0 + r1 + r2 + r3 + own);
+    kaesu 0;
+}
+run();

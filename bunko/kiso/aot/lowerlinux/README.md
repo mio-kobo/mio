@@ -13,6 +13,8 @@ caller). Heap objects start with a 16-byte header (kind | size << 8, mark word).
 The collector runs at function entry and loop back-edges; each call/poll site is followed by an inline frame descriptor
 (`jmp over; count; rbp offsets`) that lists the reference slots of that frame, so roots are exact.
 
+C interop (Mio → C, System V AMD64): `cabi_sysv.mio` classifies fixed-prototype scalar C declarations (`$cabi::` externals shared with the Darwin backend) into INTEGER/SSE/MEMORY placements and emits the call bridge; `compile_with_c` returns position-independent machine code plus the list of external `call` sites, and `selfhost/pipeline/cabi_sysv.mio` hands them to the system C driver (`call sym@PLT`, non-PIE, `.mio_bss` fixed at the ELF data address). Programs without C declarations compile exactly as before. See `docs/linux-amd64-c-ffi.md`.
+
 Not supported (reported as errors or as run-time "unsupported operation" stubs, never skipped silently):
 string ordering, `chant` of floats, threads, TLS and concurrent collection.
 Tests: `scripts/ci/native_platforms.py` (native compiler and CLI fixed points, `tests/native-differential` and the Runtime ABI contract in the default and `--gc-stress` configurations, compared with the reference VM).

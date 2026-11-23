@@ -50,7 +50,7 @@ def run(label,args,timeout=1800,expected=0):
  unchanged();return (out/(label+'.stdout')).read_bytes()
 tools=out/'controllers';tools.mkdir()
 def controller(original,name):
- source=(snap/original).read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da',pin)
+ source=(snap/original).read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79',pin)
  target=tools/name;target.write_text(source);return target
 try:
  run('compiler-signature',['codesign','--verify','--strict',compiler])
@@ -111,7 +111,7 @@ try:
   run('snapshot-'+mode,command,1800);proofs['snapshot_'+mode]=str(dest)
  sweep=tools/'sweep';sweep.mkdir()
  for original in (snap/'tests/m19ef/old-sweep-v2').glob('*.py'):
-  source=original.read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da',pin)
+  source=original.read_text().replace('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio',str(compiler)).replace('be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79',pin)
   for child in ('run.py','ungated_matrix.py','cancel_matrix.py','test_cancel_oracle.py'):source=source.replace("'tests/m19ef/old-sweep-v2/"+child+"'",repr(str(sweep/child)))
   (sweep/original.name).write_text(source)
  for pattern in ('*.fixture','old-unscheduled-epochs.json'):

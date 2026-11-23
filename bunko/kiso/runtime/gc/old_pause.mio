@@ -1,69 +1,217 @@
-// Experimental allocation/Minor protocol, under native validation. The executing Mutator owns
-// the heap epoch. request448/ack456/released464 are monotonic; depth496 is
-// private to that owner. Never accept a stale acknowledgment after reuse.
+// 分配与 Minor GC 暂停/恢复协议：当前执行的 Mutator 持有堆 Epoch 所有权。
+// request(448)/ack(456)/released(464) 单调递增，depth(496) 为持有者私有；绝不接受复用前残留的陈旧确认。
 waza old_pause_program() -> ir.Function {
- kaku f=ir.function("gc_old_pause");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"abort");tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");
- ir.put(f,ir.load,10,0,0,496);ir.branch(f,ir.zero,10,"request");tconstant(f,11,1024);ir.put(f,ir.less_unsigned,11,10,11,0);ir.branch(f,ir.zero,11,"invalid");tconstant(f,11,1);ir.put(f,ir.add,10,10,11,0);ir.put(f,ir.store,0,0,10,496);ir.branch(f,ir.jump,0,"done");
- ir.branch(f,ir.label,0,"request");ir.put(f,ir.acquire_load,10,0,0,448);tconstant(f,11,1);ir.put(f,ir.add,10,10,11,0);ir.branch(f,ir.zero,10,"invalid");ir.put(f,ir.release_store,0,0,10,448);old_deadline(f,20,10000000000,"invalid");
- ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"abort");ir.put(f,ir.acquire_load,11,0,0,456);ir.put(f,ir.equal,11,11,10,0);ir.branch(f,ir.nonzero,11,"acknowledged");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"wait");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);old_error(f,5);
- ir.branch(f,ir.label,0,"abort");ir.invoke_function(f,"gc_old_abort_join",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"acknowledged");tconstant(f,5,1);ir.put(f,ir.store,0,0,5,496);old_add(f,472);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_pause");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "abort");
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    ir.put(f, ir.load, 10, 0, 0, 496);
+    ir.branch(f, ir.zero, 10, "request");
+    tconstant(f, 11, 1024);
+    ir.put(f, ir.less_unsigned, 11, 10, 11, 0);
+    ir.branch(f, ir.zero, 11, "invalid");
+    tconstant(f, 11, 1);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.put(f, ir.store, 0, 0, 10, 496);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "request");
+    ir.put(f, ir.acquire_load, 10, 0, 0, 448);
+    tconstant(f, 11, 1);
+    ir.put(f, ir.add, 10, 10, 11, 0);
+    ir.branch(f, ir.zero, 10, "invalid");
+    ir.put(f, ir.release_store, 0, 0, 10, 448);
+    old_deadline(f, 20, 10000000000, "invalid");
+    ir.branch(f, ir.label, 0, "wait");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "abort");
+    ir.put(f, ir.acquire_load, 11, 0, 0, 456);
+    ir.put(f, ir.equal, 11, 11, 10, 0);
+    ir.branch(f, ir.nonzero, 11, "acknowledged");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "wait");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    ir.branch(f, ir.label, 0, "abort");
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "acknowledged");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.store, 0, 0, 5, 496);
+    old_add(f, 472);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_resume_program() -> ir.Function {
- kaku f=ir.function("gc_old_resume");ir.put(f,ir.load,10,0,0,496);ir.branch(f,ir.zero,10,"done");tconstant(f,11,1);ir.put(f,ir.subtract,10,10,11,0);ir.put(f,ir.store,0,0,10,496);ir.branch(f,ir.nonzero,10,"done");ir.put(f,ir.acquire_load,10,0,0,448);ir.put(f,ir.release_store,0,0,10,464);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_resume");
+    ir.put(f, ir.load, 10, 0, 0, 496);
+    ir.branch(f, ir.zero, 10, "done");
+    tconstant(f, 11, 1);
+    ir.put(f, ir.subtract, 10, 10, 11, 0);
+    ir.put(f, ir.store, 0, 0, 10, 496);
+    ir.branch(f, ir.nonzero, 10, "done");
+    ir.put(f, ir.acquire_load, 10, 0, 0, 448);
+    ir.put(f, ir.release_store, 0, 0, 10, 464);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_promoted_program() -> ir.Function {
- kaku f=ir.function("gc_old_promoted");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");old_add(f,488);ir.invoke_function(f,"gc_old_visit",5,[0,1]);ir.branch(f,ir.zero,5,"done");ir.invoke_function(f,"gc_old_abort_join",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_promoted");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    old_add(f, 488);
+    ir.invoke_function(f, "gc_old_visit", 5, [0, 1]);
+    ir.branch(f, ir.zero, 5, "done");
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 // Inline into the marker's take loop, between complete scans. The adapter
 // must add a label take_unpaused after this gate. No queue lock is held here.
-waza old_marker_pause_gate(f:ir.Function) -> unit {
- ir.put(f,ir.acquire_load,22,0,0,448);ir.put(f,ir.acquire_load,23,0,0,464);ir.put(f,ir.equal,24,22,23,0);ir.branch(f,ir.nonzero,24,"take_unpaused");ir.put(f,ir.less_unsigned,24,22,23,0);ir.branch(f,ir.nonzero,24,"invalid");ir.put(f,ir.release_store,0,0,22,456);
- ir.branch(f,ir.label,0,"paused");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"done");ir.put(f,ir.acquire_load,23,0,0,464);ir.put(f,ir.equal,24,22,23,0);ir.branch(f,ir.nonzero,24,"take");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"paused");ir.branch(f,ir.jump,0,"invalid");
+waza old_marker_pause_gate(f: ir.Function) -> unit {
+    ir.put(f, ir.acquire_load, 22, 0, 0, 448);
+    ir.put(f, ir.acquire_load, 23, 0, 0, 464);
+    ir.put(f, ir.equal, 24, 22, 23, 0);
+    ir.branch(f, ir.nonzero, 24, "take_unpaused");
+    ir.put(f, ir.less_unsigned, 24, 22, 23, 0);
+    ir.branch(f, ir.nonzero, 24, "invalid");
+    ir.put(f, ir.release_store, 0, 0, 22, 456);
+    ir.branch(f, ir.label, 0, "paused");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "done");
+    ir.put(f, ir.acquire_load, 23, 0, 0, 464);
+    ir.put(f, ir.equal, 24, 22, 23, 0);
+    ir.branch(f, ir.nonzero, 24, "take");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "paused");
+    ir.branch(f, ir.jump, 0, "invalid");
 }
 
 // A real Minor increments this only after a successful pause acknowledgment.
 waza old_minor_note_program() -> ir.Function {
- kaku f=ir.function("gc_old_note_minor");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");ir.put(f,ir.load,5,0,0,496);ir.branch(f,ir.zero,5,"invalid");old_add(f,480);
- ir.branch(f,ir.label,0,"done");treturn(f,0);
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);old_error(f,5);ir.invoke_function(f,"gc_old_abort_join",6,[0]);treturn(f,4);kaesu f;
+    kaku f = ir.function("gc_old_note_minor");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    ir.put(f, ir.load, 5, 0, 0, 496);
+    ir.branch(f, ir.zero, 5, "invalid");
+    old_add(f, 480);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    ir.invoke_function(f, "gc_old_abort_join", 6, [0]);
+    treturn(f, 4);
+    kaesu f;
 }
 // Fresh object storage may be promoted by a nested allocation before its
 // descriptor/fields finish initialization. Hold the marker across the entire
 // existing Mutator heap epoch, rather than resuming immediately after malloc.
 waza old_pause_epoch_program() -> ir.Function {
- kaku f=ir.function("gc_old_pause_epoch");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"abort");tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");ir.put(f,ir.load,5,0,0,496);ir.branch(f,ir.nonzero,5,"done");ir.invoke_function(f,"gc_old_pause",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"abort");ir.invoke_function(f,"gc_old_abort_join",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_pause_epoch");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "abort");
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    ir.put(f, ir.load, 5, 0, 0, 496);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.invoke_function(f, "gc_old_pause", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "abort");
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_resume_epoch_program() -> ir.Function {
- kaku f=ir.function("gc_old_resume_epoch");ir.put(f,ir.load,5,0,0,496);ir.branch(f,ir.zero,5,"done");tconstant(f,6,1);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.invoke_function(f,"gc_old_resume",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);old_error(f,5);ir.invoke_function(f,"gc_old_abort_join",6,[0]);treturn(f,4);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_resume_epoch");
+    ir.put(f, ir.load, 5, 0, 0, 496);
+    ir.branch(f, ir.zero, 5, "done");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.invoke_function(f, "gc_old_resume", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    ir.invoke_function(f, "gc_old_abort_join", 6, [0]);
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 // The adapter supplies an OWNED optional extension slot offset, containing a
 // pointer to the shared control-pointer slot. No CPU or OS layout is assumed.
 // Interpose every original gc_end path, including Native blocking and error
 // cleanup, so pause ownership cannot leak across a Mutator epoch transfer.
-waza old_end_epoch_program(control_link_offset:int64) -> ir.Function {
- kaku f=ir.function("gc_end");tprepare(f);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.zero,12,"not_owner");
- ir.put(f,ir.load,10,0,0,control_link_offset);ir.branch(f,ir.zero,10,"delegate_epoch_end");ir.put(f,ir.acquire_load,10,10,0,0);ir.branch(f,ir.zero,10,"delegate_epoch_end");ir.invoke_function(f,"gc_old_resume_epoch",5,[10]);ir.branch(f,ir.nonzero,5,"failed");
- ir.branch(f,ir.label,0,"delegate_epoch_end");ir.invoke_function(f,"gc_end_base",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.zero,10,"failed");ir.invoke_function(f,"gc_old_world_resumed",5,[10]);
- ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"not_owner");treturn(f,4);kaesu f;
+waza old_end_epoch_program(control_link_offset: int64) -> ir.Function {
+    kaku f = ir.function("gc_end");
+    tprepare(f);
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "not_owner");
+    ir.put(f, ir.load, 10, 0, 0, control_link_offset);
+    ir.branch(f, ir.zero, 10, "delegate_epoch_end");
+    ir.put(f, ir.acquire_load, 10, 10, 0, 0);
+    ir.branch(f, ir.zero, 10, "delegate_epoch_end");
+    ir.invoke_function(f, "gc_old_resume_epoch", 5, [10]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.label, 0, "delegate_epoch_end");
+    ir.invoke_function(f, "gc_end_base", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.zero, 10, "failed");
+    ir.invoke_function(f, "gc_old_world_resumed", 5, [10]);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "not_owner");
+    treturn(f, 4);
+    kaesu f;
 }
-koukai waza old_heap_epoch_program(functions:[]ir.Function,control_link_offset:int64,owned_context_bytes:int64) -> []ir.Function {
- kaku result:[]ir.Function=[];moshi(control_link_offset<thread_context_bytes || owned_context_bytes<8 || control_link_offset>owned_context_bytes-8 || control_link_offset-(control_link_offset/8)*8!=0){kaesu result;}
- kaku i=0;kaku found=0;
- aida(i<len(functions)){kaku f=functions[i];moshi(f.name=="gc_end"){found=found+1;array.push(result,ir.Function {name:"gc_end_base",steps:f.steps});array.push(result,old_end_epoch_program(control_link_offset));}sore{array.push(result,f);}i=i+1;}
- // An invalid build-time composition fails later symbol validation, rather
- // than silently omitting the release wrapper from a purported safe profile.
- moshi(found!=1){kaku invalid:[]ir.Function=[];kaesu invalid;}
- array.append_all(result,[old_pause_epoch_program(),old_resume_epoch_program()]);kaesu result;
+koukai waza old_heap_epoch_program(functions: []ir.Function, control_link_offset: int64, owned_context_bytes: int64) -> []ir.Function {
+    kaku result: []ir.Function = [];
+    moshi (control_link_offset<thread_context_bytes || owned_context_bytes<8 || control_link_offset>owned_context_bytes - 8 || control_link_offset - (control_link_offset / 8) * 8 != 0) {
+        kaesu result;
+    }
+    kaku i = 0;
+    kaku found = 0;
+    aida (i<len(functions)) {
+        kaku f = functions[i];
+        moshi (f.name == "gc_end") {
+            found = found + 1;
+            array.push(result, ir.Function {
+                    name: "gc_end_base", steps: f.steps });
+            array.push(result, old_end_epoch_program(control_link_offset));
+        } sore {
+            array.push(result, f);
+        }
+        i = i + 1;
+    }
+    // An invalid build-time composition fails later symbol validation, rather
+    // than silently omitting the release wrapper from a purported safe profile.
+    moshi (found != 1) {
+        kaku invalid: []ir.Function = [];
+        kaesu invalid;
+    }
+    array.append_all(result, [old_pause_epoch_program(), old_resume_epoch_program()]);
+    kaesu result;
 }
 
 // One-way publication of the initial stopped-world release. Sampling current
@@ -72,6 +220,16 @@ koukai waza old_heap_epoch_program(functions:[]ir.Function,control_link_offset:i
 // Called only after successful gc_end_base; a later owner must still be able
 // to request/receive an acknowledgment before its constructor touches storage.
 waza old_world_resumed_program() -> ir.Function {
- kaku f=ir.function("gc_old_world_resumed");ir.put(f,ir.acquire_load,5,0,0,296);ir.branch(f,ir.nonzero,5,"done");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,296);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_world_resumed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 296);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 296);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }

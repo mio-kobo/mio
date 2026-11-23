@@ -1,0 +1,34 @@
+yobu "kiso/testing";
+yobu "kiso/string";
+yobu "kiso/encoding/json";
+
+waza code_action_reply(state: Session, uri: string, only: string) -> string {
+    kaku request = string.concat("{\"id\":21,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":", json.quote(uri));
+    request = string.concat(request, ",\"version\":1},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"context\":{\"diagnostics\":[],\"only\":[");
+    request = string.concat(request, string.concat(json.quote(only), "]}}}"));
+    kaku reply = dispatch(state, string.to_bytes(request));
+    testing.expect(len(reply.messages) == 1, "one code action reply");
+    moshi (len(reply.messages) != 1) { kaesu ""; }
+    kaesu reply.messages[0];
+}
+
+waza open_unsorted(state: Session, uri: string) -> unit {
+    kaku text = "yobu \"kiso/string\";\nyobu \"kiso/array\";\nwaza main() -> unit { kaku a = array.make[int64](1, 0); chant(string.concat(\"a\", \"b\")); }\n";
+    dispatch(state, string.to_bytes(string.concat("{\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":", string.concat(json.quote(uri), string.concat(",\"version\":1,\"languageId\":\"mio\",\"text\":", string.concat(json.quote(text), "}}}"))))));
+}
+
+waza test_code_action_titles_follow_the_session_language() -> unit {
+    kaku uri = "file:///__mio_rpc_imports__/main.mio";
+    kaku state = session("/__mio_rpc_imports__", "");
+    dispatch(state, string.to_bytes("{\"id\":0,\"method\":\"initialize\"}"));
+    open_unsorted(state, uri);
+    testing.expect(state.language[0] == "en-US", "a new session speaks the default language");
+    kaku english = code_action_reply(state, uri, "source.organizeImports");
+    testing.expect(string.contains(english, "\"title\":\"Organize imports\""), "default title is the en-US catalog text");
+    testing.expect(string.contains(english, "\"kind\":\"source.organizeImports\""), "the action kind is not translated");
+    state.language[0] = "ja-JP";
+    kaku japanese = code_action_reply(state, uri, "source.organizeImports");
+    testing.expect(string.contains(japanese, "\"title\":\"インポートを整理\""), "title follows the session language");
+    testing.expect(string.contains(japanese, "\"kind\":\"source.organizeImports\""), "the action kind stays the LSP constant");
+    testing.expect(!string.contains(japanese, "Organize imports"), "no English fallback when the locale has the key");
+}

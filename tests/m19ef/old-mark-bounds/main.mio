@@ -1,36 +1,154 @@
-yobu "kiso/runtime/gc";yobu "kiso/runtime/ir";yobu "kiso/runtime/os/darwin";yobu "kiso/runtime/cpu/aarch64";
-yobu "kiso/aot/arm64";yobu "kiso/aot/lower";yobu "kiso/aot/macho";yobu "kiso/aot/sign";yobu "kiso/array";yobu "kiso/fs";yobu "kiso/os";
+yobu "kiso/runtime/gc";
+yobu "kiso/runtime/ir";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/runtime/cpu/aarch64";
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
 // Real allocator ownership-negative component; ordinary Worker matrices supply
 // positive automatic roots. Never dereferences the stale payload after Major.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza eq(f:ir.Function,r:int64,v:int64) -> unit {n(f,30,v);ir.put(f,ir.equal,30,r,30,0);ir.branch(f,ir.zero,30,"fail");}
-waza bounds(f:ir.Function,p:int64,expected:int64) -> unit {ir.invoke_function(f,"gc_old_bounds",5,[0,p]);eq(f,5,expected);}
-waza run() -> ir.Function {
- kaku f=ir.function("run");ir.call(f,202,20,[]);ir.branch(f,ir.zero,20,"fail");ir.put(f,ir.store,0,0,20,128);ir.put(f,ir.address,21,0,0,640);
- n(f,26,48);n(f,27,100);ir.call(f,203,22,[20,21,26,27]);ir.branch(f,ir.zero,22,"fail");
- // Valid exact payload, null, unmapped low address, unaligned and end boundary.
- bounds(f,22,48);n(f,23,0);bounds(f,23,0);n(f,23,4096);bounds(f,23,0);n(f,23,1);ir.put(f,ir.add,23,22,23,0);bounds(f,23,0);ir.put(f,ir.load,23,20,0,0);bounds(f,23,0);
- ir.put(f,ir.copy,24,22,0,0);
- n(f,26,131104);n(f,27,102);ir.call(f,203,22,[20,21,26,27]);ir.branch(f,ir.zero,22,"fail");bounds(f,22,131104);ir.put(f,ir.copy,25,22,0,0);
- n(f,23,16);ir.put(f,ir.add,23,22,23,0);bounds(f,23,0);
- // No roots remain; both mappings are collected by the actual legacy Major.
- n(f,23,0);ir.put(f,ir.store,0,21,23,8);n(f,2,1);ir.call(f,201,5,[20,21,2]);eq(f,5,0);bounds(f,24,0);bounds(f,25,0);ir.put(f,ir.load,5,20,0,gc.los_count);eq(f,5,0);ir.put(f,ir.load,5,20,0,304);eq(f,5,0);
- n(f,26,9);ir.put(f,ir.store,0,0,26,48);ir.put(f,ir.address,1,0,0,48);n(f,2,8);ir.call(f,103,5,[1,2]);eq(f,5,8);n(f,1,0);ir.put(f,ir.result,0,1,0,0);
- ir.branch(f,ir.label,0,"fail");n(f,1,89);ir.call(f,102,2,[1]);kaesu f;
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza eq(f: ir.Function, r: int64, v: int64) -> unit {
+    n(f, 30, v);
+    ir.put(f, ir.equal, 30, r, 30, 0);
+    ir.branch(f, ir.zero, 30, "fail");
 }
-waza emit(c:arm64.Assembler,x:arm64.Instruction) -> unit {arm64.assembler_emit(c,x);}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,off:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:off,register:r});}
+waza bounds(f: ir.Function, p: int64, expected: int64) -> unit {
+    ir.invoke_function(f, "gc_old_bounds", 5, [0, p]);
+    eq(f, 5, expected);
+}
+waza run() -> ir.Function {
+    kaku f = ir.function("run");
+    ir.call(f, 202, 20, []);
+    ir.branch(f, ir.zero, 20, "fail");
+    ir.put(f, ir.store, 0, 0, 20, 128);
+    ir.put(f, ir.address, 21, 0, 0, 640);
+    n(f, 26, 48);
+    n(f, 27, 100);
+    ir.call(f, 203, 22, [20, 21, 26, 27]);
+    ir.branch(f, ir.zero, 22, "fail");
+    // Valid exact payload, null, unmapped low address, unaligned and end boundary.
+    bounds(f, 22, 48);
+    n(f, 23, 0);
+    bounds(f, 23, 0);
+    n(f, 23, 4096);
+    bounds(f, 23, 0);
+    n(f, 23, 1);
+    ir.put(f, ir.add, 23, 22, 23, 0);
+    bounds(f, 23, 0);
+    ir.put(f, ir.load, 23, 20, 0, 0);
+    bounds(f, 23, 0);
+    ir.put(f, ir.copy, 24, 22, 0, 0);
+    n(f, 26, 131104);
+    n(f, 27, 102);
+    ir.call(f, 203, 22, [20, 21, 26, 27]);
+    ir.branch(f, ir.zero, 22, "fail");
+    bounds(f, 22, 131104);
+    ir.put(f, ir.copy, 25, 22, 0, 0);
+    n(f, 23, 16);
+    ir.put(f, ir.add, 23, 22, 23, 0);
+    bounds(f, 23, 0);
+    // No roots remain; both mappings are collected by the actual legacy Major.
+    n(f, 23, 0);
+    ir.put(f, ir.store, 0, 21, 23, 8);
+    n(f, 2, 1);
+    ir.call(f, 201, 5, [20, 21, 2]);
+    eq(f, 5, 0);
+    bounds(f, 24, 0);
+    bounds(f, 25, 0);
+    ir.put(f, ir.load, 5, 20, 0, gc.los_count);
+    eq(f, 5, 0);
+    ir.put(f, ir.load, 5, 20, 0, 304);
+    eq(f, 5, 0);
+    n(f, 26, 9);
+    ir.put(f, ir.store, 0, 0, 26, 48);
+    ir.put(f, ir.address, 1, 0, 0, 48);
+    n(f, 2, 8);
+    ir.call(f, 103, 5, [1, 2]);
+    eq(f, 5, 8);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 1, 89);
+    ir.call(f, 102, 2, [1]);
+    kaesu f;
+}
+waza emit(c: arm64.Assembler, x: arm64.Instruction) -> unit { arm64.assembler_emit(c, x); }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, off: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: off, register: r });
+}
 waza main() -> unit {
- kaku functions=gc.old_mark_program();array.append_all(functions,darwin.worker_platform_program());array.push(functions,run());kaku bindings=darwin.worker_bindings();kaku ops=[202,203,201];kaku args:[][]int64=[[],[0,1,2,3],[0,1,2]];kaku i=0;
- aida(i<3){array.push(bindings,ir.Binding {operation:ops[i],slot:25+i,arguments:args[i],result_bits:64});i=i+1;}
- kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];addr(c,patches,7,0);addr(c,patches,0,256);kaku names=["stw_heap_init","stw_heap_alloc","stw_heap_collect"];kaku ats:[]int64=[];i=0;
- aida(i<3){array.push(ats,len(c.words));emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,7,(25+i)*8));i=i+1;}
- arm64.assembler_bl(c,"rt_run");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));kaku error=aarch64.emit_program(c,functions,bindings,28,"rt");moshi(error!=""){chant(error);os.exit(2);}
- lower.emit_stopped_heap_adapter(c,1048576);i=0;aida(i<3){kaku ins=arm64.adr(9,(arm64.assembler_label_word(c,names[i])-ats[i])*4);moshi(ins.error!=mu){os.exit(3);}c.words[ats[i]]=ins.word;i=i+1;}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(4);}kaku symbols=darwin.worker_symbols();
- // Appended slots are replaced by actual native helper addresses before use;
- // use existing exported symbols for loadability, as in scanner witnesses.
- array.append_all(symbols,["_getpid","_getpid","_getpid"]);
- kaku image=darwin.executable_appended(macho.ImageSpec {words:assembled.words,constants:[],globals:0,patches:patches},symbols,256);moshi(image.error!=""){chant(image.error);os.exit(5);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){os.exit(6);}kaku argv=os.arguments();fs.write_all(argv[1],signed.bytes);os.chmod(argv[1],448);
+    kaku functions = gc.old_mark_program();
+    array.append_all(functions, darwin.worker_platform_program());
+    array.push(functions, run());
+    kaku bindings = darwin.worker_bindings();
+    kaku ops = [202, 203, 201];
+    kaku args: [][]int64 = [[], [0, 1, 2, 3], [0, 1, 2]];
+    kaku i = 0;
+    aida (i<3) {
+        array.push(bindings, ir.Binding {
+                operation: ops[i], slot: 25 + i, arguments: args[i], result_bits: 64 });
+        i = i + 1;
+    }
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    addr(c, patches, 7, 0);
+    addr(c, patches, 0, 256);
+    kaku names = ["stw_heap_init", "stw_heap_alloc", "stw_heap_collect"];
+    kaku ats: []int64 = [];
+    i = 0;
+    aida (i<3) {
+        array.push(ats, len(c.words));
+        emit(c, arm64.movz_x(9, 0, 0));
+        emit(c, arm64.str_x(9, 7, (25 + i) * 8));
+        i = i + 1;
+    }
+    arm64.assembler_bl(c, "rt_run");
+    emit(c, arm64.movz_x(16, 1, 0));
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, bindings, 28, "rt");
+    moshi (error != "") {
+        chant(error);
+        os.exit(2);
+    }
+    lower.emit_stopped_heap_adapter(c, 1048576);
+    i = 0;
+    aida (i<3) {
+        kaku ins = arm64.adr(9, (arm64.assembler_label_word(c, names[i]) - ats[i]) * 4);
+        moshi (ins.error != mu) {
+            os.exit(3);
+        }
+        c.words[ats[i]] = ins.word;
+        i = i + 1;
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(4);
+    }
+    kaku symbols = darwin.worker_symbols();
+    // Appended slots are replaced by actual native helper addresses before use;
+    // use existing exported symbols for loadability, as in scanner witnesses.
+    array.append_all(symbols, ["_getpid", "_getpid", "_getpid"]);
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 0, patches: patches }, symbols, 256);
+    moshi (image.error != "") {
+        chant(image.error);
+        os.exit(5);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(6);
+    }
+    kaku argv = os.arguments();
+    fs.write_all(argv[1], signed.bytes);
+    os.chmod(argv[1], 448);
 }
 main();
