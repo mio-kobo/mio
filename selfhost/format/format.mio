@@ -7,9 +7,12 @@ yobu "selfhost/parser";
 
 koukai kata Result { data: []uint8; error: string; }
 
+kata Style { indent: []uint8; crlf: bool; final_lines: int64; }
+
 kata Output {
     buffer: bytes.ByteBuffer;
     line: []bool;
+    style: Style;
 }
 
 waza put(out: Output, value: uint8) -> unit {
@@ -33,14 +36,27 @@ waza pad(out: Output, width: int64) -> unit {
     }
 }
 
+waza indent(out: Output, depth: int64) -> unit {
+    kaku level = 0;
+    aida (level < depth) {
+        copy(out, out.style.indent, 0, len(out.style.indent));
+        level = level + 1;
+    }
+}
+
+waza newline(out: Output) -> unit {
+    moshi (out.style.crlf) { put(out, uint8(13)); }
+    put(out, uint8(10));
+}
+
 waza breaks(out: Output, count: int64) -> unit {
     moshi (bytes.buffer_len(out.buffer) == 0 || count == 0) { kaesu; }
-    moshi (out.line[0]) { put(out, uint8(10)); }
-    moshi (count > 1) { put(out, uint8(10)); }
+    moshi (out.line[0]) { newline(out); }
+    moshi (count > 1) { newline(out); }
 }
 
 waza horizontal(value: uint8) -> bool {
-    kaesu value == uint8(32) || value == uint8(9) || value == uint8(11) || value == uint8(12);
+    kaesu value == uint8(32) || value == uint8(9) || value == uint8(11) || value == uint8(12) || value == uint8(13);
 }
 
 waza opens(kind: int64) -> bool { kaesu kind == 24 || kind == 26 || kind == 28; }
@@ -100,7 +116,7 @@ waza emit_gap(out: Output, source: []uint8, first: int64, end: int64, depth: int
         kaku line_comment = source[at + 1] == uint8(47);
         at = at + 2;
         moshi (line_comment) {
-            aida (at < end && source[at] != uint8(10)) { at = at + 1; }
+            aida (at < end && source[at] != uint8(10) && source[at] != uint8(13)) { at = at + 1; }
         } sore {
             aida (at + 1 < end && !(source[at] == uint8(42) && source[at + 1] == uint8(47))) {
                 at = at + 1;
@@ -114,7 +130,7 @@ waza emit_gap(out: Output, source: []uint8, first: int64, end: int64, depth: int
             }
         } sore {
             breaks(out, lines);
-            pad(out, depth * 4);
+            indent(out, depth);
         }
         copy(out, source, start, at);
         lines = 0;
@@ -124,8 +140,8 @@ waza emit_gap(out: Output, source: []uint8, first: int64, end: int64, depth: int
     kaesu Gap { lines: lines, spaces: blanks, comment: comment };
 }
 
-waza render(source: []uint8, tokens: []lexer.Token) -> []uint8 {
-    kaku out = Output { buffer: bytes.buffer_with_capacity(len(source)), line: [iie] };
+waza render(source: []uint8, tokens: []lexer.Token, style: Style) -> []uint8 {
+    kaku out = Output { buffer: bytes.buffer_with_capacity(len(source)), line: [iie], style: style };
     kaku at = 0;
     kaku offset = 0;
     kaku depth = 0;
@@ -140,7 +156,7 @@ waza render(source: []uint8, tokens: []lexer.Token) -> []uint8 {
         moshi (!out.line[0]) {
             kaku level = depth;
             moshi (closes(kind) && level > 0) { level = level - 1; }
-            pad(out, level * 4);
+            indent(out, level);
         } sore {
             moshi (gap.comment || space(kind, previous, before, gap.spaces > 0)) { pad(out, 1); }
         }
@@ -152,7 +168,11 @@ waza render(source: []uint8, tokens: []lexer.Token) -> []uint8 {
         offset = token.end.offset;
         at = at + 1;
     }
-    moshi (out.line[0]) { put(out, uint8(10)); }
+    kaku remaining = style.final_lines;
+    aida (remaining > 0) {
+        newline(out);
+        remaining = remaining - 1;
+    }
     kaesu bytes.buffer_bytes(out.buffer);
 }
 
@@ -178,40 +198,63 @@ waza same_tokens(source: []uint8, original: []lexer.Token, output: []uint8, form
 }
 
 koukai waza source(data: []uint8) -> Result {
+    kaesu format_source(data, [uint8(32), uint8(32), uint8(32), uint8(32)], iie, hai, hai);
+}
+
+koukai waza document(data: []uint8, tab_size: int64, insert_spaces: bool, insert_final: bool, trim_final: bool) -> Result {
+    kaku padding = [uint8(9)];
+    moshi (insert_spaces) { padding = array.make[uint8](tab_size, uint8(32)); }
+    kaesu format_source(data, padding, hai, insert_final, trim_final);
+}
+
+waza format_source(data: []uint8, padding: []uint8, preserve_eof: bool, insert_final: bool, trim_final: bool) -> Result {
     kaku bom = len(data) >= 3 && data[0] == uint8(239) && data[1] == uint8(187) && data[2] == uint8(191);
+    kaku start = 0;
+    moshi (bom) { start = 3; }
+    kaku input = bytes.buffer_with_capacity(len(data));
     kaku crlf = iie;
-    kaku normalized = bytes.buffer_with_capacity(len(data));
-    kaku at = 0;
-    moshi (bom) { at = 3; }
+    kaku found_line = iie;
+    kaku at = start;
     aida (at < len(data)) {
-        moshi (data[at] == uint8(13)) {
-            moshi (at + 1 >= len(data) || data[at + 1] != uint8(10)) {
-                kaesu Result { data: [], error: "bare carriage return in source" };
-            }
-            crlf = hai;
-        } sore { bytes.write_byte(normalized, data[at]); }
+        moshi (data[at] == uint8(13) && (at + 1 >= len(data) || data[at + 1] != uint8(10))) {
+            kaesu Result { data: [], error: "bare carriage return in source" };
+        }
+        moshi (!found_line && data[at] == uint8(10)) {
+            found_line = hai;
+            crlf = at > start && data[at - 1] == uint8(13);
+        }
+        bytes.write_byte(input, data[at]);
         at = at + 1;
     }
-    kaku input = bytes.buffer_bytes(normalized);
-    kaku parsed = parser.parse(input);
+    kaku original = bytes.buffer_bytes(input);
+    kaku parsed = parser.parse(original);
     moshi (len(parsed.errors) > 0) {
         kaku line = convert.format_int(parsed.errors[0].position.line);
         kaesu Result { data: [], error: string.concat("source does not parse at line ", line) };
     }
-    kaku formatted = render(input, parsed.tokens);
+    kaku final_lines = 0;
+    moshi (preserve_eof) {
+        at = len(original) - 1;
+        aida (at >= 0 && (horizontal(original[at]) || original[at] == uint8(10))) {
+            moshi (original[at] == uint8(10)) { final_lines = final_lines + 1; }
+            at = at - 1;
+        }
+    }
+    moshi (trim_final && final_lines > 1) { final_lines = 1; }
+    kaku text = string.from_utf8(original);
+    kaku nonblank = iie;
+    moshi (text != mu) { nonblank = string.trim_space(text) != ""; }
+    moshi (insert_final && final_lines == 0 && (preserve_eof || nonblank)) { final_lines = 1; }
+    kaku style = Style { indent: padding, crlf: crlf, final_lines: final_lines };
+    kaku formatted = render(original, parsed.tokens, style);
     kaku checked = parser.parse(formatted);
-    moshi (len(checked.errors) > 0 || !same_tokens(input, parsed.tokens, formatted, checked.tokens) ||
-        !bytes.equal(formatted, render(formatted, checked.tokens))) {
+    moshi (len(checked.errors) > 0 || !same_tokens(original, parsed.tokens, formatted, checked.tokens) ||
+        !bytes.equal(formatted, render(formatted, checked.tokens, style))) {
         kaesu Result { data: [], error: "internal formatter error: token preservation or idempotency check failed" };
     }
-    moshi (!bom && !crlf) { kaesu Result { data: formatted, error: "" }; }
+    moshi (!bom) { kaesu Result { data: formatted, error: "" }; }
     kaku out = bytes.buffer_with_capacity(len(data));
-    moshi (bom) { bytes.write(out, [uint8(239), uint8(187), uint8(191)]); }
-    at = 0;
-    aida (at < len(formatted)) {
-        moshi (crlf && formatted[at] == uint8(10)) { bytes.write_byte(out, uint8(13)); }
-        bytes.write_byte(out, formatted[at]);
-        at = at + 1;
-    }
+    bytes.write(out, [uint8(239), uint8(187), uint8(191)]);
+    bytes.write(out, formatted);
     kaesu Result { data: bytes.buffer_bytes(out), error: "" };
 }
