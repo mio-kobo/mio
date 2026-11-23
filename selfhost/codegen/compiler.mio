@@ -756,6 +756,10 @@ waza compile_function_body(state: CompilerState, reference: resolver.NodeRef, id
 }
 
 waza compile_c_declaration(state: CompilerState, reference: resolver.NodeRef, node: parser.Node, id: int64) -> unit {
+    moshi (string.has_prefix(node.extra, "mio_ffi_") && state.resolved.package_path != "kiso/ffi") {
+        add_error(state, CompileErrorKind.UnsupportedNode(), reference.file_id, reference.node_id, "reserved Mio FFI runtime symbol");
+        kaesu;
+    }
     kaku symbol = binding_of(state, reference.file_id, reference.node_id);
     kaku at = 0;
     aida (at < len(state.checked.signatures) && state.checked.signatures[at].symbol_id != symbol) { at = at + 1; }

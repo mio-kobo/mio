@@ -1,0 +1,141 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/encoding/mochi";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/string";
+
+// Complete validated prototypes for the loader's OS calls. These are bound
+// by our Mach-O writer, even on a machine without Xcode or a visible PATH.
+waza loader_system_symbols() -> []string {
+    kaesu ["$cabi::dlopen:kke", "$cabi::dlsym:kkk", "$cabi::dlclose:ek",
+        "$cabi::dlerror:k", "$cabi::malloc:kh", "$cabi::free:vk", "$cabi::dladdr:ekk",
+        "$cabi::getsectiondata:kkkkk"];
+}
+
+waza loader_intrinsics() -> []string {
+    kaesu ["$cabi::mio_ffi_store_byte:vkhb", "$cabi::mio_ffi_load_byte:bkh",
+        "$cabi::mio_ffi_call_g:gk", "$cabi::mio_ffi_call_gg:gkg",
+        "$cabi::mio_ffi_call_ggg:gkgg", "$cabi::mio_ffi_call_jj:jkj",
+        "$cabi::mio_ffi_call_jgg:jkgg", "$cabi::mio_ffi_call_lg:lkg",
+        "$cabi::mio_ffi_load_pointer:kkh", "$cabi::mio_ffi_pointer_offset:gkk", "$cabi::mio_ffi_load_word:gk"];
+}
+
+waza index_of_prototype(names: []string, value: string) -> int64 {
+    kaku at = 0;
+    aida (at < len(names)) {
+        moshi (names[at] == value) { kaesu at; }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+waza has_loader_calls(file: mochi.File) -> bool {
+    kaku at = 0;
+    aida (at < len(file.functions)) {
+        moshi (string.has_prefix(file.functions[at].name, "$cabi::mio_ffi_")) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
+    moshi (kind == 0 || kind == 1) {
+        array.push(words, arm64.add_x(9, 0, 1).word);
+        moshi (kind == 0) { array.push(words, arm64.strb_w(2, 9, 0).word); }
+        sore { array.push(words, arm64.ldrb_w(0, 9, 0).word); }
+        array.push(words, arm64.ret().word);
+        kaesu;
+    }
+    moshi (kind == 8) {
+        array.push(words, arm64.add_x(9, 0, 1).word);
+        array.push(words, arm64.ldr_x(0, 9, 0).word);
+        array.push(words, arm64.ret().word);
+        kaesu;
+    }
+    moshi (kind == 9 || kind == 10) {
+        moshi (kind == 9) { array.push(words, arm64.sub_x(0, 0, 1).word); }
+        sore { array.push(words, arm64.ldr_x(0, 0, 0).word); }
+        array.push(words, arm64.ret().word);
+        kaesu;
+    }
+    // The first GP slot carries the resolved address. FP slots already have
+    // their target ABI positions. Tail branch preserves the C caller's LR.
+    array.push(words, arm64.add_imm_x(16, 0, 0, iie).word);
+    moshi (kind == 3 || kind == 4 || kind == 6 || kind == 7) {
+        array.push(words, arm64.add_imm_x(0, 1, 0, iie).word);
+    }
+    moshi (kind == 4 || kind == 6) { array.push(words, arm64.add_imm_x(1, 2, 0, iie).word); }
+    array.push(words, arm64.br_x(16).word);
+}
+
+waza build_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, options: []string) -> NativeBuildResult {
+    moshi (workers || len(options) != 0) { kaesu dylib_build_error("E_FFI dynamic loading requires a single-mutator image without extra linker options"); }
+    kaku system = loader_system_symbols();
+    kaku intrinsics = loader_intrinsics();
+    kaku at = 0;
+    aida (at < len(file.functions)) {
+        kaku name = file.functions[at].name;
+        moshi (cabi.is_external(name) && index_of_prototype(system, name) < 0 && index_of_prototype(intrinsics, name) < 0) {
+            kaesu dylib_build_error("E_FFI dynamic loading cannot be mixed with other C declarations");
+        }
+        at = at + 1;
+    }
+    kaku words = lowered.words;
+    kaku patches = lowered.patches;
+    kaku entries: []int64 = [];
+    at = 0;
+    aida (at < len(intrinsics)) {
+        array.push(entries, len(words));
+        append_loader_intrinsic(words, at);
+        at = at + 1;
+    }
+    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata"];
+    kaku stubs: []int64 = [];
+    at = 0;
+    aida (at < len(symbols)) {
+        kaku word = len(words);
+        array.push(stubs, word);
+        array.push(words, uint32(0));
+        array.push(words, uint32(0));
+        array.push(words, arm64.ldr_x(16, 16, 0).word);
+        array.push(words, arm64.br_x(16).word);
+        array.push(patches, macho.AddressPatch { at_word: word, add_at_word: word + 1,
+            target: macho.data_target(), target_offset: (lowered.globals + at) * 8, register: 16 });
+        at = at + 1;
+    }
+
+    // C bridges still pack arguments and unpack results using the existing
+    // Darwin C ABI lowerer. Resolve its fixed-width call sites to local stubs.
+    at = 0;
+    aida (at < len(lowered.labels)) {
+        kaku label = lowered.labels[at];
+        moshi (label.name == "cabi_process_exit") {
+            kaku jump = arm64.b(stubs[0] - label.word);
+            moshi (jump.error != mu) { kaesu dylib_build_error("E_FFI exit stub out of range"); }
+            words[label.word] = jump.word;
+        }
+        moshi (string.has_prefix(label.name, "cabi_call_")) {
+            kaku id = 0; kaku index = 10; kaku digits = string.to_bytes(label.name);
+            aida (index < len(digits)) { id = id * 10 + int64(digits[index]) - 48; index = index + 1; }
+            kaku name = file.functions[id].name;
+            kaku intrinsic = index_of_prototype(intrinsics, name);
+            kaku target = 0;
+            moshi (intrinsic >= 0) { target = entries[intrinsic]; }
+            sore { target = stubs[1 + index_of_prototype(system, name)]; }
+            kaku call = arm64.bl(target - label.word);
+            moshi (call.error != mu) { kaesu dylib_build_error("E_FFI call stub out of range"); }
+            words[label.word] = call.word;
+        }
+        at = at + 1;
+    }
+    kaku linked = darwin.executable_appended(macho.ImageSpec { words: words, constants: lowered.constants,
+        globals: lowered.globals, patches: patches }, symbols, 0);
+    moshi (linked.error != "") { kaesu dylib_build_error(string.concat("E_MACHO ", linked.error)); }
+    kaku signed = sign.adhoc_linked(linked.bytes);
+    moshi (signed.error != "") { kaesu dylib_build_error(string.concat("E_SIGN ", signed.error)); }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}
