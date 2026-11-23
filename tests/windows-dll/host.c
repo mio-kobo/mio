@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 typedef int64_t (*unary_fn)(int64_t);
 typedef int64_t (*binary_fn)(int64_t, int64_t);
@@ -15,6 +16,35 @@ static FARPROC symbol(HMODULE lib, const char *name) {
         ExitProcess(2);
     }
     return result;
+}
+
+// Generated DIR64 operands address the IAT. Check the loader actually rebased
+// those code operands, even though successful scalar calls do not use the traps.
+static int relocated_iat(HMODULE lib) {
+    const BYTE *image = (const BYTE *)lib;
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)image;
+    const IMAGE_NT_HEADERS64 *nt = (const IMAGE_NT_HEADERS64 *)(image+dos->e_lfanew);
+    IMAGE_DATA_DIRECTORY reloc = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC];
+    IMAGE_DATA_DIRECTORY iat = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
+    DWORD at = 0, fixups = 0;
+    while (at < reloc.Size) {
+        const IMAGE_BASE_RELOCATION *block = (const IMAGE_BASE_RELOCATION *)(image+reloc.VirtualAddress+at);
+        const WORD *entries = (const WORD *)(block+1);
+        DWORD i, count;
+        if (block->SizeOfBlock < 8 || block->SizeOfBlock > reloc.Size-at) return 0;
+        count = (block->SizeOfBlock-8)/2;
+        for (i = 0; i < count; ++i) {
+            if ((entries[i] >> 12) == IMAGE_REL_BASED_DIR64) {
+                uintptr_t target;
+                memcpy(&target, image+block->VirtualAddress+(entries[i]&4095), sizeof(target));
+                if (target < (uintptr_t)image+iat.VirtualAddress ||
+                    target+8 > (uintptr_t)image+iat.VirtualAddress+iat.Size) return 0;
+                ++fixups;
+            }
+        }
+        at += block->SizeOfBlock;
+    }
+    return fixups == 3;
 }
 
 // Independently exercise the OS unwinder for a wrapper just after its prologue.
@@ -47,6 +77,7 @@ int wmain(void) {
         for (i = 0; i < 5; ++i) {
             libs[i] = LoadLibraryW(files[i]);
             if (!libs[i]) { fprintf(stderr, "LoadLibraryW(%u): %lu\n", i, GetLastError()); return 1; }
+            if (!relocated_iat(libs[i])) return 9;
             if ((uintptr_t)libs[i] != UINT64_C(0x140000000)) relocated = 1;
         }
         binary_fn add = (binary_fn)symbol(libs[0], "mio_add");
