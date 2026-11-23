@@ -537,16 +537,53 @@ koukai waza lea_label(a: Assembler, dst: int64, target: string) -> unit {
     branch(a, target);
 }
 
+// 外部调用（System V C ABI）：目标标签以 "ext:" 开头的 call 不在本汇编器内解析。
+// 其 rel32 保持 0，并作为 ExternalCall 返回；由系统链接器通过 R_X86_64_PLT32 回填。
+koukai teisu external_prefix = "ext:";
+koukai kata ExternalCall {
+    at: int64;
+    symbol: string;
+}
+koukai kata LinkedAssembly {
+    bytes: []uint8;
+    error: string;
+    externals: []ExternalCall;
+}
+
+// call rel32 到链接器解析的外部符号。返回时 rel32 位于调用指令末尾 4 字节。
+koukai waza call_external(a: Assembler, symbol: string) -> unit {
+    byte(a, 232);
+    branch(a, string.concat(external_prefix, symbol));
+}
+
 koukai waza assemble(a: Assembler) -> AssembleResult {
-    moshi (len(a.errors) > 0) { kaesu AssembleResult { bytes: [], error: a.errors[0] }; }
+    kaku linked = assemble_linked(a);
+    moshi (linked.error == "" && len(linked.externals) != 0) { kaesu AssembleResult { bytes: [], error: "UNRESOLVED_EXTERNAL" }; }
+    kaesu AssembleResult { bytes: linked.bytes, error: linked.error };
+}
+
+koukai waza assemble_linked(a: Assembler) -> LinkedAssembly {
+    moshi (len(a.errors) > 0) { kaesu LinkedAssembly { bytes: [], error: a.errors[0], externals: [] }; }
     kaku output = array.clone(a.bytes);
+    kaku externals: []ExternalCall = [];
     kaku i = 0;
     aida (i < len(a.fixups)) {
         kaku f = a.fixups[i];
+        moshi (string.has_prefix(f.target, external_prefix)) {
+            kaku name_bytes = string.to_bytes(f.target);
+            kaku symbol_bytes: []uint8 = [];
+            kaku n = 4;
+            aida (n < len(name_bytes)) { array.push(symbol_bytes, name_bytes[n]); n = n + 1; }
+            kaku symbol = string.from_utf8(symbol_bytes);
+            moshi (symbol == mu) { kaesu LinkedAssembly { bytes: [], error: "INVALID_EXTERNAL", externals: [] }; }
+            array.push(externals, ExternalCall { at: f.at, symbol: symbol });
+            i = i + 1;
+            tsuzuku;
+        }
         kaku target = find_label(a, f.target);
-        moshi (target < 0) { kaesu AssembleResult { bytes: [], error: "UNDEFINED_LABEL" }; }
+        moshi (target < 0) { kaesu LinkedAssembly { bytes: [], error: "UNDEFINED_LABEL", externals: [] }; }
         kaku delta = target - (f.at + 4);
-        moshi (delta < -2147483648 || delta > 2147483647) { kaesu AssembleResult { bytes: [], error: "BRANCH_OUT_OF_RANGE" }; }
+        moshi (delta < -2147483648 || delta > 2147483647) { kaesu LinkedAssembly { bytes: [], error: "BRANCH_OUT_OF_RANGE", externals: [] }; }
         kaku x = delta;
         moshi (x < 0) {
             x = x + 4294967296;
@@ -559,5 +596,5 @@ koukai waza assemble(a: Assembler) -> AssembleResult {
         }
         i = i + 1;
     }
-    kaesu AssembleResult { bytes: output, error: "" };
+    kaesu LinkedAssembly { bytes: output, error: "", externals: externals };
 }

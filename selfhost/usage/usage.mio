@@ -16,75 +16,60 @@ koukai teisu group_diagnostics = 3;
 koukai teisu group_testing = 4;
 koukai teisu group_tools = 5;
 
-koukai kata Entry {
-    name: string;
-    group: int64;
-    description: string;
-    usage: string;
-    options: []string;
-}
-kata OptionInfo {
-    name: string;
-    syntax: string;
-    description: string;
-}
+koukai kata Entry { name: string; group: int64; description: string; usage: string; options: []string; }
+kata OptionInfo { name: string; syntax: string; description: string; }
 
 koukai waza commands() -> []Entry {
     kaesu [
-        Entry { name: "help", group: group_general, description: i18n.key_cmd_help, usage: "mio help [command]", options: ["lang", "color", "theme"] },
-        Entry { name: "version", group: group_general, description: i18n.key_cmd_version, usage: "mio version", options: ["lang", "color", "theme"] },
-        Entry { name: "build", group: group_compilation, description: i18n.key_cmd_build, usage: "mio build <source> [options]", options: ["output", "target", "emit", "symbols", "gc_stress", "observe", "bunko", "format", "color", "theme", "lang", "verbose"] },
-        Entry { name: "check", group: group_compilation, description: i18n.key_cmd_check, usage: "mio check <source> [options]", options: ["bunko", "format", "color", "theme", "lang", "verbose"] },
-        Entry { name: "run", group: group_execution, description: i18n.key_cmd_run, usage: "mio run <source> [-- <program arguments...>]", options: ["target", "bunko", "format", "color", "theme", "lang", "verbose", "program_args"] },
-        Entry { name: "exec", group: group_execution, description: i18n.key_cmd_exec, usage: "mio exec <file.mochi> [-- <program arguments...>]", options: ["target", "format", "color", "theme", "lang", "verbose", "program_args"] },
-        Entry { name: "disasm", group: group_diagnostics, description: i18n.key_cmd_disasm, usage: "mio disasm <file.mochi>", options: ["lang", "color", "theme"] },
-        Entry { name: "test", group: group_testing, description: i18n.key_cmd_test, usage: "mio test <directory[/...]> [--run=<regexp>] [options]", options: ["run_filter", "format", "color", "theme", "lang", "verbose", "bunko"] },
-        Entry { name: "lsp", group: group_tools, description: i18n.key_cmd_lsp, usage: "mio lsp [--stdio] [options]", options: ["stdio", "bunko"] }
+        Entry {name: "help", group: group_general, description: i18n.key_cmd_help, usage: "mio help [command]", options: ["lang", "color", "theme"]},
+        Entry {name: "version", group: group_general, description: i18n.key_cmd_version, usage: "mio version", options: ["lang", "color", "theme"]},
+        Entry {name: "build", group: group_compilation, description: i18n.key_cmd_build, usage: "mio build <source> [options]", options: ["output", "target", "emit", "symbols", "gc_stress", "observe", "link", "library_path", "library", "framework_path", "framework", "rpath", "bunko", "format", "color", "theme", "lang", "verbose"]},
+        Entry {name: "check", group: group_compilation, description: i18n.key_cmd_check, usage: "mio check <source> [options]", options: ["bunko", "format", "color", "theme", "lang", "verbose"]},
+        Entry {name: "run", group: group_execution, description: i18n.key_cmd_run, usage: "mio run <source> [-- <program arguments...>]", options: ["target", "bunko", "format", "color", "theme", "lang", "verbose", "program_args"]},
+        Entry {name: "exec", group: group_execution, description: i18n.key_cmd_exec, usage: "mio exec <file.mochi> [-- <program arguments...>]", options: ["target", "format", "color", "theme", "lang", "verbose", "program_args"]},
+        Entry {name: "disasm", group: group_diagnostics, description: i18n.key_cmd_disasm, usage: "mio disasm <file.mochi>", options: ["lang", "color", "theme"]},
+        Entry {name: "test", group: group_testing, description: i18n.key_cmd_test, usage: "mio test <directory[/...]> [--run=<regexp>] [options]", options: ["run_filter", "format", "color", "theme", "lang", "verbose", "bunko"]},
+        Entry {name: "fmt", group: group_tools, description: i18n.key_cmd_fmt, usage: "mio fmt [--check] [--diff] [--no-organize-imports] <path>... | --stdin [--stdin-filepath <path>]", options: ["bunko"]},
+        Entry {name: "lsp", group: group_tools, description: i18n.key_cmd_lsp, usage: "mio lsp [--stdio] [options]", options: ["stdio", "bunko"]}
     ];
 }
 
 waza option_table() -> []OptionInfo {
     kaesu [
-        OptionInfo { name: "lang", syntax: "--lang <locale>", description: i18n.key_opt_lang },
-        OptionInfo { name: "color", syntax: "--color <when>", description: i18n.key_opt_color },
-        OptionInfo { name: "theme", syntax: "--theme <name>", description: i18n.key_opt_theme },
-        OptionInfo { name: "format", syntax: "--format <format>", description: i18n.key_opt_format },
-        OptionInfo { name: "verbose", syntax: "--verbose", description: i18n.key_opt_verbose },
-        OptionInfo { name: "bunko", syntax: "--bunko-root <directory>", description: i18n.key_opt_bunko },
-        OptionInfo { name: "output", syntax: "-o <path>", description: i18n.key_opt_output },
-        OptionInfo { name: "target", syntax: "--target <target>", description: i18n.key_opt_target },
-        OptionInfo { name: "emit", syntax: "--emit=mochi", description: i18n.key_opt_emit },
-        OptionInfo { name: "symbols", syntax: "--emit-symbols <file>", description: i18n.key_opt_symbols },
-        OptionInfo { name: "gc_stress", syntax: "--gc-stress", description: i18n.key_opt_gc_stress },
-        OptionInfo { name: "observe", syntax: "--observe", description: i18n.key_opt_observe },
-        OptionInfo { name: "run_filter", syntax: "--run=<regexp>", description: i18n.key_opt_run_filter },
-        OptionInfo { name: "stdio", syntax: "--stdio", description: i18n.key_opt_stdio },
-        OptionInfo { name: "program_args", syntax: "-- <arguments...>", description: i18n.key_opt_program_args },
-        OptionInfo { name: "help", syntax: "--help, -h", description: i18n.key_opt_help },
-        OptionInfo { name: "version", syntax: "--version", description: i18n.key_opt_version }
+        OptionInfo {name: "lang", syntax: "--lang <locale>", description: i18n.key_opt_lang},
+        OptionInfo {name: "color", syntax: "--color <when>", description: i18n.key_opt_color},
+        OptionInfo {name: "theme", syntax: "--theme <name>", description: i18n.key_opt_theme},
+        OptionInfo {name: "format", syntax: "--format <format>", description: i18n.key_opt_format},
+        OptionInfo {name: "verbose", syntax: "--verbose", description: i18n.key_opt_verbose},
+        OptionInfo {name: "bunko", syntax: "--bunko-root <directory>", description: i18n.key_opt_bunko},
+        OptionInfo {name: "output", syntax: "-o <path>", description: i18n.key_opt_output},
+        OptionInfo {name: "target", syntax: "--target <target>", description: i18n.key_opt_target},
+        OptionInfo {name: "emit", syntax: "--emit=mochi", description: i18n.key_opt_emit},
+        OptionInfo {name: "symbols", syntax: "--emit-symbols <file>", description: i18n.key_opt_symbols},
+        OptionInfo {name: "gc_stress", syntax: "--gc-stress", description: i18n.key_opt_gc_stress},
+        OptionInfo {name: "observe", syntax: "--observe", description: i18n.key_opt_observe},
+        OptionInfo {name: "link", syntax: "--link <file>", description: "Link an ARM64 .o, .a or .dylib for a Darwin C ABI build."},
+        OptionInfo {name: "library_path", syntax: "-L <directory>", description: "Add a Darwin linker library search path."},
+        OptionInfo {name: "library", syntax: "-l <name>", description: "Link a Darwin library by name."},
+        OptionInfo {name: "framework_path", syntax: "-F <directory>", description: "Add a Darwin linker Framework search path."},
+        OptionInfo {name: "framework", syntax: "-framework <name>", description: "Link a Darwin Framework."},
+        OptionInfo {name: "rpath", syntax: "--rpath <path>", description: "Add a Darwin runtime library search path."},
+        OptionInfo {name: "run_filter", syntax: "--run=<regexp>", description: i18n.key_opt_run_filter},
+        OptionInfo {name: "stdio", syntax: "--stdio", description: i18n.key_opt_stdio},
+        OptionInfo {name: "program_args", syntax: "-- <arguments...>", description: i18n.key_opt_program_args},
+        OptionInfo {name: "help", syntax: "--help, -h", description: i18n.key_opt_help},
+        OptionInfo {name: "version", syntax: "--version", description: i18n.key_opt_version}
     ];
 }
 
 koukai waza find(name: string) -> int64 {
-    kaku entries = commands();
-    kaku at = 0;
-    aida (at < len(entries)) {
-        moshi (entries[at].name == name) {
-            kaesu at;
-        }
-        at = at + 1;
-    }
+    kaku entries = commands(); kaku at = 0;
+    aida (at < len(entries)) { moshi (entries[at].name == name) { kaesu at; } at = at + 1; }
     kaesu -1;
 }
 waza option_index(name: string) -> int64 {
-    kaku entries = option_table();
-    kaku at = 0;
-    aida (at < len(entries)) {
-        moshi (entries[at].name == name) {
-            kaesu at;
-        }
-        at = at + 1;
-    }
+    kaku entries = option_table(); kaku at = 0;
+    aida (at < len(entries)) { moshi (entries[at].name == name) { kaesu at; } at = at + 1; }
     kaesu -1;
 }
 waza group_key(group: int64) -> string {
@@ -111,78 +96,43 @@ waza cell(value: int64) -> int64 {
     kaesu 1;
 }
 koukai waza visible_width(value: string) -> int64 {
-    kaku data = string.to_bytes(value);
-    kaku at = 0;
-    kaku total = 0;
+    kaku data = string.to_bytes(value); kaku at = 0; kaku total = 0;
     aida (at < len(data)) {
         kaku decoded = utf8.decode_one(data, at);
-        moshi (!decoded.valid || decoded.width <= 0) {
-            total = total + 1;
-            at = at + 1;
-            tsuzuku;
-        }
-        total = total + cell(int64(decoded.value));
-        at = at + decoded.width;
+        moshi (!decoded.valid || decoded.width <= 0) { total = total + 1; at = at + 1; tsuzuku; }
+        total = total + cell(int64(decoded.value)); at = at + decoded.width;
     }
     kaesu total;
 }
 waza spaces(count: int64) -> string {
-    kaku output = string.new_builder();
-    kaku at = 0;
-    aida (at < count) {
-        string.write_rune(output, rune(32));
-        at = at + 1;
-    }
+    kaku output = string.new_builder(); kaku at = 0;
+    aida (at < count) { string.write_rune(output, rune(32)); at = at + 1; }
     kaesu string.builder_string(output);
 }
 waza slice(data: []uint8, first: int64, end: int64) -> string {
-    kaku bytes: []uint8 = [];
-    kaku at = first;
-    aida (at < end) {
-        array.push(bytes, data[at]);
-        at = at + 1;
-    }
-    kaku value = string.from_utf8(bytes);
-    moshi (value == mu) {
-        kaesu "";
-    }
-    kaesu value;
+    kaku bytes: []uint8 = []; kaku at = first;
+    aida (at < end) { array.push(bytes, data[at]); at = at + 1; }
+    kaku value = string.from_utf8(bytes); moshi (value == mu) { kaesu ""; } kaesu value;
 }
-waza tail(value: string, offset: int64) -> string {
-    kaku data = string.to_bytes(value);
-    kaesu slice(data, offset, len(data));
-}
+waza tail(value: string, offset: int64) -> string { kaku data = string.to_bytes(value); kaesu slice(data, offset, len(data)); }
 
 // Break one word that is wider than the line; CJK text has no spaces.
 waza hard_split(word: string, limit: int64) -> []string {
-    kaku data = string.to_bytes(word);
-    kaku lines: []string = [];
-    kaku start = 0;
-    kaku at = 0;
-    kaku width = 0;
+    kaku data = string.to_bytes(word); kaku lines: []string = []; kaku start = 0; kaku at = 0; kaku width = 0;
     aida (at < len(data)) {
         kaku decoded = utf8.decode_one(data, at);
-        moshi (!decoded.valid || decoded.width <= 0) {
-            at = at + 1;
-            tsuzuku;
-        }
+        moshi (!decoded.valid || decoded.width <= 0) { at = at + 1; tsuzuku; }
         kaku size = cell(int64(decoded.value));
         moshi (width + size > limit && at > start) {
-            array.push(lines, slice(data, start, at));
-            start = at;
-            width = 0;
+            array.push(lines, slice(data, start, at)); start = at; width = 0;
         }
-        width = width + size;
-        at = at + decoded.width;
+        width = width + size; at = at + decoded.width;
     }
     moshi (start < len(data)) { array.push(lines, slice(data, start, len(data))); }
     kaesu lines;
 }
 waza words(value: string) -> []string {
-    kaku data = string.to_bytes(value);
-    kaku result: []string = [];
-    kaku start = 0;
-    kaku at = 0;
+    kaku data = string.to_bytes(value); kaku result: []string = []; kaku start = 0; kaku at = 0;
     aida (at <= len(data)) {
         kaku separator = at == len(data) || data[at] == uint8(32) || data[at] == uint8(9) || data[at] == uint8(10) || data[at] == uint8(13);
         moshi (separator) {
@@ -194,60 +144,27 @@ waza words(value: string) -> []string {
     kaesu result;
 }
 koukai waza wrap(value: string, limit: int64) -> []string {
-    kaku maximum = limit;
-    moshi (maximum < 4) {
-        maximum = 4;
-    }
-    kaku pieces = words(value);
-    kaku lines: []string = [];
-    kaku current = "";
-    kaku width = 0;
-    kaku at = 0;
+    kaku maximum = limit; moshi (maximum < 4) { maximum = 4; }
+    kaku pieces = words(value); kaku lines: []string = []; kaku current = ""; kaku width = 0; kaku at = 0;
     aida (at < len(pieces)) {
-        kaku word = pieces[at];
-        kaku size = visible_width(word);
+        kaku word = pieces[at]; kaku size = visible_width(word);
         moshi (width == 0) {
-            moshi (size <= maximum) {
-                current = word;
-                width = size;
-            }
+            moshi (size <= maximum) { current = word; width = size; }
             sore {
-                kaku chunks = hard_split(word, maximum);
-                kaku index = 0;
-                aida (index + 1 < len(chunks)) {
-                    array.push(lines, chunks[index]);
-                    index = index + 1;
-                }
-                moshi (len(chunks) > 0) {
-                    current = chunks[len(chunks) - 1];
-                    width = visible_width(current);
-                }
+                kaku chunks = hard_split(word, maximum); kaku index = 0;
+                aida (index + 1 < len(chunks)) { array.push(lines, chunks[index]); index = index + 1; }
+                moshi (len(chunks) > 0) { current = chunks[len(chunks) - 1]; width = visible_width(current); }
             }
         }
         sore {
-            moshi (width + 1 + size <= maximum) {
-                current = string.concat(current, string.concat(" ", word));
-                width = width + 1 + size;
-            }
+            moshi (width + 1 + size <= maximum) { current = string.concat(current, string.concat(" ", word)); width = width + 1 + size; }
             sore {
-                array.push(lines, current);
-                width = 0;
-                current = "";
-                moshi (size <= maximum) {
-                    current = word;
-                    width = size;
-                }
+                array.push(lines, current); width = 0; current = "";
+                moshi (size <= maximum) { current = word; width = size; }
                 sore {
-                    kaku chunks = hard_split(word, maximum);
-                    kaku index = 0;
-                    aida (index + 1 < len(chunks)) {
-                        array.push(lines, chunks[index]);
-                        index = index + 1;
-                    }
-                    moshi (len(chunks) > 0) {
-                        current = chunks[len(chunks) - 1];
-                        width = visible_width(current);
-                    }
+                    kaku chunks = hard_split(word, maximum); kaku index = 0;
+                    aida (index + 1 < len(chunks)) { array.push(lines, chunks[index]); index = index + 1; }
+                    moshi (len(chunks) > 0) { current = chunks[len(chunks) - 1]; width = visible_width(current); }
                 }
             }
         }
@@ -272,23 +189,16 @@ waza entry(builder: string.StringBuilder, style: theme.Theme, syntax: string, de
         kaku lines = wrap(description, width - column);
         line(builder, string.concat(lead, string.concat(spaces(pad), lines[0])));
         kaku at = 1;
-        aida (at < len(lines)) {
-            line(builder, string.concat(spaces(column), lines[at]));
-            at = at + 1;
-        }
+        aida (at < len(lines)) { line(builder, string.concat(spaces(column), lines[at])); at = at + 1; }
         kaesu;
     }
     line(builder, string.concat(spaces(indent), theme.paint(style, role, syntax)));
     kaku lines = wrap(description, width - indent - 2);
     kaku at = 0;
-    aida (at < len(lines)) {
-        line(builder, string.concat(spaces(indent + 2), lines[at]));
-        at = at + 1;
-    }
+    aida (at < len(lines)) { line(builder, string.concat(spaces(indent + 2), lines[at])); at = at + 1; }
 }
 waza column_width(entries: []string, width: int64) -> int64 {
-    kaku maximum = 0;
-    kaku at = 0;
+    kaku maximum = 0; kaku at = 0;
     aida (at < len(entries)) {
         kaku size = visible_width(entries[at]) + 4;
         moshi (size > maximum) { maximum = size; }
@@ -300,26 +210,20 @@ waza column_width(entries: []string, width: int64) -> int64 {
     kaesu maximum;
 }
 waza option_syntaxes(entry_value: Entry) -> []string {
-    kaku result: []string = [];
-    kaku at = 0;
+    kaku result: []string = []; kaku at = 0;
     aida (at < len(entry_value.options)) {
-        kaku index = option_index(entry_value.options[at]);
-        kaku table = option_table();
+        kaku index = option_index(entry_value.options[at]); kaku table = option_table();
         moshi (index >= 0) { array.push(result, table[index].syntax); }
         at = at + 1;
     }
     kaesu result;
 }
 waza command_syntaxes() -> []string {
-    kaku entries = commands();
-    kaku result: []string = [];
-    kaku at = 0;
+    kaku entries = commands(); kaku result: []string = []; kaku at = 0;
     aida (at < len(entries)) {
-        kaku suffix = entries[at].usage;
-        kaku prefix = "mio ";
+        kaku suffix = entries[at].usage; kaku prefix = "mio ";
         moshi (string.has_prefix(suffix, prefix)) { suffix = tail(suffix, 4); }
-        array.push(result, suffix);
-        at = at + 1;
+        array.push(result, suffix); at = at + 1;
     }
     kaesu result;
 }
@@ -330,6 +234,7 @@ waza examples(name: string) -> []string {
     moshi (name == "exec") { kaesu ["mio exec app.mochi", "mio exec app.mochi -- input.txt"]; }
     moshi (name == "disasm") { kaesu ["mio disasm app.mochi"]; }
     moshi (name == "test") { kaesu ["mio test .", "mio test . --run=string --format=short"]; }
+    moshi (name == "fmt") { kaesu ["mio fmt .", "mio fmt --check .", "mio fmt --diff ."]; }
     moshi (name == "lsp") { kaesu ["mio lsp --stdio"]; }
     moshi (name == "version") { kaesu ["mio version", "mio version --lang=ja-JP"]; }
     kaesu ["mio help", "mio help build"];
@@ -345,8 +250,7 @@ koukai waza width() -> int64 {
 }
 
 koukai waza global(language: string, version: string, theme_value: theme.Theme) -> string {
-    kaku output = string.new_builder();
-    kaku size = width();
+    kaku output = string.new_builder(); kaku size = width();
     line(output, theme.paint(theme_value, "title", i18n.format(language, i18n.key_help_title, [version])));
     line(output, i18n.text(language, i18n.key_help_tagline));
     line(output, "");
@@ -355,19 +259,14 @@ koukai waza global(language: string, version: string, theme_value: theme.Theme) 
     line(output, string.concat(spaces(2), "mio help <command>"));
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_commands));
-    kaku entries = commands();
-    kaku syntaxes = command_syntaxes();
-    kaku column = column_width(syntaxes, size);
+    kaku entries = commands(); kaku syntaxes = command_syntaxes(); kaku column = column_width(syntaxes, size);
     kaku group = group_general;
     aida (group <= group_tools) {
         kaku first = hai;
         kaku at = 0;
         aida (at < len(entries)) {
             moshi (entries[at].group == group) {
-                moshi (first) {
-                    line(output, string.concat(spaces(2), theme.paint(theme_value, "muted", i18n.text(language, group_key(group)))));
-                    first = iie;
-                }
+                moshi (first) { line(output, string.concat(spaces(2), theme.paint(theme_value, "muted", i18n.text(language, group_key(group))))); first = iie; }
                 entry(output, theme_value, syntaxes[at], i18n.text(language, entries[at].description), size, column, "command");
             }
             at = at + 1;
@@ -376,8 +275,7 @@ koukai waza global(language: string, version: string, theme_value: theme.Theme) 
         group = group + 1;
     }
     section(output, theme_value, i18n.text(language, i18n.key_help_options));
-    kaku table = option_table();
-    kaku globals: []string = ["lang", "color", "theme", "format", "verbose", "bunko", "help", "version"];
+    kaku table = option_table(); kaku globals: []string = ["lang", "color", "theme", "format", "verbose", "bunko", "help", "version"];
     kaku syntax_list: []string = [];
     kaku index = 0;
     aida (index < len(globals)) {
@@ -389,33 +287,22 @@ koukai waza global(language: string, version: string, theme_value: theme.Theme) 
     index = 0;
     aida (index < len(globals)) {
         kaku found = option_index(globals[index]);
-        moshi (found >= 0) {
-            entry(output, theme_value, table[found].syntax, i18n.text(language, table[found].description), size, option_column, "option");
-        }
+        moshi (found >= 0) { entry(output, theme_value, table[found].syntax, i18n.text(language, table[found].description), size, option_column, "option"); }
         index = index + 1;
     }
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_examples));
     kaku samples = global_examples();
     index = 0;
-    aida (index < len(samples)) {
-        line(output, string.concat(spaces(2), samples[index]));
-        index = index + 1;
-    }
+    aida (index < len(samples)) { line(output, string.concat(spaces(2), samples[index])); index = index + 1; }
     line(output, "");
     line(output, theme.paint(theme_value, "muted", i18n.text(language, i18n.key_help_more)));
     kaesu string.builder_string(output);
 }
 
 koukai waza command(language: string, name: string, theme_value: theme.Theme) -> string {
-    kaku index = find(name);
-    moshi (index < 0) {
-        kaesu "";
-    }
-    kaku entries = commands();
-    kaku entry_value = entries[index];
-    kaku output = string.new_builder();
-    kaku size = width();
+    kaku index = find(name); moshi (index < 0) { kaesu ""; }
+    kaku entries = commands(); kaku entry_value = entries[index]; kaku output = string.new_builder(); kaku size = width();
     line(output, theme.paint(theme_value, "command", string.concat("mio ", name)));
     line(output, i18n.text(language, entry_value.description));
     line(output, "");
@@ -423,24 +310,16 @@ koukai waza command(language: string, name: string, theme_value: theme.Theme) ->
     line(output, string.concat(spaces(2), entry_value.usage));
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_options));
-    kaku table = option_table();
-    kaku syntax_list = option_syntaxes(entry_value);
-    kaku column = column_width(syntax_list, size);
+    kaku table = option_table(); kaku syntax_list = option_syntaxes(entry_value); kaku column = column_width(syntax_list, size);
     kaku at = 0;
     aida (at < len(entry_value.options)) {
         kaku found = option_index(entry_value.options[at]);
-        moshi (found >= 0) {
-            entry(output, theme_value, table[found].syntax, i18n.text(language, table[found].description), size, column, "option");
-        }
+        moshi (found >= 0) { entry(output, theme_value, table[found].syntax, i18n.text(language, table[found].description), size, column, "option"); }
         at = at + 1;
     }
     line(output, "");
     section(output, theme_value, i18n.text(language, i18n.key_help_examples));
-    kaku samples = examples(name);
-    at = 0;
-    aida (at < len(samples)) {
-        line(output, string.concat(spaces(2), samples[at]));
-        at = at + 1;
-    }
+    kaku samples = examples(name); at = 0;
+    aida (at < len(samples)) { line(output, string.concat(spaces(2), samples[at])); at = at + 1; }
     kaesu string.builder_string(output);
 }

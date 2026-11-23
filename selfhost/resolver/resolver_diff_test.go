@@ -428,7 +428,8 @@ func TestMioResolverSelfAndBunkoSources(t *testing.T) {
 		{path: "kiso/testing", directory: "bunko/kiso/testing"},
 		{path: "selfhost/progress", directory: "selfhost/progress"},
 		{path: "selfhost/lexer", directory: "selfhost/lexer", dependencies: []string{"kiso/array", "kiso/string", "kiso/utf8", "selfhost/progress"}},
-		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
+		{path: "kiso/aot/cabi", directory: "bunko/kiso/aot/cabi", dependencies: []string{"kiso/array", "kiso/string"}},
+		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
 		{path: "selfhost/resolver", directory: "selfhost/resolver", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress"}},
 	}
 	root := resolverRoot(t)

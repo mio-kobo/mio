@@ -64,7 +64,10 @@ koukai waza run_command(args: []string, language: string) -> int64 {
         fs.write_all("/dev/stderr", string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdout"]), "\n"))));
         kaesu 1;
     }
-    kaku result = serve(session(".", library.root), input, output);
+    kaku state = session(".", library.root);
+    // Titles the server shows in the editor follow the language of the command, like its other messages.
+    state.language[0] = language;
+    kaku result = serve(state, input, output);
     fs.close(input);
     fs.close(output);
     moshi (result.error != "") { fs.write_all("/dev/stderr", string.to_bytes(string.concat("mio lsp: ", string.concat(result.error, "\n")))); }

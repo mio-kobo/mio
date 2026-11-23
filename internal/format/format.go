@@ -201,7 +201,7 @@ func splitGap(gap string) ([]gapComment, error) {
 			if end < 0 {
 				end = len(gap) - i
 			}
-			out = append(out, gapComment{text: strings.TrimRight(gap[i:i+end], " \t\f\v"), newlinesBefore: newlines, spacesBefore: blanks})
+			out = append(out, gapComment{text: gap[i : i+end], newlinesBefore: newlines, spacesBefore: blanks})
 			i += end
 			newlines = 0
 			blanks = 0

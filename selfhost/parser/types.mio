@@ -5,7 +5,7 @@ waza looks_like_type_name(name: string) -> bool {
     moshi (name == "int8" || name == "int16" || name == "int32" || name == "int64" ||
         name == "cptr" || name == "uint64" || name == "rune" || name == "uint8" || name == "uint16" || name == "uint32" ||
         name == "float32" || name == "float64" || name == "bool" || name == "string" ||
-        name == "unit" || name == "resource" || name == "Map") { kaesu hai; }
+        name == "unit" || name == "resource" || name == "Map" || name == "uint64" || name == "cptr") { kaesu hai; }
     kaku data = string.to_bytes(name);
     kaesu len(data) > 0 && data[0] >= uint8(65) && data[0] <= uint8(90);
 }
@@ -62,8 +62,7 @@ waza parse_type_inner(state: ParserState) -> int64 {
             end = current_token(state).end;
             advance(state);
         }
-        result = add_node(state.arena, NodeKind.TypeName(), name, "", 0, iie, 0, arguments, SourceSpan {
-                start: start_token.start, end: end });
+        result = add_node(state.arena, NodeKind.TypeName(), name, "", 0, iie, 0, arguments, SourceSpan { start: start_token.start, end: end });
     } sore {
         moshi (kind == 28) {
             kaku start = current_token(state).start;
@@ -73,8 +72,7 @@ waza parse_type_inner(state: ParserState) -> int64 {
             moshi (element < 0) { kaesu -1; }
             kaku children = empty_children(1);
             array.push(children, element);
-            result = add_node(state.arena, NodeKind.ArrayType(), "", "", 0, iie, 0, children, SourceSpan {
-                    start: start, end: node_span(state, element).end });
+            result = add_node(state.arena, NodeKind.ArrayType(), "", "", 0, iie, 0, children, SourceSpan { start: start, end: node_span(state, element).end });
         } sore {
             moshi (kind == 24) {
                 kaku start = current_token(state).start;
@@ -100,8 +98,7 @@ waza parse_type_inner(state: ParserState) -> int64 {
                     kaku return_type = parse_type(state);
                     moshi (return_type < 0) { kaesu -1; }
                     array.push(parameters, return_type);
-                    result = add_node(state.arena, NodeKind.FunctionType(), "", "", len(parameters) - 1, iie, 0, parameters, SourceSpan {
-                            start: start, end: node_span(state, return_type).end });
+                    result = add_node(state.arena, NodeKind.FunctionType(), "", "", len(parameters) - 1, iie, 0, parameters, SourceSpan { start: start, end: node_span(state, return_type).end });
                 } sore {
                     moshi (len(parameters) != 1) {
                         add_parse_error(state, ParseErrorKind.InvalidType(), 50);
@@ -120,8 +117,7 @@ waza parse_type_inner(state: ParserState) -> int64 {
         advance(state);
         kaku children = empty_children(1);
         array.push(children, result);
-        result = add_node(state.arena, NodeKind.NullableType(), "", "", 0, iie, 0, children, SourceSpan {
-                start: node_span(state, result).start, end: question.end });
+        result = add_node(state.arena, NodeKind.NullableType(), "", "", 0, iie, 0, children, SourceSpan { start: node_span(state, result).start, end: question.end });
     }
     kaesu result;
 }
@@ -150,8 +146,7 @@ waza parse_type_parameters(state: ParserState) -> []int64 {
             end = current_token(state).end;
             advance(state);
         }
-        array.push(parameters, add_node(state.arena, NodeKind.TypeParameter(), name, constraint, 0, iie, 0, empty_children(0), SourceSpan {
-                    start: token.start, end: end }));
+        array.push(parameters, add_node(state.arena, NodeKind.TypeParameter(), name, constraint, 0, iie, 0, empty_children(0), SourceSpan { start: token.start, end: end }));
         moshi (current_kind(state) != 22) { nukeru; }
         advance(state);
     }

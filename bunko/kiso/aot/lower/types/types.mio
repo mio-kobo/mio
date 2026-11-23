@@ -1,4 +1,5 @@
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/aot/lower/nativefs";
 yobu "kiso/encoding/mochi";
 yobu "kiso/encoding/win64c";
@@ -1117,6 +1118,21 @@ koukai waza forwarded_parameter(function: mochi.Function) -> int64 {
     kaesu parameter;
 }
 
+waza constrain_c_scalar(arena: TypeArena, slot: int64, kind: int64) -> unit {
+    moshi (kind == 105) { type_require(arena, slot, type_float32); kaesu; }
+    moshi (kind == 106) { type_require(arena, slot, type_float64); kaesu; }
+    moshi (kind == 108) { type_require(arena, slot, type_bool); kaesu; }
+    type_require(arena, slot, type_integer);
+    kaku descriptor = 1;
+    moshi (kind == 97) { descriptor = 12; }
+    moshi (kind == 98) { descriptor = 15; }
+    moshi (kind == 99) { descriptor = 13; }
+    moshi (kind == 100) { descriptor = 16; }
+    moshi (kind == 101) { descriptor = 14; }
+    moshi (kind == 102) { descriptor = 17; }
+    arena.integer_descriptor[type_root(arena, slot)] = descriptor;
+}
+
 koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
     kaesu analyze_types_traced(file, iie);
 }
@@ -1162,6 +1178,18 @@ koukai waza analyze_types_traced(file: mochi.File, trace: bool) -> TypeAnalysis 
         moshi (is_testing_report(file.functions[index].name) && len(slots) == 2) {
             type_require(arena, slots[0], type_bool);
             type_require(arena, slots[1], type_string_id);
+        }
+        kaku function = file.functions[index];
+        moshi (cabi.is_external(function.name)) {
+            kaku declaration = cabi.signature(function.name, function.parameter_count, function.returns_value);
+            moshi (declaration.valid && len(slots) >= function.parameter_count) {
+                kaku parameter = 0;
+                aida (parameter < function.parameter_count) {
+                    constrain_c_scalar(arena, slots[parameter], declaration.parameters[parameter]);
+                    parameter = parameter + 1;
+                }
+                moshi (function.returns_value) { constrain_c_scalar(arena, result, declaration.result); }
+            }
         }
         kaku external = file.functions[index];
         moshi (win64c.is_external(external.name) && win64c.validate(external.name, external.parameter_count, external.returns_value) == "") {

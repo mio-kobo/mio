@@ -65,9 +65,7 @@ waza check_integer_range(env: TypeEnvironment, file_id: int64, node_id: int64, e
     kaku code = type_kind_code(env.result.types[expected].kind);
     kaku limit = integer_limit(code, negative);
     kaku valid = limit != "" && decimal_fits(node_at(env, file_id, node_id).text, limit);
-    moshi (!valid) {
-        add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, expected, builtin_type(env, "int64"), "integer literal is outside target range");
-    }
+    moshi (!valid) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, expected, builtin_type(env, "int64"), "integer literal is outside target range"); }
     kaesu valid;
 }
 
@@ -91,29 +89,18 @@ waza expected_expression(env: TypeEnvironment, file_id: int64, node_id: int64, e
         check_integer_range(env, file_id, node_id, target, iie);
         kaesu set_node_type(env, file_id, node_id, target);
     }
-    moshi (kind == 6 && (target == builtin_type(env, "float32") || target == builtin_type(env, "float64"))) {
-        kaesu set_node_type(env, file_id, node_id, target);
-    }
-    moshi (kind == 13) {
-        kaku actual = expected_expression(env, file_id, node.children[0], expected);
-        kaesu set_node_type(env, file_id, node_id, actual);
-    }
+    moshi (kind == 6 && (target == builtin_type(env, "float32") || target == builtin_type(env, "float64"))) { kaesu set_node_type(env, file_id, node_id, target); }
+    moshi (kind == 13) { kaku actual = expected_expression(env, file_id, node.children[0], expected); kaesu set_node_type(env, file_id, node_id, actual); }
     moshi (kind == 12 && node.operator == 9 && is_integer(env.result, target)) {
         kaku literal_id = grouped_integer_literal(env, file_id, node.children[0]);
-        moshi (literal_id >= 0) {
-            check_integer_range(env, file_id, literal_id, target, hai);
-            set_grouped_integer_type(env, file_id, node.children[0], target);
-            kaesu set_node_type(env, file_id, node_id, target);
-        }
+        moshi (literal_id >= 0) { check_integer_range(env, file_id, literal_id, target, hai); set_grouped_integer_type(env, file_id, node.children[0], target); kaesu set_node_type(env, file_id, node_id, target); }
     }
     moshi (kind == 25 && type_kind_code(env.result.types[target].kind) == 15) {
         kaku element = env.result.types[target].element;
         kaku index = 0;
         aida (index < len(node.children)) {
             kaku actual = expected_expression(env, file_id, node.children[index], element);
-            moshi (!is_assignable(env.result, element, actual)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[index], element, actual, "array element type mismatch");
-            }
+            moshi (!is_assignable(env.result, element, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[index], element, actual, "array element type mismatch"); }
             index = index + 1;
         }
         kaesu set_node_type(env, file_id, node_id, target);
@@ -129,122 +116,64 @@ waza check_struct_literal(env: TypeEnvironment, file_id: int64, node_id: int64, 
     moshi (definition_index < 0) {
         definition_index = struct_named(env, node.text);
     }
-    moshi (definition_index < 0) {
-        add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text);
-        kaesu 0;
-    }
+    moshi (definition_index < 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text); kaesu 0; }
     kaku definition = env.result.structs[definition_index];
     kaku names = array.with_capacity[string](len(definition.parameters));
     kaku types = array.with_capacity[int64](len(definition.parameters));
     kaku index = 0;
-    aida (index < node.integer) {
-        array.push(names, definition.parameters[index].name);
-        array.push(types, resolve_type_node(env, file_id, node.children[index], env.constraints));
-        index = index + 1;
-    }
+    aida (index < node.integer) { array.push(names, definition.parameters[index].name); array.push(types, resolve_type_node(env, file_id, node.children[index], env.constraints)); index = index + 1; }
     moshi (node.integer == 0 && expected > 0 && type_kind_code(env.result.types[expected].kind) == 17 && env.result.types[expected].name == string.concat(string.concat(definition.package_path, "."), definition.name)) {
-        index = 0;
-        aida (index < len(definition.parameters)) {
-            array.push(names, definition.parameters[index].name);
-            array.push(types, env.result.types[expected].arguments[index]);
-            index = index + 1;
-        }
+        index = 0; aida (index < len(definition.parameters)) { array.push(names, definition.parameters[index].name); array.push(types, env.result.types[expected].arguments[index]); index = index + 1; }
     }
     kaku seen = array.make[bool](len(definition.fields), iie);
     index = node.integer;
     aida (index < len(node.children)) {
         kaku field_node_id = node.children[index];
         kaku field_node = node_at(env, file_id, field_node_id);
-        kaku field_index = -1;
-        kaku search = 0;
-        aida (search < len(definition.fields)) {
-            moshi (definition.fields[search].name == field_node.text) {
-                field_index = search;
-                nukeru;
-            }
-            search = search + 1;
-        }
-        moshi (field_index < 0) {
-            add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, field_node_id, 0, 0, field_node.text);
-        }
+        kaku field_index = -1; kaku search = 0;
+        aida (search < len(definition.fields)) { moshi (definition.fields[search].name == field_node.text) { field_index = search; nukeru; } search = search + 1; }
+        moshi (field_index < 0) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, field_node_id, 0, 0, field_node.text); }
         sore {
-            moshi (seen[field_index]) {
-                add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, field_node_id, 0, 0, "duplicate field");
-            }
+            moshi (seen[field_index]) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, field_node_id, 0, 0, "duplicate field"); }
             seen[field_index] = hai;
             kaku template = definition.fields[field_index].type_id;
             kaku wanted = substitute_type(env, template, names, types);
             kaku actual = expected_expression(env, file_id, field_node.children[0], wanted);
-            moshi (len(types) < len(definition.parameters)) {
-                infer_type_argument(env, template, actual, names, types);
-                wanted = substitute_type(env, template, names, types);
-            }
-            moshi (!is_assignable(env.result, wanted, actual)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, field_node.children[0], wanted, actual, field_node.text);
-            }
+            moshi (len(types) < len(definition.parameters)) { infer_type_argument(env, template, actual, names, types); wanted = substitute_type(env, template, names, types); }
+            moshi (!is_assignable(env.result, wanted, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, field_node.children[0], wanted, actual, field_node.text); }
         }
         index = index + 1;
     }
     index = 0;
-    aida (index < len(seen)) {
-        moshi (!seen[index]) {
-            add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, definition.fields[index].type_id, 0, definition.fields[index].name);
-        }
-        index = index + 1;
-    }
-    moshi (len(types) != len(definition.parameters)) {
-        add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer struct type arguments");
-        kaesu 0;
-    }
+    aida (index < len(seen)) { moshi (!seen[index]) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, definition.fields[index].type_id, 0, definition.fields[index].name); } index = index + 1; }
+    moshi (len(types) != len(definition.parameters)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer struct type arguments"); kaesu 0; }
     kaku name = string.concat(string.concat(definition.package_path, "."), definition.name);
     kaesu set_node_type(env, file_id, node_id, named_type(env.result, name, types));
 }
 
 waza check_builtin_call(env: TypeEnvironment, file_id: int64, node_id: int64, name: string, arguments: []int64, type_arguments: []int64) -> int64 {
     moshi (name == "chant") {
-        moshi (len(arguments) != 1) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "chant expects one argument");
-            kaesu 0;
-        }
+        moshi (len(arguments) != 1) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "chant expects one argument"); kaesu 0; }
         kaku actual = check_expression(env, file_id, arguments[0]);
-        moshi (type_kind_code(env.result.types[actual].kind) > 12) {
-            add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, arguments[0], 0, actual, "chant requires a scalar value");
-        }
+        moshi (type_kind_code(env.result.types[actual].kind) > 12) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, arguments[0], 0, actual, "chant requires a scalar value"); }
         kaesu builtin_type(env, "unit");
     }
     moshi (name == "len") {
-        moshi (len(arguments) != 1) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "len expects one argument");
-            kaesu 0;
-        }
+        moshi (len(arguments) != 1) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "len expects one argument"); kaesu 0; }
         kaku actual = check_expression(env, file_id, arguments[0]);
-        moshi (type_kind_code(env.result.types[actual].kind) != 15) {
-            add_type_error(env, TypeErrorKind.InvalidCall(), "E0305", file_id, arguments[0], 0, actual, "len requires an array");
-        }
+        moshi (type_kind_code(env.result.types[actual].kind) != 15) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0305", file_id, arguments[0], 0, actual, "len requires an array"); }
         kaesu builtin_type(env, "int64");
     }
     moshi (name == "Map") {
-        moshi (len(type_arguments) != 2 || len(arguments) != 0) {
-            add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, "Map constructor requires two type arguments and no values");
-            kaesu 0;
-        }
+        moshi (len(type_arguments) != 2 || len(arguments) != 0) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, "Map constructor requires two type arguments and no values"); kaesu 0; }
         kaku key = resolve_type_node(env, file_id, type_arguments[0], env.constraints);
         kaku value = resolve_type_node(env, file_id, type_arguments[1], env.constraints);
-        moshi (!is_hashable(env.result, key)) {
-            add_type_error(env, TypeErrorKind.InvalidMapKey(), "E0312", file_id, type_arguments[0], 0, key, "Map key is not hashable");
-            kaesu 0;
-        }
+        moshi (!is_hashable(env.result, key)) { add_type_error(env, TypeErrorKind.InvalidMapKey(), "E0312", file_id, type_arguments[0], 0, key, "Map key is not hashable"); kaesu 0; }
         kaesu map_type(env.result, key, value);
     }
     moshi (name == "__array_make" || name == "__array_with_capacity") {
-        kaku expected_count = 1;
-        moshi (name == "__array_make") {
-            expected_count = 2;
-        }
-        moshi (len(arguments) != expected_count) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name);
-            kaesu 0;
-        }
+        kaku expected_count = 1; moshi (name == "__array_make") { expected_count = 2; }
+        moshi (len(arguments) != expected_count) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); kaesu 0; }
         kaku element = 0;
         moshi (len(type_arguments) == 1) { element = resolve_type_node(env, file_id, type_arguments[0], env.constraints); }
         moshi (element == 0 && expected_count == 2) { element = check_expression(env, file_id, arguments[1]); }
@@ -252,100 +181,37 @@ waza check_builtin_call(env: TypeEnvironment, file_id: int64, node_id: int64, na
             kaku expected_return = env.return_types[len(env.return_types) - 1];
             moshi (type_kind_code(env.result.types[expected_return].kind) == 15) { element = env.result.types[expected_return].element; }
         }
-        moshi (element == 0) {
-            add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer array element type");
-            kaesu 0;
-        }
+        moshi (element == 0) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer array element type"); kaesu 0; }
         expected_expression(env, file_id, arguments[0], builtin_type(env, "int64"));
         moshi (expected_count == 2) { expected_expression(env, file_id, arguments[1], element); }
         kaesu array_type(env.result, element);
     }
     moshi (name == "__array_push" || name == "__array_capacity" || name == "__array_reserve" || name == "__array_clone" || name == "__array_truncate" || name == "__array_append_all") {
-        moshi (len(arguments) == 0) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name);
-            kaesu 0;
-        }
+        moshi (len(arguments) == 0) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); kaesu 0; }
         kaku container = check_expression(env, file_id, arguments[0]);
-        moshi (container == 0 || type_kind_code(env.result.types[container].kind) != 15) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, container, name);
-            kaesu 0;
-        }
+        moshi (container == 0 || type_kind_code(env.result.types[container].kind) != 15) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, container, name); kaesu 0; }
         kaku element = env.result.types[container].element;
         moshi (name == "__array_capacity") { kaesu builtin_type(env, "int64"); }
         moshi (name == "__array_clone") { kaesu container; }
-        moshi (name == "__array_push") {
-            moshi (len(arguments) != 2) {
-                add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name);
-            } sore {
-                expected_expression(env, file_id, arguments[1], element);
-            }
-            kaesu builtin_type(env, "unit");
-        }
-        moshi (name == "__array_append_all") {
-            moshi (len(arguments) != 2) {
-                add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name);
-            } sore {
-                expected_expression(env, file_id, arguments[1], container);
-            }
-            kaesu builtin_type(env, "unit");
-        }
+        moshi (name == "__array_push") { moshi (len(arguments) != 2) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); } sore { expected_expression(env, file_id, arguments[1], element); } kaesu builtin_type(env, "unit"); }
+        moshi (name == "__array_append_all") { moshi (len(arguments) != 2) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); } sore { expected_expression(env, file_id, arguments[1], container); } kaesu builtin_type(env, "unit"); }
         moshi (len(arguments) != 2) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); }
         sore { expected_expression(env, file_id, arguments[1], builtin_type(env, "int64")); }
         kaesu builtin_type(env, "unit");
     }
-    moshi (name == "__string_to_bytes") {
-        moshi (len(arguments) == 1) {
-            expected_expression(env, file_id, arguments[0], builtin_type(env, "string"));
-            kaesu array_type(env.result, builtin_type(env, "uint8"));
-        }
-    }
-    moshi (name == "__string_from_utf8") {
-        moshi (len(arguments) == 1) {
-            expected_expression(env, file_id, arguments[0], array_type(env.result, builtin_type(env, "uint8")));
-            kaesu nullable_type(env.result, builtin_type(env, "string"));
-        }
-    }
-    moshi (name == "__string_byte_len") {
-        moshi (len(arguments) == 1) {
-            expected_expression(env, file_id, arguments[0], builtin_type(env, "string"));
-            kaesu builtin_type(env, "int64");
-        }
-    }
+    moshi (name == "__string_to_bytes") { moshi (len(arguments) == 1) { expected_expression(env, file_id, arguments[0], builtin_type(env, "string")); kaesu array_type(env.result, builtin_type(env, "uint8")); } }
+    moshi (name == "__string_from_utf8") { moshi (len(arguments) == 1) { expected_expression(env, file_id, arguments[0], array_type(env.result, builtin_type(env, "uint8"))); kaesu nullable_type(env.result, builtin_type(env, "string")); } }
+    moshi (name == "__string_byte_len") { moshi (len(arguments) == 1) { expected_expression(env, file_id, arguments[0], builtin_type(env, "string")); kaesu builtin_type(env, "int64"); } }
     moshi (name == "__sqrt" || name == "__floor" || name == "__ceil" || name == "__round_even" || name == "__trunc") {
-        moshi (len(arguments) != 1) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name);
-            kaesu 0;
-        }
-        kaku actual = check_expression(env, file_id, arguments[0]);
-        moshi (!floating_type(env, actual)) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name);
-        }
+        moshi (len(arguments) != 1) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, name); kaesu 0; }
+        kaku actual = check_expression(env, file_id, arguments[0]); moshi (!floating_type(env, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name); }
         kaesu actual;
     }
     moshi (name == "__is_nan" || name == "__is_inf" || name == "__is_finite") {
-        moshi (len(arguments) == 1) {
-            kaku actual = check_expression(env, file_id, arguments[0]);
-            moshi (!floating_type(env, actual)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name);
-            }
-            kaesu builtin_type(env, "bool");
-        }
+        moshi (len(arguments) == 1) { kaku actual = check_expression(env, file_id, arguments[0]); moshi (!floating_type(env, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name); } kaesu builtin_type(env, "bool"); }
     }
-    moshi (name == "__is_negative" || name == "__neg_overflows") {
-        moshi (len(arguments) == 1) {
-            kaku actual = check_expression(env, file_id, arguments[0]);
-            moshi (!numeric_type(env, actual)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name);
-            }
-            kaesu builtin_type(env, "bool");
-        }
-    }
-    moshi (name == "__math_error") {
-        moshi (len(arguments) == 1) {
-            expected_expression(env, file_id, arguments[0], builtin_type(env, "string"));
-            kaesu builtin_type(env, "unit");
-        }
-    }
+    moshi (name == "__is_negative" || name == "__neg_overflows") { moshi (len(arguments) == 1) { kaku actual = check_expression(env, file_id, arguments[0]); moshi (!numeric_type(env, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[0], 0, actual, name); } kaesu builtin_type(env, "bool"); } }
+    moshi (name == "__math_error") { moshi (len(arguments) == 1) { expected_expression(env, file_id, arguments[0], builtin_type(env, "string")); kaesu builtin_type(env, "unit"); } }
     kaesu 0;
 }
 
@@ -359,35 +225,22 @@ waza check_native_argument(env: TypeEnvironment, file_id: int64, node_id: int64,
 
 waza check_native_call(env: TypeEnvironment, file_id: int64, node_id: int64, package_path: string, name: string, arguments: []int64) -> int64 {
     moshi (package_path == "mio/testing/runtime" && name == "report") {
-        moshi (len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "bool"));
-            check_native_argument(env, file_id, arguments[1], builtin_type(env, "string"));
-            kaesu builtin_type(env, "unit");
-        }
+        moshi (len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "bool")); check_native_argument(env, file_id, arguments[1], builtin_type(env, "string")); kaesu builtin_type(env, "unit"); }
     }
     moshi (package_path == "mio/thread/runtime") {
         // OS threads on Linux x86-64 (docs/concurrency.md): start(entry: () -> int64) -> handle or -errno; join(handle) -> result.
         kaku integer = builtin_type(env, "int64");
         kaku no_parameters: []int64 = [];
-        moshi (name == "start" && len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], function_type(env.result, no_parameters, integer));
-            kaesu integer;
-        }
+        moshi (name == "start" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], function_type(env.result, no_parameters, integer)); kaesu integer; }
         moshi (name == "join_status" && len(arguments) == 0) { kaesu integer; }
-        moshi (name == "join" && len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], integer);
-            kaesu integer;
-        }
+        moshi (name == "join" && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], integer); kaesu integer; }
         kaku word_calls = ["words_new", "words_free", "word_get", "word_set", "word_cas", "word_add", "word_wait", "word_wake"];
         kaku word_arity = [1, 2, 2, 3, 4, 3, 3, 3];
         kaku word_at = 0;
         aida (word_at < len(word_calls)) {
             moshi (name == word_calls[word_at] && len(arguments) == word_arity[word_at]) {
                 kaku word_arg = 0;
-                aida (word_arg < len(arguments)) {
-                    check_native_argument(env, file_id, arguments[word_arg], integer);
-                    word_arg = word_arg + 1;
-                }
+                aida (word_arg < len(arguments)) { check_native_argument(env, file_id, arguments[word_arg], integer); word_arg = word_arg + 1; }
                 kaesu integer;
             }
             word_at = word_at + 1;
@@ -395,182 +248,68 @@ waza check_native_call(env: TypeEnvironment, file_id: int64, node_id: int64, pac
     }
     moshi (package_path == "mio/os/runtime") {
         kaku integer = builtin_type(env, "int64");
-        moshi ((name == "argc" || name == "pid" || name == "monotonic_ms" || name == "stdin_ready") && len(arguments) == 0) {
-            kaesu integer;
-        }
-        moshi ((name == "env_copy" || name == "real_path") && len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "uint8")));
-            kaesu integer;
-        }
-        moshi ((name == "remove" || name == "rmdir" || name == "env_size") && len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            kaesu integer;
-        }
-        moshi ((name == "spawn" || name == "exec") && len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "string")));
-            kaesu integer;
-        }
-        moshi ((name == "arg_size" || name == "exit" || name == "stdin_wait") && len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], integer);
-            kaesu integer;
-        }
-        moshi (name == "arg_copy" && len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], integer);
-            check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "uint8")));
-            kaesu integer;
-        }
+        moshi ((name == "argc" || name == "pid" || name == "monotonic_ms" || name == "stdin_ready") && len(arguments) == 0) { kaesu integer; }
+        moshi ((name == "env_copy" || name == "real_path") && len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "uint8"))); kaesu integer; }
+        moshi ((name == "remove" || name == "rmdir" || name == "env_size") && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); kaesu integer; }
+        moshi ((name == "spawn" || name == "exec") && len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "string"))); kaesu integer; }
+        moshi ((name == "arg_size" || name == "exit" || name == "stdin_wait") && len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], integer); kaesu integer; }
+        moshi (name == "arg_copy" && len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], integer); check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "uint8"))); kaesu integer; }
         moshi (name == "spawn_test" && len(arguments) == 6) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "string")));
-            check_native_argument(env, file_id, arguments[2], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[3], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[4], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[5], integer);
-            kaesu integer;
+            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], array_type(env.result, builtin_type(env, "string")));
+            check_native_argument(env, file_id, arguments[2], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[3], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[4], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[5], integer); kaesu integer;
         }
-        moshi (name == "chmod" && len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], integer);
-            kaesu integer;
-        }
-        add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name);
-        kaesu 0;
+        moshi (name == "chmod" && len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], integer); kaesu integer; }
+        add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name); kaesu 0;
     }
     moshi (package_path == "mio/sys/socket") {
-        kaku parameters: []string = [];
-        kaku result = "string";
-        kaku known = name == "open";
+        kaku parameters: []string = []; kaku result = "string"; kaku known = name == "open";
         moshi (name == "open") { result = "resource"; }
-        moshi (name == "accept") {
-            known = hai;
-            parameters = ["resource"];
-            result = "resource";
-        }
-        moshi (name == "status" || name == "close" || name == "finish_connect" || name == "reactor_signal" || name == "reactor_ack") {
-            known = hai;
-            parameters = ["resource", "bytes"];
-        }
-        moshi (name == "bind_ipv4" || name == "connect_ipv4") {
-            known = hai;
-            parameters = ["resource", "bytes", "int64", "bytes"];
-        }
-        moshi (name == "listen" || name == "set_nonblocking") {
-            known = hai;
-            parameters = ["resource", "int64", "bytes"];
-        }
-        moshi (name == "read" || name == "write" || name == "reactor_wait") {
-            known = hai;
-            parameters = ["resource", "bytes", "int64", "int64", "bytes"];
-        }
-        moshi (name == "reactor_open") {
-            known = hai;
-            parameters = ["int64"];
-            result = "resource";
-        }
-        moshi (name == "reactor_ctl") {
-            known = hai;
-            parameters = ["resource", "resource", "int64", "bytes"];
-        }
-        moshi (!known || len(arguments) != len(parameters)) {
-            add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name);
-            kaesu 0;
-        }
+        moshi (name == "accept") { known = hai; parameters = ["resource"]; result = "resource"; }
+        moshi (name == "status" || name == "close" || name == "finish_connect" || name == "reactor_signal" || name == "reactor_ack") { known = hai; parameters = ["resource", "bytes"]; }
+        moshi (name == "bind_ipv4" || name == "connect_ipv4") { known = hai; parameters = ["resource", "bytes", "int64", "bytes"]; }
+        moshi (name == "listen" || name == "set_nonblocking") { known = hai; parameters = ["resource", "int64", "bytes"]; }
+        moshi (name == "read" || name == "write" || name == "reactor_wait") { known = hai; parameters = ["resource", "bytes", "int64", "int64", "bytes"]; }
+        moshi (name == "reactor_open") { known = hai; parameters = ["int64"]; result = "resource"; }
+        moshi (name == "reactor_ctl") { known = hai; parameters = ["resource", "resource", "int64", "bytes"]; }
+        moshi (!known || len(arguments) != len(parameters)) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name); kaesu 0; }
         kaku at = 0;
         aida (at < len(parameters)) {
             kaku wanted = builtin_type(env, parameters[at]);
             moshi (parameters[at] == "bytes") { wanted = array_type(env.result, builtin_type(env, "uint8")); }
-            check_native_argument(env, file_id, arguments[at], wanted);
-            at = at + 1;
+            check_native_argument(env, file_id, arguments[at], wanted); at = at + 1;
         }
         kaesu builtin_type(env, result);
     }
     moshi (package_path != "mio/fs/runtime") { kaesu 0; }
     kaku bytes_type = array_type(env.result, builtin_type(env, "uint8"));
-    moshi (name == "open") {
-        moshi (len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], builtin_type(env, "int64"));
-            kaesu builtin_type(env, "resource");
-        }
-    }
-    moshi (name == "open_dir") {
-        moshi (len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            kaesu builtin_type(env, "resource");
-        }
-    }
-    moshi (name == "dir_next" || name == "dir_is_dir" || name == "dir_is_file") {
-        moshi (len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource"));
-            kaesu builtin_type(env, "bool");
-        }
-    }
-    moshi (name == "dir_name") {
-        moshi (len(arguments) == 1) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource"));
-            kaesu builtin_type(env, "string");
-        }
-    }
-    moshi (name == "file_status" || name == "close" || name == "dir_status" || name == "dir_close") {
-        moshi (len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource"));
-            check_native_argument(env, file_id, arguments[1], bytes_type);
-            kaesu builtin_type(env, "string");
-        }
-    }
-    moshi (name == "stat" || name == "mkdir") {
-        moshi (len(arguments) == 2) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "string"));
-            check_native_argument(env, file_id, arguments[1], bytes_type);
-            kaesu builtin_type(env, "string");
-        }
-    }
+    moshi (name == "open") { moshi (len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], builtin_type(env, "int64")); kaesu builtin_type(env, "resource"); } }
+    moshi (name == "open_dir") { moshi (len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); kaesu builtin_type(env, "resource"); } }
+    moshi (name == "dir_next" || name == "dir_is_dir" || name == "dir_is_file") { moshi (len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource")); kaesu builtin_type(env, "bool"); } }
+    moshi (name == "dir_name") { moshi (len(arguments) == 1) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource")); kaesu builtin_type(env, "string"); } }
+    moshi (name == "file_status" || name == "close" || name == "dir_status" || name == "dir_close") { moshi (len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource")); check_native_argument(env, file_id, arguments[1], bytes_type); kaesu builtin_type(env, "string"); } }
+    moshi (name == "stat" || name == "mkdir") { moshi (len(arguments) == 2) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "string")); check_native_argument(env, file_id, arguments[1], bytes_type); kaesu builtin_type(env, "string"); } }
     moshi (name == "read" || name == "write") {
-        moshi (len(arguments) == 5) {
-            check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource"));
-            check_native_argument(env, file_id, arguments[1], bytes_type);
-            check_native_argument(env, file_id, arguments[2], builtin_type(env, "int64"));
-            check_native_argument(env, file_id, arguments[3], builtin_type(env, "int64"));
-            check_native_argument(env, file_id, arguments[4], bytes_type);
-            kaesu builtin_type(env, "string");
-        }
+        moshi (len(arguments) == 5) { check_native_argument(env, file_id, arguments[0], builtin_type(env, "resource")); check_native_argument(env, file_id, arguments[1], bytes_type); check_native_argument(env, file_id, arguments[2], builtin_type(env, "int64")); check_native_argument(env, file_id, arguments[3], builtin_type(env, "int64")); check_native_argument(env, file_id, arguments[4], bytes_type); kaesu builtin_type(env, "string"); }
     }
     add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, name);
     kaesu 0;
 }
 
 waza check_signature_call(env: TypeEnvironment, file_id: int64, node_id: int64, signature: FunctionSignature, arguments: []int64, type_arguments: []int64) -> int64 {
-    moshi (len(arguments) != len(signature.parameters)) {
-        add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "wrong argument count");
-        kaesu 0;
-    }
+    moshi (len(arguments) != len(signature.parameters)) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "wrong argument count"); kaesu 0; }
     kaku names = array.with_capacity[string](len(signature.type_parameters));
     kaku types = array.with_capacity[int64](len(signature.type_parameters));
     kaku index = 0;
     moshi (len(type_arguments) > 0) {
-        moshi (len(type_arguments) != len(signature.type_parameters)) {
-            add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "wrong type argument count");
-            kaesu 0;
-        }
-        aida (index < len(type_arguments)) {
-            array.push(names, signature.type_parameters[index].name);
-            array.push(types, resolve_type_node(env, file_id, type_arguments[index], env.constraints));
-            index = index + 1;
-        }
+        moshi (len(type_arguments) != len(signature.type_parameters)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "wrong type argument count"); kaesu 0; }
+        aida (index < len(type_arguments)) { array.push(names, signature.type_parameters[index].name); array.push(types, resolve_type_node(env, file_id, type_arguments[index], env.constraints)); index = index + 1; }
     }
     index = 0;
     aida (index < len(arguments)) {
         kaku wanted = substitute_type(env, signature.parameters[index], names, types);
         kaku actual = expected_expression(env, file_id, arguments[index], wanted);
-        moshi (len(types) < len(signature.type_parameters)) {
-            infer_type_argument(env, signature.parameters[index], actual, names, types);
-            wanted = substitute_type(env, signature.parameters[index], names, types);
-        }
-        moshi (!is_assignable(env.result, wanted, actual)) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[index], wanted, actual, "argument type mismatch");
-        }
+        moshi (len(types) < len(signature.type_parameters)) { infer_type_argument(env, signature.parameters[index], actual, names, types); wanted = substitute_type(env, signature.parameters[index], names, types); }
+        moshi (!is_assignable(env.result, wanted, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[index], wanted, actual, "argument type mismatch"); }
         index = index + 1;
     }
     moshi (!validate_substitution(env, file_id, node_id, signature, names, types)) { kaesu 0; }
@@ -592,59 +331,35 @@ waza check_call(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
         target_id = callee.children[0];
         type_arguments = array.with_capacity[int64](callee.integer);
         kaku type_index = 0;
-        aida (type_index < callee.integer) {
-            array.push(type_arguments, callee.children[type_index + 1]);
-            type_index = type_index + 1;
-        }
+        aida (type_index < callee.integer) { array.push(type_arguments, callee.children[type_index + 1]); type_index = type_index + 1; }
     }
     kaku arguments = array.with_capacity[int64](len(node.children) - 1);
-    kaku index = 1;
-    aida (index < len(node.children)) {
-        array.push(arguments, node.children[index]);
-        index = index + 1;
-    }
+    kaku index = 1; aida (index < len(node.children)) { array.push(arguments, node.children[index]); index = index + 1; }
     kaku target_node = node_at(env, file_id, target_id);
     moshi (parser.node_kind_code(target_node.kind) == 27 && len(target_node.children) == 1) {
         kaku owner_symbol = binding_of(env, file_id, target_node.children[0]);
         kaku definition_index = enum_of(env, owner_symbol);
         moshi (definition_index >= 0) {
-            kaku definition = env.result.enums[definition_index];
-            kaku variant_index = 0;
+            kaku definition = env.result.enums[definition_index]; kaku variant_index = 0;
             aida (variant_index < len(definition.variants)) {
                 kaku variant = definition.variants[variant_index];
                 moshi (variant.name == target_node.text) {
-                    moshi (len(arguments) != len(variant.fields)) {
-                        add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, variant.name);
-                        kaesu 0;
-                    }
-                    kaku names = array.with_capacity[string](len(definition.parameters));
-                    kaku types = array.with_capacity[int64](len(definition.parameters));
+                    moshi (len(arguments) != len(variant.fields)) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, variant.name); kaesu 0; }
+                    kaku names = array.with_capacity[string](len(definition.parameters)); kaku types = array.with_capacity[int64](len(definition.parameters));
                     kaku type_index = 0;
                     moshi (len(type_arguments) > 0) {
-                        moshi (len(type_arguments) != len(definition.parameters)) {
-                            add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "wrong enum type argument count");
-                            kaesu 0;
-                        }
-                        aida (type_index < len(type_arguments)) {
-                            array.push(names, definition.parameters[type_index].name);
-                            array.push(types, resolve_type_node(env, file_id, type_arguments[type_index], env.constraints));
-                            type_index = type_index + 1;
-                        }
+                        moshi (len(type_arguments) != len(definition.parameters)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "wrong enum type argument count"); kaesu 0; }
+                        aida (type_index < len(type_arguments)) { array.push(names, definition.parameters[type_index].name); array.push(types, resolve_type_node(env, file_id, type_arguments[type_index], env.constraints)); type_index = type_index + 1; }
                     }
                     kaku argument_index = 0;
                     aida (argument_index < len(arguments)) {
                         kaku actual = check_expression(env, file_id, arguments[argument_index]);
                         infer_type_argument(env, variant.fields[argument_index], actual, names, types);
                         kaku expected = substitute_type(env, variant.fields[argument_index], names, types);
-                        moshi (!is_assignable(env.result, expected, actual)) {
-                            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[argument_index], expected, actual, variant.name);
-                        }
+                        moshi (!is_assignable(env.result, expected, actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[argument_index], expected, actual, variant.name); }
                         argument_index = argument_index + 1;
                     }
-                    moshi (len(types) != len(definition.parameters)) {
-                        add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer enum type arguments");
-                        kaesu 0;
-                    }
+                    moshi (len(types) != len(definition.parameters)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer enum type arguments"); kaesu 0; }
                     kaesu set_node_type(env, file_id, node_id, named_type(env.result, string.concat(string.concat(definition.package_path, "."), definition.name), types));
                 }
                 variant_index = variant_index + 1;
@@ -671,22 +386,11 @@ waza check_call(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
                 kaku variant = env.result.enums[enum_index].variants[variant_index];
                 moshi (variant.symbol_id == symbol_id) {
                     kaku definition = env.result.enums[enum_index];
-                    moshi (len(arguments) != len(variant.fields)) {
-                        add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, variant.name);
-                        kaesu 0;
-                    }
-                    kaku names = array.with_capacity[string](len(definition.parameters));
-                    kaku types = array.with_capacity[int64](len(definition.parameters));
+                    moshi (len(arguments) != len(variant.fields)) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, variant.name); kaesu 0; }
+                    kaku names = array.with_capacity[string](len(definition.parameters)); kaku types = array.with_capacity[int64](len(definition.parameters));
                     kaku argument_index = 0;
-                    aida (argument_index < len(arguments)) {
-                        kaku actual = check_expression(env, file_id, arguments[argument_index]);
-                        infer_type_argument(env, variant.fields[argument_index], actual, names, types);
-                        argument_index = argument_index + 1;
-                    }
-                    moshi (len(types) != len(definition.parameters)) {
-                        add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer enum type arguments");
-                        kaesu 0;
-                    }
+                    aida (argument_index < len(arguments)) { kaku actual = check_expression(env, file_id, arguments[argument_index]); infer_type_argument(env, variant.fields[argument_index], actual, names, types); argument_index = argument_index + 1; }
+                    moshi (len(types) != len(definition.parameters)) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "cannot infer enum type arguments"); kaesu 0; }
                     kaesu set_node_type(env, file_id, node_id, named_type(env.result, string.concat(string.concat(definition.package_path, "."), definition.name), types));
                 }
                 variant_index = variant_index + 1;
@@ -695,36 +399,20 @@ waza check_call(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
         }
     }
     kaku callee_type = check_expression(env, file_id, target_id);
-    moshi (callee_type == 0 || type_kind_code(env.result.types[callee_type].kind) != 18) {
-        add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, target_id, 0, callee_type, "value is not callable");
-        kaesu 0;
-    }
+    moshi (callee_type == 0 || type_kind_code(env.result.types[callee_type].kind) != 18) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, target_id, 0, callee_type, "value is not callable"); kaesu 0; }
     kaku info = env.result.types[callee_type];
-    moshi (len(arguments) != len(info.parameters)) {
-        add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "wrong argument count");
-        kaesu 0;
-    }
+    moshi (len(arguments) != len(info.parameters)) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "wrong argument count"); kaesu 0; }
     index = 0;
-    aida (index < len(arguments)) {
-        kaku actual = expected_expression(env, file_id, arguments[index], info.parameters[index]);
-        moshi (!is_assignable(env.result, info.parameters[index], actual)) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[index], info.parameters[index], actual, "argument type mismatch");
-        }
-        index = index + 1;
-    }
+    aida (index < len(arguments)) { kaku actual = expected_expression(env, file_id, arguments[index], info.parameters[index]); moshi (!is_assignable(env.result, info.parameters[index], actual)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, arguments[index], info.parameters[index], actual, "argument type mismatch"); } index = index + 1; }
     invalidate_all_facts(env);
     kaesu set_node_type(env, file_id, node_id, info.result);
 }
 
 waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> int64 {
-    moshi (!progress.checkpoint(env.work)) { kaesu 0; }
+    moshi(!progress.checkpoint(env.work)){kaesu 0;}
     kaku node = node_at(env, file_id, node_id);
     kaku kind = parser.node_kind_code(node.kind);
-    moshi (kind == 5) {
-        kaku target = builtin_type(env, "int64");
-        check_integer_range(env, file_id, node_id, target, iie);
-        kaesu set_node_type(env, file_id, node_id, target);
-    }
+    moshi (kind == 5) { kaku target = builtin_type(env, "int64"); check_integer_range(env, file_id, node_id, target, iie); kaesu set_node_type(env, file_id, node_id, target); }
     moshi (kind == 6) { kaesu set_node_type(env, file_id, node_id, builtin_type(env, "float64")); }
     moshi (kind == 7) { kaesu set_node_type(env, file_id, node_id, builtin_type(env, "int32")); }
     moshi (kind == 8) { kaesu set_node_type(env, file_id, node_id, builtin_type(env, "string")); }
@@ -732,17 +420,11 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
     moshi (kind == 10) { kaesu set_node_type(env, file_id, node_id, builtin_type(env, "mu")); }
     moshi (kind == 4) {
         kaku symbol_id = binding_of(env, file_id, node_id);
-        moshi (symbol_id < 0) {
-            add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text);
-            kaesu 0;
-        }
+        moshi (symbol_id < 0) { add_type_error(env, TypeErrorKind.UnknownType(), "E0305", file_id, node_id, 0, 0, node.text); kaesu 0; }
         kaku signature_index = signature_of(env, symbol_id);
         moshi (signature_index >= 0) {
             kaku signature = env.result.signatures[signature_index];
-            moshi (len(signature.type_parameters) > 0) {
-                add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "generic function requires call-site inference");
-                kaesu 0;
-            }
+            moshi (len(signature.type_parameters) > 0) { add_type_error(env, TypeErrorKind.InvalidTypeArgument(), "E0306", file_id, node_id, 0, 0, "generic function requires call-site inference"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, function_type(env.result, signature.parameters, signature.result));
         }
         kaku found = symbol_type(env, symbol_id);
@@ -754,144 +436,83 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
         moshi (node.operator == 9) {
             kaku literal_id = grouped_integer_literal(env, file_id, node.children[0]);
             moshi (literal_id >= 0) {
-                kaku target = builtin_type(env, "int64");
-                check_integer_range(env, file_id, literal_id, target, hai);
-                set_grouped_integer_type(env, file_id, node.children[0], target);
-                kaesu set_node_type(env, file_id, node_id, target);
+                kaku target = builtin_type(env, "int64"); check_integer_range(env, file_id, literal_id, target, hai); set_grouped_integer_type(env, file_id, node.children[0], target); kaesu set_node_type(env, file_id, node_id, target);
             }
         }
         kaku right = check_expression(env, file_id, node.children[0]);
-        moshi (node.operator == 9 && !signed_type(env, right)) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, 0, right, "unary minus requires a signed number");
-            kaesu 0;
-        }
-        moshi (node.operator == 12 && right != builtin_type(env, "bool")) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, builtin_type(env, "bool"), right, "logical not requires bool");
-            kaesu 0;
-        }
+        moshi (node.operator == 9 && !signed_type(env, right)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, 0, right, "unary minus requires a signed number"); kaesu 0; }
+        moshi (node.operator == 12 && right != builtin_type(env, "bool")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, builtin_type(env, "bool"), right, "logical not requires bool"); kaesu 0; }
         kaesu set_node_type(env, file_id, node_id, right);
     }
     moshi (kind == 11) {
         kaku left = check_expression(env, file_id, node.children[0]);
         kaku right = check_expression(env, file_id, node.children[1]);
         moshi (left != right) {
-            kaku left_node = node_at(env, file_id, node.children[0]);
-            kaku right_node = node_at(env, file_id, node.children[1]);
-            moshi (is_integer(env.result, left) && parser.node_kind_code(right_node.kind) == 5) {
-                right = expected_expression(env, file_id, node.children[1], left);
-            }
-            sore {
-                moshi (is_integer(env.result, right) && parser.node_kind_code(left_node.kind) == 5) {
-                    left = expected_expression(env, file_id, node.children[0], right);
-                }
-            }
+            kaku left_node = node_at(env, file_id, node.children[0]); kaku right_node = node_at(env, file_id, node.children[1]);
+            moshi (is_integer(env.result, left) && parser.node_kind_code(right_node.kind) == 5) { right = expected_expression(env, file_id, node.children[1], left); }
+            sore { moshi (is_integer(env.result, right) && parser.node_kind_code(left_node.kind) == 5) { left = expected_expression(env, file_id, node.children[0], right); } }
         }
         moshi (node.operator >= 8 && node.operator <= 11) {
-            moshi (left != right || !numeric_type(env, left)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "numeric operands must have the same type");
-                kaesu 0;
-            }
+            moshi (left != right || !numeric_type(env, left)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "numeric operands must have the same type"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, left);
         }
         moshi (node.operator >= 16 && node.operator <= 19) {
-            moshi (left != right || !numeric_type(env, left)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "comparison operands must have the same numeric type");
-                kaesu 0;
-            }
+            moshi (left != right || !numeric_type(env, left)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "comparison operands must have the same numeric type"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, builtin_type(env, "bool"));
         }
         moshi (node.operator == 14 || node.operator == 15) {
             kaku nil_ok = (type_kind_code(env.result.types[left].kind) == 12 && type_kind_code(env.result.types[right].kind) == 16) || (type_kind_code(env.result.types[right].kind) == 12 && type_kind_code(env.result.types[left].kind) == 16);
             // A narrowed value still has a nullable declaration. Rechecking
             // it against mu is legal, including after a captured Cell changes.
-            moshi (type_kind_code(env.result.types[left].kind) == 12 && declared_nullable_operand(env, file_id, node.children[1])) {
-                nil_ok = hai;
-            }
-            moshi (type_kind_code(env.result.types[right].kind) == 12 && declared_nullable_operand(env, file_id, node.children[0])) {
-                nil_ok = hai;
-            }
-            moshi (left != right && !nil_ok) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], left, right, "equality operands must have the same type");
-                kaesu 0;
-            }
+            moshi (type_kind_code(env.result.types[left].kind) == 12 && declared_nullable_operand(env, file_id, node.children[1])) { nil_ok = hai; }
+            moshi (type_kind_code(env.result.types[right].kind) == 12 && declared_nullable_operand(env, file_id, node.children[0])) { nil_ok = hai; }
+            moshi (left != right && !nil_ok) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], left, right, "equality operands must have the same type"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, builtin_type(env, "bool"));
         }
         moshi (node.operator == 20 || node.operator == 21) {
             kaku bool_type = builtin_type(env, "bool");
-            moshi (left != bool_type || right != bool_type) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, bool_type, right, "logical operands must be bool");
-                kaesu 0;
-            }
+            moshi (left != bool_type || right != bool_type) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node_id, bool_type, right, "logical operands must be bool"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, bool_type);
         }
     }
     moshi (kind == 22) { kaesu check_call(env, file_id, node_id); }
-    moshi (kind == 23) {
-        add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, "type application must be called");
-        kaesu 0;
-    }
+    moshi (kind == 23) { add_type_error(env, TypeErrorKind.InvalidCall(), "E0303", file_id, node_id, 0, 0, "type application must be called"); kaesu 0; }
     moshi (kind == 24) {
-        moshi (len(node.children) != 2) {
-            add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "conversion expects one argument");
-            kaesu 0;
-        }
+        moshi (len(node.children) != 2) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "conversion expects one argument"); kaesu 0; }
         kaku source = check_expression(env, file_id, node.children[1]);
         kaku target = builtin_type(env, node.text);
         moshi (node.text == "cptr") {
-            kaku zero = node_at(env, file_id, node.children[1]);
-            moshi (parser.node_kind_code(zero.kind) != 5 || zero.integer != 0) { add_type_error(env, TypeErrorKind.InvalidConversion(), "E_FFI_POINTER", file_id, node_id, target, source, "only cptr(0) constructs a native pointer"); kaesu 0; }
-            kaesu set_node_type(env, file_id, node_id, target);
-        }
-        kaku source_code = type_kind_code(env.result.types[source].kind);
-        moshi ((node.text == "uint64" && source_code >= 1 && source_code <= 7) || (node.text == "int64" && source_code == 21)) { kaesu set_node_type(env, file_id, node_id, target); }
-        moshi (target == 0 || !is_numeric(env.result, target) || !is_numeric(env.result, source) || target == source) {
-            add_type_error(env, TypeErrorKind.InvalidConversion(), "E0302", file_id, node_id, target, source, "invalid numeric conversion");
+            kaku operand = node_at(env, file_id, node.children[1]);
+            moshi (parser.node_kind_code(operand.kind) == 5 && operand.integer == 0) {
+                kaesu set_node_type(env, file_id, node_id, target);
+            }
+            add_type_error(env, TypeErrorKind.InvalidConversion(), "E_CABI", file_id, node_id, target, source,
+                "cptr(0) constructs null; other C pointers must come from C");
             kaesu 0;
         }
+        moshi (node.text == "uint64") {
+            moshi (is_integer(env.result, source)) { kaesu set_node_type(env, file_id, node_id, target); }
+            add_type_error(env, TypeErrorKind.InvalidConversion(), "E_CABI", file_id, node_id, target, source,
+                "uint64 conversion requires a Mio integer");
+            kaesu 0;
+        }
+        moshi (node.text == "int64" && source == builtin_type(env, "uint64")) {
+            kaesu set_node_type(env, file_id, node_id, target);
+        }
+        moshi (target == 0 || !is_numeric(env.result, target) || !is_numeric(env.result, source) || target == source) { add_type_error(env, TypeErrorKind.InvalidConversion(), "E0302", file_id, node_id, target, source, "invalid numeric conversion"); kaesu 0; }
         kaesu set_node_type(env, file_id, node_id, target);
     }
     moshi (kind == 25) {
-        moshi (len(node.children) == 0) {
-            add_type_error(env, TypeErrorKind.TypeMismatch(), "E0305", file_id, node_id, 0, 0, "cannot infer empty array type");
-            kaesu 0;
-        }
-        kaku element = check_expression(env, file_id, node.children[0]);
-        kaku index = 1;
-        aida (index < len(node.children)) {
-            kaku actual = check_expression(env, file_id, node.children[index]);
-            element = common_array_type(env, element, actual);
-            moshi (element == 0) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[index], element, actual, "array element type mismatch");
-                kaesu 0;
-            }
-            index = index + 1;
-        }
+        moshi (len(node.children) == 0) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0305", file_id, node_id, 0, 0, "cannot infer empty array type"); kaesu 0; }
+        kaku element = check_expression(env, file_id, node.children[0]); kaku index = 1;
+        aida (index < len(node.children)) { kaku actual = check_expression(env, file_id, node.children[index]); element = common_array_type(env, element, actual); moshi (element == 0) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[index], element, actual, "array element type mismatch"); kaesu 0; } index = index + 1; }
         kaesu set_node_type(env, file_id, node_id, array_type(env.result, element));
     }
     moshi (kind == 26) {
-        kaku container = check_expression(env, file_id, node.children[0]);
-        kaku info = env.result.types[container];
-        kaku code = type_kind_code(info.kind);
-        moshi (code == 15) {
-            kaku index_type = check_expression(env, file_id, node.children[1]);
-            moshi (index_type != builtin_type(env, "int64")) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], builtin_type(env, "int64"), index_type, "array index must be int64");
-            }
-            kaesu set_node_type(env, file_id, node_id, info.element);
-        }
-        moshi (code == 17 && info.name == "Map" && len(info.arguments) == 2) {
-            kaku key = expected_expression(env, file_id, node.children[1], info.arguments[0]);
-            moshi (!is_assignable(env.result, info.arguments[0], key)) {
-                add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], info.arguments[0], key, "Map key type mismatch");
-            }
-            kaku value = info.arguments[1];
-            moshi (type_kind_code(env.result.types[value].kind) != 16) {
-                value = nullable_type(env.result, value);
-            }
-            kaesu set_node_type(env, file_id, node_id, value);
-        }
-        add_type_error(env, TypeErrorKind.TypeMismatch(), "E0305", file_id, node.children[0], 0, container, "index target must be array or Map");
-        kaesu 0;
+        kaku container = check_expression(env, file_id, node.children[0]); kaku info = env.result.types[container]; kaku code = type_kind_code(info.kind);
+        moshi (code == 15) { kaku index_type = check_expression(env, file_id, node.children[1]); moshi (index_type != builtin_type(env, "int64")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], builtin_type(env, "int64"), index_type, "array index must be int64"); } kaesu set_node_type(env, file_id, node_id, info.element); }
+        moshi (code == 17 && info.name == "Map" && len(info.arguments) == 2) { kaku key = expected_expression(env, file_id, node.children[1], info.arguments[0]); moshi (!is_assignable(env.result, info.arguments[0], key)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], info.arguments[0], key, "Map key type mismatch"); } kaku value = info.arguments[1]; moshi (type_kind_code(env.result.types[value].kind) != 16) { value = nullable_type(env.result, value); } kaesu set_node_type(env, file_id, node_id, value); }
+        add_type_error(env, TypeErrorKind.TypeMismatch(), "E0305", file_id, node.children[0], 0, container, "index target must be array or Map"); kaesu 0;
     }
     moshi (kind == 27) {
         kaku symbol_id = binding_of(env, file_id, node_id);
@@ -900,32 +521,13 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
         }
         moshi (symbol_id >= 0 && resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 12) { kaesu 0; }
         kaku left = check_expression(env, file_id, node.children[0]);
-        moshi (left == 0 || type_kind_code(env.result.types[left].kind) != 17) {
-            add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text);
-            kaesu 0;
-        }
-        kaku info = env.result.types[left];
-        kaku definition_index = struct_named(env, info.name);
-        moshi (definition_index < 0) {
-            add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text);
-            kaesu 0;
-        }
-        kaku definition = env.result.structs[definition_index];
-        kaku names = array.with_capacity[string](len(definition.parameters));
-        kaku index = 0;
-        aida (index < len(definition.parameters)) {
-            array.push(names, definition.parameters[index].name);
-            index = index + 1;
-        }
-        index = 0;
-        aida (index < len(definition.fields)) {
-            moshi (definition.fields[index].name == node.text) {
-                kaesu set_node_type(env, file_id, node_id, substitute_type(env, definition.fields[index].type_id, names, info.arguments));
-            }
-            index = index + 1;
-        }
-        add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text);
-        kaesu 0;
+        moshi (left == 0 || type_kind_code(env.result.types[left].kind) != 17) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text); kaesu 0; }
+        kaku info = env.result.types[left]; kaku definition_index = struct_named(env, info.name);
+        moshi (definition_index < 0) { add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text); kaesu 0; }
+        kaku definition = env.result.structs[definition_index]; kaku names = array.with_capacity[string](len(definition.parameters)); kaku index = 0;
+        aida (index < len(definition.parameters)) { array.push(names, definition.parameters[index].name); index = index + 1; }
+        index = 0; aida (index < len(definition.fields)) { moshi (definition.fields[index].name == node.text) { kaesu set_node_type(env, file_id, node_id, substitute_type(env, definition.fields[index].type_id, names, info.arguments)); } index = index + 1; }
+        add_type_error(env, TypeErrorKind.InvalidField(), "E0310", file_id, node_id, 0, left, node.text); kaesu 0;
     }
     moshi (kind == 28) { kaesu check_struct_literal(env, file_id, node_id, 0); }
     moshi (kind == 33) { kaesu check_function_literal(env, file_id, node_id); }

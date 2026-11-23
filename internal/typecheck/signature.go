@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"Mio/internal/ast"
+	"Mio/internal/cabi"
 	"Mio/internal/ffi"
 	"Mio/internal/resolver"
 )
@@ -152,6 +153,23 @@ func (c *Checker) registerFunctionSignature(
 			"%q is not a function symbol",
 			fn.Name.Name,
 		)
+	}
+
+	if fn.CSymbol != "" && !fn.CABI {
+		const prototypeError = "E_CABI C ABI requires a fixed prototype with explicit scalar parameters and a scalar or unit result"
+		if fn.ReturnType == nil || len(fn.TypeParams) != 0 || len(fn.Parameters) > 256 ||
+			!cabi.ValidSymbol(fn.CSymbol) || len(fn.Body.Statements) != 0 ||
+			cabi.TypeCode(fn.ReturnType.Name) == "" || len(fn.ReturnType.Args) != 0 {
+			return fmt.Errorf("%s", prototypeError)
+		}
+		for _, param := range fn.Parameters {
+			if param.DeclaredType == nil || len(param.DeclaredType.Args) != 0 {
+				return fmt.Errorf("%s", prototypeError)
+			}
+			if code := cabi.TypeCode(param.DeclaredType.Name); code == "" || code == "v" {
+				return fmt.Errorf("%s", prototypeError)
+			}
+		}
 	}
 
 	// 函数必须声明返回类型

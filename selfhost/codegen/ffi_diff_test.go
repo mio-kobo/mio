@@ -13,9 +13,13 @@ import (
 )
 
 // 同时验证两套前端的声明、符号绑定、原型元数据和 VM 拒绝执行行为。
-func TestWindowsCMetadataDifferential(t *testing.T) {
+func TestCMetadataDifferential(t *testing.T) {
 	source := `waza mixed(a:int64,b:float64,c:int32,d:float32,p:cptr,u:uint64) -> float64 = c "fixture.dll" "mixed_export";
-mixed(1,2.0,int32(3),float32(4.0),cptr(0),uint64(-1));`
+waza windows_default() -> uint32 = c "FIXTURE.DLL";
+waza unix_symbol(a:uint64) -> uint64 = c "mio_unix_symbol";
+mixed(1,2.0,int32(3),float32(4.0),cptr(0),uint64(-1));
+windows_default();
+unix_symbol(uint64(-1));`
 	pure, err := mochi.Decode(bytes.NewReader(compileWithPureMio(t, source)))
 	if err != nil {
 		t.Fatal(err)
@@ -44,9 +48,19 @@ mixed(1,2.0,int32(3),float32(4.0),cptr(0),uint64(-1));`
 	if !reflect.DeepEqual(pure.Functions, reference.Functions) {
 		t.Fatalf("C metadata differs: Mio=%+v Go=%+v", pure.Functions, reference.Functions)
 	}
-	expected := "$win64c|fixture.dll|mixed_export|float64|int64|float64|int32|float32|cptr|uint64"
-	if len(pure.Functions) != 1 || pure.Functions[0].Name != expected || len(pure.Functions[0].Instructions) != 0 {
-		t.Fatalf("lost prototype: %+v", pure.Functions)
+	expected := []string{
+		"$win64c|fixture.dll|mixed_export|float64|int64|float64|int32|float32|cptr|uint64",
+		"$win64c|FIXTURE.DLL|windows_default|uint32",
+		"$cabi::mio_unix_symbol:hh",
+	}
+	if len(pure.Functions) != len(expected) {
+		t.Fatalf("unexpected function count: %+v", pure.Functions)
+	}
+	for i, name := range expected {
+		fn := pure.Functions[i]
+		if fn.Name != name || len(fn.Instructions) != 0 {
+			t.Fatalf("lost prototype %s: %+v", name, fn)
+		}
 	}
 	var output bytes.Buffer
 	if err := env.Run(program, &output); err == nil || !strings.Contains(err.Error(), "E_FFI_RUNTIME") {

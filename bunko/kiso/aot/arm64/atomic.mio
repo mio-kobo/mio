@@ -1,4 +1,4 @@
-// A64 base ISA atomics: no dependency on optional LSE instructions.
+// A64 atomics. Callers of optional LSE instructions must ensure target support.
 // LDAR/STLR provide acquire/release. LL/SC loops live in the CPU adapter.
 // Encodings follow Arm A64 ISA (load/store exclusive and barrier classes).
 koukai waza read_nzcv(rt: int64) -> Instruction {
@@ -58,3 +58,11 @@ koukai waza stxr_x(status: int64, rt: int64, rn: int64, release: bool) -> Instru
 }
 koukai waza dmb_ish() -> Instruction { kaesu instruction(3573758911); }
 koukai waza clrex() -> Instruction { kaesu instruction(3573759839); }
+
+// FEAT_LSE exchange with release ordering. Rs may be XZR. Rn is the address
+// (31 denotes SP), and Rt receives the old value.
+koukai waza swpl_x(rs:int64, rt:int64, rn:int64) -> Instruction {
+    kaku error = three_registers(rs, rt, rn);
+    moshi (error != mu) { kaesu Instruction {word:uint32(0),error:error}; }
+    kaesu instruction(4167073792 + rs * 65536 + rn * 32 + rt);
+}

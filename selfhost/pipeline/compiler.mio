@@ -8,15 +8,13 @@ yobu "kiso/convert";
 yobu "kiso/array";
 yobu "kiso/string";
 yobu "kiso/fs";
+yobu "kiso/os";
 
-koukai kata NativeBuildResult {
-    bytes: []uint8;
-    error: string;
-}
+koukai kata NativeBuildResult { bytes: []uint8; error: string; }
 
-// 源码到原生可执行映像（Native Executable）的共享编译核心：
-// 仅在进程内存缓冲区中传递 Mochi IR，不依赖中间文件、VM、子进程或外部链接器。
-// Ad-hoc 签名由纯 Mio 实现；产物发布与进程管理由独立服务负责。
+// Shared source-to-native core. The only IR handoff is this process's memory
+// buffer; no intermediate file, VM, compiler subprocess or linker is involved.
+// Ad-hoc signing is pure Mio; publication and process control are separate services.
 koukai waza build_source(root: string, entry: string, bunko_root: string) -> NativeBuildResult {
     kaesu build_source_with_options(root, entry, bunko_root, 1073741824, iie);
 }
@@ -29,8 +27,7 @@ koukai waza build_source_with_options(root: string, entry: string, bunko_root: s
 }
 
 koukai waza build_mochi_with_options(data: []uint8, heap_capacity: int64, gc_stress: bool) -> NativeBuildResult {
-    kaku decoded = mochi.decode(data);
-    kaku file = decoded.value;
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
     kaesu build_file(file, heap_capacity, gc_stress);
@@ -42,35 +39,22 @@ waza build_file(file: mochi.File, heap_capacity: int64, gc_stress: bool) -> Nati
 
 // Diagnostic symbol map for profilers: one line "<code word> <function name>" per emitted function.
 waza write_symbols(path: string, file: mochi.File, lowered: lower.LowerResult) -> string {
-    kaku output = string.new_builder();
-    kaku at = 0;
+    kaku output = string.new_builder(); kaku at = 0;
     aida (at < len(lowered.function_words) && at < len(file.functions)) {
         moshi (lowered.function_words[at] >= 0) {
-            string.write_string(output, convert.format_int(lowered.function_words[at]));
-            string.write_string(output, " ");
-            string.write_string(output, file.functions[at].name);
-            string.write_string(output, "\n");
+            string.write_string(output, convert.format_int(lowered.function_words[at])); string.write_string(output, " ");
+            string.write_string(output, file.functions[at].name); string.write_string(output, "\n");
         }
         at = at + 1;
     }
     // runtime routines: labels with plain names (block, function and generated labels contain numbers)
     at = 0;
     aida (at < len(lowered.labels)) {
-        kaku name = lowered.labels[at].name;
-        kaku bytes = string.to_bytes(name);
-        kaku digits = iie;
-        kaku bi = 0;
-        aida (bi < len(bytes)) {
-            moshi (bytes[bi] >= uint8(48) && bytes[bi] <= uint8(57)) {
-                digits = hai;
-            }
-            bi = bi + 1;
-        }
+        kaku name = lowered.labels[at].name; kaku bytes = string.to_bytes(name);
+        kaku digits = iie; kaku bi = 0;
+        aida (bi < len(bytes)) { moshi (bytes[bi] >= uint8(48) && bytes[bi] <= uint8(57)) { digits = hai; } bi = bi + 1; }
         moshi (len(bytes) > 0 && !digits) {
-            string.write_string(output, convert.format_int(lowered.labels[at].word));
-            string.write_string(output, " rt:");
-            string.write_string(output, name);
-            string.write_string(output, "\n");
+            string.write_string(output, convert.format_int(lowered.labels[at].word)); string.write_string(output, " rt:"); string.write_string(output, name); string.write_string(output, "\n");
         }
         at = at + 1;
     }
@@ -83,6 +67,7 @@ waza write_symbols(path: string, file: mochi.File, lowered: lower.LowerResult) -
 // own behaviour and output are unchanged).
 waza build_file_observed(file: mochi.File, heap_capacity: int64, gc_stress: bool, observation: bool, symbols: string) -> NativeBuildResult {
     moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
+    moshi (has_c_declarations(file)) { kaesu c_link_error("E_CABI external calls require the Darwin source or Mochi linker"); }
     kaku lowered = lower.compile_with_heap(file, heap_capacity, gc_stress);
     moshi (observation) { lowered = lower.compile_with_observation(file, heap_capacity, gc_stress); }
     moshi (symbols != "" && lowered.error == mu) {
@@ -95,7 +80,7 @@ waza build_file_observed(file: mochi.File, heap_capacity: int64, gc_stress: bool
         kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", detail) };
     }
     kaku image = macho.executable(macho.ImageSpec { words: lowered.words, constants: lowered.constants,
-            globals: lowered.globals, patches: lowered.patches });
+        globals: lowered.globals, patches: lowered.patches });
     moshi (image.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_MACHO cannot encode native image" }; }
     kaesu NativeBuildResult { bytes: image.bytes, error: "" };
 }
@@ -116,31 +101,46 @@ koukai waza build_signed_source_observed(root: string, entry: string, bunko_root
 }
 
 koukai waza build_signed_source_diagnostic(root: string, entry: string, bunko_root: string, gc_stress: bool, observation: bool, symbols: string) -> NativeBuildResult {
-    kaku checked = frontend.compile_source(root, entry, bunko_root);
+    kaesu build_signed_source_linked(root, entry, bunko_root, gc_stress, observation, symbols, []);
+}
+
+koukai waza build_signed_source_linked(root: string, entry: string, bunko_root: string, gc_stress: bool,
+    observation: bool, symbols: string, link_options: []string) -> NativeBuildResult {
+    kaku checked = frontend.compile_source_target(root, entry, bunko_root, hai);
     moshi (checked.error != "") { kaesu NativeBuildResult { bytes: [], error: checked.error }; }
-    kaku decoded = mochi.decode(checked.bytes);
-    kaku file = decoded.value;
+    kaku decoded = mochi.decode(checked.bytes); kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
-    kaku thread_start = -1;
-    kaku thread_join = -1;
-    kaku scan = 0;
+    kaesu build_signed_file(file, gc_stress, observation, symbols, link_options);
+}
+
+waza build_signed_file(file: mochi.File, gc_stress: bool, observation: bool, symbols: string,
+    link_options: []string) -> NativeBuildResult {
+    moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
+    kaku thread_start = -1; kaku thread_join = -1; kaku scan = 0;
     aida (scan < len(file.functions)) {
         kaku name = file.functions[scan].name;
         moshi (string.has_prefix(name, "$mma::mio/thread/runtime::start::")) { thread_start = scan; }
         sore { moshi (string.has_prefix(name, "$mma::mio/thread/runtime::join::")) { thread_join = scan; } }
         scan = scan + 1;
     }
+    moshi (has_c_declarations(file)) {
+        kaku workers = thread_start >= 0 && thread_join >= 0;
+        moshi ((thread_start >= 0 || thread_join >= 0) && !workers) {
+            kaesu c_link_error("E_THREAD darwin-arm64 thread programs must declare start and join together");
+        }
+        kaku retention = !observation || os.getenv("MIO_OBSERVE_NO_RETENTION") != "1";
+        kaku lowered = lower.compile_with_c(file, 1073741824, gc_stress, observation, thread_start, thread_join, retention);
+        kaesu finish_c_build(file, lowered, workers, symbols, link_options);
+    }
+    moshi (len(link_options) != 0) { kaesu c_link_error("E_CABI link options require a C ABI declaration"); }
     // Programs that reference the OS thread natives take the cooperative multi-mutator build (the Darwin worker bridge); every other
     // program takes the ordinary build below, byte for byte as before.
     // (Other thread natives, such as the word natives of kiso/thread, are declared too; one that the program really calls has no arm64
     // routine yet and the lowering rejects the build.)
     moshi (thread_start >= 0 || thread_join >= 0) {
-        moshi (thread_start < 0 || thread_join < 0) {
-            kaesu NativeBuildResult {
-                bytes: [], error: "E_THREAD darwin-arm64 thread programs must declare start and join together" };
-        }
-        kaesu build_signed_thread_image(file, 1073741824, gc_stress, thread_start, thread_join);
+        moshi (thread_start < 0 || thread_join < 0) { kaesu NativeBuildResult { bytes: [], error: "E_THREAD darwin-arm64 thread programs must declare start and join together" }; }
+        kaesu build_signed_thread_image(file, 1073741824, gc_stress, thread_start, thread_join, symbols, observation);
     }
     kaku compiled = build_file_observed(file, 1073741824, gc_stress, observation, symbols);
     moshi (compiled.error != "") { kaesu compiled; }
@@ -149,10 +149,50 @@ koukai waza build_signed_source_diagnostic(root: string, entry: string, bunko_ro
     kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
 }
 
-// Darwin ARM64 image with the thread runtime: lowered by the worker bridge, linked against libSystem's pthread symbols and ad-hoc signed.
-waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64) -> NativeBuildResult {
-    moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
+waza lower_threads(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64,
+    observation: bool) -> lower.LowerResult {
     kaku lowered = lower.compile_with_public_threads(file, capacity, gc_stress, start_id, join_id);
+    // --observe: a diagnostic image that prints the heap observation record and the epoch-protocol counters on stderr at exit (never for timing).
+    // MIO_OBSERVE_NO_RETENTION=1 builds that image without bounded epoch retention so the epoch counts of both variants can be compared.
+    moshi (observation) { lowered = lower.compile_with_public_threads_observed(file, capacity, gc_stress, start_id, join_id, os.getenv("MIO_OBSERVE_NO_RETENTION") != "1"); }
+    // MIO_ALLOC_LOCK_STRESS=1 (with --observe): the test-only image that runs the real allocation lock fast path next to frequent real collections
+    // (docs/darwin-thread-heap-exclusion-design.md section 12). Requires --observe; without it the variable has no effect.
+    // MIO_ALLOC_LOCK_STRESS=violate is the detector-sensitivity control: it polls inside the locked region on purpose, and the in-lock checks must trip.
+    moshi (observation && (os.getenv("MIO_ALLOC_LOCK_STRESS") == "1" || os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate")) {
+        lowered = lower.compile_with_public_threads_lock_stress(file, capacity, start_id, join_id, os.getenv("MIO_ALLOC_LOCK_STRESS") == "violate");
+    }
+    moshi(observation){
+        kaku wait_test=os.getenv("MIO_ALLOC_WAIT_TEST");
+        moshi(wait_test=="owner"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,3);}
+        moshi(wait_test=="errno"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,4);}
+        moshi(wait_test=="park"){lowered=lower.compile_with_public_threads_wait_test(file,capacity,start_id,join_id,5);}
+    }
+    kaesu lowered;
+}
+
+waza finish_c_build(file: mochi.File, lowered: lower.LowerResult, workers: bool, symbols: string,
+    options: []string) -> NativeBuildResult {
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
+        kaesu c_link_error(string.concat("E_CABI ARM64 lowering failed ", detail));
+    }
+    moshi (symbols != "") {
+        kaku error = write_symbols(symbols, file, lowered);
+        moshi (error != "") { kaesu c_link_error(error); }
+    }
+    kaesu link_c_image(file, lowered, workers, options);
+}
+
+// Darwin ARM64 image with the thread runtime: lowered by the worker bridge, linked against libSystem's pthread symbols and ad-hoc signed.
+waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: bool, start_id: int64, join_id: int64,
+    symbols: string, observation: bool) -> NativeBuildResult {
+    kaku lowered = lower_threads(file, capacity, gc_stress, start_id, join_id, observation);
+    // --emit-symbols: the same function/runtime word map as for ordinary images, so stack samples of a thread image can be attributed.
+    moshi (symbols != "" && lowered.error == mu) {
+        kaku written = write_symbols(symbols, file, lowered);
+        moshi (written != "") { kaesu NativeBuildResult { bytes: [], error: written }; }
+    }
     kaku problem = lowered.error;
     moshi (problem != mu) {
         kaku detail = string.concat(convert.format_int(lower.error_code(problem)), string.concat(" / ", convert.format_int(lower.error_detail(problem))));
@@ -167,7 +207,11 @@ waza build_signed_thread_image(file: mochi.File, capacity: int64, gc_stress: boo
 }
 
 koukai waza build_signed_mochi(data: []uint8) -> NativeBuildResult {
-    kaku compiled = build_mochi_with_options(data, 1073741824, iie);
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu c_link_error("E_IR frontend produced invalid Mochi"); }
+    moshi (file == mu) { kaesu c_link_error("E_IR frontend returned no module"); }
+    moshi (has_c_declarations(file)) { kaesu build_signed_file(file, iie, iie, "", []); }
+    kaku compiled = build_file(file, 1073741824, iie);
     moshi (compiled.error != "") { kaesu compiled; }
     kaku signed = sign.adhoc(compiled.bytes);
     moshi (signed.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_SIGN ", signed.error) }; }
@@ -177,13 +221,10 @@ koukai waza build_signed_mochi(data: []uint8) -> NativeBuildResult {
 // Test images use a private, length-prefixed assertion channel plus a normal
 // completion marker. Ordinary applications retain the standard report ABI.
 koukai waza build_signed_test(data: []uint8) -> NativeBuildResult {
-    kaku decoded = mochi.decode(data);
-    kaku file = decoded.value;
+    kaku decoded = mochi.decode(data); kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR invalid test module" }; }
     moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR missing test module" }; }
-    kaku functions: []mochi.Function = [];
-    kaku at = 0;
-    kaku found = iie;
+    kaku functions: []mochi.Function = []; kaku at = 0; kaku found = iie;
     kaku normal = "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
     kaku packet = "$mma::mio/testing/runtime::report_packet::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967";
     aida (at < len(file.functions)) {
@@ -193,15 +234,15 @@ koukai waza build_signed_test(data: []uint8) -> NativeBuildResult {
             fn = mochi.Function { id: fn.id, name: packet, name_bytes: string.to_bytes(packet), parameter_count: fn.parameter_count,
                 local_count: fn.local_count, returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
         }
-        array.push(functions, fn);
-        at = at + 1;
+        array.push(functions, fn); at = at + 1;
     }
     moshi (!found) {
         array.push(functions, mochi.Function { id: len(functions), name: packet, name_bytes: string.to_bytes(packet), parameter_count: 2,
-                local_count: 2, returns_value: iie, captures: [], instructions: [] });
+            local_count: 2, returns_value: iie, captures: [], instructions: [] });
     }
     kaku linked = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count,
         instructions: file.instructions, functions: functions };
+    moshi (has_c_declarations(linked)) { kaesu build_signed_file(linked, iie, iie, "", []); }
     kaku compiled = build_file(linked, 1073741824, iie);
     moshi (compiled.error != "") { kaesu compiled; }
     kaku signed = sign.adhoc(compiled.bytes);

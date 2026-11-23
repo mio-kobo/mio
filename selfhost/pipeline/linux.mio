@@ -49,6 +49,8 @@ koukai waza build_linux_test(data: []uint8) -> NativeBuildResult {
         kaesu NativeBuildResult {
             bytes: [], error: "E_IR missing test module" };
     }
+    // 含 C 声明的测试包：与 mio build 相同的 System V 降级和系统链接（libc 默认链接，没有用户库参数）。
+    moshi (has_c_declarations(file)) { kaesu build_linux_c_file(file, iie, []); }
     kaku lowered = lowerlinux.compile(file);
     moshi (lowered.error != "") { kaesu NativeBuildResult { bytes: [], error: string.concat("E_LOWER ", lowered.error) }; }
     kaesu NativeBuildResult { bytes: lowered.bytes, error: "" };

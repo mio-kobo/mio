@@ -85,6 +85,11 @@ waza emit_os_runtime(code: x86_64.Assembler) -> unit {
 
     // rt.os_exit: rdi = status
     x86_64.label(code, "rt.os_exit");
+    moshi (cabi_enabled(code)) {
+        // C 模式：经 libc exit 冲刷 C stdio；exit 要求 RSP 16 字节对齐。
+        x86_64.and_ri(code, x86_64.rsp, -16);
+        x86_64.call_external(code, "exit");
+    }
     x86_64.mov_eax_imm(code, 231);
     x86_64.syscall(code);
 

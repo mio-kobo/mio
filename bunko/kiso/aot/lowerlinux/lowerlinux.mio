@@ -1,3 +1,4 @@
+yobu "kiso/aot/cabi";
 yobu "kiso/aot/elf";
 yobu "kiso/aot/machox64";
 yobu "kiso/aot/lower/types";
@@ -1362,6 +1363,17 @@ waza emit_function(code: x86_64.Assembler, file: mochi.File, analysis: types.Typ
         x86_64.ret(code);
         kaesu "";
     }
+    moshi (len(function.instructions) == 0 && cabi.is_external(function.name)) {
+        // C 外部函数：只有 compile_with_c 会定义 cabi_sysv 标签；其他构建不会得到 C 调用，也不会回退到 Mio 约定。
+        moshi (!cabi_enabled(code)) { kaesu "UNSUPPORTED_C_ABI_TARGET"; }
+        kaku declaration = cabi.signature(function.name, function.parameter_count, function.returns_value);
+        kaku bridged = emit_c_bridge(code, declaration, function.parameter_count);
+        moshi (bridged != "") { kaesu bridged; }
+        x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+        x86_64.pop_r(code, x86_64.rbp);
+        x86_64.ret(code);
+        kaesu "";
+    }
     moshi (len(function.instructions) == 0) {
         kaku operation = native_operation(function.name);
         kaku routine = native_routine(operation);
@@ -1435,13 +1447,73 @@ waza uses_threads(file: mochi.File) -> bool {
     kaesu iie;
 }
 
+// C ABI 模式由标签 cabi_sysv 开启（与 darwin_abi、mutators 相同的标签式开关），因此普通构建的指令序列完全不变。
+waza cabi_enabled(code: x86_64.Assembler) -> bool { kaesu x86_64.label_offset(code, "cabi_sysv") >= 0; }
+
+// 正常结束：C 模式下必须走 libc 的 exit，才能冲刷 C 的 stdio 缓冲并运行 atexit；普通构建仍直接 exit_group。
+// libc 的 exit 要求调用点 RSP 对齐 16 字节。
+waza emit_clean_exit(code: x86_64.Assembler) -> unit {
+    moshi (cabi_enabled(code)) {
+        x86_64.mov_ri(code, x86_64.rdi, 0);
+        x86_64.and_ri(code, x86_64.rsp, -16);
+        x86_64.call_external(code, "exit");
+        kaesu;
+    }
+    emit_exit(code, 0);
+}
+
+koukai kata CLowerResult {
+    // 机器码；入口偏移为 0。外部调用的 rel32 为 0，等待系统链接器回填。
+    bytes: []uint8;
+    error: string;
+    externals: []x86_64.ExternalCall;
+    // 需要在固定地址 elf.data_base 提供的零填充 bss 字节数。
+    bss_size: int64;
+}
+
+koukai waza compile_with_c(file: mochi.File, gc_threshold: int64) -> CLowerResult {
+    kaku parts = compile_parts(file, gc_threshold, iie, hai);
+    kaesu CLowerResult { bytes: parts.code, error: parts.error, externals: parts.externals, bss_size: parts.bss_size };
+}
+
 waza compile_target(file: mochi.File, gc_threshold: int64, darwin: bool) -> LowerResult {
-    moshi (mochi.has_win64_c(file)) { kaesu failed("E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64"); }
-    moshi (gc_threshold < 4096) { kaesu failed("INVALID_GC_THRESHOLD"); }
+    kaku parts = compile_parts(file, gc_threshold, darwin, iie);
+    moshi (parts.error != "") { kaesu failed(parts.error); }
+    moshi (darwin) {
+        kaku macho_image = machox64.executable(machox64.ImageSpec { code: parts.code, entry_offset: 0, bss_size: parts.bss_size });
+        moshi (macho_image.error != "") { kaesu failed(macho_image.error); }
+        kaesu LowerResult { bytes: macho_image.bytes, error: "" };
+    }
+    kaku image = elf.executable(elf.ImageSpec { code: parts.code, entry_offset: 0, bss_size: parts.bss_size });
+    moshi (image.error != "") { kaesu failed(image.error); }
+    kaesu LowerResult { bytes: image.bytes, error: "" };
+}
+
+kata Parts {
+    code: []uint8;
+    error: string;
+    externals: []x86_64.ExternalCall;
+    bss_size: int64;
+}
+
+waza failed_parts(message: string) -> Parts { kaesu Parts { code: [], error: message, externals: [], bss_size: 0 }; }
+
+waza compile_parts(file: mochi.File, gc_threshold: int64, darwin: bool, c_abi: bool) -> Parts {
+    moshi (mochi.has_win64_c(file)) { kaesu failed_parts("E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64"); }
+    moshi (gc_threshold < 4096) { kaesu failed_parts("INVALID_GC_THRESHOLD"); }
     kaku threads = uses_threads(file);
-    moshi (threads && darwin) { kaesu failed("UNSUPPORTED_THREADS_TARGET"); }
+    moshi (threads && darwin) { kaesu failed_parts("UNSUPPORTED_THREADS_TARGET"); }
+    // 线程运行时用裸 clone 和 FS 基址 TLS，会破坏 libc 的线程状态，所以 C 调用与 OS 线程不能同时使用。
+    moshi (threads && c_abi) { kaesu failed_parts("E_CABI C calls cannot be combined with OS threads on linux-amd64"); }
     kaku analysis = types.analyze_types(file);
     kaku code = x86_64.assembler();
+    moshi (c_abi) {
+        x86_64.label(code, "cabi_sysv");
+        // glibc 的 _start 调用 main(argc, argv, envp)：RDI = argc，RSI = argv，argc 就在 argv 前一个字，
+        // 与 Linux 进程入口处期望的 RSP 布局完全一致。和 Darwin x86-64 入口相同，直接把 RSP 放回该处；
+        // 之后程序只通过 libc 的 exit 结束，不会返回 libc 启动代码。argv 16 字节对齐 + 8，所以 RSP 对齐。
+        x86_64.lea(code, x86_64.rsp, x86_64.rsi, -8);
+    }
     moshi (threads) { x86_64.label(code, "mutators"); }
     // dyld enters at LC_MAIN with main(argc, argv, envp): rsi = argv, and argc sits just below it, exactly where the Linux
     // entry expects its stack pointer. The label darwin_abi makes every x86_64.syscall a call of darwin_syscall.
@@ -1462,33 +1534,26 @@ waza compile_target(file: mochi.File, gc_threshold: int64, darwin: bool) -> Lowe
     x86_64.push_r(code, x86_64.rbp);
     x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
     kaku problem = emit_block(code, file, analysis, file.instructions, "main", -1, 0);
-    moshi (problem != "") { kaesu failed(problem); }
+    moshi (problem != "") { kaesu failed_parts(problem); }
     moshi (uses_testing(file)) {
         x86_64.mov_ri(code, x86_64.rdi, 0);
         moshi (uses_testing_packet(file)) { x86_64.mov_ri(code, x86_64.rdi, 1); }
         x86_64.call(code, "rt.testing_finish");
     }
-    emit_exit(code, 0);
+    emit_clean_exit(code);
     kaku reached = types.reachable_functions(file);
     kaku index = 0;
     aida (index < len(file.functions)) {
         kaku problem = emit_function(code, file, analysis, index, reached[index]);
-        moshi (problem != "") { kaesu failed(problem); }
+        moshi (problem != "") { kaesu failed_parts(problem); }
         index = index + 1;
     }
     emit_runtime(code);
     moshi (darwin) { emit_darwin_abi_runtime(code); }
     emit_globals_map(code, file, analysis);
     emit_string_constants(code, file);
-    kaku assembled = x86_64.assemble(code);
-    moshi (assembled.error != "") { kaesu failed(assembled.error); }
+    kaku assembled = x86_64.assemble_linked(code);
+    moshi (assembled.error != "") { kaesu failed_parts(assembled.error); }
     kaku bss = 8192 + 2097152 + 98304 + 8 * file.global_count + 32;
-    moshi (darwin) {
-        kaku macho_image = machox64.executable(machox64.ImageSpec { code: assembled.bytes, entry_offset: 0, bss_size: bss });
-        moshi (macho_image.error != "") { kaesu failed(macho_image.error); }
-        kaesu LowerResult { bytes: macho_image.bytes, error: "" };
-    }
-    kaku image = elf.executable(elf.ImageSpec { code: assembled.bytes, entry_offset: 0, bss_size: bss });
-    moshi (image.error != "") { kaesu failed(image.error); }
-    kaesu LowerResult { bytes: image.bytes, error: "" };
+    kaesu Parts { code: assembled.bytes, error: "", externals: assembled.externals, bss_size: bss };
 }

@@ -6,48 +6,33 @@ yobu "selfhost/pipeline";
 
 // dispatch: the package's tests compiled with the generated dispatcher (frontend.compile_tests_dispatched), so one
 // native image serves every test of the package; empty when unavailable, and then each test gets its own image.
-koukai kata TestPlan {
-    bytes: []uint8;
-    tests: []frontend.TestCase;
-    error: string;
-    entry: string;
-    requested: string;
-    dispatch: []uint8;
-}
+koukai kata TestPlan { bytes: []uint8; tests: []frontend.TestCase; error: string; entry: string; requested: string; dispatch: []uint8; }
 
 koukai waza plan(root: string, entry: string, bunko_root: string) -> TestPlan {
-    kaku compiled = frontend.compile_tests(root, entry, bunko_root);
-    kaku identity = frontend.package_identity(root, entry);
+    kaku allow_c = pipeline.host_target() == "darwin-arm64" || pipeline.host_target() == "linux-amd64";
+    kaku compiled = frontend.compile_tests(root, entry, bunko_root, allow_c);
+    kaku identity=frontend.package_identity(root,entry);
     kaku dispatch: []uint8 = [];
     // Only worth a second frontend pass when it saves at least one native build.
     moshi (compiled.error == "" && len(compiled.tests) >= 2) {
-        kaku dispatched = frontend.compile_tests_dispatched(root, entry, bunko_root, compiled.tests);
+        kaku dispatched = frontend.compile_tests_dispatched(root, entry, bunko_root, compiled.tests, allow_c);
         // The dispatched program must contain exactly the same tests; otherwise keep one image per test.
         moshi (dispatched.error == "" && same_tests(dispatched.tests, compiled.tests)) { dispatch = dispatched.bytes; }
     }
-    kaesu TestPlan {
-        bytes: compiled.bytes, tests: compiled.tests, error: compiled.error, entry: identity, requested: entry, dispatch: dispatch };
+    kaesu TestPlan { bytes: compiled.bytes, tests: compiled.tests, error: compiled.error, entry:identity, requested:entry, dispatch: dispatch };
 }
 
 waza same_tests(left: []frontend.TestCase, right: []frontend.TestCase) -> bool {
     moshi (len(left) != len(right)) { kaesu iie; }
     kaku at = 0;
-    aida (at < len(left)) {
-        moshi (left[at].name != right[at].name) {
-            kaesu iie;
-        }
-        at = at + 1;
-    }
+    aida (at < len(left)) { moshi (left[at].name != right[at].name) { kaesu iie; } at = at + 1; }
     kaesu hai;
 }
 
 // The single test image of a package (plan.dispatch must be non-empty): its main calls the dispatcher, which runs the
 // test named by argument 1.
 koukai waza package_image(plan: TestPlan) -> pipeline.NativeBuildResult {
-    moshi (plan.error != "" || len(plan.dispatch) == 0) {
-        kaesu pipeline.NativeBuildResult {
-            bytes: [], error: "E0601 no dispatched test plan" };
-    }
+    moshi (plan.error != "" || len(plan.dispatch) == 0) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E0601 no dispatched test plan" }; }
     kaesu entry_image(plan.dispatch, string.concat(plan.entry, string.concat("::", frontend.test_dispatch_function)));
 }
 
@@ -55,38 +40,27 @@ koukai waza package_image(plan: TestPlan) -> pipeline.NativeBuildResult {
 // with the same test/helper name can accidentally become the selected entry.
 koukai waza image(plan: TestPlan, entry: string, name: string) -> pipeline.NativeBuildResult {
     moshi (plan.error != "") { kaesu pipeline.NativeBuildResult { bytes: [], error: plan.error }; }
-    moshi (entry != plan.requested && entry != plan.entry && frontend.source_identity(entry) != plan.entry) {
-        kaesu pipeline.NativeBuildResult {
-            bytes: [], error: "E0601 test package does not match compiled registry" };
-    }
+    moshi(entry!=plan.requested && entry!=plan.entry && frontend.source_identity(entry)!=plan.entry){kaesu pipeline.NativeBuildResult {bytes:[],error:"E0601 test package does not match compiled registry"};}
     kaesu entry_image(plan.bytes, string.concat(plan.entry, string.concat("::", name)));
 }
 
 // Native test image whose main runs the module's top level and then calls the function `key` (no parameters).
 waza entry_image(bytes: []uint8, key: string) -> pipeline.NativeBuildResult {
-    kaku decoded = mochi.decode(bytes);
-    kaku file = decoded.value;
+    kaku decoded = mochi.decode(bytes); kaku file = decoded.value;
     moshi (decoded.error != mu) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E_IR invalid test plan" }; }
     moshi (file == mu) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E_IR empty test plan" }; }
-    kaku selected = -1;
-    kaku at = 0;
+    kaku selected = -1; kaku at = 0;
     aida (at < len(file.functions)) {
         kaku fn = file.functions[at];
         moshi (fn.name == key) {
-            moshi (selected >= 0 || fn.parameter_count != 0 || fn.returns_value || len(fn.captures) != 0) {
-                kaesu pipeline.NativeBuildResult {
-                    bytes: [], error: "E0601 invalid or duplicate test entry" };
-            }
+            moshi (selected >= 0 || fn.parameter_count != 0 || fn.returns_value || len(fn.captures) != 0) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E0601 invalid or duplicate test entry" }; }
             selected = at;
         }
         at = at + 1;
     }
     moshi (selected < 0) { kaesu pipeline.NativeBuildResult { bytes: [], error: "E0601 test entry not found" }; }
     kaku instructions = array.clone(file.instructions);
-    array.push(instructions, uint8(25));
-    array.push(instructions, uint8(selected / 256));
-    array.push(instructions, uint8(selected - (selected / 256) * 256));
-    kaku module = mochi.File {
-        version: file.version, constants: file.constants, global_count: file.global_count, instructions: instructions, functions: file.functions };
+    array.push(instructions, uint8(25)); array.push(instructions, uint8(selected / 256)); array.push(instructions, uint8(selected - (selected / 256) * 256));
+    kaku module = mochi.File { version: file.version, constants: file.constants, global_count: file.global_count, instructions: instructions, functions: file.functions };
     kaesu pipeline.build_host_test(mochi.canonical_bytes(module));
 }

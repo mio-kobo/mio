@@ -1,6 +1,7 @@
-// 自举编译器前端协调器：负责包加载、源码覆盖层（Overlay）、LSP 分析与原生编译入口。
+yobu "kiso/encoding/win64c";
 yobu "selfhost/progress";
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/convert";
 yobu "kiso/fs";
 yobu "kiso/os";
@@ -12,39 +13,13 @@ yobu "selfhost/typecheck";
 yobu "selfhost/codegen";
 yobu "selfhost/resources";
 
-koukai kata TestCase {
-    name: string;
-    path: string;
-}
-koukai kata TestsResult {
-    bytes: []uint8;
-    tests: []TestCase;
-    error: string;
-}
+koukai kata TestCase { name: string; path: string; }
+koukai kata TestsResult { bytes: []uint8; tests: []TestCase; error: string; }
 
-koukai kata SourceOverlay {
-    path: string;
-    bytes: []uint8;
-}
-koukai kata AnalysisDiagnostic {
-    code: string;
-    path: string;
-    span: parser.SourceSpan;
-    detail: string;
-}
-koukai kata AnalysisSource {
-    path: string;
-    bytes: []uint8;
-    package_path: string;
-    file_id: int64;
-}
-koukai kata AnalysisResult {
-    resolved: []resolver.ResolvedPackage;
-    checked: []typecheck.TypeCheckResult;
-    sources: []AnalysisSource;
-    diagnostics: []AnalysisDiagnostic;
-    error: string;
-}
+koukai kata SourceOverlay { path: string; bytes: []uint8; }
+koukai kata AnalysisDiagnostic { code: string; path: string; span: parser.SourceSpan; detail: string; }
+koukai kata AnalysisSource { path: string; bytes: []uint8; package_path: string; file_id: int64; }
+koukai kata AnalysisResult { resolved: []resolver.ResolvedPackage; checked: []typecheck.TypeCheckResult; sources: []AnalysisSource; diagnostics: []AnalysisDiagnostic; error: string; }
 
 kata PackageState {
     work: progress.Context;
@@ -101,206 +76,113 @@ waza insert_sorted(values: []string, value: string) -> unit {
 // Physical identities unify cwd, symlinks and client overlays. Missing files
 // may still be valid unsaved buffers; resolve their existing parent if possible.
 koukai waza source_identity(file: string) -> string {
-    moshi (string.has_prefix(file, "<embedded>/")) { kaesu path.clean(file); }
-    kaku physical = os.canonical_path(file);
-    moshi (physical != mu) {
-        kaesu physical;
-    }
-    kaesu path.clean(file);
+    moshi(string.has_prefix(file,"<embedded>/")){kaesu path.clean(file);}
+    kaku physical=os.canonical_path(file);moshi(physical!=mu){kaesu physical;}kaesu path.clean(file);
 }
 // An unsaved file in a real aliased directory uses that directory's physical
 // identity. Entirely virtual directories retain their caller-provided identity.
 koukai waza source_file_identity(file: string) -> string {
-    moshi (string.has_prefix(file, "<embedded>/")) { kaesu path.clean(file); }
-    kaku physical = os.canonical_path(file);
-    moshi (physical != mu) {
-        kaesu physical;
-    }
-    physical = os.canonical_path(path.dir(file));
-    moshi (physical != mu) {
-        kaesu path.join(physical, path.base(file));
-    }
-    kaesu path.clean(file);
+    moshi(string.has_prefix(file,"<embedded>/")){kaesu path.clean(file);}
+    kaku physical=os.canonical_path(file);moshi(physical!=mu){kaesu physical;}
+    physical=os.canonical_path(path.dir(file));moshi(physical!=mu){kaesu path.join(physical,path.base(file));}kaesu path.clean(file);
 }
 
 // Windows host: SystemRoot names an existing directory (neither Unix host has one). Physical identities on Windows are
 // drive-absolute ("C:/dir/file.mio", '/' separators, from os.canonical_path).
 koukai waza host_is_windows() -> bool {
-    kaku system = os.environment("SystemRoot");
-    moshi (system == mu) {
-        kaesu iie;
-    }
-    kaesu system != "" && fs.is_dir(system) && !fs.is_dir("/proc/self");
+    kaku system=os.environment("SystemRoot");moshi(system==mu){kaesu iie;}
+    kaesu system!="" && fs.is_dir(system) && !fs.is_dir("/proc/self");
 }
 // True for "X:/..." or "X:" with an ASCII drive letter.
 koukai waza drive_absolute(value: string) -> bool {
-    kaku bytes = string.to_bytes(value);
-    moshi (len(bytes)<2 || bytes[1] != uint8(58)) {
-        kaesu iie;
-    }
-    kaku letter = (bytes[0] >= uint8(65) && bytes[0] <= uint8(90)) || (bytes[0] >= uint8(97) && bytes[0] <= uint8(122));
-    kaesu letter && (len(bytes) == 2 || bytes[2] == uint8(47));
+    kaku bytes=string.to_bytes(value);moshi(len(bytes)<2 || bytes[1]!=uint8(58)){kaesu iie;}
+    kaku letter=(bytes[0]>=uint8(65) && bytes[0]<=uint8(90)) || (bytes[0]>=uint8(97) && bytes[0]<=uint8(122));
+    kaesu letter && (len(bytes)==2 || bytes[2]==uint8(47));
 }
 // Absolute identity: a POSIX absolute path on every host; on a Windows host also a drive-absolute path. kiso/path
 // keeps its host-independent POSIX semantics, so "C:/x" stays relative there and on Unix hosts.
 koukai waza absolute_identity(value: string) -> bool {
-    moshi (path.is_abs(value)) { kaesu hai; }
+    moshi(path.is_abs(value)){kaesu hai;}
     kaesu drive_absolute(value) && host_is_windows();
 }
 koukai waza package_identity(root: string, requested: string) -> string {
-    moshi (string.has_prefix(requested, "kiso/") || string.has_prefix(requested, "mio/")) { kaesu path.clean(requested); }
-    moshi (absolute_identity(requested)) {
-        kaesu source_identity(requested);
-    }
-    kaesu source_identity(path.join(root, requested));
+    moshi(string.has_prefix(requested,"kiso/") || string.has_prefix(requested,"mio/")){kaesu path.clean(requested);}
+    moshi(absolute_identity(requested)){kaesu source_identity(requested);}kaesu source_identity(path.join(root,requested));
 }
 waza source_directory(state: PackageState, root: string, package_path: string) -> string {
-    moshi (string.has_prefix(package_path, "kiso/")) {
-        kaku raw = path.join(state.bunko_root, package_path);
-        moshi (state.bunko_root == "") {
-            kaesu raw;
-        }
-        kaku physical = os.canonical_path(raw);
-        kaku base = os.canonical_path(state.bunko_root);
-        moshi (physical != mu) {
-            moshi (base != mu) {
-                moshi (physical != base && !string.has_prefix(physical, string.concat(base, "/"))) {
-                    state.failed[0] = hai;
-                    state.diagnostic[0] = string.concat("E_IMPORT Bunko package escapes explicit root: ", package_path);
-                }
-            }
-            kaesu physical;
-        }
+    moshi(string.has_prefix(package_path,"kiso/")){
+        kaku raw=path.join(state.bunko_root,package_path);moshi(state.bunko_root==""){kaesu raw;}
+        kaku physical=os.canonical_path(raw);kaku base=os.canonical_path(state.bunko_root);
+        moshi(physical!=mu){moshi(base!=mu){moshi(physical!=base && !string.has_prefix(physical,string.concat(base,"/"))){state.failed[0]=hai;state.diagnostic[0]=string.concat("E_IMPORT Bunko package escapes explicit root: ",package_path);}}kaesu physical;}
         kaesu raw;
     }
-    moshi (absolute_identity(package_path)) {
-        kaesu path.clean(package_path);
-    }
-    kaesu path.join(root, package_path);
+    moshi(absolute_identity(package_path)){kaesu path.clean(package_path);}kaesu path.join(root,package_path);
 }
 
 waza add_socket_layouts(result: []codegen.NativeFunctionLayout, packages: []resolver.ResolvedPackage) -> unit {
-    kaku found = iie;
-    kaku at = 0;
+    kaku found = iie; kaku at = 0;
     aida (at < len(packages)) {
-        kaku aliases = packages[at].aliases;
-        kaku ai = 0;
-        aida (ai < len(aliases)) {
-            moshi (aliases[ai].package_path == "mio/sys/socket") {
-                found = hai;
-            }
-            ai = ai + 1;
-        }
+        kaku aliases = packages[at].aliases; kaku ai = 0;
+        aida (ai < len(aliases)) { moshi (aliases[ai].package_path == "mio/sys/socket") { found = hai; } ai = ai + 1; }
         at = at + 1;
     }
     moshi (!found) { kaesu; }
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "open", binding_key: "$mma::mio/sys/socket::open::2bd390f6a00486b5badde861e398d7014c8e331b8946668924bd7048c8bd76d7", parameter_count: 0, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "status", binding_key: "$mma::mio/sys/socket::status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "bind_ipv4", binding_key: "$mma::mio/sys/socket::bind_ipv4::f5e8d492393d1d5f642e3573af501663920a9be9788fbeda8b1f38deb28ffecd", parameter_count: 4, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "connect_ipv4", binding_key: "$mma::mio/sys/socket::connect_ipv4::f5e8d492393d1d5f642e3573af501663920a9be9788fbeda8b1f38deb28ffecd", parameter_count: 4, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "listen", binding_key: "$mma::mio/sys/socket::listen::0a2af19668a171e5f7f873b1d1a23a4d3ebe7ca1f73a074d7b75234419859515", parameter_count: 3, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "accept", binding_key: "$mma::mio/sys/socket::accept::3a6d99e54aef1b988c4bc8780939e06e8558ca5116f17980850557fbe5abc4d4", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "read", binding_key: "$mma::mio/sys/socket::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "write", binding_key: "$mma::mio/sys/socket::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "close", binding_key: "$mma::mio/sys/socket::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "set_nonblocking", binding_key: "$mma::mio/sys/socket::set_nonblocking::0a2af19668a171e5f7f873b1d1a23a4d3ebe7ca1f73a074d7b75234419859515", parameter_count: 3, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "finish_connect", binding_key: "$mma::mio/sys/socket::finish_connect::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "reactor_open", binding_key: "$mma::mio/sys/socket::reactor_open::e2a0babf4a727ca4f89523981320dd885733845cd378c09e6c21c159e1f42906", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "reactor_ctl", binding_key: "$mma::mio/sys/socket::reactor_ctl::192e86d1345326f3b7e75658a055233648ffd9a32cf67722240f4e14905712b7", parameter_count: 4, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "reactor_wait", binding_key: "$mma::mio/sys/socket::reactor_wait::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "reactor_signal", binding_key: "$mma::mio/sys/socket::reactor_signal::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/sys/socket", name: "reactor_ack", binding_key: "$mma::mio/sys/socket::reactor_ack::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"open",binding_key:"$mma::mio/sys/socket::open::2bd390f6a00486b5badde861e398d7014c8e331b8946668924bd7048c8bd76d7",parameter_count:0,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"status",binding_key:"$mma::mio/sys/socket::status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93",parameter_count:2,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"bind_ipv4",binding_key:"$mma::mio/sys/socket::bind_ipv4::f5e8d492393d1d5f642e3573af501663920a9be9788fbeda8b1f38deb28ffecd",parameter_count:4,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"connect_ipv4",binding_key:"$mma::mio/sys/socket::connect_ipv4::f5e8d492393d1d5f642e3573af501663920a9be9788fbeda8b1f38deb28ffecd",parameter_count:4,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"listen",binding_key:"$mma::mio/sys/socket::listen::0a2af19668a171e5f7f873b1d1a23a4d3ebe7ca1f73a074d7b75234419859515",parameter_count:3,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"accept",binding_key:"$mma::mio/sys/socket::accept::3a6d99e54aef1b988c4bc8780939e06e8558ca5116f17980850557fbe5abc4d4",parameter_count:1,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"read",binding_key:"$mma::mio/sys/socket::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430",parameter_count:5,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"write",binding_key:"$mma::mio/sys/socket::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430",parameter_count:5,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"close",binding_key:"$mma::mio/sys/socket::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93",parameter_count:2,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"set_nonblocking",binding_key:"$mma::mio/sys/socket::set_nonblocking::0a2af19668a171e5f7f873b1d1a23a4d3ebe7ca1f73a074d7b75234419859515",parameter_count:3,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"finish_connect",binding_key:"$mma::mio/sys/socket::finish_connect::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93",parameter_count:2,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"reactor_open",binding_key:"$mma::mio/sys/socket::reactor_open::e2a0babf4a727ca4f89523981320dd885733845cd378c09e6c21c159e1f42906",parameter_count:1,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"reactor_ctl",binding_key:"$mma::mio/sys/socket::reactor_ctl::192e86d1345326f3b7e75658a055233648ffd9a32cf67722240f4e14905712b7",parameter_count:4,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"reactor_wait",binding_key:"$mma::mio/sys/socket::reactor_wait::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430",parameter_count:5,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"reactor_signal",binding_key:"$mma::mio/sys/socket::reactor_signal::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93",parameter_count:2,returns_value:hai});
+    array.push(result, codegen.NativeFunctionLayout {package_path:"mio/sys/socket",name:"reactor_ack",binding_key:"$mma::mio/sys/socket::reactor_ack::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93",parameter_count:2,returns_value:hai});
 }
 
 waza native_layouts() -> []codegen.NativeFunctionLayout {
     kaku result: []codegen.NativeFunctionLayout = [];
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "close", binding_key: "$mma::mio/fs/runtime::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_close", binding_key: "$mma::mio/fs/runtime::dir_close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_is_dir", binding_key: "$mma::mio/fs/runtime::dir_is_dir::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_is_file", binding_key: "$mma::mio/fs/runtime::dir_is_file::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_name", binding_key: "$mma::mio/fs/runtime::dir_name::ca5c10cb23a1dc4f8d7120a05626b664f700151ff09870e6a2a9204b890efa7c", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_next", binding_key: "$mma::mio/fs/runtime::dir_next::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "dir_status", binding_key: "$mma::mio/fs/runtime::dir_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "file_status", binding_key: "$mma::mio/fs/runtime::file_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "mkdir", binding_key: "$mma::mio/fs/runtime::mkdir::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "open", binding_key: "$mma::mio/fs/runtime::open::1192df94a5bdf48f4df10a0aa4b61147cfc2e6f2c2f8ea1248826e517f716633", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "open_dir", binding_key: "$mma::mio/fs/runtime::open_dir::7128dadd824bee38c385b052b0d86ff37b801ae61b35c36db664b2d310b6dbdf", parameter_count: 1, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "read", binding_key: "$mma::mio/fs/runtime::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "stat", binding_key: "$mma::mio/fs/runtime::stat::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946", parameter_count: 2, returns_value: hai });
-    array.push(result, codegen.NativeFunctionLayout {
-            package_path: "mio/fs/runtime", name: "write", binding_key: "$mma::mio/fs/runtime::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "close", binding_key: "$mma::mio/fs/runtime::close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_close", binding_key: "$mma::mio/fs/runtime::dir_close::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_is_dir", binding_key: "$mma::mio/fs/runtime::dir_is_dir::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_is_file", binding_key: "$mma::mio/fs/runtime::dir_is_file::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_name", binding_key: "$mma::mio/fs/runtime::dir_name::ca5c10cb23a1dc4f8d7120a05626b664f700151ff09870e6a2a9204b890efa7c", parameter_count: 1, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_next", binding_key: "$mma::mio/fs/runtime::dir_next::c9ff387755a05bfa435b60b204111ffc83a5f199b21f569f6673482e3a103ca6", parameter_count: 1, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "dir_status", binding_key: "$mma::mio/fs/runtime::dir_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "file_status", binding_key: "$mma::mio/fs/runtime::file_status::513a084e5a0291e2893cce23d944461f99797716df1ab69f0acf49b3f195be93", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "mkdir", binding_key: "$mma::mio/fs/runtime::mkdir::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "open", binding_key: "$mma::mio/fs/runtime::open::1192df94a5bdf48f4df10a0aa4b61147cfc2e6f2c2f8ea1248826e517f716633", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "open_dir", binding_key: "$mma::mio/fs/runtime::open_dir::7128dadd824bee38c385b052b0d86ff37b801ae61b35c36db664b2d310b6dbdf", parameter_count: 1, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "read", binding_key: "$mma::mio/fs/runtime::read::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "stat", binding_key: "$mma::mio/fs/runtime::stat::6f2c95561ed64afe3034886f256d86934e0ad43ef1d605224b7f6d40167a9946", parameter_count: 2, returns_value: hai });
+    array.push(result, codegen.NativeFunctionLayout { package_path: "mio/fs/runtime", name: "write", binding_key: "$mma::mio/fs/runtime::write::e8706d18fa932e83ff56c940a8552084a64d75a1d0629364439b5e079ca29430", parameter_count: 5, returns_value: hai });
     kaesu result;
 }
 
 waza overlay_index(state: PackageState, file_path: string) -> int64 {
-    kaku normalized = source_file_identity(file_path);
-    kaku at = len(state.overlays) - 1;
-    aida (at >= 0) {
-        moshi (source_file_identity(state.overlays[at].path) == normalized) {
-            kaesu at;
-        }
-        at = at - 1;
-    }
-    kaesu -1;
+    kaku normalized = source_file_identity(file_path); kaku at = len(state.overlays) - 1;
+    aida (at >= 0) { moshi (source_file_identity(state.overlays[at].path) == normalized) { kaesu at; } at = at - 1; } kaesu -1;
 }
 waza import_failure(state: PackageState, files: []resolver.SourceFile, dependency: string, detail: string) -> unit {
     moshi (len(files) == 0) { kaesu; }
-    kaku source = files[0];
-    kaku span = source.ast.nodes[source.root].span;
-    kaku fi = 0;
-    kaku found = iie;
+    kaku source = files[0]; kaku span = source.ast.nodes[source.root].span; kaku fi = 0; kaku found = iie;
     aida (fi < len(files) && !found) {
-        kaku file = files[fi];
-        kaku children = file.ast.nodes[file.root].children;
-        kaku ni = 0;
+        kaku file = files[fi]; kaku children = file.ast.nodes[file.root].children; kaku ni = 0;
         aida (ni < len(children) && !found) { kaku node = file.ast.nodes[children[ni]];
-            moshi (parser.node_kind_code(node.kind) == 1 && node.text == dependency) {
-                source = file;
-                span = node.span;
-                found = hai;
-            }
-            ni = ni + 1;
+            moshi (parser.node_kind_code(node.kind) == 1 && node.text == dependency) { source = file; span = node.span; found = hai; } ni = ni + 1;
         } fi = fi + 1;
     }
     array.push(state.diagnostics, AnalysisDiagnostic { code: "E_IMPORT", path: source.path, span: span, detail: detail });
 }
 
 waza load_package(state: PackageState, root: string, requested: string) -> unit {
-    kaku package_path = package_identity(root, requested);
-    moshi (!progress.checkpoint(state.work)) {
-        state.failed[0] = hai;
-        state.diagnostic[0] = "E_CANCELLED native service request";
-        kaesu;
-    }
+    kaku package_path=package_identity(root,requested);
+    moshi(!progress.checkpoint(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";kaesu;}
     moshi (state.failed[0] || contains(state.paths, package_path)) { kaesu; }
     moshi (contains(state.visiting, package_path)) {
         state.failed[0] = hai;
@@ -309,17 +191,9 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
     }
     array.push(state.visiting, package_path);
     kaku directory = source_directory(state, root, package_path);
-    moshi (state.failed[0]) {
-        array.truncate(state.visiting, len(state.visiting) - 1);
-        kaesu;
-    }
+    moshi(state.failed[0]){array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
     kaku embedded = state.bunko_root == "" && string.has_prefix(package_path, "kiso/");
-    moshi (embedded && len(state.embedded) == 0) {
-        state.failed[0] = hai;
-        state.diagnostic[0] = string.concat("E_BUNKO_MISSING Bunko is not installed; use --bunko-root or MIO_BUNKO to import ", package_path);
-        array.truncate(state.visiting, len(state.visiting) - 1);
-        kaesu;
-    }
+    moshi(embedded && len(state.embedded)==0){state.failed[0]=hai;state.diagnostic[0]=string.concat("E_BUNKO_MISSING Bunko is not installed; use --bunko-root or MIO_BUNKO to import ",package_path);array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
     kaku selected = "";
     kaku names: []string = [];
     moshi (embedded) {
@@ -332,128 +206,66 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
         directory = string.concat("<embedded>/", package_path);
     }
     sore {
-        moshi (fs.is_file(directory) || overlay_index(state, directory) >= 0) {
-            selected = path.base(directory);
-            directory = path.dir(directory);
-        }
+        moshi (fs.is_file(directory) || overlay_index(state, directory) >= 0) { selected = path.base(directory); directory = path.dir(directory); }
         kaku listing = fs.read_dir(directory);
         kaku oi = 0;
         aida (oi < len(state.overlays)) {
-            kaku file_path = source_file_identity(state.overlays[oi].path);
-            kaku name = path.base(file_path);
-            moshi (path.dir(file_path) == path.clean(directory) && (selected == "" || selected == name) && string.has_suffix(name, ".mio") && (!string.has_suffix(name, "_test.mio") || package_path == state.test_entry) && !contains(names, name)) {
-                insert_sorted(names, name);
-            }
+            kaku file_path = source_file_identity(state.overlays[oi].path); kaku name = path.base(file_path);
+            moshi (path.dir(file_path) == path.clean(directory) && (selected == "" || selected == name) && string.has_suffix(name, ".mio") && (!string.has_suffix(name, "_test.mio") || package_path == state.test_entry) && !contains(names, name)) { insert_sorted(names, name); }
             oi = oi + 1;
         }
-        moshi (listing.error != mu && len(names) == 0) {
-            state.failed[0] = hai;
-            state.diagnostic[0] = string.concat("E_IO read package: ", package_path);
-            array.truncate(state.visiting, len(state.visiting) - 1);
-            kaesu;
-        }
+        moshi (listing.error != mu && len(names) == 0) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IO read package: ", package_path); array.truncate(state.visiting, len(state.visiting) - 1); kaesu; }
         kaku entry = 0;
         aida (entry < len(listing.entries)) {
             kaku current = listing.entries[entry];
-            moshi ((selected == "" || selected == current.name) && (!string.has_prefix(package_path, "kiso/") || current.is_file) && !current.is_dir && string.has_suffix(current.name, ".mio") && (!string.has_suffix(current.name, "_test.mio") || package_path == state.test_entry)) {
-                moshi (!contains(names, current.name)) {
-                    insert_sorted(names, current.name);
-                }
-            }
+            moshi ((selected == "" || selected == current.name) && (!string.has_prefix(package_path,"kiso/") || current.is_file) && !current.is_dir && string.has_suffix(current.name, ".mio") && (!string.has_suffix(current.name, "_test.mio") || package_path == state.test_entry)) { moshi (!contains(names, current.name)) { insert_sorted(names, current.name); } }
             entry = entry + 1;
         }
     }
-    moshi (len(names) == 0) {
-        state.failed[0] = hai;
-        state.diagnostic[0] = string.concat("E_INPUT empty package: ", package_path);
-        array.truncate(state.visiting, len(state.visiting) - 1);
-        kaesu;
-    }
+    moshi (len(names) == 0) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_INPUT empty package: ", package_path); array.truncate(state.visiting, len(state.visiting) - 1); kaesu; }
     kaku files: []resolver.SourceFile = [];
     kaku dependencies: []string = [];
     kaku index = 0;
     aida (index < len(names)) {
         kaku file_path = path.join(directory, names[index]);
-        moshi (!embedded) { file_path = source_file_identity(file_path); }
+        moshi(!embedded){file_path=source_file_identity(file_path);}
         kaku data: []uint8 = [];
         kaku overlay = overlay_index(state, file_path);
         moshi (overlay >= 0) { data = state.overlays[overlay].bytes; }
         sore { moshi (embedded) {
-                kaku key = path.join(package_path, names[index]);
-                kaku found = iie;
-                kaku ei = 0;
-                aida (ei < len(state.embedded)) {
-                    moshi (state.embedded[ei].path == key) {
-                        data = string.to_bytes(state.embedded[ei].source);
-                        found = hai;
-                        nukeru;
-                    }
-                    ei = ei + 1;
-                }
-                moshi (!found) {
-                    state.failed[0] = hai;
-                    state.diagnostic[0] = string.concat("E_RESOURCE missing embedded source: ", key);
-                    nukeru;
-                }
+            kaku key = path.join(package_path, names[index]); kaku found = iie; kaku ei = 0;
+            aida (ei < len(state.embedded)) {
+                moshi (state.embedded[ei].path == key) { data = string.to_bytes(state.embedded[ei].source); found = hai; nukeru; }
+                ei = ei + 1;
             }
-            sore {
-                kaku source = fs.read_all(file_path);
-                moshi (source.error != mu) {
-                    state.failed[0] = hai;
-                    state.diagnostic[0] = string.concat("E_IO read source: ", file_path);
-                    nukeru;
-                }
-                data = source.data;
-            } }
-        kaku parsed = parser.parse_with_progress(data, state.work);
-        moshi (progress.cancelled(state.work)) {
-            state.failed[0] = hai;
-            state.diagnostic[0] = "E_CANCELLED native service request";
-            array.truncate(state.visiting, len(state.visiting) - 1);
-            kaesu;
+            moshi (!found) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_RESOURCE missing embedded source: ", key); nukeru; }
         }
+        sore {
+            kaku source = fs.read_all(file_path);
+            moshi (source.error != mu) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IO read source: ", file_path); nukeru; }
+            data = source.data;
+        } }
+        kaku parsed = parser.parse_with_progress(data,state.work);
+        moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
+        moshi (state.analysis_mode) { kaku file_id = len(files); moshi (parsed.root < 0) { file_id = -1; } array.push(state.sources, AnalysisSource { path: file_path, bytes: data, package_path: package_path, file_id: file_id }); }
         moshi (state.analysis_mode) {
-            kaku file_id = len(files);
-            moshi (parsed.root < 0) {
-                file_id = -1;
-            }
-            array.push(state.sources, AnalysisSource {
-                    path: file_path, bytes: data, package_path: package_path, file_id: file_id });
-        }
-        moshi (state.analysis_mode) {
-            kaku pi = 0;
-            aida (pi < len(parsed.errors)) {
-                kaku problem = parsed.errors[pi];
-                kaku code = "E0101";
-                kaku detail = "invalid source syntax";
-                moshi (parser.parse_error_kind_code(problem.kind) == 0) {
-                    code = "E0001";
-                    detail = "invalid source token";
-                }
-                kaku end = problem.position;
-                kaku ti = 0;
-                aida (ti < len(parsed.tokens)) {
-                    moshi (parsed.tokens[ti].start.offset == problem.position.offset) {
-                        end = parsed.tokens[ti].end;
-                        nukeru;
-                    }
-                    ti = ti + 1;
-                }
-                array.push(state.diagnostics, AnalysisDiagnostic {
-                        code: code, path: file_path, span: parser.SourceSpan {
-                            start: problem.position, end: end }, detail: detail });
-                pi = pi + 1;
+            kaku pi = 0; aida (pi < len(parsed.errors)) { kaku problem = parsed.errors[pi];
+                kaku code = "E0101"; kaku detail = "invalid source syntax";
+                moshi (parser.parse_error_kind_code(problem.kind) == 0) { code = "E0001"; detail = "invalid source token"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
+                moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
+                kaku end = problem.position; kaku ti = 0;
+                aida (ti < len(parsed.tokens)) { moshi (parsed.tokens[ti].start.offset == problem.position.offset) { end = parsed.tokens[ti].end; nukeru; } ti = ti + 1; }
+                array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: file_path, span: parser.SourceSpan { start: problem.position, end: end }, detail: detail }); pi = pi + 1;
             }
         }
         moshi (len(parsed.errors) != 0 && !state.analysis_mode) {
-            state.failed[0] = hai;
-            state.diagnostic[0] = diagnostic("E_PARSE", file_path, parsed.errors[0].position.line, parsed.errors[0].position.column, "invalid source syntax");
-            nukeru;
+            kaku problem = parsed.errors[0]; kaku code = "E_PARSE"; kaku detail = "invalid source syntax";
+            moshi (parser.parse_error_kind_code(problem.kind) == 8) { code = "E_CABI"; detail = "expected a C declaration suffix = c followed by a C symbol string"; }
+            moshi (parser.parse_error_kind_code(problem.kind) == 9) { code = "E_CABI"; detail = "variadic parameters are unsupported"; }
+            state.failed[0] = hai; state.diagnostic[0] = diagnostic(code, file_path, problem.position.line, problem.position.column, detail); nukeru;
         }
-        moshi (parsed.root < 0 || parsed.root >= len(parsed.ast.nodes)) {
-            index = index + 1;
-            tsuzuku;
-        }
+        moshi (parsed.root < 0 || parsed.root >= len(parsed.ast.nodes)) { index = index + 1; tsuzuku; }
         array.push(files, resolver.SourceFile { file_id: len(files), path: file_path, ast: parsed.ast, root: parsed.root });
         kaku root_node = parsed.ast.nodes[parsed.root];
         kaku child = 0;
@@ -463,15 +275,12 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
             moshi (parser.node_kind_code(node.kind) == 1 && (string.has_prefix(node.text, "./") || string.has_prefix(node.text, "../"))) {
                 kaku parent = directory;
                 kaku normalized = path.clean(path.join(parent, node.text));
-                node = parser.Node {
-                    kind: node.kind, text: normalized, extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator, children: node.children, span: node.span };
+                node = parser.Node { kind: node.kind, text: normalized, extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator, children: node.children, span: node.span };
                 parsed.ast.nodes[node_id] = node;
             }
-            moshi (parser.node_kind_code(node.kind) == 1 && !string.has_prefix(node.text, "mio/")) {
-                kaku normalized = package_identity(root, node.text);
-                node = parser.Node {
-                    kind: node.kind, text: normalized, extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator, children: node.children, span: node.span };
-                parsed.ast.nodes[node_id] = node;
+            moshi(parser.node_kind_code(node.kind)==1 && !string.has_prefix(node.text,"mio/")){
+                kaku normalized=package_identity(root,node.text);
+                node=parser.Node {kind:node.kind,text:normalized,extra:node.extra,integer:node.integer,flag:node.flag,operator:node.operator,children:node.children,span:node.span};parsed.ast.nodes[node_id]=node;
             }
             moshi (!state.analysis_mode && package_path == state.test_entry && string.has_suffix(names[index], "_test.mio") && parser.node_kind_code(node.kind) == 32 && string.has_prefix(node.text, "test_")) {
                 kaku valid = node.integer == 0 && node.operator == 0;
@@ -481,15 +290,11 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
                 }
                 moshi (!valid) {
                     array.push(state.tests, TestCase { name: node.text, path: file_path });
-                    state.failed[0] = hai;
-                    state.diagnostic[0] = diagnostic("E0601", file_path, node.span.start.line, node.span.start.column, string.concat(node.text, ": test functions must be nongeneric, have no parameters and return unit"));
-                    nukeru;
+                    state.failed[0] = hai; state.diagnostic[0] = diagnostic("E0601", file_path, node.span.start.line, node.span.start.column, string.concat(node.text, ": test functions must be nongeneric, have no parameters and return unit")); nukeru;
                 }
                 array.push(state.tests, TestCase { name: node.text, path: file_path });
             }
-            moshi (parser.node_kind_code(node.kind) == 1 && !string.has_prefix(node.text, "mio/") && !contains(dependencies, node.text)) {
-                insert_sorted(dependencies, node.text);
-            }
+            moshi (parser.node_kind_code(node.kind) == 1 && !string.has_prefix(node.text, "mio/") && !contains(dependencies, node.text)) { insert_sorted(dependencies, node.text); }
             child = child + 1;
         }
         index = index + 1;
@@ -497,16 +302,12 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
     // Lexical errors can leave every source without an AST. Keep those source
     // diagnostics, but do not ask the resolver to install builtins from files[0].
     moshi (state.analysis_mode && len(files) == 0) {
-        array.truncate(state.visiting, len(state.visiting) - 1);
-        kaesu;
+        array.truncate(state.visiting, len(state.visiting) - 1); kaesu;
     }
     index = 0;
     aida (index < len(dependencies)) {
         load_package(state, root, dependencies[index]);
-        moshi (state.analysis_mode && state.failed[0] && !progress.cancelled(state.work)) {
-            import_failure(state, files, dependencies[index], state.diagnostic[0]);
-            state.failed[0] = iie;
-        }
+        moshi (state.analysis_mode && state.failed[0] && !progress.cancelled(state.work)) { import_failure(state, files, dependencies[index], state.diagnostic[0]); state.failed[0] = iie; }
         index = index + 1;
     }
     moshi (!state.failed[0]) {
@@ -515,107 +316,78 @@ waza load_package(state: PackageState, root: string, requested: string) -> unit 
         index = 0;
         aida (index < len(dependencies)) {
             kaku dependency = 0;
-            aida (dependency < len(state.paths) && state.paths[dependency] != dependencies[index]) { dependency = dependency + 1; }
-            moshi (dependency == len(state.paths) && state.analysis_mode) {
-                index = index + 1;
-                tsuzuku;
-            }
-            moshi (dependency == len(state.paths)) {
-                state.failed[0] = hai;
-                state.diagnostic[0] = string.concat("E_IMPORT missing dependency: ", dependencies[index]);
-                nukeru;
-            }
+            kaku identity = package_identity(root, dependencies[index]);
+            aida (dependency < len(state.paths) && state.paths[dependency] != identity) { dependency = dependency + 1; }
+            moshi (dependency == len(state.paths) && state.analysis_mode) { index = index + 1; tsuzuku; }
+            moshi (dependency == len(state.paths)) { state.failed[0] = hai; state.diagnostic[0] = string.concat("E_IMPORT missing dependency: ", dependencies[index]); nukeru; }
             array.push(resolved_dependencies, state.resolved[dependency]);
             array.push(checked_dependencies, state.checked[dependency]);
             index = index + 1;
         }
         moshi (!state.failed[0]) {
-            kaku resolved = resolver.resolve_package_with_progress(package_path, files, resolved_dependencies, state.work);
-            moshi (progress.cancelled(state.work)) {
-                state.failed[0] = hai;
-                state.diagnostic[0] = "E_CANCELLED native service request";
-                array.truncate(state.visiting, len(state.visiting) - 1);
-                kaesu;
-            }
-            kaku checked = typecheck.check_package_with_progress(resolved, checked_dependencies, state.work);
-            moshi (progress.cancelled(state.work)) {
-                state.failed[0] = hai;
-                state.diagnostic[0] = "E_CANCELLED native service request";
-                array.truncate(state.visiting, len(state.visiting) - 1);
-                kaesu;
-            }
-            moshi (state.analysis_mode) {
-                kaku ei = 0;
-                aida (ei < len(resolved.errors)) {
-                    kaku problem = resolved.errors[ei];
-                    kaku kind = resolver.resolve_error_kind_code(problem.kind);
-                    kaku code = "E0205";
-                    kaku detail = problem.name;
-                    moshi (kind == 0) {
-                        code = "E0201";
-                        detail = string.concat("undefined identifier ", string.concat(problem.name, "\nhelp: check the name or declare it in the current scope"));
+            // The resolver compares dependency identities, while the parser's
+            // alias comes from the original import spelling.
+            kaku fi = 0;
+            aida (fi < len(files)) {
+                kaku file = files[fi];
+                kaku children = file.ast.nodes[file.root].children;
+                kaku ni = 0;
+                aida (ni < len(children)) {
+                    kaku id = children[ni];
+                    kaku node = file.ast.nodes[id];
+                    moshi (parser.node_kind_code(node.kind) == 1) {
+                        file.ast.nodes[id] = parser.Node { kind: node.kind, text: package_identity(root, node.text),
+                            extra: node.extra, integer: node.integer, flag: node.flag, operator: node.operator,
+                            children: node.children, span: node.span };
                     }
-                    moshi (kind == 1 || kind == 7) {
-                        code = "E0202";
-                        detail = string.concat("duplicate declaration: ", problem.name);
-                    }
-                    moshi (kind == 8) {
-                        code = "E0203";
-                        moshi (problem.name == "kaesu") {
-                            code = "E0204";
-                        }
-                    }
-                    array.push(state.diagnostics, AnalysisDiagnostic {
-                            code: code, path: files[problem.file_id].path, span: problem.span, detail: detail });
-                    ei = ei + 1;
+                    ni = ni + 1;
                 }
-                ei = 0;
-                aida (ei < len(checked.errors)) {
-                    kaku problem = checked.errors[ei];
-                    kaku code = problem.code;
-                    kaku span = problem.span;
+                fi = fi + 1;
+            }
+            kaku resolved = resolver.resolve_package_with_progress(package_path, files, resolved_dependencies,state.work);
+            moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
+            kaku checked = typecheck.check_package_with_progress(resolved, checked_dependencies,state.work);
+            moshi(progress.cancelled(state.work)){state.failed[0]=hai;state.diagnostic[0]="E_CANCELLED native service request";array.truncate(state.visiting,len(state.visiting)-1);kaesu;}
+            moshi (state.analysis_mode) {
+                kaku ei = 0; aida (ei < len(resolved.errors)) { kaku problem = resolved.errors[ei];
+                    kaku kind = resolver.resolve_error_kind_code(problem.kind); kaku code = "E0205"; kaku detail = problem.name;
+                    moshi (kind == 0) { code = "E0201"; detail = string.concat("undefined identifier ", string.concat(problem.name, "\nhelp: check the name or declare it in the current scope")); }
+                    moshi (kind == 1 || kind == 7) { code = "E0202"; detail = string.concat("duplicate declaration: ", problem.name); }
+                    moshi (kind == 8) { code = "E0203"; moshi (problem.name == "kaesu") { code = "E0204"; } }
+                    array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: files[problem.file_id].path, span: problem.span, detail: detail }); ei = ei + 1;
+                }
+                ei = 0; aida (ei < len(checked.errors)) { kaku problem = checked.errors[ei];
+                    kaku code = problem.code; kaku span = problem.span;
                     moshi (typecheck.type_error_kind_code(problem.kind) == 6) {
-                        code = "E0304";
-                        kaku node = files[problem.node.file_id].ast.nodes[problem.node.node_id];
+                        code = "E0304"; kaku node = files[problem.node.file_id].ast.nodes[problem.node.node_id];
                         moshi (len(node.children) > 0) { span = files[problem.node.file_id].ast.nodes[node.children[0]].span; }
                     }
                     kaku detail = string.concat(problem.detail, string.concat("\nexpected/actual: ", string.concat(typecheck.type_name(checked, problem.expected), string.concat(" / ", typecheck.type_name(checked, problem.actual)))));
                     // Ownership diagnostics carry no types: print only the explanation.
                     moshi (typecheck.type_error_kind_code(problem.kind) == 14) { detail = problem.detail; }
-                    array.push(state.diagnostics, AnalysisDiagnostic {
-                            code: code, path: files[problem.node.file_id].path, span: span, detail: detail });
-                    ei = ei + 1;
+                    array.push(state.diagnostics, AnalysisDiagnostic { code: code, path: files[problem.node.file_id].path, span: span, detail: detail }); ei = ei + 1;
                 }
-                array.push(state.paths, package_path);
-                array.push(state.resolved, resolved);
-                array.push(state.checked, checked);
+                array.push(state.paths, package_path); array.push(state.resolved, resolved); array.push(state.checked, checked);
             }
             sore { moshi (len(resolved.errors) != 0 || len(checked.errors) != 0) {
-                    state.failed[0] = hai;
-                    moshi (len(resolved.errors) != 0) {
-                        kaku problem = resolved.errors[0];
-                        state.diagnostic[0] = diagnostic("E_RESOLVE", files[problem.file_id].path, problem.span.start.line, problem.span.start.column, problem.name);
-                    }
-                    sore {
-                        kaku problem = checked.errors[0];
-                        state.diagnostic[0] = diagnostic(problem.code, files[problem.node.file_id].path, problem.span.start.line, problem.span.start.column, problem.detail);
-                    }
+                state.failed[0] = hai;
+                moshi (len(resolved.errors) != 0) {
+                    kaku problem = resolved.errors[0];
+                    state.diagnostic[0] = diagnostic("E_RESOLVE", files[problem.file_id].path, problem.span.start.line, problem.span.start.column, problem.name);
                 }
                 sore {
-                    array.push(state.paths, package_path);
-                    array.push(state.resolved, resolved);
-                    array.push(state.checked, checked);
+                    kaku problem = checked.errors[0];
+                    state.diagnostic[0] = diagnostic(problem.code, files[problem.node.file_id].path, problem.span.start.line, problem.span.start.column, problem.detail);
                 }
             }
+            sore { array.push(state.paths, package_path); array.push(state.resolved, resolved); array.push(state.checked, checked); } }
         }
     }
     array.truncate(state.visiting, len(state.visiting) - 1);
 }
 
-koukai kata FrontendResult {
-    bytes: []uint8;
-    error: string;
-}
+
+koukai kata FrontendResult { bytes: []uint8; error: string; }
 
 waza diagnostic(code: string, file: string, line: int64, column: int64, detail: string) -> string {
     kaku location = string.concat(file, string.concat(":", convert.format_int(line)));
@@ -626,25 +398,23 @@ waza diagnostic(code: string, file: string, line: int64, column: int64, detail: 
 // Real source entry and project/Bunko roots are supplied by the caller. This
 // module has no top-level execution, output files or bootstrap configuration.
 koukai waza compile_source(root: string, entry: string, bunko_root: string) -> FrontendResult {
-    kaku state = source_state(bunko_root, "");
-    kaesu compile_state(state, root, entry);
+    kaesu compile_source_target(root, entry, bunko_root, iie);
 }
 
-koukai waza compile_tests(root: string, entry: string, bunko_root: string) -> TestsResult {
-    kaku state = source_state(bunko_root, package_identity(root, entry));
+koukai waza compile_source_target(root: string, entry: string, bunko_root: string, allow_c: bool) -> FrontendResult {
+    kaku state = source_state(bunko_root, "");
+    kaesu compile_state(state, root, entry, allow_c);
+}
+
+koukai waza compile_tests(root: string, entry: string, bunko_root: string, allow_c: bool) -> TestsResult {
+    kaku state = source_state(bunko_root, package_identity(root,entry));
     kaku listing = fs.read_dir(source_directory(state, root, entry));
     moshi (listing.error == mu) {
-        kaku any = iie;
-        kaku at = 0;
-        aida (at < len(listing.entries)) {
-            moshi (!listing.entries[at].is_dir && string.has_suffix(listing.entries[at].name, ".mio")) {
-                any = hai;
-            }
-            at = at + 1;
-        }
+        kaku any = iie; kaku at = 0;
+        aida (at < len(listing.entries)) { moshi (!listing.entries[at].is_dir && string.has_suffix(listing.entries[at].name, ".mio")) { any = hai; } at = at + 1; }
         moshi (!any) { kaesu TestsResult { bytes: [], tests: [], error: "" }; }
     }
-    kaku compiled = compile_state(state, root, entry);
+    kaku compiled = compile_state(state, root, entry, allow_c);
     kaesu TestsResult { bytes: compiled.bytes, tests: state.tests, error: compiled.error };
 }
 
@@ -654,7 +424,7 @@ koukai waza compile_tests(root: string, entry: string, bunko_root: string) -> Te
 // in its own process from the same image. Returns an empty result (callers then build one image per test) when the
 // package is not a plain source directory: a single file, or Bunko sources embedded in the compiler.
 koukai teisu test_dispatch_function = "mio_test_dispatch";
-koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: string, tests: []TestCase) -> TestsResult {
+koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: string, tests: []TestCase, allow_c: bool) -> TestsResult {
     kaku probe = source_state(bunko_root, package_identity(root, entry));
     moshi (bunko_root == "" && string.has_prefix(entry, "kiso/")) { kaesu TestsResult { bytes: [], tests: [], error: "" }; }
     kaku directory = source_directory(probe, root, entry);
@@ -669,62 +439,60 @@ koukai waza compile_tests_dispatched(root: string, entry: string, bunko_root: st
         at = at + 1;
     }
     string.write_string(source, "    testing.expect(iie, \"E_TEST unknown test selection\");\n}\n");
-    kaku overlay = SourceOverlay {
-        path: path.join(directory, "mio_test_dispatch_test.mio"), bytes: string.to_bytes(string.builder_string(source)) };
+    kaku overlay = SourceOverlay { path: path.join(directory, "mio_test_dispatch_test.mio"), bytes: string.to_bytes(string.builder_string(source)) };
     kaku state = source_state_options(bunko_root, package_identity(root, entry), [overlay], iie);
-    kaku compiled = compile_state(state, root, entry);
+    kaku compiled = compile_state(state, root, entry, allow_c);
     kaesu TestsResult { bytes: compiled.bytes, tests: state.tests, error: compiled.error };
 }
 
 waza source_state(bunko_root: string, test_entry: string) -> PackageState { kaesu source_state_options(bunko_root, test_entry, [], iie); }
-waza source_state_options(bunko_root: string, test_entry: string, overlays: []SourceOverlay, analysis_mode: bool) -> PackageState {
-    kaesu source_state_progress(bunko_root, test_entry, overlays, analysis_mode, progress.context());
-}
+waza source_state_options(bunko_root: string, test_entry: string, overlays: []SourceOverlay, analysis_mode: bool) -> PackageState {kaesu source_state_progress(bunko_root,test_entry,overlays,analysis_mode,progress.context());}
 waza source_state_progress(bunko_root: string, test_entry: string, overlays: []SourceOverlay, analysis_mode: bool, work: progress.Context) -> PackageState {
-    kaku embedded: []resources.File = [];
-    moshi (bunko_root == "") {
-        embedded = resources.files();
-    }
-    kaesu PackageState {
-        work: work, overlays: overlays, analysis_mode: analysis_mode, sources: [], diagnostics: [], bunko_root: bunko_root, embedded: embedded, test_entry: test_entry, tests: [], paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""] };
+    kaku embedded: []resources.File = []; moshi (bunko_root == "") { embedded = resources.files(); }
+    kaesu PackageState { work:work, overlays: overlays, analysis_mode: analysis_mode, sources: [], diagnostics: [], bunko_root: bunko_root, embedded: embedded, test_entry: test_entry, tests: [], paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""] };
 }
 
 // LSP analysis shares the source provider, parser, resolver and checker used by
 // normal compilation. Overlays are read-only memory inputs; no disk rewrite.
-koukai waza analyze_source(root: string, entry: string, bunko_root: string, overlays: []SourceOverlay, include_tests: bool) -> AnalysisResult {
-    kaesu analyze_source_with_progress(root, entry, bunko_root, overlays, include_tests, progress.context());
-}
+koukai waza analyze_source(root: string, entry: string, bunko_root: string, overlays: []SourceOverlay, include_tests: bool) -> AnalysisResult {kaesu analyze_source_with_progress(root,entry,bunko_root,overlays,include_tests,progress.context());}
 koukai waza analyze_source_with_progress(root: string, entry: string, bunko_root: string, overlays: []SourceOverlay, include_tests: bool, work: progress.Context) -> AnalysisResult {
-    kaku test_entry = "";
-    moshi (include_tests) {
-        test_entry = package_identity(root, entry);
-    }
-    kaku state = source_state_progress(bunko_root, test_entry, overlays, hai, work);
-    load_package(state, root, entry);
-    kaku error = "";
-    moshi (state.failed[0]) {
-        error = state.diagnostic[0];
-    }
-    kaesu AnalysisResult {
-        resolved: state.resolved, checked: state.checked, sources: state.sources, diagnostics: state.diagnostics, error: error };
+    kaku test_entry = ""; moshi (include_tests) { test_entry = package_identity(root,entry); }
+    kaku state = source_state_progress(bunko_root, test_entry, overlays, hai,work);
+    load_package(state, root, entry); kaku error = ""; moshi (state.failed[0]) { error = state.diagnostic[0]; }
+    kaesu AnalysisResult { resolved: state.resolved, checked: state.checked, sources: state.sources, diagnostics: state.diagnostics, error: error };
 }
 
-waza compile_state(state: PackageState, root: string, entry: string) -> FrontendResult {
+koukai waza c_declaration_error(packages: []resolver.ResolvedPackage) -> string {
+    kaku pi = 0;
+    aida (pi < len(packages)) {
+        kaku files = packages[pi].files;
+        kaku fi = 0;
+        aida (fi < len(files)) {
+            kaku file = files[fi]; kaku root = file.ast.nodes[file.root]; kaku ni = 0;
+            aida (ni < len(root.children)) {
+                kaku node = file.ast.nodes[root.children[ni]];
+                moshi (parser.node_kind_code(node.kind) == 32 && node.extra != "" && !win64c.is_external(node.extra)) { kaesu cabi.target_error; }
+                ni = ni + 1;
+            }
+            fi = fi + 1;
+        }
+        pi = pi + 1;
+    }
+    kaesu "";
+}
+
+waza compile_state(state: PackageState, root: string, entry: string, allow_c: bool) -> FrontendResult {
     load_package(state, root, entry);
     moshi (state.failed[0]) { kaesu FrontendResult { bytes: [], error: state.diagnostic[0] }; }
-    kaku natives = native_layouts();
-    add_socket_layouts(natives, state.resolved);
-    kaku testing_runtime = iie;
-    kaku os_runtime = iie;
-    kaku thread_runtime = iie;
-    kaku package_index = 0;
+    moshi (!allow_c) {
+        kaku problem = c_declaration_error(state.resolved);
+        moshi (problem != "") { kaesu FrontendResult { bytes: [], error: problem }; }
+    }
+    kaku natives = native_layouts(); add_socket_layouts(natives, state.resolved); kaku testing_runtime = iie; kaku os_runtime = iie; kaku thread_runtime = iie; kaku package_index = 0;
     aida (package_index < len(state.resolved)) {
-        kaku symbols = state.resolved[package_index].symbols;
-        kaku symbol_index = 0;
+        kaku symbols = state.resolved[package_index].symbols; kaku symbol_index = 0;
         aida (symbol_index < len(symbols)) {
-            moshi (symbols[symbol_index].package_path == "mio/testing/runtime" && symbols[symbol_index].name == "report") {
-                testing_runtime = hai;
-            }
+            moshi (symbols[symbol_index].package_path == "mio/testing/runtime" && symbols[symbol_index].name == "report") { testing_runtime = hai; }
             moshi (symbols[symbol_index].package_path == "mio/os/runtime") { os_runtime = hai; }
             moshi (symbols[symbol_index].package_path == "mio/thread/runtime") { thread_runtime = hai; }
             symbol_index = symbol_index + 1;
@@ -733,73 +501,54 @@ waza compile_state(state: PackageState, root: string, entry: string) -> Frontend
     }
     moshi (testing_runtime) {
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/testing/runtime", name: "report",
-                binding_key: "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967",
-                parameter_count: 2, returns_value: iie });
+            binding_key: "$mma::mio/testing/runtime::report::153aff314d46bf25303f5c7917c019f53894e31277e171f138611964b6a5d967",
+            parameter_count: 2, returns_value: iie });
     }
     moshi (thread_runtime) {
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "start",
-                binding_key: "$mma::mio/thread/runtime::start::a3d1240461811d5cb81abc2a8540289381e974014b9673e90fde86ab68e0b5a0", parameter_count: 1, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::start::a3d1240461811d5cb81abc2a8540289381e974014b9673e90fde86ab68e0b5a0", parameter_count: 1, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "join",
-                binding_key: "$mma::mio/thread/runtime::join::b15568a4df58d4355f98d16e65c34ee8bcb7acdc6bee95cdfc64e1fa36946600", parameter_count: 1, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::join::b15568a4df58d4355f98d16e65c34ee8bcb7acdc6bee95cdfc64e1fa36946600", parameter_count: 1, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "join_status",
-                binding_key: "$mma::mio/thread/runtime::join_status::e1e7f17901b77414d6ee92dad5ab45a52e52ca578aa8d3ad9b67008198a23c07", parameter_count: 0, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::join_status::e1e7f17901b77414d6ee92dad5ab45a52e52ca578aa8d3ad9b67008198a23c07", parameter_count: 0, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "words_new",
-                binding_key: "$mma::mio/thread/runtime::words_new::2d442928cf15b11422d9812e734deb33200ebfa5553356bb4c38613afb3e0a40", parameter_count: 1, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::words_new::2d442928cf15b11422d9812e734deb33200ebfa5553356bb4c38613afb3e0a40", parameter_count: 1, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "words_free",
-                binding_key: "$mma::mio/thread/runtime::words_free::ac68c7c9ef3695b7255576336208b6f56ce093398520340f92bb07d61895a659", parameter_count: 2, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::words_free::ac68c7c9ef3695b7255576336208b6f56ce093398520340f92bb07d61895a659", parameter_count: 2, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_get",
-                binding_key: "$mma::mio/thread/runtime::word_get::8af87688970e58bad000d36e06ba1f0227af3a16c04b0fc00772057c70b14682", parameter_count: 2, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_get::8af87688970e58bad000d36e06ba1f0227af3a16c04b0fc00772057c70b14682", parameter_count: 2, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_set",
-                binding_key: "$mma::mio/thread/runtime::word_set::1f324e2e20def45450776395bd16a6c6669ffcc6a6ef60b5c01751bf33819306", parameter_count: 3, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_set::1f324e2e20def45450776395bd16a6c6669ffcc6a6ef60b5c01751bf33819306", parameter_count: 3, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_cas",
-                binding_key: "$mma::mio/thread/runtime::word_cas::0419470a865f4221eba43d76ec966762d3f528dcef2399c7000a7081eabb9b1d", parameter_count: 4, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_cas::0419470a865f4221eba43d76ec966762d3f528dcef2399c7000a7081eabb9b1d", parameter_count: 4, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_add",
-                binding_key: "$mma::mio/thread/runtime::word_add::a14dc46a52f2e8c25a4b9717b59aecfec1ab1cbe884534026f3cfa6db6d1f1b7", parameter_count: 3, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_add::a14dc46a52f2e8c25a4b9717b59aecfec1ab1cbe884534026f3cfa6db6d1f1b7", parameter_count: 3, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_wait",
-                binding_key: "$mma::mio/thread/runtime::word_wait::6d1cd1973e5e31558f21d3f6310709fe58b6445a223a33a7023e93693a2f8a42", parameter_count: 3, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_wait::6d1cd1973e5e31558f21d3f6310709fe58b6445a223a33a7023e93693a2f8a42", parameter_count: 3, returns_value: hai });
         array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/thread/runtime", name: "word_wake",
-                binding_key: "$mma::mio/thread/runtime::word_wake::aa512d8bd82f76f25c5bf4771fb6b8bc4947685a189c054081f100547eb0ecb6", parameter_count: 3, returns_value: hai });
+            binding_key: "$mma::mio/thread/runtime::word_wake::aa512d8bd82f76f25c5bf4771fb6b8bc4947685a189c054081f100547eb0ecb6", parameter_count: 3, returns_value: hai });
     }
     moshi (os_runtime) {
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "real_path", binding_key: "$mma::mio/os/runtime::real_path::a45d9b7aef28d85d1466309e6a9a98b654726a1bef371c90bca683b2ecf21318", parameter_count: 2, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "stdin_wait", binding_key: "$mma::mio/os/runtime::stdin_wait::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "stdin_ready", binding_key: "$mma::mio/os/runtime::stdin_ready::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "env_size", binding_key: "$mma::mio/os/runtime::env_size::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "env_copy", binding_key: "$mma::mio/os/runtime::env_copy::a45d9b7aef28d85d1466309e6a9a98b654726a1bef371c90bca683b2ecf21318", parameter_count: 2, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout {package_path:"mio/os/runtime",name:"real_path",binding_key:"$mma::mio/os/runtime::real_path::a45d9b7aef28d85d1466309e6a9a98b654726a1bef371c90bca683b2ecf21318",parameter_count:2,returns_value:hai});
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "stdin_wait", binding_key: "$mma::mio/os/runtime::stdin_wait::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "stdin_ready", binding_key: "$mma::mio/os/runtime::stdin_ready::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "env_size", binding_key: "$mma::mio/os/runtime::env_size::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "env_copy", binding_key: "$mma::mio/os/runtime::env_copy::a45d9b7aef28d85d1466309e6a9a98b654726a1bef371c90bca683b2ecf21318", parameter_count: 2, returns_value: hai });
 
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "monotonic_ms", binding_key: "$mma::mio/os/runtime::monotonic_ms::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "spawn_test", binding_key: "$mma::mio/os/runtime::spawn_test::37cce6b035b8405afd5f3ab3e07963f5a23d78f9a2a2205d364e0f72c317b660", parameter_count: 6, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "rmdir", binding_key: "$mma::mio/os/runtime::rmdir::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "spawn", binding_key: "$mma::mio/os/runtime::spawn::555acc9cd6915c133a226b6aa37175af19e84fed7e725f4199a2dec2d98ab4eb", parameter_count: 2, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "exec", binding_key: "$mma::mio/os/runtime::exec::555acc9cd6915c133a226b6aa37175af19e84fed7e725f4199a2dec2d98ab4eb", parameter_count: 2, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "pid", binding_key: "$mma::mio/os/runtime::pid::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "remove", binding_key: "$mma::mio/os/runtime::remove::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "argc", binding_key: "$mma::mio/os/runtime::argc::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "arg_size", binding_key: "$mma::mio/os/runtime::arg_size::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "arg_copy", binding_key: "$mma::mio/os/runtime::arg_copy::70ac3b361d4ba108aeefdd952d76d4590a62bb1ce0a04031189b6b1dc7419a6d", parameter_count: 2, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "chmod", binding_key: "$mma::mio/os/runtime::chmod::61215f13826fb0c45557e17ebf8aee362b6cfb0d3b2d7f437f7946c1a407f361", parameter_count: 2, returns_value: hai });
-        array.push(natives, codegen.NativeFunctionLayout {
-                package_path: "mio/os/runtime", name: "exit", binding_key: "$mma::mio/os/runtime::exit::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "monotonic_ms", binding_key: "$mma::mio/os/runtime::monotonic_ms::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "spawn_test", binding_key: "$mma::mio/os/runtime::spawn_test::37cce6b035b8405afd5f3ab3e07963f5a23d78f9a2a2205d364e0f72c317b660", parameter_count: 6, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "rmdir", binding_key: "$mma::mio/os/runtime::rmdir::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "spawn", binding_key: "$mma::mio/os/runtime::spawn::555acc9cd6915c133a226b6aa37175af19e84fed7e725f4199a2dec2d98ab4eb", parameter_count: 2, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "exec", binding_key: "$mma::mio/os/runtime::exec::555acc9cd6915c133a226b6aa37175af19e84fed7e725f4199a2dec2d98ab4eb", parameter_count: 2, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "pid", binding_key: "$mma::mio/os/runtime::pid::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "remove", binding_key: "$mma::mio/os/runtime::remove::195aa2406eb132812cd197e0d54d8f0ef64515accac66d0fc6e2cfd3835d892b", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "argc", binding_key: "$mma::mio/os/runtime::argc::dda1c13cbb7a6ee343f4a88c74e87cfab8b1e56c9fd213764793ebc5315482f2", parameter_count: 0, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "arg_size", binding_key: "$mma::mio/os/runtime::arg_size::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "arg_copy", binding_key: "$mma::mio/os/runtime::arg_copy::70ac3b361d4ba108aeefdd952d76d4590a62bb1ce0a04031189b6b1dc7419a6d", parameter_count: 2, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "chmod", binding_key: "$mma::mio/os/runtime::chmod::61215f13826fb0c45557e17ebf8aee362b6cfb0d3b2d7f437f7946c1a407f361", parameter_count: 2, returns_value: hai });
+        array.push(natives, codegen.NativeFunctionLayout { package_path: "mio/os/runtime", name: "exit", binding_key: "$mma::mio/os/runtime::exit::ef54322c57791e5008c09839db29d0913e109a8d2c1ed9b499ed05a73016289c", parameter_count: 1, returns_value: hai });
     }
-    kaku result = codegen.CompileResult {
-        success: iie, bytes: [], layout: codegen.BytecodeLayout {
-            constants: [], global_count: 0, instructions: [], functions: [] }, errors: [] };
+    kaku result = codegen.CompileResult { success: iie, bytes: [], layout: codegen.BytecodeLayout { constants: [], global_count: 0, instructions: [], functions: [] }, errors: [] };
     result = codegen.compile_native_modules(state.resolved, state.checked, natives, state.test_entry != "");
     moshi (!result.success) {
         kaku detail = "E_CODEGEN";
