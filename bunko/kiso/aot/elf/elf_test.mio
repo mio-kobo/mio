@@ -1,8 +1,14 @@
 yobu "kiso/testing";
 
 waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
-    kaku value = 0; kaku scale = 1; kaku i = 0;
-    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) {
+        value = value + int64(bytes[at + i]) * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
     kaesu value;
 }
 
@@ -57,8 +63,14 @@ waza test_complete_layout_program_and_section_headers() -> unit {
     testing.expect(word(b, r + 24, 8) == 4112 && word(b, r + 32, 8) == 22 && word(b, r + 48, 8) == 1, ".shstrtab offset/size/align");
     // string table contents: "\0.text\0.bss\0.shstrtab\0"
     kaku expected: []int64 = [0, 46, 116, 101, 120, 116, 0, 46, 98, 115, 115, 0, 46, 115, 104, 115, 116, 114, 116, 97, 98, 0];
-    kaku i = 0; kaku same = hai;
-    aida (i < len(expected)) { moshi (int64(b[4112 + i]) != expected[i]) { same = iie; } i = i + 1; }
+    kaku i = 0;
+    kaku same = hai;
+    aida (i < len(expected)) {
+        moshi (int64(b[4112 + i]) != expected[i]) {
+            same = iie;
+        }
+        i = i + 1;
+    }
     testing.expect(same, ".shstrtab holds \"\\0.text\\0.bss\\0.shstrtab\\0\"");
     testing.expect(word(b, 4096 + 1, 1) == 255 && word(b, 4096 + 3, 1) == 231 && word(b, 4096 + 8, 1) == 5, "code bytes unchanged");
 }
@@ -75,11 +87,14 @@ waza test_zero_bss_omits_the_data_segment() -> unit {
 
 waza test_invalid_specs_fail_closed() -> unit {
     testing.expect(executable(ImageSpec { code: [], entry_offset: 0, bss_size: 0 }).error == "EMPTY_TEXT", "empty text");
-    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 1, bss_size: 0 }).error == "INVALID_ENTRY", "entry at the end of the code");
+    testing.expect(executable(ImageSpec {
+                code: [uint8(195)], entry_offset: 1, bss_size: 0 }).error == "INVALID_ENTRY", "entry at the end of the code");
     testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: -1, bss_size: 0 }).error == "INVALID_ENTRY", "negative entry");
     testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: -1 }).error == "INVALID_BSS", "negative bss");
-    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "bss above maximum_bss_size");
-    testing.expect(executable(ImageSpec { code: [uint8(195)], entry_offset: 0, bss_size: 268435456 }).error == "", "bss exactly at maximum_bss_size is accepted");
+    testing.expect(executable(ImageSpec {
+                code: [uint8(195)], entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "bss above maximum_bss_size");
+    testing.expect(executable(ImageSpec {
+                code: [uint8(195)], entry_offset: 0, bss_size: 268435456 }).error == "", "bss exactly at maximum_bss_size is accepted");
 }
 
 // AArch64: exit_group(0): mov x0,#0 ; mov x8,#94 ; svc #0

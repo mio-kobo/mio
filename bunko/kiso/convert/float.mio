@@ -445,7 +445,10 @@ waza rounded_decimal_coefficient(digits: []uint8, precision: int64) -> int64 {
         kaku sticky = iie;
         index = precision + 1;
         aida (index < len(digits)) {
-            moshi (digits[index] != 48) { sticky = hai; nukeru; }
+            moshi (digits[index] != 48) {
+                sticky = hai;
+                nukeru;
+            }
             index = index + 1;
         }
         moshi (next > 5 || (next == 5 && (sticky || coefficient - (coefficient / 2) * 2 != 0))) {
@@ -470,13 +473,19 @@ waza decimal_candidate(coefficient_value: int64, exponent10_value: int64) -> str
         bytes.write_byte(fixed, uint8(48));
         bytes.write_byte(fixed, uint8(46));
         kaku zeros = -point;
-        aida (zeros > 0) { bytes.write_byte(fixed, uint8(48)); zeros = zeros - 1; }
+        aida (zeros > 0) {
+            bytes.write_byte(fixed, uint8(48));
+            zeros = zeros - 1;
+        }
         bytes.write(fixed, coefficient_bytes);
     } sore {
         moshi (point >= len(coefficient_bytes)) {
             bytes.write(fixed, coefficient_bytes);
             kaku zeros = point - len(coefficient_bytes);
-            aida (zeros > 0) { bytes.write_byte(fixed, uint8(48)); zeros = zeros - 1; }
+            aida (zeros > 0) {
+                bytes.write_byte(fixed, uint8(48));
+                zeros = zeros - 1;
+            }
         } sore {
             kaku index: int64 = 0;
             aida (index < len(coefficient_bytes)) {
@@ -541,14 +550,26 @@ waza shorter_candidate(current: string, candidate: string?) -> string {
 waza format_finite_float64(value: float64) -> string {
     kaku normalized = value;
     kaku exponent2: int64 = 0;
-    aida (normalized >= 2.0) { normalized = normalized / 2.0; exponent2 = exponent2 + 1; }
-    aida (normalized < 1.0) { normalized = normalized * 2.0; exponent2 = exponent2 - 1; }
+    aida (normalized >= 2.0) {
+        normalized = normalized / 2.0;
+        exponent2 = exponent2 + 1;
+    }
+    aida (normalized < 1.0) {
+        normalized = normalized * 2.0;
+        exponent2 = exponent2 - 1;
+    }
     kaku factor: float64 = 1.0;
     kaku count: int64 = 0;
-    aida (count < 52) { factor = factor * 2.0; count = count + 1; }
+    aida (count < 52) {
+        factor = factor * 2.0;
+        count = count + 1;
+    }
     kaku significand = int64(normalized * factor);
     exponent2 = exponent2 - 52;
-    aida (significand - (significand / 2) * 2 == 0) { significand = significand / 2; exponent2 = exponent2 + 1; }
+    aida (significand - (significand / 2) * 2 == 0) {
+        significand = significand / 2;
+        exponent2 = exponent2 + 1;
+    }
     kaku exact = exact_decimal(significand, exponent2);
     kaku digits = big_decimal_bytes(exact.significand);
     kaku lower: int64 = 1;
@@ -579,14 +600,26 @@ waza format_finite_float64(value: float64) -> string {
 waza format_finite_float32(value: float32) -> string {
     kaku normalized = value;
     kaku exponent2: int64 = 0;
-    aida (normalized >= float32(2.0)) { normalized = normalized / float32(2.0); exponent2 = exponent2 + 1; }
-    aida (normalized < float32(1.0)) { normalized = normalized * float32(2.0); exponent2 = exponent2 - 1; }
+    aida (normalized >= float32(2.0)) {
+        normalized = normalized / float32(2.0);
+        exponent2 = exponent2 + 1;
+    }
+    aida (normalized < float32(1.0)) {
+        normalized = normalized * float32(2.0);
+        exponent2 = exponent2 - 1;
+    }
     kaku factor: float32 = float32(1.0);
     kaku count: int64 = 0;
-    aida (count < 23) { factor = factor * float32(2.0); count = count + 1; }
+    aida (count < 23) {
+        factor = factor * float32(2.0);
+        count = count + 1;
+    }
     kaku significand = int64(normalized * factor);
     exponent2 = exponent2 - 23;
-    aida (significand - (significand / 2) * 2 == 0) { significand = significand / 2; exponent2 = exponent2 + 1; }
+    aida (significand - (significand / 2) * 2 == 0) {
+        significand = significand / 2;
+        exponent2 = exponent2 + 1;
+    }
     kaku exact = exact_decimal(significand, exponent2);
     kaku digits = big_decimal_bytes(exact.significand);
     kaku lower: int64 = 1;

@@ -23,8 +23,8 @@ teisu socket_state = 20; // 20 open, 20 + status failed. File states occupy 1 th
 
 waza winsock_imports() -> pe.ImportLibrary {
     kaesu pe.ImportLibrary { name: "WS2_32.dll", symbols: [
-        "WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
-        "bind", "connect", "listen", "accept", "recv", "send", "closesocket", "ioctlsocket", "getsockopt"] };
+            "WSAStartup", "WSACleanup", "WSAGetLastError", "WSASocketW", "setsockopt",
+            "bind", "connect", "listen", "accept", "recv", "send", "closesocket", "ioctlsocket", "getsockopt"] };
 }
 
 waza winsock_started_cell() -> int64 { kaesu gc_state() + 104; }
@@ -592,7 +592,10 @@ waza socket_routine(function_name: string) -> string {
     kaku bytes = string.to_bytes(function_name);
     kaku at = string.byte_len(prefix);
     kaku output: []uint8 = [];
-    aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(output, bytes[at]); at = at + 1; }
+    aida (at < len(bytes) && bytes[at] != uint8(58)) {
+        array.push(output, bytes[at]);
+        at = at + 1;
+    }
     kaku name = string.from_utf8(output);
     moshi (name == mu) { kaesu ""; }
     moshi (name == "open") { kaesu "rt.sock_open"; }

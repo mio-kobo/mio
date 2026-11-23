@@ -1,8 +1,14 @@
 yobu "kiso/testing";
 
 waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
-    kaku value = 0; kaku scale = 1; kaku i = 0;
-    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) {
+        value = value + int64(bytes[at + i]) * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
     kaesu value;
 }
 
@@ -56,8 +62,10 @@ waza test_dyld_build_version_and_main() -> unit {
 
 waza test_invalid_specs_fail_closed() -> unit {
     testing.expect(executable(ImageSpec { code: [], entry_offset: 0, bss_size: 0 }).error == "EMPTY_TEXT", "no code");
-    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 3, bss_size: 0 }).error == "INVALID_ENTRY", "entry outside the code");
+    testing.expect(executable(ImageSpec {
+                code: code_ret(), entry_offset: 3, bss_size: 0 }).error == "INVALID_ENTRY", "entry outside the code");
     testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: -1, bss_size: 0 }).error == "INVALID_ENTRY", "negative entry");
     testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 0, bss_size: -1 }).error == "INVALID_BSS", "negative bss");
-    testing.expect(executable(ImageSpec { code: code_ret(), entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "oversized bss");
+    testing.expect(executable(ImageSpec {
+                code: code_ret(), entry_offset: 0, bss_size: 268435457 }).error == "INVALID_BSS", "oversized bss");
 }

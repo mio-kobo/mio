@@ -6,34 +6,70 @@ yobu "kiso/string";
 yobu "selfhost/lsp";
 yobu "selfhost/i18n";
 
-koukai kata ServeResult {status: int64; error: string;}
+koukai kata ServeResult {
+    status: int64;
+    error: string;
+}
 koukai waza serve(state: Session, input: fs.File, output: fs.File) -> ServeResult {
-    kaku io=transport(input,output);
-    progress.install(state.work,waza () -> bool {kaesu pump_transport(state,io);});
-    kaku result=serve_cooperative(state,io);
+    kaku io = transport(input, output);
+    progress.install(state.work, waza () -> bool {
+            kaesu pump_transport(state, io);
+        });
+    kaku result = serve_cooperative(state, io);
     progress.clear(state.work);
     kaesu result;
 }
 
 koukai waza command(args: []string) -> int64 { kaesu run_command(args, i18n.select("")); }
 koukai waza run_command(args: []string, language: string) -> int64 {
-    kaku at=2; kaku explicit="";
+    kaku at = 2;
+    kaku explicit = "";
     kaku usage = string.concat(i18n.text(language, i18n.key_help_usage), ": mio lsp [--stdio] [--bunko-root <directory>]");
-    aida(at<len(args)){
-        kaku option=args[at];
-        moshi(option=="help" || option=="-h" || option=="--help"){chant(usage);kaesu 0;}
-        moshi(option=="--bunko-root"){at=at+1;moshi(at>=len(args) || args[at]==""){fs.write_all("/dev/stderr",string.to_bytes(string.concat("E_OPTIONS ",string.concat(i18n.format(language,i18n.key_err_missing_value,["--bunko-root"]),"\n"))));kaesu 2;}explicit=args[at];at=at+1;tsuzuku;}
-        moshi(option!="--stdio"){
-            fs.write_all("/dev/stderr",string.to_bytes(string.concat("E_OPTIONS ",string.concat(i18n.format(language,i18n.key_cli_lsp_unknown,[option]),string.concat("\n", string.concat(usage, "\n"))))));kaesu 2;
-        }at=at+1;
+    aida (at<len(args)) {
+        kaku option = args[at];
+        moshi (option == "help" || option == "-h" || option == "--help") {
+            chant(usage);
+            kaesu 0;
+        }
+        moshi (option == "--bunko-root") {
+            at = at + 1;
+            moshi (at >= len(args) || args[at] == "") {
+                fs.write_all("/dev/stderr", string.to_bytes(string.concat("E_OPTIONS ", string.concat(i18n.format(language, i18n.key_err_missing_value, ["--bunko-root"]), "\n"))));
+                kaesu 2;
+            }
+            explicit = args[at];
+            at = at + 1;
+            tsuzuku;
+        }
+        moshi (option != "--stdio") {
+            fs.write_all("/dev/stderr", string.to_bytes(string.concat("E_OPTIONS ", string.concat(i18n.format(language, i18n.key_cli_lsp_unknown, [option]), string.concat("\n", string.concat(usage, "\n"))))));
+            kaesu 2;
+        } at = at + 1;
     }
-    kaku library=bunkopath.resolve(explicit, language);moshi(library.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat(library.error,"\n")));kaesu 2;}
-    kaku opened_input=fs.open_read("/dev/stdin");kaku input=opened_input.file;
-    moshi(input==mu){fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdin"]), "\n"))));kaesu 1;}
-    kaku opened_output=fs.open_write("/dev/stdout");kaku output=opened_output.file;
-    moshi(output==mu){fs.close(input);fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdout"]), "\n"))));kaesu 1;}
-    kaku result=serve(session(".",library.root),input,output);
-    fs.close(input);fs.close(output);
-    moshi(result.error!=""){fs.write_all("/dev/stderr",string.to_bytes(string.concat("mio lsp: ",string.concat(result.error,"\n"))));}
+    kaku library = bunkopath.resolve(explicit, language);
+    moshi (library.error != "") {
+        fs.write_all("/dev/stderr", string.to_bytes(string.concat(library.error, "\n")));
+        kaesu 2;
+    }
+    kaku opened_input = fs.open_read("/dev/stdin");
+    kaku input = opened_input.file;
+    moshi (input == mu) {
+        fs.write_all("/dev/stderr", string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdin"]), "\n"))));
+        kaesu 1;
+    }
+    kaku opened_output = fs.open_write("/dev/stdout");
+    kaku output = opened_output.file;
+    moshi (output == mu) {
+        fs.close(input);
+        fs.write_all("/dev/stderr", string.to_bytes(string.concat("mio lsp: ", string.concat(i18n.format(language, i18n.key_err_open_stream, ["stdout"]), "\n"))));
+        kaesu 1;
+    }
+    kaku state = session(".", library.root);
+    // Titles the server shows in the editor follow the language of the command, like its other messages.
+    state.language[0] = language;
+    kaku result = serve(state, input, output);
+    fs.close(input);
+    fs.close(output);
+    moshi (result.error != "") { fs.write_all("/dev/stderr", string.to_bytes(string.concat("mio lsp: ", string.concat(result.error, "\n")))); }
     kaesu result.status;
 }

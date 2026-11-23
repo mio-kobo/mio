@@ -3,21 +3,70 @@
 // until this returns. A failed publication Abort/joins before compatibility
 // mutation; it never authorizes concurrent reclaim or a successful cycle.
 waza old_satb_program() -> ir.Function {
- kaku f=ir.function("gc_old_prewrite");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"done");
- old_add(f,424);ir.put(f,ir.acquire_load,1,1,0,0);ir.branch(f,ir.zero,1,"done");tconstant(f,6,2);ir.put(f,ir.divide_unsigned,7,1,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,1,0);ir.branch(f,ir.zero,7,"done");old_add(f,432);
- // Only exact pointer slots reach here. Young is excluded from the Old
- // queue; Init's complete Young frontier owns its pre-existing Old edges.
- ir.invoke_function(f,"gc_old_bounds",19,[0,1]);ir.branch(f,ir.zero,19,"invalid");tconstant(f,6,16);ir.put(f,ir.less_unsigned,7,1,6,0);ir.branch(f,ir.nonzero,7,"invalid");ir.put(f,ir.subtract,10,1,6,0);ir.put(f,ir.acquire_load,11,10,0,0);old_bit(f,11,12,old_generation_bit);ir.branch(f,ir.zero,12,"done");old_bit(f,11,12,old_color_bit);ir.branch(f,ir.nonzero,12,"publish");old_add(f,440);
- ir.branch(f,ir.label,0,"publish");ir.invoke_function(f,"gc_old_visit",5,[0,1]);ir.branch(f,ir.zero,5,"done");ir.branch(f,ir.jump,0,"abort");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);old_error(f,5);
- ir.branch(f,ir.label,0,"abort");ir.invoke_function(f,"gc_old_abort_join",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_prewrite");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "done");
+    old_add(f, 424);
+    ir.put(f, ir.acquire_load, 1, 1, 0, 0);
+    ir.branch(f, ir.zero, 1, "done");
+    tconstant(f, 6, 2);
+    ir.put(f, ir.divide_unsigned, 7, 1, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 1, 0);
+    ir.branch(f, ir.zero, 7, "done");
+    old_add(f, 432);
+    // Only exact pointer slots reach here. Young is excluded from the Old
+    // queue; Init's complete Young frontier owns its pre-existing Old edges.
+    ir.invoke_function(f, "gc_old_bounds", 19, [0, 1]);
+    ir.branch(f, ir.zero, 19, "invalid");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.less_unsigned, 7, 1, 6, 0);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.put(f, ir.subtract, 10, 1, 6, 0);
+    ir.put(f, ir.acquire_load, 11, 10, 0, 0);
+    old_bit(f, 11, 12, old_generation_bit);
+    ir.branch(f, ir.zero, 12, "done");
+    old_bit(f, 11, 12, old_color_bit);
+    ir.branch(f, ir.nonzero, 12, "publish");
+    old_add(f, 440);
+    ir.branch(f, ir.label, 0, "publish");
+    ir.invoke_function(f, "gc_old_visit", 5, [0, 1]);
+    ir.branch(f, ir.zero, 5, "done");
+    ir.branch(f, ir.jump, 0, "abort");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    ir.branch(f, ir.label, 0, "abort");
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 // Caller supplies an owned object HEADER, with generation/list mutations
 // serialized by the Mutator epoch. Preserve a concurrent Old color claim.
 waza old_remember_header_program() -> ir.Function {
- kaku f=ir.function("gc_old_remember_header");tconstant(f,10,0);
- ir.branch(f,ir.label,0,"retry");ir.put(f,ir.acquire_load,11,0,0,0);old_bit(f,11,12,1099511627776);ir.branch(f,ir.nonzero,12,"done");tconstant(f,12,1099511627776);ir.put(f,ir.add,12,11,12,0);
- array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:13,left:0,right:12,immediate:0,name:"",arguments:[11],order:acq_rel,failure_order:acquire});ir.put(f,ir.equal,13,13,11,0);ir.branch(f,ir.nonzero,13,"done");tconstant(f,12,1);ir.put(f,ir.add,10,10,12,0);tconstant(f,12,1024);ir.put(f,ir.less_unsigned,12,10,12,0);ir.branch(f,ir.nonzero,12,"retry");treturn(f,4);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_remember_header");
+    tconstant(f, 10, 0);
+    ir.branch(f, ir.label, 0, "retry");
+    ir.put(f, ir.acquire_load, 11, 0, 0, 0);
+    old_bit(f, 11, 12, 1099511627776);
+    ir.branch(f, ir.nonzero, 12, "done");
+    tconstant(f, 12, 1099511627776);
+    ir.put(f, ir.add, 12, 11, 12, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 13, left: 0, right: 12, immediate: 0, name: "", arguments: [11], order: acq_rel, failure_order: acquire });
+    ir.put(f, ir.equal, 13, 13, 11, 0);
+    ir.branch(f, ir.nonzero, 13, "done");
+    tconstant(f, 12, 1);
+    ir.put(f, ir.add, 10, 10, 12, 0);
+    tconstant(f, 12, 1024);
+    ir.put(f, ir.less_unsigned, 12, 10, 12, 0);
+    ir.branch(f, ir.nonzero, 12, "retry");
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }

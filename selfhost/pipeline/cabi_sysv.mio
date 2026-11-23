@@ -1,0 +1,168 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lowerlinux";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/runtime/abi";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+
+// Linux x86-64 的 C ABI 构建（System V AMD64）。与 Darwin 路径共享前端、类型检查和 `$cabi::` 原型元数据，
+// 只有降级（lowerlinux.compile_with_c）和链接是 Linux 专用的。
+//
+// 没有 C 声明的程序仍然走原有的静态 ELF 写入器，产物与此前逐字节相同。含 C 声明的程序由 Mio 生成机器码，
+// 系统 C 编译器驱动（cc、gcc 或 clang）负责汇编外部 PLT32 重定位并链接：.o、.a、.so、-L、-l 以及 libc。
+// 链接器与 libc 的诊断原样留在 stderr。
+
+koukai waza build_linux_source_linked(root: string, entry: string, bunko_root: string, gc_stress: bool,
+    link_options: []string) -> NativeBuildResult {
+    kaku checked = frontend.compile_source_target(root, entry, bunko_root, hai);
+    moshi (checked.error != "") { kaesu NativeBuildResult { bytes: [], error: checked.error }; }
+    kaesu build_linux_mochi_linked(checked.bytes, gc_stress, link_options);
+}
+
+koukai waza build_linux_mochi_linked(data: []uint8, gc_stress: bool, link_options: []string) -> NativeBuildResult {
+    kaku decoded = mochi.decode(data);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend produced invalid Mochi" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_IR frontend returned no module" }; }
+    moshi (!has_c_declarations(file)) {
+        moshi (len(link_options) != 0) { kaesu c_link_error("E_CABI link options require a C ABI declaration"); }
+        kaesu build_linux_mochi_with_options(data, gc_stress);
+    }
+    kaesu build_linux_c_file(file, gc_stress, link_options);
+}
+
+waza build_linux_c_file(file: mochi.File, gc_stress: bool, link_options: []string) -> NativeBuildResult {
+    moshi (mochi.has_win64_c(file)) { kaesu NativeBuildResult { bytes: [], error: "E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64" }; }
+    // 交叉构建不能链接 C：这里没有目标平台的 C 工具链和 libc，也不能把交叉编译当作原生执行。
+    moshi (host_target() != "linux-amd64") { kaesu c_link_error(cabi.target_error); }
+    kaku invalid = duplicate_c_prototype(file);
+    moshi (invalid != "") { kaesu c_link_error(invalid); }
+    kaku threshold = 33554432;
+    moshi (gc_stress) { threshold = abi.gc_stress_threshold_bytes; }
+    kaku lowered = lowerlinux.compile_with_c(file, threshold);
+    moshi (lowered.error != "") { kaesu c_link_error(string.concat("E_CABI Linux x86-64 lowering failed ", lowered.error)); }
+    kaesu link_sysv_image(lowered, link_options);
+}
+
+// 选择 C 编译器驱动：MIO_CC，其次 CC，最后在 PATH 中查找 cc、gcc、clang。不写死任何发行版路径。
+waza find_c_driver() -> string {
+    kaku names: []string = [os.getenv("MIO_CC"), os.getenv("CC")];
+    kaku at = 0;
+    aida (at < len(names)) {
+        kaku name = names[at];
+        moshi (name != "") {
+            moshi (string.contains(name, "/")) { moshi (fs.is_file(name)) { kaesu name; } }
+            sore { kaku found = search_path(name); moshi (found != "") { kaesu found; } }
+        }
+        at = at + 1;
+    }
+    kaku defaults: []string = ["cc", "gcc", "clang"];
+    at = 0;
+    aida (at < len(defaults)) {
+        kaku found = search_path(defaults[at]);
+        moshi (found != "") { kaesu found; }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+waza search_path(name: string) -> string {
+    kaku path = os.getenv("PATH");
+    kaku bytes = string.to_bytes(path);
+    kaku start = 0; kaku at = 0;
+    aida (at <= len(bytes)) {
+        moshi (at == len(bytes) || bytes[at] == uint8(58)) {
+            kaku piece: []uint8 = [];
+            kaku i = start;
+            aida (i < at) { array.push(piece, bytes[i]); i = i + 1; }
+            kaku directory = string.from_utf8(piece);
+            moshi (directory != mu) {
+                moshi (directory != "") {
+                    kaku candidate = string.concat(directory, string.concat("/", name));
+                    moshi (fs.is_file(candidate)) { kaesu candidate; }
+                }
+            }
+            start = at + 1;
+        }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+waza assembly_include_bytes(out: string.StringBuilder, file: string, offset: int64, size: int64) -> unit {
+    moshi (size <= 0) { kaesu; }
+    string.write_string(out, ".incbin \"");
+    string.write_string(out, file);
+    string.write_string(out, "\", ");
+    string.write_string(out, convert.format_int(offset));
+    string.write_string(out, ", ");
+    string.write_string(out, convert.format_int(size));
+    string.write_string(out, "\n");
+}
+
+// Mio 的机器码原样 .incbin 进 .text，只在每个外部 call 处插入汇编指令 `call symbol@PLT`，由系统汇编器
+// 生成 R_X86_64_PLT32 重定位，链接器据此解析符号并在需要时建立 PLT。其余部分是位置无关的 rip 相对代码。
+// Mio 的全局数据、堆元数据使用固定的绝对地址（elf.data_base），所以放进单独的 NOBITS 段 .mio_bss，
+// 链接时用 --section-start 固定到该地址，可执行文件必须是非 PIE。
+waza sysv_assembly(lowered: lowerlinux.CLowerResult, code_path: string) -> string {
+    kaku out = string.new_builder();
+    string.write_string(out, ".text\n.p2align 4\n.globl main\n.type main, @function\nmain:\n");
+    kaku start = 0; kaku at = 0;
+    aida (at < len(lowered.externals)) {
+        kaku external = lowered.externals[at];
+        // external.at 指向 rel32，操作码 0xE8 在它前一字节。
+        assembly_include_bytes(out, code_path, start, external.at - 1 - start);
+        string.write_string(out, "call ");
+        string.write_string(out, external.symbol);
+        string.write_string(out, "@PLT\n");
+        start = external.at + 4;
+        at = at + 1;
+    }
+    assembly_include_bytes(out, code_path, start, len(lowered.bytes) - start);
+    string.write_string(out, ".section .note.GNU-stack,\"\",@progbits\n");
+    string.write_string(out, ".section .mio_bss,\"aw\",@nobits\n.p2align 12\n.zero ");
+    string.write_string(out, convert.format_int(lowered.bss_size));
+    string.write_string(out, "\n");
+    kaesu string.builder_string(out);
+}
+
+waza link_sysv_image(lowered: lowerlinux.CLowerResult, options: []string) -> NativeBuildResult {
+    kaku driver = find_c_driver();
+    moshi (driver == "") { kaesu c_link_error("E_CABI_LINK no C compiler driver found: install cc, gcc or clang, or set MIO_CC"); }
+    kaku directory = string.concat(temporary_root(), string.concat("/mio-cabi-", convert.format_int(os.pid())));
+    kaku created = fs.create_dir(directory);
+    moshi (created.error != mu) { kaesu c_link_error("E_CABI cannot create a private link directory"); }
+    moshi (os.chmod(directory, 448) != 0) {
+        os.remove_dir(directory); kaesu c_link_error("E_CABI cannot protect the link directory");
+    }
+    kaku result = link_sysv_in_directory(lowered, options, driver, directory);
+    os.remove(string.concat(directory, "/code.bin"));
+    os.remove(string.concat(directory, "/program.s"));
+    os.remove(string.concat(directory, "/program"));
+    os.remove_dir(directory);
+    kaesu result;
+}
+
+waza link_sysv_in_directory(lowered: lowerlinux.CLowerResult, options: []string, driver: string, directory: string) -> NativeBuildResult {
+    kaku code = string.concat(directory, "/code.bin");
+    kaku assembly = string.concat(directory, "/program.s");
+    kaku image = string.concat(directory, "/program");
+    kaku a = fs.write_all(code, lowered.bytes);
+    kaku b = fs.write_all(assembly, string.to_bytes(sysv_assembly(lowered, code)));
+    moshi (a.error != mu || b.error != mu) { kaesu c_link_error("E_CABI cannot write linker inputs"); }
+    // -no-pie：Mio 的数据段在固定地址。argv 直接传递，保留链接器的标准错误和退出状态。
+    kaku arguments = [driver, "-no-pie", "-o", image, assembly,
+        string.concat("-Wl,--section-start=.mio_bss=", "0x10000000"), "-Wl,-z,noexecstack"];
+    array.append_all(arguments, options);
+    kaku status = os.spawn(driver, arguments);
+    moshi (status != 0) {
+        kaesu c_link_error(string.concat("E_CABI_LINK system C linker failed with status ", convert.format_int(status)));
+    }
+    kaku linked = fs.read_all(image);
+    moshi (linked.error != mu || len(linked.data) == 0) { kaesu c_link_error("E_CABI_LINK cannot read linked executable"); }
+    kaesu NativeBuildResult { bytes: linked.data, error: "" };
+}

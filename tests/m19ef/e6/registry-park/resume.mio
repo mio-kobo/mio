@@ -7,32 +7,154 @@ yobu "kiso/aot/sign";
 yobu "kiso/array";
 yobu "kiso/fs";
 yobu "kiso/os";
-waza e(c:arm64.Assembler,i:arm64.Instruction)->unit {moshi(arm64.assembler_emit(c,i)!=mu){os.exit(70);}}
-waza n(c:arm64.Assembler,r:int64,v:int64)->unit {e(c,arm64.movz_x(r,v-(v/65536)*65536,0));e(c,arm64.movk_x(r,(v/65536)-((v/65536)/65536)*65536,1));}
-waza data(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64)->unit {kaku at=len(c.words);e(c,arm64.movz_x(r,0,0));e(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:0,register:r});}
-waza main()->unit {
- kaku args=os.arguments();moshi(len(args)!=2){os.exit(64);kaesu;}
- kaku all=gc.safepoint_program(1);kaku functions:[]ir.Function=[];kaku i=0;
- aida(i<len(all)){moshi(all[i].name=="gc_park_locked"){
-  kaku f=ir.function("gc_park_locked");kaku j=0;aida(j<len(all[i].steps)){kaku step=all[i].steps[j];array.push(f.steps,step);moshi(step.kind==ir.label && step.name=="resumed"){ir.call(f,9002,23,[0]);}j=j+1;}array.push(functions,f);
- }i=i+1;}
- moshi(len(functions)!=1){os.exit(71);kaesu;}
- kaku clock=ir.function("platform_now");ir.call(clock,9000,1,[]);ir.put(clock,ir.result,0,1,0,0);array.push(functions,clock);
- kaku wait=ir.function("platform_wait");ir.call(wait,9001,1,[]);ir.put(wait,ir.result,0,1,0,0);array.push(functions,wait);
- kaku bindings:[]ir.Binding=[ir.Binding {operation:9000,slot:0,arguments:[],result_bits:64},ir.Binding {operation:9001,slot:1,arguments:[],result_bits:64},ir.Binding {operation:9002,slot:2,arguments:[0],result_bits:64},ir.Binding {operation:gc.abort_runtime,slot:3,arguments:[0],result_bits:64}];
- kaku c=arm64.assembler();kaku p:[]macho.AddressPatch=[];data(c,p,7);kaku points:[]int64=[];i=0;
- aida(i<4){array.push(points,len(c.words));e(c,arm64.movz_x(9,0,0));e(c,arm64.movz_x(9,0,0));e(c,arm64.str_x(9,7,i*8));i=i+1;}
- n(c,9,1000000000);e(c,arm64.str_x(9,7,32));e(c,arm64.add_imm_x(0,7,64,iie));e(c,arm64.str_x(7,0,gc.thread_imports));e(c,arm64.add_imm_x(10,7,512,iie));e(c,arm64.str_x(10,0,gc.thread_registry));n(c,9,7);e(c,arm64.str_x(9,10,gc.gc_registry_epoch));n(c,9,4096);e(c,arm64.str_x(9,10,gc.gc_registry_owner));n(c,9,9);e(c,arm64.str_x(9,10,gc.gc_registry_heartbeat));arm64.assembler_bl(c,"probe_gc_park_locked");
- data(c,p,7);e(c,arm64.str_x(0,7,640));kaku offsets=[64+gc.thread_ack_epoch,64+gc.thread_seen_epoch,512+gc.gc_registry_epoch,512+gc.gc_registry_owner,64+gc.thread_progress,40];i=0;aida(i<len(offsets)){e(c,arm64.ldr_x(9,7,offsets[i]));e(c,arm64.str_x(9,7,648+i*8));i=i+1;}
- n(c,0,1);e(c,arm64.add_imm_x(1,7,640,iie));n(c,2,56);n(c,16,4);e(c,arm64.svc(128));n(c,0,0);n(c,16,1);e(c,arm64.svc(128));
- kaku error=aarch64.emit_program(c,functions,bindings,4,"probe");moshi(error!=""){chant(error);os.exit(72);kaesu;}
- kaku bodies:[]int64=[];array.push(bodies,len(c.words));e(c,arm64.ldr_x(0,19,32));e(c,arm64.ret());
- array.push(bodies,len(c.words));e(c,arm64.str_x(31,19,512+gc.gc_registry_owner));e(c,arm64.ldr_x(9,19,40));e(c,arm64.add_imm_x(9,9,1,iie));e(c,arm64.str_x(9,19,40));n(c,0,0);e(c,arm64.ret());
- // Controlled legal interleaving: another owner publishes Epoch8 just after
- // the waiter observed release of Epoch7, before its completion publication.
- array.push(bodies,len(c.words));e(c,arm64.ldr_x(10,0,gc.thread_registry));n(c,9,8);e(c,arm64.str_x(9,10,gc.gc_registry_epoch));n(c,9,8192);e(c,arm64.str_x(9,10,gc.gc_registry_owner));n(c,0,0);e(c,arm64.ret());
- array.push(bodies,len(c.words));n(c,16,1);e(c,arm64.svc(128));
- i=0;aida(i<4){array.push(p,macho.AddressPatch {at_word:points[i],add_at_word:points[i]+1,target:macho.text_target(),target_offset:bodies[i]*4,register:9});i=i+1;}
- kaku assembled=arm64.assembler_assemble(c);moshi(assembled.error!=mu){os.exit(73);kaesu;}kaku image=macho.executable(macho.ImageSpec {words:assembled.words,constants:[],globals:96,patches:p});moshi(image.error!=mu){os.exit(74);kaesu;}kaku signed=sign.adhoc(image.bytes);moshi(signed.error!=""){os.exit(75);kaesu;}moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){os.exit(76);}
+waza e(c: arm64.Assembler, i: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, i) != mu) { os.exit(70); } }
+waza n(c: arm64.Assembler, r: int64, v: int64) -> unit {
+    e(c, arm64.movz_x(r, v - (v / 65536) * 65536, 0));
+    e(c, arm64.movk_x(r, (v / 65536) - ((v / 65536) / 65536) * 65536, 1));
+}
+waza data(c: arm64.Assembler, p: []macho.AddressPatch, r: int64) -> unit {
+    kaku at = len(c.words);
+    e(c, arm64.movz_x(r, 0, 0));
+    e(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: 0, register: r });
+}
+waza main() -> unit {
+    kaku args = os.arguments();
+    moshi (len(args) != 2) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku all = gc.safepoint_program(1);
+    kaku functions: []ir.Function = [];
+    kaku i = 0;
+    aida (i<len(all)) { moshi (all[i].name == "gc_park_locked") {
+            kaku f = ir.function("gc_park_locked");
+            kaku j = 0;
+            aida (j<len(all[i].steps)) {
+                kaku step = all[i].steps[j];
+                array.push(f.steps, step);
+                moshi (step.kind == ir.label && step.name == "resumed") {
+                    ir.call(f, 9002, 23, [0]);
+                }
+                j = j + 1;
+            }
+            array.push(functions, f);
+        } i = i + 1; }
+    moshi (len(functions) != 1) {
+        os.exit(71);
+        kaesu;
+    }
+    kaku clock = ir.function("platform_now");
+    ir.call(clock, 9000, 1, []);
+    ir.put(clock, ir.result, 0, 1, 0, 0);
+    array.push(functions, clock);
+    kaku wait = ir.function("platform_wait");
+    ir.call(wait, 9001, 1, []);
+    ir.put(wait, ir.result, 0, 1, 0, 0);
+    array.push(functions, wait);
+    kaku bindings: []ir.Binding = [ir.Binding {
+            operation: 9000, slot: 0, arguments: [], result_bits: 64 }, ir.Binding {
+            operation: 9001, slot: 1, arguments: [], result_bits: 64 }, ir.Binding {
+            operation: 9002, slot: 2, arguments: [0], result_bits: 64 }, ir.Binding {
+            operation: gc.abort_runtime, slot: 3, arguments: [0], result_bits: 64 }
+    ];
+    kaku c = arm64.assembler();
+    kaku p: []macho.AddressPatch = [];
+    data(c, p, 7);
+    kaku points: []int64 = [];
+    i = 0;
+    aida (i<4) {
+        array.push(points, len(c.words));
+        e(c, arm64.movz_x(9, 0, 0));
+        e(c, arm64.movz_x(9, 0, 0));
+        e(c, arm64.str_x(9, 7, i * 8));
+        i = i + 1;
+    }
+    n(c, 9, 1000000000);
+    e(c, arm64.str_x(9, 7, 32));
+    e(c, arm64.add_imm_x(0, 7, 64, iie));
+    e(c, arm64.str_x(7, 0, gc.thread_imports));
+    e(c, arm64.add_imm_x(10, 7, 512, iie));
+    e(c, arm64.str_x(10, 0, gc.thread_registry));
+    n(c, 9, 7);
+    e(c, arm64.str_x(9, 10, gc.gc_registry_epoch));
+    n(c, 9, 4096);
+    e(c, arm64.str_x(9, 10, gc.gc_registry_owner));
+    n(c, 9, 9);
+    e(c, arm64.str_x(9, 10, gc.gc_registry_heartbeat));
+    arm64.assembler_bl(c, "probe_gc_park_locked");
+    data(c, p, 7);
+    e(c, arm64.str_x(0, 7, 640));
+    kaku offsets = [64 + gc.thread_ack_epoch, 64 + gc.thread_seen_epoch, 512 + gc.gc_registry_epoch, 512 + gc.gc_registry_owner, 64 + gc.thread_progress, 40];
+    i = 0;
+    aida (i<len(offsets)) {
+        e(c, arm64.ldr_x(9, 7, offsets[i]));
+        e(c, arm64.str_x(9, 7, 648 + i * 8));
+        i = i + 1;
+    }
+    n(c, 0, 1);
+    e(c, arm64.add_imm_x(1, 7, 640, iie));
+    n(c, 2, 56);
+    n(c, 16, 4);
+    e(c, arm64.svc(128));
+    n(c, 0, 0);
+    n(c, 16, 1);
+    e(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, bindings, 4, "probe");
+    moshi (error != "") {
+        chant(error);
+        os.exit(72);
+        kaesu;
+    }
+    kaku bodies: []int64 = [];
+    array.push(bodies, len(c.words));
+    e(c, arm64.ldr_x(0, 19, 32));
+    e(c, arm64.ret());
+    array.push(bodies, len(c.words));
+    e(c, arm64.str_x(31, 19, 512 + gc.gc_registry_owner));
+    e(c, arm64.ldr_x(9, 19, 40));
+    e(c, arm64.add_imm_x(9, 9, 1, iie));
+    e(c, arm64.str_x(9, 19, 40));
+    n(c, 0, 0);
+    e(c, arm64.ret());
+    // Controlled legal interleaving: another owner publishes Epoch8 just after
+    // the waiter observed release of Epoch7, before its completion publication.
+    array.push(bodies, len(c.words));
+    e(c, arm64.ldr_x(10, 0, gc.thread_registry));
+    n(c, 9, 8);
+    e(c, arm64.str_x(9, 10, gc.gc_registry_epoch));
+    n(c, 9, 8192);
+    e(c, arm64.str_x(9, 10, gc.gc_registry_owner));
+    n(c, 0, 0);
+    e(c, arm64.ret());
+    array.push(bodies, len(c.words));
+    n(c, 16, 1);
+    e(c, arm64.svc(128));
+    i = 0;
+    aida (i<4) {
+        array.push(p, macho.AddressPatch {
+                at_word: points[i], add_at_word: points[i] + 1, target: macho.text_target(), target_offset: bodies[i] * 4, register: 9 });
+        i = i + 1;
+    }
+    kaku assembled = arm64.assembler_assemble(c);
+    moshi (assembled.error != mu) {
+        os.exit(73);
+        kaesu;
+    }
+    kaku image = macho.executable(macho.ImageSpec {
+            words: assembled.words, constants: [], globals: 96, patches: p });
+    moshi (image.error != mu) {
+        os.exit(74);
+        kaesu;
+    }
+    kaku signed = sign.adhoc(image.bytes);
+    moshi (signed.error != "") {
+        os.exit(75);
+        kaesu;
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) {
+        os.exit(76);
+    }
 }
 main();

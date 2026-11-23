@@ -7,58 +7,71 @@ yobu "kiso/string";
 
 // Test-only golden AMD64 instruction sequences, not an instruction encoder or
 // compiler backend. Every PE header, import, fixup and unwind record is Mio.
-waza write_image(name:string, spec:pe.ImageSpec) -> unit {
-    kaku image=pe.executable(spec);moshi(image.error!=mu){math.fail("PE fixture generation failed");kaesu;}
+waza write_image(name: string, spec: pe.ImageSpec) -> unit {
+    kaku image = pe.executable(spec);
+    moshi (image.error != mu) {
+        math.fail("PE fixture generation failed");
+        kaesu;
+    }
     // The test driver supplies an isolated working directory.
-    kaku saved=fs.write_all(name,image.bytes);
-    moshi(saved.error!=mu){math.fail("PE fixture write failed");}
+    kaku saved = fs.write_all(name, image.bytes);
+    moshi (saved.error != mu) { math.fail("PE fixture write failed"); }
 }
-waza exit_text(code:uint8) -> []uint8 {
+waza exit_text(code: uint8) -> []uint8 {
     // sub rsp,40; mov ecx,code; call [rip+disp32]; int3
-    kaesu [72,131,236,40,185,code,0,0,0,255,21,0,0,0,0,204];
+    kaesu [72, 131, 236, 40, 185, code, 0, 0, 0, 255, 21, 0, 0, 0, 0, 204];
 }
-waza unwind(size:int64) -> []pe.UnwindFunction {
-    kaesu [pe.UnwindFunction {begin:0,end:size,prolog_size:4,stack_size:40,stack_offset:4}];
+waza unwind(size: int64) -> []pe.UnwindFunction {
+    kaesu [pe.UnwindFunction { begin: 0, end: size, prolog_size: 4, stack_size: 40, stack_offset: 4 }];
 }
-kaku kernel:[]pe.ImportLibrary=[pe.ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess"]}];
-kaku call:[]pe.Patch=[pe.Patch {section:pe.text_section,offset:11,kind:pe.rel32,target:pe.import_section,target_offset:0}];
-write_image("exit42.exe",pe.ImageSpec {text:exit_text(uint8(42)),rdata:[],data:[],zero_fill:0,entry:0,imports:kernel,patches:call,unwind:unwind(16)});
+kaku kernel: []pe.ImportLibrary = [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["ExitProcess"] }];
+kaku call: []pe.Patch = [pe.Patch { section: pe.text_section, offset: 11, kind: pe.rel32, target: pe.import_section, target_offset: 0 }];
+write_image("exit42.exe", pe.ImageSpec {
+        text: exit_text(uint8(42)), rdata: [], data: [], zero_fill: 0, entry: 0, imports: kernel, patches: call, unwind: unwind(16) });
 
 // Absolute IAT reference exercises DIR64 creation and a seven-section header.
-kaku absolute:[]uint8=[72,131,236,40,185,43,0,0,0,72,184,0,0,0,0,0,0,0,0,255,16,204];
-write_image("relocated43.exe",pe.ImageSpec {text:absolute,rdata:[77,105,111,0],data:[7,0,8],zero_fill:1024,entry:0,imports:kernel,
-    patches:[pe.Patch {section:pe.text_section,offset:11,kind:pe.va64,target:pe.import_section,target_offset:0}],unwind:unwind(22)});
+kaku absolute: []uint8 = [72, 131, 236, 40, 185, 43, 0, 0, 0, 72, 184, 0, 0, 0, 0, 0, 0, 0, 0, 255, 16, 204];
+write_image("relocated43.exe", pe.ImageSpec { text: absolute, rdata: [77, 105, 111, 0], data: [7, 0, 8], zero_fill: 1024, entry: 0, imports: kernel,
+        patches: [pe.Patch { section: pe.text_section, offset: 11, kind: pe.va64, target: pe.import_section, target_offset: 0 }], unwind: unwind(22) });
 
 // Read four zero-filled bytes at the end of BSS, then add 44 and exit.
 // sub rsp,40; mov ecx,[rip+disp32]; add ecx,44; call [rip+disp32]; int3
-write_image("bss44.exe",pe.ImageSpec {text:[72,131,236,40,139,13,0,0,0,0,131,193,44,255,21,0,0,0,0,204],rdata:[],data:[],zero_fill:4097,entry:0,
-    imports:[pe.ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess","GetStdHandle"]},pe.ImportLibrary {name:"USER32.dll",symbols:["MessageBoxA"]}],
-    patches:[pe.Patch {section:pe.text_section,offset:6,kind:pe.rel32,target:pe.data_section,target_offset:4093},
-        pe.Patch {section:pe.text_section,offset:15,kind:pe.rel32,target:pe.import_section,target_offset:0}],unwind:unwind(20)});
+write_image("bss44.exe", pe.ImageSpec { text: [72, 131, 236, 40, 139, 13, 0, 0, 0, 0, 131, 193, 44, 255, 21, 0, 0, 0, 0, 204], rdata: [], data: [], zero_fill: 4097, entry: 0,
+        imports: [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["ExitProcess", "GetStdHandle"] }, pe.ImportLibrary { name: "USER32.dll", symbols: ["MessageBoxA"] }],
+        patches: [pe.Patch { section: pe.text_section, offset: 6, kind: pe.rel32, target: pe.data_section, target_offset: 4093 },
+            pe.Patch { section: pe.text_section, offset: 15, kind: pe.rel32, target: pe.import_section, target_offset: 0 }], unwind: unwind(20) });
 
 // Unordered absolute fixups on three pages, with odd/even relocation blocks.
-kaku paged=array.make[uint8](8208,uint8(0));kaku entry=exit_text(uint8(45));kaku i=0;
-aida(i<len(entry)){paged[i]=entry[i];i=i+1;}
-write_image("paged45.exe",pe.ImageSpec {text:paged,rdata:[1,2,3],data:[],zero_fill:0,entry:0,imports:kernel,patches:[
-    pe.Patch {section:pe.text_section,offset:8192,kind:pe.va64,target:pe.rdata_section,target_offset:0},
-    pe.Patch {section:pe.text_section,offset:4096,kind:pe.va64,target:pe.text_section,target_offset:0},
-    pe.Patch {section:pe.text_section,offset:32,kind:pe.va64,target:pe.text_section,target_offset:0},
-    pe.Patch {section:pe.text_section,offset:24,kind:pe.va64,target:pe.text_section,target_offset:0},
-    pe.Patch {section:pe.text_section,offset:11,kind:pe.rel32,target:pe.import_section,target_offset:0}],unwind:unwind(16)});
+kaku paged = array.make[uint8](8208, uint8(0));
+kaku entry = exit_text(uint8(45));
+kaku i = 0;
+aida (i<len(entry)) {
+    paged[i] = entry[i];
+    i = i + 1;
+}
+write_image("paged45.exe", pe.ImageSpec { text: paged, rdata: [1, 2, 3], data: [], zero_fill: 0, entry: 0, imports: kernel, patches: [
+            pe.Patch { section: pe.text_section, offset: 8192, kind: pe.va64, target: pe.rdata_section, target_offset: 0 },
+            pe.Patch { section: pe.text_section, offset: 4096, kind: pe.va64, target: pe.text_section, target_offset: 0 },
+            pe.Patch { section: pe.text_section, offset: 32, kind: pe.va64, target: pe.text_section, target_offset: 0 },
+            pe.Patch { section: pe.text_section, offset: 24, kind: pe.va64, target: pe.text_section, target_offset: 0 },
+            pe.Patch { section: pe.text_section, offset: 11, kind: pe.rel32, target: pe.import_section, target_offset: 0 }], unwind: unwind(16) });
 
 // Structural fixtures: leaf/no-import image, and a large allocation unwind.
-write_image("leaf.exe",pe.ImageSpec {text:[184,46,0,0,0,195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[]});
-write_image("large-unwind.exe",pe.ImageSpec {text:[72,129,236,136,0,0,0,72,129,196,136,0,0,0,195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],
-    unwind:[pe.UnwindFunction {begin:0,end:15,prolog_size:7,stack_size:136,stack_offset:7}]});
+write_image("leaf.exe", pe.ImageSpec { text: [184, 46, 0, 0, 0, 195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] });
+write_image("large-unwind.exe", pe.ImageSpec { text: [72, 129, 236, 136, 0, 0, 0, 72, 129, 196, 136, 0, 0, 0, 195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [],
+        unwind: [pe.UnwindFunction { begin: 0, end: 15, prolog_size: 7, stack_size: 136, stack_offset: 7 }] });
 chant("PE fixtures written");
 
 // These images use the shared instruction encoder, not golden instruction bytes.
-waza write_console(name:string, result:winconsole.BuildResult) -> unit {
-    moshi(result.error!=""){math.fail(result.error);kaesu;}
-    kaku saved=fs.write_all(name,result.bytes);
-    moshi(saved.error!=mu){math.fail("console fixture write failed");}
+waza write_console(name: string, result: winconsole.BuildResult) -> unit {
+    moshi (result.error != "") {
+        math.fail(result.error);
+        kaesu;
+    }
+    kaku saved = fs.write_all(name, result.bytes);
+    moshi (saved.error != mu) { math.fail("console fixture write failed"); }
 }
-write_console("encoded-exit47.exe",winconsole.exit_executable(47));
-write_console("encoded-stdout48.exe",winconsole.stdout_executable(string.to_bytes("Mio Windows AMD64\n"),48));
-write_console("encoded-binary49.exe",winconsole.stdout_executable([77,105,111,0,255,10],49));
-write_console("encoded-empty50.exe",winconsole.stdout_executable([],50));
+write_console("encoded-exit47.exe", winconsole.exit_executable(47));
+write_console("encoded-stdout48.exe", winconsole.stdout_executable(string.to_bytes("Mio Windows AMD64\n"), 48));
+write_console("encoded-binary49.exe", winconsole.stdout_executable([77, 105, 111, 0, 255, 10], 49));
+write_console("encoded-empty50.exe", winconsole.stdout_executable([], 50));

@@ -1,0 +1,172 @@
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+yobu "selfhost/progress";
+yobu "selfhost/resolver";
+yobu "selfhost/resources";
+
+kata Package { name: string; alias: string; }
+koukai kata Export { name: string; kind: int64; }
+koukai kata Candidate { name: string; identity: string; members: []Export; dependencies: []resolver.PackageDependency; }
+kata Indexed { package: Package; exports: Candidate; }
+koukai kata Index {
+    root: string;
+    bunko: string;
+    ready: []bool;
+    packages: []Package;
+    exports: []Indexed;
+    overlays: []frontend.SourceOverlay;
+}
+
+koukai waza index(root: string, bunko: string) -> Index {
+    kaesu Index { root: root, bunko: bunko, ready: [iie], packages: [], exports: [], overlays: [] };
+}
+
+waza add(packages: []Package, name: string) -> unit {
+    kaku i = 0;
+    aida (i < len(packages)) {
+        moshi (packages[i].name == name) { kaesu; }
+        i = i + 1;
+    }
+    array.push(packages, Package { name: name, alias: path.base(name) });
+}
+
+waza skip(name: string) -> bool {
+    kaesu string.has_prefix(name, ".") || name == "node_modules" || name == "vendor" ||
+        name == "build" || name == "out" || name == "dist" || name == "target";
+}
+
+waza collect(catalog: Index, directory: string, name: string, library: bool, work: progress.Context) -> unit {
+    moshi (!progress.checkpoint(work)) { kaesu; }
+    kaku listing = fs.read_dir(directory);
+    moshi (listing.error != mu) { kaesu; }
+    kaku i = 0;
+    kaku has_source = iie;
+    aida (i < len(listing.entries)) {
+        kaku entry = listing.entries[i];
+        i = i + 1;
+        moshi (entry.is_dir && !skip(entry.name)) {
+            kaku child = path.join(directory, entry.name);
+            // The library provider owns the kiso namespace. Never discover
+            // an alternate physical directory by following project links.
+            kaku physical = os.canonical_path(child);
+            moshi (physical != mu) {
+                moshi (physical == child && physical != catalog.bunko) {
+                    kaku key = entry.name;
+                    moshi (name != "") { key = path.join(name, key); }
+                    moshi (library || (!string.has_prefix(key, "kiso/") && !string.has_prefix(key, "mio/") && key != "kiso" && key != "mio")) {
+                        collect(catalog, child, key, library, work);
+                    }
+                }
+            }
+        }
+        moshi (entry.is_file && string.has_suffix(entry.name, ".mio") &&
+            !string.has_suffix(entry.name, "_test.mio")) { has_source = hai; }
+    }
+    moshi (has_source && name != "") { add(catalog.packages, name); }
+}
+
+waza discover(catalog: Index, work: progress.Context) -> unit {
+    moshi (catalog.ready[0]) { kaesu; }
+    array.truncate(catalog.packages, 0);
+    kaku root = os.canonical_path(catalog.root);
+    moshi (root != mu) { collect(catalog, root, "", iie, work); }
+    moshi (catalog.bunko == "") {
+        kaku files = resources.files();
+        kaku i = 0;
+        aida (i < len(files) && progress.checkpoint(work)) {
+            kaku name = path.dir(files[i].path);
+            add(catalog.packages, name);
+            i = i + 1;
+        }
+    } sore {
+        kaku library = os.canonical_path(path.join(catalog.bunko, "kiso"));
+        moshi (library != mu) { collect(catalog, library, "kiso", hai, work); }
+    }
+    moshi (!progress.cancelled(work)) { catalog.ready[0] = hai; }
+}
+
+waza exported(catalog: Index, package: Package, work: progress.Context) -> Candidate {
+    kaku identity = frontend.package_identity(catalog.root, package.name);
+    kaku directory = identity;
+    moshi (string.has_prefix(package.name, "kiso/")) {
+        directory = path.join(catalog.bunko, package.name);
+    }
+    kaku live = iie;
+    kaku i = 0;
+    aida (i < len(catalog.overlays) && !live) {
+        live = path.dir(catalog.overlays[i].path) == directory;
+        i = i + 1;
+    }
+    i = 0;
+    aida (!live && i < len(catalog.exports)) {
+        moshi (catalog.exports[i].package.name == package.name) { kaesu catalog.exports[i].exports; }
+        i = i + 1;
+    }
+    kaku loaded = frontend.analyze_source_with_progress(catalog.root, package.name, catalog.bunko, catalog.overlays, iie, work);
+    kaku members: []Export = [];
+    kaku dependencies: []resolver.PackageDependency = [];
+    i = 0;
+    moshi (loaded.error == "" && len(loaded.diagnostics) == 0) {
+        aida (i < len(loaded.resolved)) {
+            kaku resolved = loaded.resolved[i];
+            i = i + 1;
+            moshi (resolved.package_path != identity) { tsuzuku; }
+            dependencies = resolved.dependencies;
+            kaku mi = 0;
+            aida (mi < len(resolved.members)) {
+                kaku member = resolved.members[mi];
+                moshi (member.public && member.package_path == identity) {
+                    kaku kind = resolver.symbol_kind_code(resolved.symbols[member.symbol_id].kind);
+                    moshi (kind == 3 || kind == 4 || kind == 6 || kind == 7) {
+                        array.push(members, Export { name: member.name, kind: kind });
+                    }
+                }
+                mi = mi + 1;
+            }
+        }
+    }
+    kaku result = Candidate { name: package.name, identity: identity, members: members, dependencies: dependencies };
+    moshi (!live && !progress.cancelled(work)) {
+        array.push(catalog.exports, Indexed { package: package, exports: result });
+    }
+    kaesu result;
+}
+
+koukai waza candidates(catalog: Index, alias: string, current: string, work: progress.Context) -> []Candidate {
+    kaku result: []Candidate = [];
+    discover(catalog, work);
+    kaku i = 0;
+    aida (i < len(catalog.packages) && progress.checkpoint(work)) {
+        kaku package = catalog.packages[i];
+        i = i + 1;
+        moshi (package.alias != alias) { tsuzuku; }
+        kaku candidate = exported(catalog, package, work);
+        moshi (len(candidate.members) == 0 || candidate.identity == current) { tsuzuku; }
+        kaku edge = 0;
+        kaku cycle = iie;
+        aida (edge < len(candidate.dependencies)) {
+            moshi (candidate.dependencies[edge].target == current) { cycle = hai; nukeru; }
+            edge = edge + 1;
+        }
+        moshi (!cycle) { array.push(result, candidate); }
+    }
+    kaesu result;
+}
+
+koukai waza provides(candidate: Candidate, member: string) -> bool {
+    kaku i = 0;
+    aida (i < len(candidate.members)) {
+        moshi (candidate.members[i].name == member) { kaesu hai; }
+        i = i + 1;
+    }
+    kaesu iie;
+}
+
+koukai waza invalidate(catalog: Index) -> unit {
+    catalog.ready[0] = iie;
+    array.truncate(catalog.exports, 0);
+}

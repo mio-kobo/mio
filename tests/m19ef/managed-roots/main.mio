@@ -13,129 +13,600 @@ yobu "kiso/string";
 // Real legacy heap/allocator/Minor/Major, with two native pthread mutators.
 // Runtime-IR fixture uses production layouts; language-codegen threading is
 // a separate outstanding gate. No replacement heap or collector is used.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza ld(f:ir.Function,r:int64,off:int64) -> unit {ir.put(f,ir.load,r,0,0,off);}
-waza st(f:ir.Function,off:int64,r:int64) -> unit {ir.put(f,ir.store,0,0,r,off);}
-waza set(f:ir.Function,off:int64,v:int64) -> unit {n(f,31,v);st(f,off,31);}
-waza ok(f:ir.Function,r:int64) -> unit {ir.branch(f,ir.nonzero,r,"fail");}
-waza eq(f:ir.Function,a:int64,b:int64) -> unit {ir.put(f,ir.equal,30,a,b,0);ir.branch(f,ir.zero,30,"fail");}
-waza finish(f:ir.Function) -> unit {ir.branch(f,ir.label,0,"fail");n(f,31,90);ir.call(f,gc.abort_runtime,31,[31]);}
-waza field(f:ir.Function,base:int64,off:int64,value:int64) -> unit {n(f,1,value);ir.put(f,ir.store,0,base,1,off);}
-waza alloc_node(f:ir.Function,size:int64,layout:int64) -> unit {
-    n(f,16,size);n(f,17,layout);ir.invoke_function(f,"gc_allocate_stopped",18,[0,15,14,16,17]);ir.branch(f,ir.zero,18,"fail");
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza ld(f: ir.Function, r: int64, off: int64) -> unit { ir.put(f, ir.load, r, 0, 0, off); }
+waza st(f: ir.Function, off: int64, r: int64) -> unit { ir.put(f, ir.store, 0, 0, r, off); }
+waza set(f: ir.Function, off: int64, v: int64) -> unit {
+    n(f, 31, v);
+    st(f, off, 31);
 }
-waza bitmap_node(f:ir.Function,count:int64,bits:int64) -> unit {
-    field(f,18,0,1);field(f,18,8,count);field(f,18,16,count);field(f,18,24,1);field(f,18,32,bits);
+waza ok(f: ir.Function, r: int64) -> unit { ir.branch(f, ir.nonzero, r, "fail"); }
+waza eq(f: ir.Function, a: int64, b: int64) -> unit {
+    ir.put(f, ir.equal, 30, a, b, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
+waza finish(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 31, 90);
+    ir.call(f, gc.abort_runtime, 31, [31]);
+}
+waza field(f: ir.Function, base: int64, off: int64, value: int64) -> unit {
+    n(f, 1, value);
+    ir.put(f, ir.store, 0, base, 1, off);
+}
+waza alloc_node(f: ir.Function, size: int64, layout: int64) -> unit {
+    n(f, 16, size);
+    n(f, 17, layout);
+    ir.invoke_function(f, "gc_allocate_stopped", 18, [0, 15, 14, 16, 17]);
+    ir.branch(f, ir.zero, 18, "fail");
+}
+waza bitmap_node(f: ir.Function, count: int64, bits: int64) -> unit {
+    field(f, 18, 0, 1);
+    field(f, 18, 8, count);
+    field(f, 18, 16, count);
+    field(f, 18, 24, 1);
+    field(f, 18, 32, bits);
 }
 waza worker() -> ir.Function {
-    kaku f=ir.function("worker");ld(f,31,gc.thread_imports);ir.put(f,ir.imports,0,31,0,0);ir.invoke_function(f,"thread_enter",1,[0]);ok(f,1);
-    ld(f,10,gc.thread_shadow);ld(f,11,gc.thread_user);ld(f,12,600);ir.branch(f,ir.zero,12,"receive");
+    kaku f = ir.function("worker");
+    ld(f, 31, gc.thread_imports);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
+    ir.invoke_function(f, "thread_enter", 1, [0]);
+    ok(f, 1);
+    ld(f, 10, gc.thread_shadow);
+    ld(f, 11, gc.thread_user);
+    ld(f, 12, 600);
+    ir.branch(f, ir.zero, 12, "receive");
     // Mutator A allocates both real objects while holding the stopped epoch.
-    ir.invoke_function(f,"gc_begin",1,[0,10]);ok(f,1);ir.put(f,ir.address,14,0,0,768);n(f,1,0);ir.put(f,ir.store,0,14,1,0);ir.put(f,ir.store,0,14,1,8);
-    ir.put(f,ir.load,15,11,0,0);alloc_node(f,16,105);
-    n(f,1,6);ir.put(f,ir.store,0,18,1,0);n(f,1,1234);ir.put(f,ir.store,0,18,1,8);ir.put(f,ir.store,0,10,18,16);
+    ir.invoke_function(f, "gc_begin", 1, [0, 10]);
+    ok(f, 1);
+    ir.put(f, ir.address, 14, 0, 0, 768);
+    n(f, 1, 0);
+    ir.put(f, ir.store, 0, 14, 1, 0);
+    ir.put(f, ir.store, 0, 14, 1, 8);
+    ir.put(f, ir.load, 15, 11, 0, 0);
+    alloc_node(f, 16, 105);
+    n(f, 1, 6);
+    ir.put(f, ir.store, 0, 18, 1, 0);
+    n(f, 1, 1234);
+    ir.put(f, ir.store, 0, 18, 1, 8);
+    ir.put(f, ir.store, 0, 10, 18, 16);
     // Exact production graph: Struct -> Array -> Storage -> Map -> entry ->
     // Closure -> environment -> scalar Cell. Nullable Struct field starts nil.
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,24,104);field(f,18,0,5);field(f,18,8,1);ir.put(f,ir.store,0,18,23,16);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,48,103);field(f,18,0,4);field(f,18,8,0);field(f,18,16,0);field(f,18,24,0);field(f,18,32,0);ir.put(f,ir.store,0,18,23,40);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,64,100);bitmap_node(f,3,5);field(f,18,40,0);field(f,18,48,42);ir.put(f,ir.store,0,18,23,56);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,48,100);bitmap_node(f,1,1);ir.put(f,ir.store,0,18,23,40);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,40,102);field(f,18,0,67587);field(f,18,8,1);field(f,18,16,1);field(f,18,24,1);ir.put(f,ir.store,0,18,23,32);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,48,101);field(f,18,0,67586);field(f,18,8,1);field(f,18,16,1);field(f,18,24,1);field(f,18,32,1);ir.put(f,ir.store,0,18,23,40);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.copy,23,18,0,0);alloc_node(f,56,100);bitmap_node(f,2,3);ir.put(f,ir.store,0,18,23,40);field(f,18,48,0);ir.put(f,ir.store,0,10,18,16);
-    ir.put(f,ir.store,0,11,18,8);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 24, 104);
+    field(f, 18, 0, 5);
+    field(f, 18, 8, 1);
+    ir.put(f, ir.store, 0, 18, 23, 16);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 48, 103);
+    field(f, 18, 0, 4);
+    field(f, 18, 8, 0);
+    field(f, 18, 16, 0);
+    field(f, 18, 24, 0);
+    field(f, 18, 32, 0);
+    ir.put(f, ir.store, 0, 18, 23, 40);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 64, 100);
+    bitmap_node(f, 3, 5);
+    field(f, 18, 40, 0);
+    field(f, 18, 48, 42);
+    ir.put(f, ir.store, 0, 18, 23, 56);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 48, 100);
+    bitmap_node(f, 1, 1);
+    ir.put(f, ir.store, 0, 18, 23, 40);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 40, 102);
+    field(f, 18, 0, 67587);
+    field(f, 18, 8, 1);
+    field(f, 18, 16, 1);
+    field(f, 18, 24, 1);
+    ir.put(f, ir.store, 0, 18, 23, 32);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 48, 101);
+    field(f, 18, 0, 67586);
+    field(f, 18, 8, 1);
+    field(f, 18, 16, 1);
+    field(f, 18, 24, 1);
+    field(f, 18, 32, 1);
+    ir.put(f, ir.store, 0, 18, 23, 40);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.copy, 23, 18, 0, 0);
+    alloc_node(f, 56, 100);
+    bitmap_node(f, 2, 3);
+    ir.put(f, ir.store, 0, 18, 23, 40);
+    field(f, 18, 48, 0);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.store, 0, 11, 18, 8);
     // Refresh snapshot to protect the Cell during the following LOS allocation.
-    n(f,1,0);ir.put(f,ir.store,0,14,1,8);ir.invoke_function(f,"gc_scan_roots",1,[0,14]);ok(f,1);
-    alloc_node(f,131072,106);ir.put(f,ir.copy,19,18,0,0);n(f,1,5678);ir.put(f,ir.store,0,19,1,0);ir.put(f,ir.store,0,10,19,24);
-    ir.put(f,ir.store,0,11,19,16);n(f,1,1);ir.put(f,ir.release_store,0,11,1,24);ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);ir.branch(f,ir.jump,0,"loop");
-    ir.branch(f,ir.label,0,"receive");ir.put(f,ir.acquire_load,1,11,0,24);ir.branch(f,ir.zero,1,"fail");ir.put(f,ir.load,18,11,0,8);ir.put(f,ir.load,19,11,0,16);ir.put(f,ir.store,0,10,18,16);ir.put(f,ir.store,0,10,19,24);
+    n(f, 1, 0);
+    ir.put(f, ir.store, 0, 14, 1, 8);
+    ir.invoke_function(f, "gc_scan_roots", 1, [0, 14]);
+    ok(f, 1);
+    alloc_node(f, 131072, 106);
+    ir.put(f, ir.copy, 19, 18, 0, 0);
+    n(f, 1, 5678);
+    ir.put(f, ir.store, 0, 19, 1, 0);
+    ir.put(f, ir.store, 0, 10, 19, 24);
+    ir.put(f, ir.store, 0, 11, 19, 16);
+    n(f, 1, 1);
+    ir.put(f, ir.release_store, 0, 11, 1, 24);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ir.branch(f, ir.jump, 0, "loop");
+    ir.branch(f, ir.label, 0, "receive");
+    ir.put(f, ir.acquire_load, 1, 11, 0, 24);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.put(f, ir.load, 18, 11, 0, 8);
+    ir.put(f, ir.load, 19, 11, 0, 16);
+    ir.put(f, ir.store, 0, 10, 18, 16);
+    ir.put(f, ir.store, 0, 10, 19, 24);
     // B also executes the production allocator, publishing its own Cell into
     // the shared Struct while A is parked. Both mutators therefore allocate.
-    ir.invoke_function(f,"gc_begin",1,[0,10]);ok(f,1);ir.put(f,ir.address,14,0,0,768);ir.put(f,ir.load,15,11,0,0);alloc_node(f,16,105);field(f,18,0,6);field(f,18,8,2468);ir.put(f,ir.load,19,10,0,16);ir.put(f,ir.store,0,19,18,48);ir.call(f,204,1,[15,19]);ok(f,1);
-    ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);n(f,1,1);ir.put(f,ir.release_store,0,11,1,32);
-    ir.branch(f,ir.label,0,"loop");
+    ir.invoke_function(f, "gc_begin", 1, [0, 10]);
+    ok(f, 1);
+    ir.put(f, ir.address, 14, 0, 0, 768);
+    ir.put(f, ir.load, 15, 11, 0, 0);
+    alloc_node(f, 16, 105);
+    field(f, 18, 0, 6);
+    field(f, 18, 8, 2468);
+    ir.put(f, ir.load, 19, 10, 0, 16);
+    ir.put(f, ir.store, 0, 19, 18, 48);
+    ir.call(f, 204, 1, [15, 19]);
+    ok(f, 1);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    n(f, 1, 1);
+    ir.put(f, ir.release_store, 0, 11, 1, 32);
+    ir.branch(f, ir.label, 0, "loop");
     // Phase1: only B retains. Phase2: all roots gone. Never read a dead payload.
-    ir.put(f,ir.acquire_load,1,11,0,40);ir.branch(f,ir.zero,1,"poll");ld(f,12,600);ir.branch(f,ir.nonzero,12,"drop");n(f,2,2);ir.put(f,ir.equal,2,1,2,0);ir.branch(f,ir.zero,2,"poll");
-    ir.branch(f,ir.label,0,"drop");n(f,1,0);ir.put(f,ir.store,0,10,1,16);ir.put(f,ir.store,0,10,1,24);
-    ir.branch(f,ir.label,0,"poll");ld(f,13,576);n(f,1,1);ir.put(f,ir.add,13,13,1,0);st(f,576,13);ir.invoke_function(f,"gc_poll",1,[0,10]);ok(f,1);
-    ld(f,12,600);ir.branch(f,ir.nonzero,12,"stop_check");n(f,1,1000000);ir.invoke_function(f,"thread_wait",1,[0,1]);n(f,2,2);ir.put(f,ir.less_unsigned,1,1,2,0);ir.branch(f,ir.zero,1,"fail");
-    ir.branch(f,ir.label,0,"stop_check");ir.put(f,ir.acquire_load,1,0,0,gc.thread_stop);ir.branch(f,ir.zero,1,"loop");
-    ir.invoke_function(f,"thread_leave",1,[0]);ok(f,1);ir.put(f,ir.result,0,1,0,0);finish(f);kaesu f;
+    ir.put(f, ir.acquire_load, 1, 11, 0, 40);
+    ir.branch(f, ir.zero, 1, "poll");
+    ld(f, 12, 600);
+    ir.branch(f, ir.nonzero, 12, "drop");
+    n(f, 2, 2);
+    ir.put(f, ir.equal, 2, 1, 2, 0);
+    ir.branch(f, ir.zero, 2, "poll");
+    ir.branch(f, ir.label, 0, "drop");
+    n(f, 1, 0);
+    ir.put(f, ir.store, 0, 10, 1, 16);
+    ir.put(f, ir.store, 0, 10, 1, 24);
+    ir.branch(f, ir.label, 0, "poll");
+    ld(f, 13, 576);
+    n(f, 1, 1);
+    ir.put(f, ir.add, 13, 13, 1, 0);
+    st(f, 576, 13);
+    ir.invoke_function(f, "gc_poll", 1, [0, 10]);
+    ok(f, 1);
+    ld(f, 12, 600);
+    ir.branch(f, ir.nonzero, 12, "stop_check");
+    n(f, 1, 1000000);
+    ir.invoke_function(f, "thread_wait", 1, [0, 1]);
+    n(f, 2, 2);
+    ir.put(f, ir.less_unsigned, 1, 1, 2, 0);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.branch(f, ir.label, 0, "stop_check");
+    ir.put(f, ir.acquire_load, 1, 0, 0, gc.thread_stop);
+    ir.branch(f, ir.zero, 1, "loop");
+    ir.invoke_function(f, "thread_leave", 1, [0]);
+    ok(f, 1);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    finish(f);
+    kaesu f;
 }
 waza configure() -> ir.Function {
-    kaku f=ir.function("configure");set(f,gc.thread_version,3);st(f,gc.thread_registry,1);st(f,gc.thread_imports,2);st(f,gc.thread_user,3);st(f,600,4);
-    ir.put(f,ir.address,3,0,0,288);st(f,gc.thread_mutex,3);ir.put(f,ir.address,3,0,0,352);st(f,gc.thread_condition,3);
-    ir.put(f,ir.address,3,0,0,512);st(f,gc.thread_shadow,3);n(f,4,0);ir.put(f,ir.store,0,3,4,0);n(f,4,2);ir.put(f,ir.store,0,3,4,8);
-    ir.function_pointer(f,"worker",3);st(f,gc.thread_entry,3);n(f,1,0);ir.put(f,ir.result,0,1,0,0);kaesu f;
+    kaku f = ir.function("configure");
+    set(f, gc.thread_version, 3);
+    st(f, gc.thread_registry, 1);
+    st(f, gc.thread_imports, 2);
+    st(f, gc.thread_user, 3);
+    st(f, 600, 4);
+    ir.put(f, ir.address, 3, 0, 0, 288);
+    st(f, gc.thread_mutex, 3);
+    ir.put(f, ir.address, 3, 0, 0, 352);
+    st(f, gc.thread_condition, 3);
+    ir.put(f, ir.address, 3, 0, 0, 512);
+    st(f, gc.thread_shadow, 3);
+    n(f, 4, 0);
+    ir.put(f, ir.store, 0, 3, 4, 0);
+    n(f, 4, 2);
+    ir.put(f, ir.store, 0, 3, 4, 8);
+    ir.function_pointer(f, "worker", 3);
+    st(f, gc.thread_entry, 3);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
 }
-waza wait_field(f:ir.Function,shared:int64,off:int64,label:string) -> unit {
-    ir.invoke_function(f,"platform_now",26,[]);n(f,27,1000000000);ir.put(f,ir.add,26,26,27,0);
-    ir.branch(f,ir.label,0,label);ir.put(f,ir.acquire_load,1,shared,0,off);ir.branch(f,ir.nonzero,1,string.concat(label,"_done"));ir.invoke_function(f,"platform_now",1,[]);ir.put(f,ir.less_unsigned,1,1,26,0);ir.branch(f,ir.zero,1,"fail");ir.branch(f,ir.jump,0,label);ir.branch(f,ir.label,0,string.concat(label,"_done"));
+waza wait_field(f: ir.Function, shared: int64, off: int64, label: string) -> unit {
+    ir.invoke_function(f, "platform_now", 26, []);
+    n(f, 27, 1000000000);
+    ir.put(f, ir.add, 26, 26, 27, 0);
+    ir.branch(f, ir.label, 0, label);
+    ir.put(f, ir.acquire_load, 1, shared, 0, off);
+    ir.branch(f, ir.nonzero, 1, string.concat(label, "_done"));
+    ir.invoke_function(f, "platform_now", 1, []);
+    ir.put(f, ir.less_unsigned, 1, 1, 26, 0);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.branch(f, ir.jump, 0, label);
+    ir.branch(f, ir.label, 0, string.concat(label, "_done"));
 }
-waza promoted(f:ir.Function,object:int64) -> unit {
-    n(f,1,16);ir.put(f,ir.subtract,1,object,1,0);ir.put(f,ir.load,1,1,0,0);n(f,2,34359738368);ir.put(f,ir.divide_unsigned,1,1,2,0);
-    n(f,2,2);ir.put(f,ir.divide_unsigned,3,1,2,0);ir.put(f,ir.multiply,3,3,2,0);ir.put(f,ir.subtract,1,1,3,0);n(f,2,1);eq(f,1,2);
+waza promoted(f: ir.Function, object: int64) -> unit {
+    n(f, 1, 16);
+    ir.put(f, ir.subtract, 1, object, 1, 0);
+    ir.put(f, ir.load, 1, 1, 0, 0);
+    n(f, 2, 34359738368);
+    ir.put(f, ir.divide_unsigned, 1, 1, 2, 0);
+    n(f, 2, 2);
+    ir.put(f, ir.divide_unsigned, 3, 1, 2, 0);
+    ir.put(f, ir.multiply, 3, 3, 2, 0);
+    ir.put(f, ir.subtract, 1, 1, 3, 0);
+    n(f, 2, 1);
+    eq(f, 1, 2);
 }
 waza run() -> ir.Function {
-    kaku f=ir.function("run");ld(f,2,gc.thread_imports);set(f,gc.thread_version,3);ir.put(f,ir.address,10,0,0,400);st(f,gc.thread_registry,10);n(f,1,3);ir.put(f,ir.store,0,10,1,0);ir.put(f,ir.address,11,0,0,1024);
-    ir.call(f,202,15,[]);ir.branch(f,ir.zero,15,"fail");ir.put(f,ir.store,0,11,15,0);ir.put(f,ir.address,14,0,0,1152);
+    kaku f = ir.function("run");
+    ld(f, 2, gc.thread_imports);
+    set(f, gc.thread_version, 3);
+    ir.put(f, ir.address, 10, 0, 0, 400);
+    st(f, gc.thread_registry, 10);
+    n(f, 1, 3);
+    ir.put(f, ir.store, 0, 10, 1, 0);
+    ir.put(f, ir.address, 11, 0, 0, 1024);
+    ir.call(f, 202, 15, []);
+    ir.branch(f, ir.zero, 15, "fail");
+    ir.put(f, ir.store, 0, 11, 15, 0);
+    ir.put(f, ir.address, 14, 0, 0, 1152);
     // No ownership: fail before invoking any collector.
-    n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);n(f,2,4);eq(f,1,2);ld(f,2,gc.thread_imports);
-    ir.put(f,ir.address,20,0,0,2048);ir.put(f,ir.address,21,0,0,4096);n(f,4,1);ir.invoke_function(f,"configure",1,[20,10,2,11,4]);ok(f,1);n(f,4,0);ir.invoke_function(f,"configure",1,[21,10,2,11,4]);ok(f,1);
-    ir.invoke_function(f,"thread_open",1,[20]);ok(f,1);wait_field(f,11,24,"allocated");ir.invoke_function(f,"thread_open",1,[21]);ok(f,1);wait_field(f,11,32,"transferred");n(f,1,1);ir.put(f,ir.release_store,0,11,1,40);
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    n(f, 2, 4);
+    eq(f, 1, 2);
+    ld(f, 2, gc.thread_imports);
+    ir.put(f, ir.address, 20, 0, 0, 2048);
+    ir.put(f, ir.address, 21, 0, 0, 4096);
+    n(f, 4, 1);
+    ir.invoke_function(f, "configure", 1, [20, 10, 2, 11, 4]);
+    ok(f, 1);
+    n(f, 4, 0);
+    ir.invoke_function(f, "configure", 1, [21, 10, 2, 11, 4]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_open", 1, [20]);
+    ok(f, 1);
+    wait_field(f, 11, 24, "allocated");
+    ir.invoke_function(f, "thread_open", 1, [21]);
+    ok(f, 1);
+    wait_field(f, 11, 32, "transferred");
+    n(f, 1, 1);
+    ir.put(f, ir.release_store, 0, 11, 1, 40);
     // Wait for A to remove both roots, using successive stopped snapshots.
-    ir.branch(f,ir.label,0,"only_b");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);ir.put(f,ir.load,1,20,0,528);ir.branch(f,ir.zero,1,"epochs");ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);ir.branch(f,ir.jump,0,"only_b");
-    ir.branch(f,ir.label,0,"epochs");
+    ir.branch(f, ir.label, 0, "only_b");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.put(f, ir.load, 1, 20, 0, 528);
+    ir.branch(f, ir.zero, 1, "epochs");
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ir.branch(f, ir.jump, 0, "only_b");
+    ir.branch(f, ir.label, 0, "epochs");
     // A complete coordinator frame plus B's roots exceeds snapshot capacity.
     // Collection must fail and preserve both GC counters and live heap ownership.
-    ir.put(f,ir.address,23,0,0,1408);field(f,23,0,0);field(f,23,8,16);st(f,gc.thread_shadow,23);
-    n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);n(f,2,4);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.minor_count);n(f,2,0);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.major_count);eq(f,1,2);st(f,gc.thread_shadow,2);
+    ir.put(f, ir.address, 23, 0, 0, 1408);
+    field(f, 23, 0, 0);
+    field(f, 23, 8, 16);
+    st(f, gc.thread_shadow, 23);
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    n(f, 2, 4);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.minor_count);
+    n(f, 2, 0);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.major_count);
+    eq(f, 1, 2);
+    st(f, gc.thread_shadow, 2);
     // A stale acknowledgement cannot authorize a collection. Holding B's
     // mutex prevents its timed park loop from repairing the injected epoch.
-    ir.put(f,ir.load,25,21,0,gc.thread_mutex);ir.call(f,ir.mutex_lock,1,[25]);ok(f,1);ir.put(f,ir.acquire_load,27,21,0,gc.thread_ack_epoch);n(f,1,0);ir.put(f,ir.release_store,0,21,1,gc.thread_ack_epoch);
-    n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);n(f,2,4);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.minor_count);n(f,2,0);eq(f,1,2);ir.put(f,ir.release_store,0,21,27,gc.thread_ack_epoch);ir.call(f,ir.mutex_unlock,1,[25]);ok(f,1);
-    n(f,22,0);
-    ir.branch(f,ir.label,0,"epoch");n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);
-    ir.put(f,ir.load,18,21,0,528);ir.put(f,ir.load,19,11,0,8);eq(f,18,19);
-    ir.put(f,ir.load,18,18,0,40);ir.put(f,ir.load,18,18,0,40);ir.put(f,ir.load,18,18,0,32);ir.put(f,ir.load,18,18,0,40);ir.put(f,ir.load,18,18,0,56);ir.put(f,ir.load,18,18,0,40);ir.put(f,ir.load,18,18,0,16);ir.put(f,ir.load,1,18,0,8);n(f,2,1234);eq(f,1,2);
-    ir.put(f,ir.load,18,21,0,536);ir.put(f,ir.load,19,11,0,16);eq(f,18,19);ir.put(f,ir.load,1,18,0,0);n(f,2,5678);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.los_count);n(f,2,1);eq(f,1,2);
-    ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);n(f,1,1);ir.put(f,ir.add,22,22,1,0);n(f,2,1000);ir.put(f,ir.less_unsigned,1,22,2,0);ir.branch(f,ir.zero,1,"drop_all");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);ir.branch(f,ir.jump,0,"epoch");
-    ir.branch(f,ir.label,0,"drop_all");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);
-    ir.put(f,ir.load,18,21,0,528);promoted(f,18);ir.put(f,ir.load,18,21,0,536);promoted(f,18);
+    ir.put(f, ir.load, 25, 21, 0, gc.thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [25]);
+    ok(f, 1);
+    ir.put(f, ir.acquire_load, 27, 21, 0, gc.thread_ack_epoch);
+    n(f, 1, 0);
+    ir.put(f, ir.release_store, 0, 21, 1, gc.thread_ack_epoch);
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    n(f, 2, 4);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.minor_count);
+    n(f, 2, 0);
+    eq(f, 1, 2);
+    ir.put(f, ir.release_store, 0, 21, 27, gc.thread_ack_epoch);
+    ir.call(f, ir.mutex_unlock, 1, [25]);
+    ok(f, 1);
+    n(f, 22, 0);
+    ir.branch(f, ir.label, 0, "epoch");
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 18, 21, 0, 528);
+    ir.put(f, ir.load, 19, 11, 0, 8);
+    eq(f, 18, 19);
+    ir.put(f, ir.load, 18, 18, 0, 40);
+    ir.put(f, ir.load, 18, 18, 0, 40);
+    ir.put(f, ir.load, 18, 18, 0, 32);
+    ir.put(f, ir.load, 18, 18, 0, 40);
+    ir.put(f, ir.load, 18, 18, 0, 56);
+    ir.put(f, ir.load, 18, 18, 0, 40);
+    ir.put(f, ir.load, 18, 18, 0, 16);
+    ir.put(f, ir.load, 1, 18, 0, 8);
+    n(f, 2, 1234);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 18, 21, 0, 536);
+    ir.put(f, ir.load, 19, 11, 0, 16);
+    eq(f, 18, 19);
+    ir.put(f, ir.load, 1, 18, 0, 0);
+    n(f, 2, 5678);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.los_count);
+    n(f, 2, 1);
+    eq(f, 1, 2);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    n(f, 1, 1);
+    ir.put(f, ir.add, 22, 22, 1, 0);
+    n(f, 2, 1000);
+    ir.put(f, ir.less_unsigned, 1, 22, 2, 0);
+    ir.branch(f, ir.zero, 1, "drop_all");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.branch(f, ir.jump, 0, "epoch");
+    ir.branch(f, ir.label, 0, "drop_all");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.put(f, ir.load, 18, 21, 0, 528);
+    promoted(f, 18);
+    ir.put(f, ir.load, 18, 21, 0, 536);
+    promoted(f, 18);
     // A freshly allocated Young Cell is reachable only through the Old Struct.
-    n(f,16,16);n(f,17,105);ir.invoke_function(f,"gc_allocate_stopped",18,[0,15,14,16,17]);ir.branch(f,ir.zero,18,"fail");field(f,18,0,6);field(f,18,8,9876);ir.put(f,ir.load,19,21,0,528);ir.put(f,ir.store,0,19,18,48);ir.call(f,204,1,[15,19]);ok(f,1);
-    n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);ir.put(f,ir.load,18,19,0,48);ir.put(f,ir.load,1,18,0,8);n(f,2,9876);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.remembered_head);ir.branch(f,ir.zero,1,"fail");
-    ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);
+    n(f, 16, 16);
+    n(f, 17, 105);
+    ir.invoke_function(f, "gc_allocate_stopped", 18, [0, 15, 14, 16, 17]);
+    ir.branch(f, ir.zero, 18, "fail");
+    field(f, 18, 0, 6);
+    field(f, 18, 8, 9876);
+    ir.put(f, ir.load, 19, 21, 0, 528);
+    ir.put(f, ir.store, 0, 19, 18, 48);
+    ir.call(f, 204, 1, [15, 19]);
+    ok(f, 1);
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 18, 19, 0, 48);
+    ir.put(f, ir.load, 1, 18, 0, 8);
+    n(f, 2, 9876);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.remembered_head);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
     // Exit A, collect while B retains the graph, then register the same owned
     // context again. Registration/exit counters and context storage persist.
-    ir.invoke_function(f,"thread_close",1,[20]);ok(f,1);n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);n(f,3,1);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);
-    ld(f,2,gc.thread_imports);n(f,4,0);ir.invoke_function(f,"configure",1,[20,10,2,11,4]);ok(f,1);n(f,1,0);ir.put(f,ir.release_store,0,11,1,32);ir.invoke_function(f,"thread_open",1,[20]);ok(f,1);wait_field(f,11,32,"reregister_ready");
+    ir.invoke_function(f, "thread_close", 1, [20]);
+    ok(f, 1);
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    n(f, 3, 1);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ld(f, 2, gc.thread_imports);
+    n(f, 4, 0);
+    ir.invoke_function(f, "configure", 1, [20, 10, 2, 11, 4]);
+    ok(f, 1);
+    n(f, 1, 0);
+    ir.put(f, ir.release_store, 0, 11, 1, 32);
+    ir.invoke_function(f, "thread_open", 1, [20]);
+    ok(f, 1);
+    wait_field(f, 11, 32, "reregister_ready");
     // A's successful re-entry adds a second registration before requesting drop.
-    ir.branch(f,ir.label,0,"reentered");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);ir.put(f,ir.acquire_load,1,10,0,8);n(f,2,2);ir.put(f,ir.equal,1,1,2,0);ir.branch(f,ir.nonzero,1,"reregistered");ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);ir.branch(f,ir.jump,0,"reentered");
-    ir.branch(f,ir.label,0,"reregistered");n(f,3,0);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);ir.put(f,ir.load,18,21,0,528);ir.put(f,ir.load,18,18,0,48);ir.put(f,ir.load,1,18,0,8);n(f,2,2468);eq(f,1,2);ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);n(f,1,2);ir.put(f,ir.release_store,0,11,1,40);
-    ir.branch(f,ir.label,0,"dropped");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);ir.put(f,ir.load,1,20,0,528);ir.branch(f,ir.nonzero,1,"still_rooted");ir.put(f,ir.load,1,21,0,528);ir.branch(f,ir.zero,1,"reclaim");ir.branch(f,ir.label,0,"still_rooted");ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);ir.branch(f,ir.jump,0,"dropped");
-    ir.branch(f,ir.label,0,"reclaim");n(f,3,1);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);
-    ir.put(f,ir.load,1,15,0,gc.los_count);n(f,2,0);eq(f,1,2);ir.put(f,ir.load,1,15,0,304);eq(f,1,2);ir.put(f,ir.load,1,15,0,gc.young_head);eq(f,1,2);
+    ir.branch(f, ir.label, 0, "reentered");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.put(f, ir.acquire_load, 1, 10, 0, 8);
+    n(f, 2, 2);
+    ir.put(f, ir.equal, 1, 1, 2, 0);
+    ir.branch(f, ir.nonzero, 1, "reregistered");
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ir.branch(f, ir.jump, 0, "reentered");
+    ir.branch(f, ir.label, 0, "reregistered");
+    n(f, 3, 0);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 18, 21, 0, 528);
+    ir.put(f, ir.load, 18, 18, 0, 48);
+    ir.put(f, ir.load, 1, 18, 0, 8);
+    n(f, 2, 2468);
+    eq(f, 1, 2);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    n(f, 1, 2);
+    ir.put(f, ir.release_store, 0, 11, 1, 40);
+    ir.branch(f, ir.label, 0, "dropped");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.put(f, ir.load, 1, 20, 0, 528);
+    ir.branch(f, ir.nonzero, 1, "still_rooted");
+    ir.put(f, ir.load, 1, 21, 0, 528);
+    ir.branch(f, ir.zero, 1, "reclaim");
+    ir.branch(f, ir.label, 0, "still_rooted");
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ir.branch(f, ir.jump, 0, "dropped");
+    ir.branch(f, ir.label, 0, "reclaim");
+    n(f, 3, 1);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 1, 15, 0, gc.los_count);
+    n(f, 2, 0);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, 304);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, gc.young_head);
+    eq(f, 1, 2);
     // Controlled allocation reuse: the dead run returned to the bump frontier.
     // Only the newly allocated Cell is dereferenced, never its dead predecessor.
-    ir.put(f,ir.address,19,15,0,3072);ir.put(f,ir.load,1,15,0,0);eq(f,1,19);n(f,16,16);n(f,17,105);ir.invoke_function(f,"gc_allocate_stopped",18,[0,15,14,16,17]);ir.put(f,ir.address,19,19,0,16);eq(f,18,19);field(f,18,0,6);field(f,18,8,4321);
+    ir.put(f, ir.address, 19, 15, 0, 3072);
+    ir.put(f, ir.load, 1, 15, 0, 0);
+    eq(f, 1, 19);
+    n(f, 16, 16);
+    n(f, 17, 105);
+    ir.invoke_function(f, "gc_allocate_stopped", 18, [0, 15, 14, 16, 17]);
+    ir.put(f, ir.address, 19, 19, 0, 16);
+    eq(f, 18, 19);
+    field(f, 18, 0, 6);
+    field(f, 18, 8, 4321);
     // Prove the unregistered coordinator's own precise frame is included.
-    ir.put(f,ir.address,23,0,0,1408);field(f,23,8,1);ir.put(f,ir.store,0,23,18,16);st(f,gc.thread_shadow,23);n(f,3,1);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);ir.put(f,ir.load,1,18,0,8);n(f,2,4321);eq(f,1,2);ir.put(f,ir.load,1,15,0,304);n(f,2,32);eq(f,1,2);
-    n(f,2,0);st(f,gc.thread_shadow,2);n(f,3,1);ir.invoke_function(f,"gc_collect_stopped",1,[0,15,14,3]);ok(f,1);ir.put(f,ir.load,1,15,0,304);eq(f,1,2);
+    ir.put(f, ir.address, 23, 0, 0, 1408);
+    field(f, 23, 8, 1);
+    ir.put(f, ir.store, 0, 23, 18, 16);
+    st(f, gc.thread_shadow, 23);
+    n(f, 3, 1);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 1, 18, 0, 8);
+    n(f, 2, 4321);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 15, 0, 304);
+    n(f, 2, 32);
+    eq(f, 1, 2);
+    n(f, 2, 0);
+    st(f, gc.thread_shadow, 2);
+    n(f, 3, 1);
+    ir.invoke_function(f, "gc_collect_stopped", 1, [0, 15, 14, 3]);
+    ok(f, 1);
+    ir.put(f, ir.load, 1, 15, 0, 304);
+    eq(f, 1, 2);
     // Reclaim is proved through occupied/LOS metadata; no freed pointer load.
-    ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);ir.invoke_function(f,"thread_close",1,[20]);ok(f,1);ir.invoke_function(f,"thread_close",1,[21]);ok(f,1);
-    ir.put(f,ir.load,1,20,0,gc.thread_registrations);n(f,2,2);eq(f,1,2);ir.put(f,ir.load,1,20,0,gc.thread_exits);eq(f,1,2);ir.put(f,ir.load,1,21,0,gc.thread_waits);ir.branch(f,ir.zero,1,"fail");
-    ir.put(f,ir.store,0,11,22,48);ir.put(f,ir.load,1,15,0,gc.minor_count);ir.put(f,ir.store,0,11,1,56);ir.put(f,ir.load,1,15,0,gc.major_count);ir.put(f,ir.store,0,11,1,64);ir.put(f,ir.load,1,15,0,gc.los_reclaimed);ir.put(f,ir.store,0,11,1,72);ir.put(f,ir.address,1,11,0,48);n(f,2,32);ir.call(f,103,3,[1,2]);n(f,1,0);ir.call(f,gc.abort_runtime,2,[1]);finish(f);kaesu f;
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_close", 1, [20]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_close", 1, [21]);
+    ok(f, 1);
+    ir.put(f, ir.load, 1, 20, 0, gc.thread_registrations);
+    n(f, 2, 2);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 20, 0, gc.thread_exits);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 21, 0, gc.thread_waits);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.put(f, ir.store, 0, 11, 22, 48);
+    ir.put(f, ir.load, 1, 15, 0, gc.minor_count);
+    ir.put(f, ir.store, 0, 11, 1, 56);
+    ir.put(f, ir.load, 1, 15, 0, gc.major_count);
+    ir.put(f, ir.store, 0, 11, 1, 64);
+    ir.put(f, ir.load, 1, 15, 0, gc.los_reclaimed);
+    ir.put(f, ir.store, 0, 11, 1, 72);
+    ir.put(f, ir.address, 1, 11, 0, 48);
+    n(f, 2, 32);
+    ir.call(f, 103, 3, [1, 2]);
+    n(f, 1, 0);
+    ir.call(f, gc.abort_runtime, 2, [1]);
+    finish(f);
+    kaesu f;
 }
-waza fatal(text:string) -> unit {fs.write_all("/dev/stderr",string.to_bytes(string.concat(text,"\n")));os.exit(1);}
-waza emit(c:arm64.Assembler,word:arm64.Instruction) -> unit {moshi(arm64.assembler_emit(c,word)!=mu){fatal("instruction");}}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,offset:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:offset,register:r});}
+waza fatal(text: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(text, "\n")));
+    os.exit(1);
+}
+waza emit(c: arm64.Assembler, word: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, word) != mu) { fatal("instruction"); } }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, offset: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: offset, register: r });
+}
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)!=2){fatal("output path");}kaku f=gc.cooperative_thread_program(iie);array.append_all(f,gc.safepoint_program(16));array.append_all(f,gc.stopped_heap_program(16));array.append_all(f,darwin.thread_platform_program());array.push(f,worker());array.push(f,configure());array.push(f,run());
-    kaku bindings=darwin.thread_bindings();kaku ops=[gc.gc_visit_root_operation,gc.gc_collect_stopped_operation,gc.gc_heap_initialize_operation,gc.gc_allocate_stopped_operation,204];kaku selectors:[][]int64=[[0,1,2],[0,1,2],[],[0,1,2,3],[0,1]];kaku i=0;aida(i<5){array.push(bindings,ir.Binding {operation:ops[i],slot:darwin.thread_symbol_count+i,arguments:selectors[i],result_bits:64});i=i+1;}
-    kaku slots=darwin.thread_symbol_count+5;kaku c=arm64.assembler();kaku p:[]macho.AddressPatch=[];addr(c,p,7,2052*8);addr(c,p,0,(2052+slots)*8);emit(c,arm64.str_x(7,0,gc.thread_imports));
-    kaku names=["mg_gc_snapshot_root","stw_heap_collect","stw_heap_init","stw_heap_alloc","stw_heap_remember"];kaku ats:[]int64=[];i=0;aida(i<5){array.push(ats,len(c.words));emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,7,(darwin.thread_symbol_count+i)*8));i=i+1;}
-    arm64.assembler_bl(c,"mg_run");emit(c,arm64.ret());kaku err=aarch64.emit_program(c,f,bindings,slots,"mg");moshi(err!=""){fatal(err);}lower.emit_stopped_heap_adapter(c,1048576);
-    i=0;aida(i<5){kaku at=arm64.assembler_label_word(c,names[i]);kaku ins=arm64.adr(9,(at-ats[i])*4);moshi(ins.error!=mu){fatal("adapter address");}c.words[ats[i]]=ins.word;i=i+1;}
-    kaku words=arm64.assembler_assemble(c);moshi(words.error!=mu){fatal("assembly");}kaku image=darwin.executable_appended(macho.ImageSpec {words:words.words,constants:[],globals:2052,patches:p},darwin.thread_symbols(),1029);moshi(image.error!=""){fatal(image.error);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){fatal(signed.error);}moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){fatal("write");}
-}main();
+    kaku args = os.arguments();
+    moshi (len(args) != 2) {
+        fatal("output path");
+    }
+    kaku f = gc.cooperative_thread_program(iie);
+    array.append_all(f, gc.safepoint_program(16));
+    array.append_all(f, gc.stopped_heap_program(16));
+    array.append_all(f, darwin.thread_platform_program());
+    array.push(f, worker());
+    array.push(f, configure());
+    array.push(f, run());
+    kaku bindings = darwin.thread_bindings();
+    kaku ops = [gc.gc_visit_root_operation, gc.gc_collect_stopped_operation, gc.gc_heap_initialize_operation, gc.gc_allocate_stopped_operation, 204];
+    kaku selectors: [][]int64 = [[0, 1, 2], [0, 1, 2], [], [0, 1, 2, 3], [0, 1]];
+    kaku i = 0;
+    aida (i<5) {
+        array.push(bindings, ir.Binding {
+                operation: ops[i], slot: darwin.thread_symbol_count + i, arguments: selectors[i], result_bits: 64 });
+        i = i + 1;
+    }
+    kaku slots = darwin.thread_symbol_count + 5;
+    kaku c = arm64.assembler();
+    kaku p: []macho.AddressPatch = [];
+    addr(c, p, 7, 2052 * 8);
+    addr(c, p, 0, (2052 + slots) * 8);
+    emit(c, arm64.str_x(7, 0, gc.thread_imports));
+    kaku names = ["mg_gc_snapshot_root", "stw_heap_collect", "stw_heap_init", "stw_heap_alloc", "stw_heap_remember"];
+    kaku ats: []int64 = [];
+    i = 0;
+    aida (i<5) {
+        array.push(ats, len(c.words));
+        emit(c, arm64.movz_x(9, 0, 0));
+        emit(c, arm64.str_x(9, 7, (darwin.thread_symbol_count + i) * 8));
+        i = i + 1;
+    }
+    arm64.assembler_bl(c, "mg_run");
+    emit(c, arm64.ret());
+    kaku err = aarch64.emit_program(c, f, bindings, slots, "mg");
+    moshi (err != "") {
+        fatal(err);
+    }
+    lower.emit_stopped_heap_adapter(c, 1048576);
+    i = 0;
+    aida (i<5) {
+        kaku at = arm64.assembler_label_word(c, names[i]);
+        kaku ins = arm64.adr(9, (at - ats[i]) * 4);
+        moshi (ins.error != mu) {
+            fatal("adapter address");
+        }
+        c.words[ats[i]] = ins.word;
+        i = i + 1;
+    }
+    kaku words = arm64.assembler_assemble(c);
+    moshi (words.error != mu) {
+        fatal("assembly");
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: words.words, constants: [], globals: 2052, patches: p }, darwin.thread_symbols(), 1029);
+    moshi (image.error != "") {
+        fatal(image.error);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        fatal(signed.error);
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) {
+        fatal("write");
+    }
+} main();

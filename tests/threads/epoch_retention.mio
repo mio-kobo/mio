@@ -1,0 +1,56 @@
+// Bounded epoch retention (docs/darwin-thread-heap-exclusion-design.md, section 8): long straight-line runs of allocations and stores, so that several
+// heap opcodes share one epoch and the run limit (16 opcodes) is crossed inside the loop body. Four threads run the same chain while the main thread
+// joins; with --gc-stress every allocation collects, so a root that is not published for the retained opcodes, a temporary lost between two
+// allocations of the same run, or a partially initialized object seen by a collection corrupts a total. Every thread's result must equal the
+// sequential result computed by the main thread, and the main thread's own allocations run between the joins.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Point { x: int64; y: int64; }
+
+waza chain(seed: int64, n: int64) -> int64 {
+    kaku acc = 0;
+    kaku keep: []Point = [];
+    kaku i = 0;
+    aida (i < n) {
+        kaku a = [i + seed, i + 1, i + 2];
+        kaku b = [a[0], a[1], i];
+        kaku c = Point { x: a[2], y: b[2] };
+        kaku d = [c.x, c.y, a[0] + b[1]];
+        kaku e = Point { x: d[2], y: len(d) + len(a) };
+        acc = acc + a[0] + b[1] + c.x + d[1] + e.x + e.y;
+        moshi (i - (i / 50) * 50 == 0) { array.push(keep, e); }
+        i = i + 1;
+    }
+    kaku k = 0;
+    kaku total = acc;
+    aida (k < len(keep)) { total = total + keep[k].x - keep[k].y; k = k + 1; }
+    kaesu total;
+}
+
+waza w0() -> int64 { kaesu chain(0, 3000); }
+waza w1() -> int64 { kaesu chain(1, 3000); }
+waza w2() -> int64 { kaesu chain(2, 3000); }
+waza w3() -> int64 { kaesu chain(3, 3000); }
+
+waza run() -> int64 {
+    kaku h0 = thread.start(w0);
+    kaku h1 = thread.start(w1);
+    kaku h2 = thread.start(w2);
+    kaku h3 = thread.start(w3);
+    kaku s0 = chain(0, 3000);
+    kaku s1 = chain(1, 3000);
+    kaku s2 = chain(2, 3000);
+    kaku s3 = chain(3, 3000);
+    kaku r0 = thread.join(h0);
+    kaku r1 = thread.join(h1);
+    kaku r2 = thread.join(h2);
+    kaku r3 = thread.join(h3);
+    chant(r0 == s0);
+    chant(r1 == s1);
+    chant(r2 == s2);
+    chant(r3 == s3);
+    chant(r0 + r1 + r2 + r3);
+    kaesu 0;
+}
+run();

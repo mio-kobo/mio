@@ -2,7 +2,7 @@ package typecheck
 
 import "Mio/internal/ast"
 
-// forEachChild calls fn for each direct sub-expression of e (function literal bodies are not entered).
+// forEachChild 对表达式 e 的每个直接子表达式调用 fn（不会进入 FunctionLiteral 函数体内部）。
 func forEachChild(e ast.Expression, fn func(ast.Expression)) {
 	switch n := e.(type) {
 	case *ast.InfixExpression:
@@ -45,7 +45,7 @@ func forEachChild(e ast.Expression, fn func(ast.Expression)) {
 	}
 }
 
-// walkAllExpressions visits every expression in the program, including the bodies of nested functions and literals.
+// walkAllExpressions 遍历程序中的所有表达式，包括嵌套函数与闭包字面量内部。
 func walkAllExpressions(program *ast.Program, visit func(ast.Expression)) {
 	var expr func(e ast.Expression)
 	var stmt func(s ast.Statement)
@@ -107,16 +107,15 @@ func walkAllExpressions(program *ast.Program, visit func(ast.Expression)) {
 	}
 }
 
-// visitIdentifiers calls fn for every identifier read inside a block (including transfer operands and nested literals).
+// visitIdentifiers 对语句块内读取的每个标识符调用 fn（包含 yuzuru 操作数与嵌套函数字面量内部）。
 func (p *ownershipPass) visitIdentifiers(b *ast.BlockStatement, fn func(*ast.Identifier)) {
 	if b == nil {
 		return
 	}
 	tmp := &ast.Program{Statements: []ast.Statement{b}}
 	walkAllExpressions(tmp, func(e ast.Expression) {
-		switch n := e.(type) {
-		case *ast.Identifier:
-			fn(n)
+		if id, ok := e.(*ast.Identifier); ok {
+			fn(id)
 		}
 	})
 }

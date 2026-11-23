@@ -1,166 +1,683 @@
-// Experimental Old marker with real exact roots, typed SATB and an independent
-// worker. Allocation/Minor require old_heap_epoch_program plus pause/promotion
-// hooks; unsupported writes/Major Abort/join. Full E4 gates remain unfinished.
-// Work queue0..127. heap128,current136,phase144,scanSeq152,scanned160,
-// scanFirst168,scanLast176,done184,error192,identity200,overlap208,
-// overlapFirst216,overlapLast224,handle232,nativeError240,imports248,
-// registry256,white264,black272,joined280,deadline288,worldResumed296,starts304,joins312.
-// Deferred bit42/outstanding104; extension416; SATB424/432/440; pauseRequest448/ack456/released464,
-// pauseCount472,Minor480,promoted488,nestedPauseDepth496.
-koukai teisu old_color_bit=2199023255552;
-koukai teisu old_generation_bit=34359738368;
-koukai teisu old_control_bytes=512;
-koukai teisu old_mark_extension_version=5;
-koukai teisu old_phase_init=1;
-koukai teisu old_phase_mark=2;
-koukai teisu old_phase_remark=3;
-koukai teisu old_phase_ready=4;
-koukai teisu old_phase_abort=6;
+// 实验性老年代（Old Generation）并发标记器（Marker）：支持精确根对象（Exact Roots）、类型化 SATB 写屏障与独立工作线程。
+// 控制块内存布局（512 字节）：
+//   0..127:   工作队列（Work Queue）；104: outstanding 溢出计数
+//   128..319: heap(128), current(136), phase(144), scanSeq(152), scanned(160), scanFirst(168), scanLast(176),
+//             done(184), error(192), identity(200), overlap(208..224), handle(232), nativeError(240),
+//             imports(248), registry(256), white(264), black(272), joined(280), deadline(288), worldResumed(296), starts(304), joins(312)
+//   416..496: extension(416), SATB(424/432/440), pauseRequest(448)/ack(456)/released(464), pauseCount(472), Minor(480), promoted(488), nestedPauseDepth(496)
+koukai teisu old_color_bit = 2199023255552;
+koukai teisu old_generation_bit = 34359738368;
+koukai teisu old_control_bytes = 512;
+koukai teisu old_mark_extension_version = 5;
+koukai teisu old_phase_init = 1;
+koukai teisu old_phase_mark = 2;
+koukai teisu old_phase_remark = 3;
+koukai teisu old_phase_ready = 4;
+koukai teisu old_phase_abort = 6;
 // Clock failure/overflow cannot extend a bounded wait or produce fake trace
 // timestamps. Virtual30/31 are private scratch at all call sites.
-waza old_deadline(f:ir.Function,destination:int64,nanoseconds:int64,failure:string) -> unit {
- ir.invoke_function(f,"platform_now",destination,[]);ir.branch(f,ir.zero,destination,failure);ir.put(f,ir.copy,30,destination,0,0);tconstant(f,31,nanoseconds);ir.put(f,ir.add,destination,destination,31,0);ir.put(f,ir.less_unsigned,31,destination,30,0);ir.branch(f,ir.nonzero,31,failure);
+waza old_deadline(f: ir.Function, destination: int64, nanoseconds: int64, failure: string) -> unit {
+    ir.invoke_function(f, "platform_now", destination, []);
+    ir.branch(f, ir.zero, destination, failure);
+    ir.put(f, ir.copy, 30, destination, 0, 0);
+    tconstant(f, 31, nanoseconds);
+    ir.put(f, ir.add, destination, destination, 31, 0);
+    ir.put(f, ir.less_unsigned, 31, destination, 30, 0);
+    ir.branch(f, ir.nonzero, 31, failure);
 }
-waza old_bit(f:ir.Function,src:int64,dst:int64,mask:int64) -> unit {
- tconstant(f,28,mask);ir.put(f,ir.divide_unsigned,dst,src,28,0);tconstant(f,28,2);ir.put(f,ir.divide_unsigned,29,dst,28,0);ir.put(f,ir.multiply,29,29,28,0);ir.put(f,ir.subtract,dst,dst,29,0);
+waza old_bit(f: ir.Function, src: int64, dst: int64, mask: int64) -> unit {
+    tconstant(f, 28, mask);
+    ir.put(f, ir.divide_unsigned, dst, src, 28, 0);
+    tconstant(f, 28, 2);
+    ir.put(f, ir.divide_unsigned, 29, dst, 28, 0);
+    ir.put(f, ir.multiply, 29, 29, 28, 0);
+    ir.put(f, ir.subtract, dst, dst, 29, 0);
 }
-waza old_error(f:ir.Function,src:int64) -> unit {
- ir.put(f,ir.address,26,0,0,192);tconstant(f,27,0);array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:25,left:26,right:src,immediate:0,name:"",arguments:[27],order:acq_rel,failure_order:acquire});tconstant(f,27,old_phase_abort);ir.put(f,ir.release_store,0,0,27,144);
+waza old_error(f: ir.Function, src: int64) -> unit {
+    ir.put(f, ir.address, 26, 0, 0, 192);
+    tconstant(f, 27, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 25, left: 26, right: src, immediate: 0, name: "", arguments: [27], order: acq_rel, failure_order: acquire });
+    tconstant(f, 27, old_phase_abort);
+    ir.put(f, ir.release_store, 0, 0, 27, 144);
 }
-waza old_add(f:ir.Function,off:int64) -> unit {ir.put(f,ir.load,28,0,0,off);tconstant(f,29,1);ir.put(f,ir.add,28,28,29,0);ir.put(f,ir.release_store,0,0,28,off);}
+waza old_add(f: ir.Function, off: int64) -> unit {
+    ir.put(f, ir.load, 28, 0, 0, off);
+    tconstant(f, 29, 1);
+    ir.put(f, ir.add, 28, 28, 29, 0);
+    ir.put(f, ir.release_store, 0, 0, 28, off);
+}
 waza old_visit_program() -> ir.Function {
- kaku f=ir.function("gc_old_visit");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"cancelled");ir.branch(f,ir.zero,1,"done");tconstant(f,6,2);ir.put(f,ir.divide_unsigned,7,1,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,1,0);ir.branch(f,ir.zero,7,"done");
- tconstant(f,6,16);ir.put(f,ir.less_unsigned,7,1,6,0);ir.branch(f,ir.nonzero,7,"invalid");ir.put(f,ir.divide_unsigned,7,1,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,1,0);ir.branch(f,ir.zero,7,"invalid");ir.invoke_function(f,"gc_old_bounds",19,[0,1]);ir.branch(f,ir.zero,19,"invalid");tconstant(f,6,16);ir.put(f,ir.subtract,10,1,6,0);tconstant(f,14,0);
- ir.branch(f,ir.label,0,"color");ir.put(f,ir.acquire_load,11,10,0,0);old_bit(f,11,12,old_generation_bit);ir.branch(f,ir.zero,12,"done");old_bit(f,11,12,old_color_bit);ir.branch(f,ir.nonzero,12,"done");tconstant(f,12,old_color_bit);ir.put(f,ir.add,12,11,12,0);
- array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:13,left:10,right:12,immediate:0,name:"",arguments:[11],order:acq_rel,failure_order:acquire});ir.put(f,ir.equal,13,13,11,0);ir.branch(f,ir.nonzero,13,"enqueue");tconstant(f,6,1);ir.put(f,ir.add,14,14,6,0);tconstant(f,6,1024);ir.put(f,ir.less_unsigned,6,14,6,0);ir.branch(f,ir.nonzero,6,"color");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"enqueue");ir.put(f,ir.load,16,0,0,112);old_deadline(f,17,1000000000,"invalid");
- ir.branch(f,ir.label,0,"offer");ir.invoke_function(f,"gc_work_offer",5,[0,16,1]);ir.branch(f,ir.zero,5,"done");tcheck(f,5,2,"contended");tcheck(f,5,1,"defer");ir.branch(f,ir.jump,0,"failed");
- ir.branch(f,ir.label,0,"defer");ir.invoke_function(f,"gc_old_defer",5,[0,1]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"contended");ir.invoke_function(f,"platform_now",18,[]);ir.branch(f,ir.zero,18,"invalid");ir.put(f,ir.less_unsigned,18,18,17,0);ir.branch(f,ir.nonzero,18,"offer");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);
- ir.branch(f,ir.label,0,"failed");ir.put(f,ir.acquire_load,6,0,0,144);tcheck(f,6,old_phase_abort,"return_error");old_error(f,5);ir.branch(f,ir.label,0,"return_error");ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"cancelled");treturn(f,4);
- ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_visit");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "cancelled");
+    ir.branch(f, ir.zero, 1, "done");
+    tconstant(f, 6, 2);
+    ir.put(f, ir.divide_unsigned, 7, 1, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 1, 0);
+    ir.branch(f, ir.zero, 7, "done");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.less_unsigned, 7, 1, 6, 0);
+    ir.branch(f, ir.nonzero, 7, "invalid");
+    ir.put(f, ir.divide_unsigned, 7, 1, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 1, 0);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.invoke_function(f, "gc_old_bounds", 19, [0, 1]);
+    ir.branch(f, ir.zero, 19, "invalid");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.subtract, 10, 1, 6, 0);
+    tconstant(f, 14, 0);
+    ir.branch(f, ir.label, 0, "color");
+    ir.put(f, ir.acquire_load, 11, 10, 0, 0);
+    old_bit(f, 11, 12, old_generation_bit);
+    ir.branch(f, ir.zero, 12, "done");
+    old_bit(f, 11, 12, old_color_bit);
+    ir.branch(f, ir.nonzero, 12, "done");
+    tconstant(f, 12, old_color_bit);
+    ir.put(f, ir.add, 12, 11, 12, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 13, left: 10, right: 12, immediate: 0, name: "", arguments: [11], order: acq_rel, failure_order: acquire });
+    ir.put(f, ir.equal, 13, 13, 11, 0);
+    ir.branch(f, ir.nonzero, 13, "enqueue");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.add, 14, 14, 6, 0);
+    tconstant(f, 6, 1024);
+    ir.put(f, ir.less_unsigned, 6, 14, 6, 0);
+    ir.branch(f, ir.nonzero, 6, "color");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "enqueue");
+    ir.put(f, ir.load, 16, 0, 0, 112);
+    old_deadline(f, 17, 1000000000, "invalid");
+    ir.branch(f, ir.label, 0, "offer");
+    ir.invoke_function(f, "gc_work_offer", 5, [0, 16, 1]);
+    ir.branch(f, ir.zero, 5, "done");
+    tcheck(f, 5, 2, "contended");
+    tcheck(f, 5, 1, "defer");
+    ir.branch(f, ir.jump, 0, "failed");
+    ir.branch(f, ir.label, 0, "defer");
+    ir.invoke_function(f, "gc_old_defer", 5, [0, 1]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "contended");
+    ir.invoke_function(f, "platform_now", 18, []);
+    ir.branch(f, ir.zero, 18, "invalid");
+    ir.put(f, ir.less_unsigned, 18, 18, 17, 0);
+    ir.branch(f, ir.nonzero, 18, "offer");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 144);
+    tcheck(f, 6, old_phase_abort, "return_error");
+    old_error(f, 5);
+    ir.branch(f, ir.label, 0, "return_error");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "cancelled");
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_inspect_program() -> ir.Function {
- // ctx,header,owned payload bytes,mode(reset0/Young frontier1/count2).
- kaku f=ir.function("gc_old_inspect");ir.put(f,ir.acquire_load,10,1,0,0);ir.branch(f,ir.zero,10,"done");ir.put(f,ir.load,11,1,0,8);ir.put(f,ir.less_unsigned,12,2,11,0);ir.branch(f,ir.nonzero,12,"invalid");old_bit(f,10,12,old_generation_bit);tcheck(f,3,0,"reset");tcheck(f,3,2,"count");tcheck(f,3,3,"reoffer");ir.branch(f,ir.nonzero,12,"done");tconstant(f,13,16);ir.put(f,ir.add,13,1,13,0);ir.invoke_function(f,"gc_trace_object",5,[0,13,2]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"reset");ir.branch(f,ir.zero,12,"done");old_bit(f,10,12,old_color_bit);ir.branch(f,ir.zero,12,"reset_deferred");tconstant(f,13,old_color_bit);ir.put(f,ir.subtract,10,10,13,0);
- ir.branch(f,ir.label,0,"reset_deferred");old_bit(f,10,12,old_deferred_bit);ir.branch(f,ir.zero,12,"reset_store");tconstant(f,13,old_deferred_bit);ir.put(f,ir.subtract,10,10,13,0);
- ir.branch(f,ir.label,0,"reset_store");ir.put(f,ir.release_store,0,1,10,0);ir.branch(f,ir.jump,0,"done");
- ir.branch(f,ir.label,0,"reoffer");ir.branch(f,ir.zero,12,"done");ir.invoke_function(f,"gc_old_reoffer",5,[0,1]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"count");ir.branch(f,ir.zero,12,"done");old_bit(f,10,12,old_color_bit);ir.branch(f,ir.zero,12,"white");old_add(f,272);ir.branch(f,ir.jump,0,"done");ir.branch(f,ir.label,0,"white");old_add(f,264);
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    // ctx,header,owned payload bytes,mode(reset0/Young frontier1/count2).
+    kaku f = ir.function("gc_old_inspect");
+    ir.put(f, ir.acquire_load, 10, 1, 0, 0);
+    ir.branch(f, ir.zero, 10, "done");
+    ir.put(f, ir.load, 11, 1, 0, 8);
+    ir.put(f, ir.less_unsigned, 12, 2, 11, 0);
+    ir.branch(f, ir.nonzero, 12, "invalid");
+    old_bit(f, 10, 12, old_generation_bit);
+    tcheck(f, 3, 0, "reset");
+    tcheck(f, 3, 2, "count");
+    tcheck(f, 3, 3, "reoffer");
+    ir.branch(f, ir.nonzero, 12, "done");
+    tconstant(f, 13, 16);
+    ir.put(f, ir.add, 13, 1, 13, 0);
+    ir.invoke_function(f, "gc_trace_object", 5, [0, 13, 2]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "reset");
+    ir.branch(f, ir.zero, 12, "done");
+    old_bit(f, 10, 12, old_color_bit);
+    ir.branch(f, ir.zero, 12, "reset_deferred");
+    tconstant(f, 13, old_color_bit);
+    ir.put(f, ir.subtract, 10, 10, 13, 0);
+    ir.branch(f, ir.label, 0, "reset_deferred");
+    old_bit(f, 10, 12, old_deferred_bit);
+    ir.branch(f, ir.zero, 12, "reset_store");
+    tconstant(f, 13, old_deferred_bit);
+    ir.put(f, ir.subtract, 10, 10, 13, 0);
+    ir.branch(f, ir.label, 0, "reset_store");
+    ir.put(f, ir.release_store, 0, 1, 10, 0);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "reoffer");
+    ir.branch(f, ir.zero, 12, "done");
+    ir.invoke_function(f, "gc_old_reoffer", 5, [0, 1]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "count");
+    ir.branch(f, ir.zero, 12, "done");
+    old_bit(f, 10, 12, old_color_bit);
+    ir.branch(f, ir.zero, 12, "white");
+    old_add(f, 272);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "white");
+    old_add(f, 264);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
 waza old_walk_program() -> ir.Function {
- kaku f=ir.function("gc_old_walk");ir.put(f,ir.load,10,0,0,128);ir.put(f,ir.address,11,10,0,metadata_bytes);ir.put(f,ir.load,12,10,0,0);
- ir.branch(f,ir.label,0,"ordinary");ir.put(f,ir.equal,5,11,12,0);ir.branch(f,ir.nonzero,5,"los_begin");ir.put(f,ir.less_unsigned,5,11,12,0);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.subtract,13,12,11,0);tconstant(f,14,16);ir.put(f,ir.less_unsigned,5,13,14,0);ir.branch(f,ir.nonzero,5,"invalid");ir.put(f,ir.subtract,13,13,14,0);ir.put(f,ir.load,14,11,0,8);ir.put(f,ir.less_unsigned,5,13,14,0);ir.branch(f,ir.nonzero,5,"invalid");
- tconstant(f,15,31);ir.put(f,ir.add,15,14,15,0);ir.put(f,ir.less_unsigned,5,15,14,0);ir.branch(f,ir.nonzero,5,"invalid");tconstant(f,16,16);ir.put(f,ir.divide_unsigned,15,15,16,0);ir.put(f,ir.multiply,15,15,16,0);ir.invoke_function(f,"gc_old_inspect",5,[0,11,13,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.add,11,11,15,0);ir.branch(f,ir.jump,0,"ordinary");
- ir.branch(f,ir.label,0,"los_begin");ir.put(f,ir.load,11,10,0,los_head);tconstant(f,20,0);ir.put(f,ir.load,21,10,0,los_count);
- ir.branch(f,ir.label,0,"los");ir.branch(f,ir.zero,11,"done");ir.put(f,ir.less_unsigned,5,20,21,0);ir.branch(f,ir.zero,5,"invalid");tconstant(f,22,1);ir.put(f,ir.add,20,20,22,0);ir.put(f,ir.load,13,11,0,8);tconstant(f,14,48);ir.put(f,ir.less_unsigned,5,13,14,0);ir.branch(f,ir.nonzero,5,"invalid");ir.put(f,ir.subtract,13,13,14,0);ir.put(f,ir.address,14,11,0,32);ir.invoke_function(f,"gc_old_inspect",5,[0,14,13,1]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.load,11,11,0,0);ir.branch(f,ir.jump,0,"los");
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_walk");
+    ir.put(f, ir.load, 10, 0, 0, 128);
+    ir.put(f, ir.address, 11, 10, 0, metadata_bytes);
+    ir.put(f, ir.load, 12, 10, 0, 0);
+    ir.branch(f, ir.label, 0, "ordinary");
+    ir.put(f, ir.equal, 5, 11, 12, 0);
+    ir.branch(f, ir.nonzero, 5, "los_begin");
+    ir.put(f, ir.less_unsigned, 5, 11, 12, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.subtract, 13, 12, 11, 0);
+    tconstant(f, 14, 16);
+    ir.put(f, ir.less_unsigned, 5, 13, 14, 0);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.subtract, 13, 13, 14, 0);
+    ir.put(f, ir.load, 14, 11, 0, 8);
+    ir.put(f, ir.less_unsigned, 5, 13, 14, 0);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    tconstant(f, 15, 31);
+    ir.put(f, ir.add, 15, 14, 15, 0);
+    ir.put(f, ir.less_unsigned, 5, 15, 14, 0);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    tconstant(f, 16, 16);
+    ir.put(f, ir.divide_unsigned, 15, 15, 16, 0);
+    ir.put(f, ir.multiply, 15, 15, 16, 0);
+    ir.invoke_function(f, "gc_old_inspect", 5, [0, 11, 13, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.add, 11, 11, 15, 0);
+    ir.branch(f, ir.jump, 0, "ordinary");
+    ir.branch(f, ir.label, 0, "los_begin");
+    ir.put(f, ir.load, 11, 10, 0, los_head);
+    tconstant(f, 20, 0);
+    ir.put(f, ir.load, 21, 10, 0, los_count);
+    ir.branch(f, ir.label, 0, "los");
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.less_unsigned, 5, 20, 21, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tconstant(f, 22, 1);
+    ir.put(f, ir.add, 20, 20, 22, 0);
+    ir.put(f, ir.load, 13, 11, 0, 8);
+    tconstant(f, 14, 48);
+    ir.put(f, ir.less_unsigned, 5, 13, 14, 0);
+    ir.branch(f, ir.nonzero, 5, "invalid");
+    ir.put(f, ir.subtract, 13, 13, 14, 0);
+    ir.put(f, ir.address, 14, 11, 0, 32);
+    ir.invoke_function(f, "gc_old_inspect", 5, [0, 14, 13, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.load, 11, 11, 0, 0);
+    ir.branch(f, ir.jump, 0, "los");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza old_roots_program() -> ir.Function {
- kaku f=ir.function("gc_old_roots");ir.put(f,ir.copy,20,1,0,0);ir.put(f,ir.load,21,20,0,8);tconstant(f,22,1001);ir.put(f,ir.less_unsigned,5,21,22,0);ir.branch(f,ir.zero,5,"invalid");tconstant(f,22,0);tconstant(f,23,8);
- ir.branch(f,ir.label,0,"root");ir.put(f,ir.equal,5,22,21,0);ir.branch(f,ir.nonzero,5,"done");ir.put(f,ir.multiply,24,22,23,0);ir.put(f,ir.add,24,20,24,0);ir.put(f,ir.load,24,24,0,16);ir.invoke_function(f,"gc_old_visit",5,[0,24]);ir.branch(f,ir.nonzero,5,"failed");tconstant(f,24,1);ir.put(f,ir.add,22,22,24,0);ir.branch(f,ir.jump,0,"root");
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_roots");
+    ir.put(f, ir.copy, 20, 1, 0, 0);
+    ir.put(f, ir.load, 21, 20, 0, 8);
+    tconstant(f, 22, 1001);
+    ir.put(f, ir.less_unsigned, 5, 21, 22, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tconstant(f, 22, 0);
+    tconstant(f, 23, 8);
+    ir.branch(f, ir.label, 0, "root");
+    ir.put(f, ir.equal, 5, 22, 21, 0);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.put(f, ir.multiply, 24, 22, 23, 0);
+    ir.put(f, ir.add, 24, 20, 24, 0);
+    ir.put(f, ir.load, 24, 24, 0, 16);
+    ir.invoke_function(f, "gc_old_visit", 5, [0, 24]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tconstant(f, 24, 1);
+    ir.put(f, ir.add, 22, 22, 24, 0);
+    ir.branch(f, ir.jump, 0, "root");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza old_prepare_program() -> ir.Function {
- // Caller holds the actual all-Mutator Init snapshot. A previous marker must
- // have joined before any task state/header can be reset. Failed epochs retain
- // ownership until this join proof, then advance monotonically without reclaim.
- kaku f=ir.function("gc_old_prepare");ir.put(f,ir.acquire_load,15,0,0,112);ir.put(f,ir.acquire_load,10,0,0,144);ir.branch(f,ir.zero,15,"first_epoch");
- tcheck(f,10,old_phase_ready,"previous_ended");tcheck(f,10,old_phase_abort,"previous_ended");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"previous_ended");ir.put(f,ir.load,11,0,0,232);ir.branch(f,ir.zero,11,"advance");ir.put(f,ir.acquire_load,12,0,0,280);ir.branch(f,ir.zero,12,"invalid");ir.branch(f,ir.jump,0,"advance");
- ir.branch(f,ir.label,0,"first_epoch");ir.branch(f,ir.nonzero,10,"invalid");
- ir.branch(f,ir.label,0,"advance");tconstant(f,6,1);ir.put(f,ir.add,16,15,6,0);ir.branch(f,ir.zero,16,"invalid");
- tconstant(f,6,old_mark_extension_version);ir.put(f,ir.store,0,0,6,416);tconstant(f,6,old_phase_init);ir.put(f,ir.release_store,0,0,6,144);tconstant(f,6,0);
- // All queue producers are parked and its sole consumer has joined. This is
- // an owned discard of cancelled work, never a live concurrent queue reset.
- kaku off=0;aida(off<128){ir.put(f,ir.store,0,0,6,off);off=off+8;}
- kaku reset=[136,152,160,168,176,184,192,200,208,216,224,232,240,264,272,280,288,296,320,424,432,440,448,456,464,472,480,488,496];kaku i=0;aida(i<len(reset)){ir.put(f,ir.store,0,0,6,reset[i]);i=i+1;}
- ir.put(f,ir.store,0,0,1,128);ir.invoke_function(f,"gc_work_configure",7,[0,3,4,5,16]);ir.branch(f,ir.nonzero,7,"failed");
- tconstant(f,6,0);ir.invoke_function(f,"gc_old_walk",7,[0,6]);ir.branch(f,ir.nonzero,7,"failed");tconstant(f,6,1);ir.invoke_function(f,"gc_old_walk",7,[0,6]);ir.branch(f,ir.nonzero,7,"failed");ir.invoke_function(f,"gc_old_roots",7,[0,2]);ir.branch(f,ir.nonzero,7,"failed");treturn(f,0);
- ir.branch(f,ir.label,0,"invalid");tconstant(f,7,4);ir.branch(f,ir.label,0,"failed");old_error(f,7);ir.put(f,ir.result,0,7,0,0);kaesu f;
+    // Caller holds the actual all-Mutator Init snapshot. A previous marker must
+    // have joined before any task state/header can be reset. Failed epochs retain
+    // ownership until this join proof, then advance monotonically without reclaim.
+    kaku f = ir.function("gc_old_prepare");
+    ir.put(f, ir.acquire_load, 15, 0, 0, 112);
+    ir.put(f, ir.acquire_load, 10, 0, 0, 144);
+    ir.branch(f, ir.zero, 15, "first_epoch");
+    tcheck(f, 10, old_phase_ready, "previous_ended");
+    tcheck(f, 10, old_phase_abort, "previous_ended");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "previous_ended");
+    ir.put(f, ir.load, 11, 0, 0, 232);
+    ir.branch(f, ir.zero, 11, "advance");
+    ir.put(f, ir.acquire_load, 12, 0, 0, 280);
+    ir.branch(f, ir.zero, 12, "invalid");
+    ir.branch(f, ir.jump, 0, "advance");
+    ir.branch(f, ir.label, 0, "first_epoch");
+    ir.branch(f, ir.nonzero, 10, "invalid");
+    ir.branch(f, ir.label, 0, "advance");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.add, 16, 15, 6, 0);
+    ir.branch(f, ir.zero, 16, "invalid");
+    tconstant(f, 6, old_mark_extension_version);
+    ir.put(f, ir.store, 0, 0, 6, 416);
+    tconstant(f, 6, old_phase_init);
+    ir.put(f, ir.release_store, 0, 0, 6, 144);
+    tconstant(f, 6, 0);
+    // All queue producers are parked and its sole consumer has joined. This is
+    // an owned discard of cancelled work, never a live concurrent queue reset.
+    kaku off = 0;
+    aida (off<128) {
+        ir.put(f, ir.store, 0, 0, 6, off);
+        off = off + 8;
+    }
+    kaku reset = [136, 152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 264, 272, 280, 288, 296, 320, 424, 432, 440, 448, 456, 464, 472, 480, 488, 496];
+    kaku i = 0;
+    aida (i<len(reset)) {
+        ir.put(f, ir.store, 0, 0, 6, reset[i]);
+        i = i + 1;
+    }
+    ir.put(f, ir.store, 0, 0, 1, 128);
+    ir.invoke_function(f, "gc_work_configure", 7, [0, 3, 4, 5, 16]);
+    ir.branch(f, ir.nonzero, 7, "failed");
+    tconstant(f, 6, 0);
+    ir.invoke_function(f, "gc_old_walk", 7, [0, 6]);
+    ir.branch(f, ir.nonzero, 7, "failed");
+    tconstant(f, 6, 1);
+    ir.invoke_function(f, "gc_old_walk", 7, [0, 6]);
+    ir.branch(f, ir.nonzero, 7, "failed");
+    ir.invoke_function(f, "gc_old_roots", 7, [0, 2]);
+    ir.branch(f, ir.nonzero, 7, "failed");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 7, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    old_error(f, 7);
+    ir.put(f, ir.result, 0, 7, 0, 0);
+    kaesu f;
 }
 waza old_bounds_program() -> ir.Function {
- // Typed references must also name an owned mapping before a header load.
- // Ordinary exact object starts are guaranteed by solved roots/layouts; LOS
- // identity is checked against its owned list, never by dereferencing p-48.
- kaku f=ir.function("gc_old_bounds");ir.branch(f,ir.zero,1,"invalid");tconstant(f,6,16);ir.put(f,ir.divide_unsigned,7,1,6,0);ir.put(f,ir.multiply,7,7,6,0);ir.put(f,ir.equal,7,7,1,0);ir.branch(f,ir.zero,7,"invalid");
- ir.put(f,ir.load,10,0,0,128);ir.branch(f,ir.zero,10,"invalid");ir.put(f,ir.address,11,10,0,metadata_bytes+16);ir.put(f,ir.load,12,10,0,0);ir.put(f,ir.less_unsigned,13,1,11,0);ir.branch(f,ir.nonzero,13,"los_begin");ir.put(f,ir.less_unsigned,13,1,12,0);ir.branch(f,ir.zero,13,"los_begin");
- ir.put(f,ir.subtract,14,12,1,0);ir.put(f,ir.subtract,15,1,6,0);ir.put(f,ir.acquire_load,16,15,0,0);ir.branch(f,ir.zero,16,"invalid");ir.put(f,ir.load,15,15,0,8);ir.branch(f,ir.zero,15,"invalid");ir.put(f,ir.less_unsigned,13,14,15,0);ir.branch(f,ir.nonzero,13,"invalid");ir.put(f,ir.result,0,15,0,0);
- ir.branch(f,ir.label,0,"los_begin");ir.put(f,ir.load,11,10,0,los_head);ir.put(f,ir.load,21,10,0,los_count);tconstant(f,20,0);
- ir.branch(f,ir.label,0,"los_owned");ir.branch(f,ir.zero,11,"invalid");ir.put(f,ir.less_unsigned,13,20,21,0);ir.branch(f,ir.zero,13,"invalid");tconstant(f,22,1);ir.put(f,ir.add,20,20,22,0);ir.put(f,ir.address,12,11,0,48);ir.put(f,ir.equal,13,1,12,0);ir.branch(f,ir.nonzero,13,"los_match");ir.put(f,ir.load,11,11,0,0);ir.branch(f,ir.jump,0,"los_owned");
- ir.branch(f,ir.label,0,"los_match");ir.put(f,ir.load,14,11,0,8);tconstant(f,15,48);ir.put(f,ir.less_unsigned,13,14,15,0);ir.branch(f,ir.nonzero,13,"invalid");ir.put(f,ir.subtract,14,14,15,0);ir.put(f,ir.acquire_load,16,11,0,32);ir.branch(f,ir.zero,16,"invalid");ir.put(f,ir.load,15,11,0,40);ir.branch(f,ir.zero,15,"invalid");ir.put(f,ir.less_unsigned,13,14,15,0);ir.branch(f,ir.nonzero,13,"invalid");ir.put(f,ir.result,0,15,0,0);
- ir.branch(f,ir.label,0,"invalid");treturn(f,0);kaesu f;
+    // Typed references must also name an owned mapping before a header load.
+    // Ordinary exact object starts are guaranteed by solved roots/layouts; LOS
+    // identity is checked against its owned list, never by dereferencing p-48.
+    kaku f = ir.function("gc_old_bounds");
+    ir.branch(f, ir.zero, 1, "invalid");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.divide_unsigned, 7, 1, 6, 0);
+    ir.put(f, ir.multiply, 7, 7, 6, 0);
+    ir.put(f, ir.equal, 7, 7, 1, 0);
+    ir.branch(f, ir.zero, 7, "invalid");
+    ir.put(f, ir.load, 10, 0, 0, 128);
+    ir.branch(f, ir.zero, 10, "invalid");
+    ir.put(f, ir.address, 11, 10, 0, metadata_bytes + 16);
+    ir.put(f, ir.load, 12, 10, 0, 0);
+    ir.put(f, ir.less_unsigned, 13, 1, 11, 0);
+    ir.branch(f, ir.nonzero, 13, "los_begin");
+    ir.put(f, ir.less_unsigned, 13, 1, 12, 0);
+    ir.branch(f, ir.zero, 13, "los_begin");
+    ir.put(f, ir.subtract, 14, 12, 1, 0);
+    ir.put(f, ir.subtract, 15, 1, 6, 0);
+    ir.put(f, ir.acquire_load, 16, 15, 0, 0);
+    ir.branch(f, ir.zero, 16, "invalid");
+    ir.put(f, ir.load, 15, 15, 0, 8);
+    ir.branch(f, ir.zero, 15, "invalid");
+    ir.put(f, ir.less_unsigned, 13, 14, 15, 0);
+    ir.branch(f, ir.nonzero, 13, "invalid");
+    ir.put(f, ir.result, 0, 15, 0, 0);
+    ir.branch(f, ir.label, 0, "los_begin");
+    ir.put(f, ir.load, 11, 10, 0, los_head);
+    ir.put(f, ir.load, 21, 10, 0, los_count);
+    tconstant(f, 20, 0);
+    ir.branch(f, ir.label, 0, "los_owned");
+    ir.branch(f, ir.zero, 11, "invalid");
+    ir.put(f, ir.less_unsigned, 13, 20, 21, 0);
+    ir.branch(f, ir.zero, 13, "invalid");
+    tconstant(f, 22, 1);
+    ir.put(f, ir.add, 20, 20, 22, 0);
+    ir.put(f, ir.address, 12, 11, 0, 48);
+    ir.put(f, ir.equal, 13, 1, 12, 0);
+    ir.branch(f, ir.nonzero, 13, "los_match");
+    ir.put(f, ir.load, 11, 11, 0, 0);
+    ir.branch(f, ir.jump, 0, "los_owned");
+    ir.branch(f, ir.label, 0, "los_match");
+    ir.put(f, ir.load, 14, 11, 0, 8);
+    tconstant(f, 15, 48);
+    ir.put(f, ir.less_unsigned, 13, 14, 15, 0);
+    ir.branch(f, ir.nonzero, 13, "invalid");
+    ir.put(f, ir.subtract, 14, 14, 15, 0);
+    ir.put(f, ir.acquire_load, 16, 11, 0, 32);
+    ir.branch(f, ir.zero, 16, "invalid");
+    ir.put(f, ir.load, 15, 11, 0, 40);
+    ir.branch(f, ir.zero, 15, "invalid");
+    ir.put(f, ir.less_unsigned, 13, 14, 15, 0);
+    ir.branch(f, ir.nonzero, 13, "invalid");
+    ir.put(f, ir.result, 0, 15, 0, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 0);
+    kaesu f;
 }
-waza old_done(f:ir.Function) -> unit {
- ir.put(f,ir.acquire_load,5,0,0,152);old_bit(f,5,6,1);ir.branch(f,ir.zero,6,"even");old_add(f,152);ir.branch(f,ir.label,0,"even");tconstant(f,6,1);ir.put(f,ir.release_store,0,0,6,184);treturn(f,0);
+waza old_done(f: ir.Function) -> unit {
+    ir.put(f, ir.acquire_load, 5, 0, 0, 152);
+    old_bit(f, 5, 6, 1);
+    ir.branch(f, ir.zero, 6, "even");
+    old_add(f, 152);
+    ir.branch(f, ir.label, 0, "even");
+    tconstant(f, 6, 1);
+    ir.put(f, ir.release_store, 0, 0, 6, 184);
+    treturn(f, 0);
 }
 waza old_worker_program() -> ir.Function {
- kaku f=ir.function("gc_old_worker");ir.put(f,ir.load,31,0,0,248);ir.put(f,ir.imports,0,31,0,0);ir.put(f,ir.load,5,0,0,416);tconstant(f,6,old_mark_extension_version);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.call(f,thread_identity,5,[]);ir.put(f,ir.release_store,0,0,5,200);old_deadline(f,20,30000000000,"invalid");ir.put(f,ir.store,0,0,20,288);ir.put(f,ir.load,16,0,0,112);ir.put(f,ir.address,17,0,0,136);
- ir.branch(f,ir.label,0,"resume");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"done");ir.put(f,ir.acquire_load,6,0,0,296);ir.branch(f,ir.nonzero,6,"take");ir.branch(f,ir.jump,0,"resume_deadline");
- ir.branch(f,ir.label,0,"take");old_marker_pause_gate(f);ir.branch(f,ir.label,0,"take_unpaused");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"done");ir.invoke_function(f,"gc_work_take",5,[0,16,17]);ir.branch(f,ir.zero,5,"item");tcheck(f,5,1,"empty");tcheck(f,5,2,"deadline");ir.branch(f,ir.jump,0,"failed");
- ir.branch(f,ir.label,0,"empty");ir.put(f,ir.acquire_load,5,0,0,104);ir.branch(f,ir.nonzero,5,"overflow_walk");ir.invoke_function(f,"gc_work_quiet",5,[0,16]);tcheck(f,5,1,"ready");tcheck(f,5,4,"failed");ir.branch(f,ir.jump,0,"deadline");
- ir.branch(f,ir.label,0,"overflow_walk");tconstant(f,6,3);ir.invoke_function(f,"gc_old_walk",5,[0,6]);ir.branch(f,ir.nonzero,5,"failed");ir.branch(f,ir.jump,0,"deadline");
- ir.branch(f,ir.label,0,"item");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.load,6,0,0,168);ir.branch(f,ir.nonzero,6,"clock_set");ir.put(f,ir.release_store,0,0,5,168);ir.branch(f,ir.label,0,"clock_set");old_add(f,152);ir.put(f,ir.load,18,17,0,0);ir.invoke_function(f,"gc_old_bounds",19,[0,18]);ir.branch(f,ir.zero,19,"invalid");ir.invoke_function(f,"gc_trace_object",5,[0,18,19]);ir.branch(f,ir.nonzero,5,"failed");old_add(f,152);
- ir.branch(f,ir.label,0,"complete");ir.invoke_function(f,"gc_work_complete",5,[0,16]);ir.branch(f,ir.zero,5,"completed");tcheck(f,5,2,"complete_wait");ir.branch(f,ir.jump,0,"failed");
- ir.branch(f,ir.label,0,"complete_wait");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"complete");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"completed");old_add(f,160);ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.release_store,0,0,5,176);
- ir.branch(f,ir.label,0,"deadline");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"take");ir.branch(f,ir.jump,0,"invalid");
- ir.branch(f,ir.label,0,"resume_deadline");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"resume");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");ir.put(f,ir.acquire_load,6,0,0,144);tcheck(f,6,old_phase_abort,"done");old_error(f,5);ir.branch(f,ir.label,0,"done");old_done(f);
- ir.branch(f,ir.label,0,"ready");tconstant(f,5,old_phase_ready);ir.put(f,ir.release_store,0,0,5,144);ir.branch(f,ir.jump,0,"done");kaesu f;
+    kaku f = ir.function("gc_old_worker");
+    ir.put(f, ir.load, 31, 0, 0, 248);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
+    ir.put(f, ir.load, 5, 0, 0, 416);
+    tconstant(f, 6, old_mark_extension_version);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.call(f, thread_identity, 5, []);
+    ir.put(f, ir.release_store, 0, 0, 5, 200);
+    old_deadline(f, 20, 30000000000, "invalid");
+    ir.put(f, ir.store, 0, 0, 20, 288);
+    ir.put(f, ir.load, 16, 0, 0, 112);
+    ir.put(f, ir.address, 17, 0, 0, 136);
+    ir.branch(f, ir.label, 0, "resume");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "done");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 296);
+    ir.branch(f, ir.nonzero, 6, "take");
+    ir.branch(f, ir.jump, 0, "resume_deadline");
+    ir.branch(f, ir.label, 0, "take");
+    old_marker_pause_gate(f);
+    ir.branch(f, ir.label, 0, "take_unpaused");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "done");
+    ir.invoke_function(f, "gc_work_take", 5, [0, 16, 17]);
+    ir.branch(f, ir.zero, 5, "item");
+    tcheck(f, 5, 1, "empty");
+    tcheck(f, 5, 2, "deadline");
+    ir.branch(f, ir.jump, 0, "failed");
+    ir.branch(f, ir.label, 0, "empty");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 104);
+    ir.branch(f, ir.nonzero, 5, "overflow_walk");
+    ir.invoke_function(f, "gc_work_quiet", 5, [0, 16]);
+    tcheck(f, 5, 1, "ready");
+    tcheck(f, 5, 4, "failed");
+    ir.branch(f, ir.jump, 0, "deadline");
+    ir.branch(f, ir.label, 0, "overflow_walk");
+    tconstant(f, 6, 3);
+    ir.invoke_function(f, "gc_old_walk", 5, [0, 6]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.jump, 0, "deadline");
+    ir.branch(f, ir.label, 0, "item");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.load, 6, 0, 0, 168);
+    ir.branch(f, ir.nonzero, 6, "clock_set");
+    ir.put(f, ir.release_store, 0, 0, 5, 168);
+    ir.branch(f, ir.label, 0, "clock_set");
+    old_add(f, 152);
+    ir.put(f, ir.load, 18, 17, 0, 0);
+    ir.invoke_function(f, "gc_old_bounds", 19, [0, 18]);
+    ir.branch(f, ir.zero, 19, "invalid");
+    ir.invoke_function(f, "gc_trace_object", 5, [0, 18, 19]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    old_add(f, 152);
+    ir.branch(f, ir.label, 0, "complete");
+    ir.invoke_function(f, "gc_work_complete", 5, [0, 16]);
+    ir.branch(f, ir.zero, 5, "completed");
+    tcheck(f, 5, 2, "complete_wait");
+    ir.branch(f, ir.jump, 0, "failed");
+    ir.branch(f, ir.label, 0, "complete_wait");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "complete");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "completed");
+    old_add(f, 160);
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.release_store, 0, 0, 5, 176);
+    ir.branch(f, ir.label, 0, "deadline");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "take");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "resume_deadline");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "resume");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.acquire_load, 6, 0, 0, 144);
+    tcheck(f, 6, old_phase_abort, "done");
+    old_error(f, 5);
+    ir.branch(f, ir.label, 0, "done");
+    old_done(f);
+    ir.branch(f, ir.label, 0, "ready");
+    tconstant(f, 5, old_phase_ready);
+    ir.put(f, ir.release_store, 0, 0, 5, 144);
+    ir.branch(f, ir.jump, 0, "done");
+    kaesu f;
 }
 waza old_join_program() -> ir.Function {
- // Caller owns the real stopped heap or has joined every Mutator. It must
- // retain all control/heap mappings on error. This never requests unsafe free.
- kaku f=ir.function("gc_old_join");ir.put(f,ir.acquire_load,5,0,0,280);ir.branch(f,ir.nonzero,5,"done");ir.put(f,ir.load,10,0,0,232);ir.branch(f,ir.zero,10,"done");old_deadline(f,20,10000000000,"clock_failed");
- ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,5,0,0,184);ir.branch(f,ir.nonzero,5,"join");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"clock_failed");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"wait");ir.branch(f,ir.jump,0,"clock_failed");
- ir.branch(f,ir.label,0,"join");tconstant(f,11,0);ir.call(f,thread_join,5,[10,11]);ir.branch(f,ir.nonzero,5,"failed");tconstant(f,5,1);ir.put(f,ir.release_store,0,0,5,280);old_add(f,312);
- ir.branch(f,ir.label,0,"done");treturn(f,0);ir.branch(f,ir.label,0,"clock_failed");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");old_error(f,5);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // Caller owns the real stopped heap or has joined every Mutator. It must
+    // retain all control/heap mappings on error. This never requests unsafe free.
+    kaku f = ir.function("gc_old_join");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 280);
+    ir.branch(f, ir.nonzero, 5, "done");
+    ir.put(f, ir.load, 10, 0, 0, 232);
+    ir.branch(f, ir.zero, 10, "done");
+    old_deadline(f, 20, 10000000000, "clock_failed");
+    ir.branch(f, ir.label, 0, "wait");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 184);
+    ir.branch(f, ir.nonzero, 5, "join");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "clock_failed");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "wait");
+    ir.branch(f, ir.jump, 0, "clock_failed");
+    ir.branch(f, ir.label, 0, "join");
+    tconstant(f, 11, 0);
+    ir.call(f, thread_join, 5, [10, 11]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.release_store, 0, 0, 5, 280);
+    old_add(f, 312);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "clock_failed");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    old_error(f, 5);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza old_abort_program() -> ir.Function {
- kaku f=ir.function("gc_old_abort_join");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_ready,"join");ir.branch(f,ir.zero,5,"done");tconstant(f,5,old_phase_abort);ir.put(f,ir.release_store,0,0,5,144);ir.branch(f,ir.label,0,"join");ir.invoke_function(f,"gc_old_join",5,[0]);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_abort_join");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_ready, "join");
+    ir.branch(f, ir.zero, 5, "done");
+    tconstant(f, 5, old_phase_abort);
+    ir.put(f, ir.release_store, 0, 0, 5, 144);
+    ir.branch(f, ir.label, 0, "join");
+    ir.invoke_function(f, "gc_old_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_launch_program() -> ir.Function {
- kaku f=ir.function("gc_old_launch");ir.put(f,ir.address,1,0,0,232);ir.function_pointer(f,"gc_old_worker",2);ir.put(f,ir.address,3,0,0,240);tconstant(f,5,old_phase_mark);ir.put(f,ir.release_store,0,0,5,144);ir.invoke_function(f,"platform_thread_start",5,[1,2,0,3]);ir.branch(f,ir.nonzero,5,"failed");old_add(f,304);ir.put(f,ir.acquire_load,5,0,0,240);ir.branch(f,ir.zero,5,"done");
- ir.branch(f,ir.label,0,"failed");old_error(f,5);ir.invoke_function(f,"gc_old_join",6,[0]);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_launch");
+    ir.put(f, ir.address, 1, 0, 0, 232);
+    ir.function_pointer(f, "gc_old_worker", 2);
+    ir.put(f, ir.address, 3, 0, 0, 240);
+    tconstant(f, 5, old_phase_mark);
+    ir.put(f, ir.release_store, 0, 0, 5, 144);
+    ir.invoke_function(f, "platform_thread_start", 5, [1, 2, 0, 3]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    old_add(f, 304);
+    ir.put(f, ir.acquire_load, 5, 0, 0, 240);
+    ir.branch(f, ir.zero, 5, "done");
+    ir.branch(f, ir.label, 0, "failed");
+    old_error(f, 5);
+    ir.invoke_function(f, "gc_old_join", 6, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_remark_program() -> ir.Function {
- // ctx,latest merged roots. The caller already completed the real all-Mutator
- // handshake and holds the registry lock. No future producers can race close.
- kaku f=ir.function("gc_old_remark");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");ir.invoke_function(f,"gc_old_roots",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");tconstant(f,5,old_phase_remark);ir.put(f,ir.release_store,0,0,5,144);old_deadline(f,20,10000000000,"invalid");
- ir.branch(f,ir.label,0,"drain");ir.put(f,ir.acquire_load,5,0,0,144);tcheck(f,5,old_phase_abort,"invalid");ir.invoke_function(f,"gc_work_lock",5,[0]);ir.branch(f,ir.nonzero,5,"deadline");ir.put(f,ir.load,5,0,0,40);ir.branch(f,ir.nonzero,5,"unlock");ir.put(f,ir.load,5,0,0,48);ir.branch(f,ir.nonzero,5,"unlock");ir.put(f,ir.acquire_load,5,0,0,104);ir.branch(f,ir.nonzero,5,"unlock");tconstant(f,5,1);ir.put(f,ir.store,0,0,5,56);
- ir.branch(f,ir.label,0,"unlock");work_unlock(f);ir.put(f,ir.acquire_load,5,0,0,184);ir.branch(f,ir.nonzero,5,"join");
- ir.branch(f,ir.label,0,"deadline");ir.invoke_function(f,"platform_now",5,[]);ir.branch(f,ir.zero,5,"invalid");ir.put(f,ir.less_unsigned,5,5,20,0);ir.branch(f,ir.nonzero,5,"drain");
- ir.branch(f,ir.label,0,"invalid");tconstant(f,5,4);ir.branch(f,ir.label,0,"failed");old_error(f,5);ir.invoke_function(f,"gc_old_join",6,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"join");ir.invoke_function(f,"gc_old_join",5,[0]);ir.branch(f,ir.nonzero,5,"failed");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_ready);ir.put(f,ir.equal,6,5,6,0);ir.branch(f,ir.zero,6,"invalid");tconstant(f,6,2);ir.invoke_function(f,"gc_old_walk",5,[0,6]);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    // ctx,latest merged roots. The caller already completed the real all-Mutator
+    // handshake and holds the registry lock. No future producers can race close.
+    kaku f = ir.function("gc_old_remark");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    ir.invoke_function(f, "gc_old_roots", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    tconstant(f, 5, old_phase_remark);
+    ir.put(f, ir.release_store, 0, 0, 5, 144);
+    old_deadline(f, 20, 10000000000, "invalid");
+    ir.branch(f, ir.label, 0, "drain");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tcheck(f, 5, old_phase_abort, "invalid");
+    ir.invoke_function(f, "gc_work_lock", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "deadline");
+    ir.put(f, ir.load, 5, 0, 0, 40);
+    ir.branch(f, ir.nonzero, 5, "unlock");
+    ir.put(f, ir.load, 5, 0, 0, 48);
+    ir.branch(f, ir.nonzero, 5, "unlock");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 104);
+    ir.branch(f, ir.nonzero, 5, "unlock");
+    tconstant(f, 5, 1);
+    ir.put(f, ir.store, 0, 0, 5, 56);
+    ir.branch(f, ir.label, 0, "unlock");
+    work_unlock(f);
+    ir.put(f, ir.acquire_load, 5, 0, 0, 184);
+    ir.branch(f, ir.nonzero, 5, "join");
+    ir.branch(f, ir.label, 0, "deadline");
+    ir.invoke_function(f, "platform_now", 5, []);
+    ir.branch(f, ir.zero, 5, "invalid");
+    ir.put(f, ir.less_unsigned, 5, 5, 20, 0);
+    ir.branch(f, ir.nonzero, 5, "drain");
+    ir.branch(f, ir.label, 0, "invalid");
+    tconstant(f, 5, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    old_error(f, 5);
+    ir.invoke_function(f, "gc_old_join", 6, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "join");
+    ir.invoke_function(f, "gc_old_join", 5, [0]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_ready);
+    ir.put(f, ir.equal, 6, 5, 6, 0);
+    ir.branch(f, ir.zero, 6, "invalid");
+    tconstant(f, 6, 2);
+    ir.invoke_function(f, "gc_old_walk", 5, [0, 6]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 waza old_observe_program() -> ir.Function {
- // Only records an observation while the same actual object scan is in flight.
- kaku f=ir.function("gc_old_observe");ir.put(f,ir.acquire_load,10,0,0,152);old_bit(f,10,11,1);ir.branch(f,ir.zero,11,"done");ir.invoke_function(f,"platform_now",12,[]);ir.branch(f,ir.zero,12,"clock_failed");ir.put(f,ir.acquire_load,11,0,0,152);ir.put(f,ir.equal,11,10,11,0);ir.branch(f,ir.zero,11,"done");ir.put(f,ir.address,11,0,0,208);tconstant(f,13,1);array.push(f.steps,ir.Step {kind:ir.fetch_add,destination:14,left:11,right:13,immediate:0,name:"",arguments:[],order:acq_rel,failure_order:relaxed});ir.branch(f,ir.nonzero,14,"last");ir.put(f,ir.release_store,0,0,12,216);ir.branch(f,ir.label,0,"last");ir.put(f,ir.release_store,0,0,12,224);
- ir.branch(f,ir.label,0,"done");ir.put(f,ir.acquire_load,5,0,0,208);ir.put(f,ir.result,0,5,0,0);ir.branch(f,ir.label,0,"clock_failed");tconstant(f,5,4);old_error(f,5);treturn(f,0);kaesu f;
+    // Only records an observation while the same actual object scan is in flight.
+    kaku f = ir.function("gc_old_observe");
+    ir.put(f, ir.acquire_load, 10, 0, 0, 152);
+    old_bit(f, 10, 11, 1);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.invoke_function(f, "platform_now", 12, []);
+    ir.branch(f, ir.zero, 12, "clock_failed");
+    ir.put(f, ir.acquire_load, 11, 0, 0, 152);
+    ir.put(f, ir.equal, 11, 10, 11, 0);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.address, 11, 0, 0, 208);
+    tconstant(f, 13, 1);
+    array.push(f.steps, ir.Step {
+            kind: ir.fetch_add, destination: 14, left: 11, right: 13, immediate: 0, name: "", arguments: [], order: acq_rel, failure_order: relaxed });
+    ir.branch(f, ir.nonzero, 14, "last");
+    ir.put(f, ir.release_store, 0, 0, 12, 216);
+    ir.branch(f, ir.label, 0, "last");
+    ir.put(f, ir.release_store, 0, 0, 12, 224);
+    ir.branch(f, ir.label, 0, "done");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 208);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "clock_failed");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    treturn(f, 0);
+    kaesu f;
 }
 koukai waza old_mark_program() -> []ir.Function {
- kaku functions=work_queue_program();array.append_all(functions,trace_program_with_visitor("gc_old_visit"));array.append_all(functions,[old_visit_program(),old_inspect_program(),old_walk_program(),old_roots_program(),old_prepare_program(),old_bounds_program(),old_worker_program(),old_join_program(),old_abort_program(),old_launch_program(),old_remark_program(),old_observe_program(),old_satb_program(),old_remember_header_program(),old_pause_program(),old_resume_program(),old_promoted_program(),old_minor_note_program(),old_world_resumed_program(),old_bulk_copy_program(),old_bulk_clear_program(),old_defer_program(),old_reoffer_program(),old_stress_minor_program(),old_cancel_program(),old_fatal_program()]);kaesu functions;
+    kaku functions = work_queue_program();
+    array.append_all(functions, trace_program_with_visitor("gc_old_visit"));
+    array.append_all(functions, [old_visit_program(), old_inspect_program(), old_walk_program(), old_roots_program(), old_prepare_program(), old_bounds_program(), old_worker_program(), old_join_program(), old_abort_program(), old_launch_program(), old_remark_program(), old_observe_program(), old_satb_program(), old_remember_header_program(), old_pause_program(), old_resume_program(), old_promoted_program(), old_minor_note_program(), old_world_resumed_program(), old_bulk_copy_program(), old_bulk_clear_program(), old_defer_program(), old_reoffer_program(), old_stress_minor_program(), old_cancel_program(), old_fatal_program()]);
+    kaesu functions;
 }
 
 // GCStress still collects before EVERY allocation. During a real Old Mark the
 // coordinated Minor path preserves the concurrent cycle; outside it the
 // existing full-collection compatibility stress semantics remain authoritative.
 waza old_stress_minor_program() -> ir.Function {
- kaku f=ir.function("gc_old_stress_minor");ir.put(f,ir.acquire_load,5,0,0,144);tconstant(f,6,old_phase_mark);ir.put(f,ir.equal,5,5,6,0);ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_old_stress_minor");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    tconstant(f, 6, old_phase_mark);
+    ir.put(f, ir.equal, 5, 5, 6, 0);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }
 
 // A terminal caller without a completed stopped epoch may request cancellation,
 // but cannot join/discard tasks concurrently with a registered coordinator.
 // Every mapping/handle is then retained until immediate terminal OS teardown.
-koukai teisu old_fatal_cancel_only=85;
+koukai teisu old_fatal_cancel_only = 85;
 waza old_cancel_program() -> ir.Function {
- kaku f=ir.function("gc_old_cancel");ir.put(f,ir.acquire_load,5,0,0,144);ir.branch(f,ir.zero,5,"done");tcheck(f,5,old_phase_ready,"done");tcheck(f,5,old_phase_abort,"done");tconstant(f,5,old_phase_abort);ir.put(f,ir.release_store,0,0,5,144);ir.branch(f,ir.label,0,"done");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_old_cancel");
+    ir.put(f, ir.acquire_load, 5, 0, 0, 144);
+    ir.branch(f, ir.zero, 5, "done");
+    tcheck(f, 5, old_phase_ready, "done");
+    tcheck(f, 5, old_phase_abort, "done");
+    tconstant(f, 5, old_phase_abort);
+    ir.put(f, ir.release_store, 0, 0, 5, 144);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    kaesu f;
 }
 waza old_fatal_program() -> ir.Function {
- kaku f=ir.function("gc_old_fatal");ir.branch(f,ir.zero,1,"cancel_only");ir.put(f,ir.load,10,0,0,256);ir.branch(f,ir.zero,10,"cancel_only");ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,1,0);ir.branch(f,ir.zero,12,"cancel_only");ir.put(f,ir.acquire_load,11,10,0,gc_registry_phase);tconstant(f,12,gc_stopped);ir.put(f,ir.equal,12,11,12,0);ir.branch(f,ir.zero,12,"cancel_only");ir.invoke_function(f,"gc_old_abort_join",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"cancel_only");ir.invoke_function(f,"gc_old_cancel",5,[0]);treturn(f,old_fatal_cancel_only);kaesu f;
+    kaku f = ir.function("gc_old_fatal");
+    ir.branch(f, ir.zero, 1, "cancel_only");
+    ir.put(f, ir.load, 10, 0, 0, 256);
+    ir.branch(f, ir.zero, 10, "cancel_only");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 1, 0);
+    ir.branch(f, ir.zero, 12, "cancel_only");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_phase);
+    tconstant(f, 12, gc_stopped);
+    ir.put(f, ir.equal, 12, 11, 12, 0);
+    ir.branch(f, ir.zero, 12, "cancel_only");
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "cancel_only");
+    ir.invoke_function(f, "gc_old_cancel", 5, [0]);
+    treturn(f, old_fatal_cancel_only);
+    kaesu f;
 }

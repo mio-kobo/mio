@@ -1,0 +1,16 @@
+yobu "kiso/aot/lowerwin";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/os";
+waza build(input: string, output: string) -> unit {
+    kaku decoded = mochi.decode_file(input);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { os.exit(1); kaesu; }
+    moshi (file == mu) { os.exit(1); kaesu; }
+    kaku image = lowerwin.compile(file);
+    moshi (image.error != "") { chant(image.error); os.exit(2); kaesu; }
+    kaku written = fs.write_all(output, image.bytes);
+    moshi (written.error != mu) { os.exit(3); }
+}
+kaku args = os.arguments();
+moshi (len(args) != 3) { os.exit(4); } sore { build(args[1], args[2]); }

@@ -1,34 +1,57 @@
 // Public pthread attributes ABI. LP64 Darwin pthread_attr_t is 64 bytes
 // (long signature + 56 opaque bytes), contained in the IR's 64-byte scratch.
 // Stack policy belongs to this adapter, never to the portable GC algorithms.
-koukai teisu worker_stack_bytes=8388608;
+koukai teisu worker_stack_bytes = 8388608;
 koukai waza worker_symbols() -> []string {
-    kaku symbols=thread_symbols();array.append_all(symbols,["_pthread_attr_init","_pthread_attr_setstacksize","_pthread_attr_destroy","_posix_spawn"]);kaesu symbols;
+    kaku symbols = thread_symbols();
+    array.append_all(symbols, ["_pthread_attr_init", "_pthread_attr_setstacksize", "_pthread_attr_destroy", "_posix_spawn"]);
+    kaesu symbols;
 }
 koukai waza worker_bindings() -> []ir.Binding {
-    kaku bindings=thread_bindings();
-    array.push(bindings,ir.Binding {operation:106,slot:21,arguments:[0],result_bits:32});
-    array.push(bindings,ir.Binding {operation:107,slot:22,arguments:[0,1],result_bits:32});
-    array.push(bindings,ir.Binding {operation:108,slot:23,arguments:[0],result_bits:32});
-    array.push(bindings,ir.Binding {operation:109,slot:0,arguments:[0,1,2,3],result_bits:32});
-    array.push(bindings,ir.Binding {operation:110,slot:24,arguments:[0,1,2,3,4,5],result_bits:32});kaesu bindings;
+    kaku bindings = thread_bindings();
+    array.push(bindings, ir.Binding { operation: 106, slot: 21, arguments: [0], result_bits: 32 });
+    array.push(bindings, ir.Binding { operation: 107, slot: 22, arguments: [0, 1], result_bits: 32 });
+    array.push(bindings, ir.Binding { operation: 108, slot: 23, arguments: [0], result_bits: 32 });
+    array.push(bindings, ir.Binding { operation: 109, slot: 0, arguments: [0, 1, 2, 3], result_bits: 32 });
+    array.push(bindings, ir.Binding {
+            operation: 110, slot: 24, arguments: [0, 1, 2, 3, 4, 5], result_bits: 32 });
+    kaesu bindings;
 }
 koukai waza worker_platform_program() -> []ir.Function {
-    kaku f=ir.function("platform_thread_start");
+    kaku f = ir.function("platform_thread_start");
     // handle*, entry, argument, first-cleanup-error*. A successful create must
     // remain success even if attribute cleanup fails: the parent owns a real
     // handle and must not lose it. Cleanup errors are independently CAS-latched.
-    ir.put(f,ir.scratch_address,4,0,0,0);ir.call(f,106,5,[4]);ir.branch(f,ir.nonzero,5,"init_failed");
-    ir.put(f,ir.constant,6,0,0,worker_stack_bytes);ir.call(f,107,5,[4,6]);ir.branch(f,ir.nonzero,5,"configuration_failed");
-    ir.call(f,109,7,[0,4,1,2]);ir.branch(f,ir.jump,0,"destroy");
-    ir.branch(f,ir.label,0,"configuration_failed");ir.put(f,ir.copy,7,5,0,0);
-    ir.branch(f,ir.label,0,"destroy");ir.branch(f,ir.zero,7,"cleanup");ir.put(f,ir.constant,8,0,0,0);
-    array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:9,left:3,right:7,immediate:0,name:"",arguments:[8],order:3,failure_order:1});
-    ir.branch(f,ir.label,0,"cleanup");ir.call(f,108,5,[4]);ir.branch(f,ir.zero,5,"result");
-    ir.put(f,ir.constant,8,0,0,0);
-    array.push(f.steps,ir.Step {kind:ir.compare_exchange,destination:9,left:3,right:5,immediate:0,name:"",arguments:[8],order:3,failure_order:1});
-    ir.branch(f,ir.label,0,"result");ir.put(f,ir.result,0,7,0,0);
-    ir.branch(f,ir.label,0,"init_failed");ir.put(f,ir.result,0,5,0,0);
-    kaku functions=thread_platform_program();array.push(functions,f);
-    kaku spawn=ir.function("platform_process_spawn");ir.call(spawn,110,6,[0,1,2,3,4,5]);ir.put(spawn,ir.result,0,6,0,0);array.push(functions,spawn);kaesu functions;
+    ir.put(f, ir.scratch_address, 4, 0, 0, 0);
+    ir.call(f, 106, 5, [4]);
+    ir.branch(f, ir.nonzero, 5, "init_failed");
+    ir.put(f, ir.constant, 6, 0, 0, worker_stack_bytes);
+    ir.call(f, 107, 5, [4, 6]);
+    ir.branch(f, ir.nonzero, 5, "configuration_failed");
+    ir.call(f, 109, 7, [0, 4, 1, 2]);
+    ir.branch(f, ir.jump, 0, "destroy");
+    ir.branch(f, ir.label, 0, "configuration_failed");
+    ir.put(f, ir.copy, 7, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "destroy");
+    ir.branch(f, ir.zero, 7, "cleanup");
+    ir.put(f, ir.constant, 8, 0, 0, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 9, left: 3, right: 7, immediate: 0, name: "", arguments: [8], order: 3, failure_order: 1 });
+    ir.branch(f, ir.label, 0, "cleanup");
+    ir.call(f, 108, 5, [4]);
+    ir.branch(f, ir.zero, 5, "result");
+    ir.put(f, ir.constant, 8, 0, 0, 0);
+    array.push(f.steps, ir.Step {
+            kind: ir.compare_exchange, destination: 9, left: 3, right: 5, immediate: 0, name: "", arguments: [8], order: 3, failure_order: 1 });
+    ir.branch(f, ir.label, 0, "result");
+    ir.put(f, ir.result, 0, 7, 0, 0);
+    ir.branch(f, ir.label, 0, "init_failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaku functions = thread_platform_program();
+    array.push(functions, f);
+    kaku spawn = ir.function("platform_process_spawn");
+    ir.call(spawn, 110, 6, [0, 1, 2, 3, 4, 5]);
+    ir.put(spawn, ir.result, 0, 6, 0, 0);
+    array.push(functions, spawn);
+    kaesu functions;
 }

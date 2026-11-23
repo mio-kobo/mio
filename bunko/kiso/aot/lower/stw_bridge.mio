@@ -2,33 +2,68 @@
 // the portable coordinator, never by sharing a thread's x24. Each call installs
 // a coordinator-owned exact snapshot, and restores every native callee-save.
 // These entry points are internal runtime adapters, not language builtins.
-waza stw_bridge_enter(code:arm64.Assembler,name:string) -> unit {
-    arm64.assembler_label(code,name);
-    emit(code,arm64.stp_pre_x(29,30,31,-16));
-    kaku r=19;aida(r<29){emit(code,arm64.stp_pre_x(r,r+1,31,-16));r=r+2;}
+waza stw_bridge_enter(code: arm64.Assembler, name: string) -> unit {
+    arm64.assembler_label(code, name);
+    emit(code, arm64.stp_pre_x(29, 30, 31, -16));
+    kaku r = 19;
+    aida (r<29) {
+        emit(code, arm64.stp_pre_x(r, r + 1, 31, -16));
+        r = r + 2;
+    }
 }
-waza stw_bridge_leave(code:arm64.Assembler) -> unit {
-    kaku r=27;aida(r>=19){emit(code,arm64.ldp_post_x(r,r+1,31,16));r=r-2;}
-    emit(code,arm64.ldp_post_x(29,30,31,16));emit(code,arm64.ret());
+waza stw_bridge_leave(code: arm64.Assembler) -> unit {
+    kaku r = 27;
+    aida (r >= 19) {
+        emit(code, arm64.ldp_post_x(r, r + 1, 31, 16));
+        r = r - 2;
+    }
+    emit(code, arm64.ldp_post_x(29, 30, 31, 16));
+    emit(code, arm64.ret());
 }
-koukai waza emit_stopped_heap_adapter(code:arm64.Assembler,capacity:int64) -> unit {
-    stw_bridge_enter(code,"stw_heap_init");
-    emit_runtime_init(code,capacity,runtime_metadata_bytes);emit_observation_init(code);
-    arm64.assembler_bl(code,"memory_sample");move_x(code,0,23);stw_bridge_leave(code);
+koukai waza emit_stopped_heap_adapter(code: arm64.Assembler, capacity: int64) -> unit {
+    stw_bridge_enter(code, "stw_heap_init");
+    emit_runtime_init(code, capacity, runtime_metadata_bytes);
+    emit_observation_init(code);
+    arm64.assembler_bl(code, "memory_sample");
+    move_x(code, 0, 23);
+    stw_bridge_leave(code);
     // heap, exact snapshot, size, type. Requires exclusive heap access; an
     // allocation-triggered collection uses the same complete root snapshot.
-    stw_bridge_enter(code,"stw_heap_alloc");move_x(code,23,0);move_x(code,24,1);
-    move_x(code,0,2);move_x(code,1,3);arm64.assembler_bl(code,"runtime_alloc");stw_bridge_leave(code);
+    stw_bridge_enter(code, "stw_heap_alloc");
+    move_x(code, 23, 0);
+    move_x(code, 24, 1);
+    move_x(code, 0, 2);
+    move_x(code, 1, 3);
+    arm64.assembler_bl(code, "runtime_alloc");
+    stw_bridge_leave(code);
     // heap, exact snapshot, major. The ordinary collector remains unchanged.
-    stw_bridge_enter(code,"stw_heap_collect");move_x(code,23,0);move_x(code,24,1);
-    arm64.assembler_cbz_x(code,2,"stw_heap_minor");arm64.assembler_bl(code,"gen_major");arm64.assembler_b(code,"stw_heap_collected");
-    arm64.assembler_label(code,"stw_heap_minor");arm64.assembler_bl(code,"gen_minor");
-    arm64.assembler_label(code,"stw_heap_collected");emit(code,arm64.movz_x(0,0,0));stw_bridge_leave(code);
+    stw_bridge_enter(code, "stw_heap_collect");
+    move_x(code, 23, 0);
+    move_x(code, 24, 1);
+    arm64.assembler_cbz_x(code, 2, "stw_heap_minor");
+    arm64.assembler_bl(code, "gen_major");
+    arm64.assembler_b(code, "stw_heap_collected");
+    arm64.assembler_label(code, "stw_heap_minor");
+    arm64.assembler_bl(code, "gen_minor");
+    arm64.assembler_label(code, "stw_heap_collected");
+    emit(code, arm64.movz_x(0, 0, 0));
+    stw_bridge_leave(code);
     // heap, typed owner. Exact pointer stores use the legacy post-write barrier
     // while all mutators are stopped; this is NOT a concurrent SATB barrier.
-    stw_bridge_enter(code,"stw_heap_remember");move_x(code,23,0);move_x(code,0,1);
-    emit_gen_remember(code,0);emit(code,arm64.movz_x(0,0,0));stw_bridge_leave(code);
-    emit_managed_runtime(code,iie,runtime_metadata_bytes,iie);
-    kaku labels=["runtime_error","runtime_oom","runtime_gc_bad_type","runtime_gc_bad_kind","runtime_gc_bad_count"];
-    kaku i=0;aida(i<len(labels)){arm64.assembler_label(code,labels[i]);emit(code,arm64.movz_x(0,91+i,0));emit(code,arm64.movz_x(16,1,0));emit(code,arm64.svc(128));i=i+1;}
+    stw_bridge_enter(code, "stw_heap_remember");
+    move_x(code, 23, 0);
+    move_x(code, 0, 1);
+    emit_gen_remember(code, 0);
+    emit(code, arm64.movz_x(0, 0, 0));
+    stw_bridge_leave(code);
+    emit_managed_runtime(code, iie, runtime_metadata_bytes, iie);
+    kaku labels = ["runtime_error", "runtime_oom", "runtime_gc_bad_type", "runtime_gc_bad_kind", "runtime_gc_bad_count"];
+    kaku i = 0;
+    aida (i<len(labels)) {
+        arm64.assembler_label(code, labels[i]);
+        emit(code, arm64.movz_x(0, 91 + i, 0));
+        emit(code, arm64.movz_x(16, 1, 0));
+        emit(code, arm64.svc(128));
+        i = i + 1;
+    }
 }

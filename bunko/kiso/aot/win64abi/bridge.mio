@@ -1,0 +1,142 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/encoding/mochi";
+yobu "kiso/encoding/win64c";
+yobu "kiso/aot/pe";
+yobu "kiso/aot/x86_64";
+
+koukai kata ImportPlan { libraries: []pe.ImportLibrary; slots: []int64; runtime_slots: []int64; error: string; }
+
+waza plan_failure(plan: ImportPlan, error: string) -> ImportPlan { kaesu ImportPlan { libraries: plan.libraries, slots: plan.slots, runtime_slots: plan.runtime_slots, error: error }; }
+
+// Windows DLL 名按不区分大小写匹配，保留实际输入拼写；导出名始终区分大小写。
+waza dll_key(name: string) -> string {
+    kaesu win64c.dll_identity(name);
+}
+waza less(a: string, b: string) -> bool {
+    kaku x = string.to_bytes(a); kaku y = string.to_bytes(b); kaku i = 0;
+    aida (i < len(x) && i < len(y)) { moshi (x[i] != y[i]) { kaesu x[i] < y[i]; } i = i + 1; }
+    kaesu len(x) < len(y);
+}
+// 保留既有 Runtime IAT 索引，将外部函数按 DLL/导出名排序后合并，避免编译顺序影响布局。
+// 所有声明都校验原型，只有可达声明进入 IAT；同一导出的冲突原型拒绝生成镜像。
+koukai waza imports(file: mochi.File, reached: []bool, base: []pe.ImportLibrary) -> ImportPlan {
+    kaku original: []pe.ImportLibrary = []; kaku bi = 0;
+    // 保存合并前的符号数，防止新增 KERNEL32 符号移动 Winsock 的 IAT 槽。
+    aida (bi < len(base)) { array.push(original, pe.ImportLibrary { name: base[bi].name, symbols: array.clone(base[bi].symbols) }); bi = bi + 1; }
+    kaku plan = ImportPlan { libraries: base, slots: array.make[int64](len(file.functions), -1), runtime_slots: [], error: "" };
+    kaku order: []int64 = []; kaku i = 0;
+    aida (i < len(file.functions)) {
+        kaku f = file.functions[i];
+        moshi (win64c.is_external(f.name)) {
+            kaku problem = win64c.validate(f.name, f.parameter_count, f.returns_value);
+            moshi (problem != "") { kaesu plan_failure(plan, problem); }
+            moshi (len(f.instructions) != 0 || len(f.captures) != 0 || f.local_count != f.parameter_count) { kaesu plan_failure(plan, "E_FFI_PROTOTYPE invalid C stub layout"); }
+            kaku p = win64c.parts(f.name); kaku j = 0;
+            aida (j < i) {
+                moshi (win64c.is_external(file.functions[j].name)) {
+                    moshi (win64c.conflicts(f.name, file.functions[j].name)) { kaesu plan_failure(plan, "E_FFI_PROTOTYPE conflicting C export prototypes"); }
+                }
+                j = j + 1;
+            }
+            moshi (reached[i]) {
+                array.push(order, i); kaku at = len(order) - 1;
+                kaku key = string.concat(dll_key(p[1]), string.concat("|", f.name));
+                aida (at > 0) {
+                    kaku previous = win64c.parts(file.functions[order[at - 1]].name);
+                    kaku other = string.concat(dll_key(previous[1]), string.concat("|", file.functions[order[at - 1]].name));
+                    moshi (!less(key, other)) { nukeru; }
+                    order[at] = order[at - 1]; at = at - 1;
+                }
+                order[at] = i;
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    aida (i < len(order)) {
+        kaku id = order[i]; kaku p = win64c.parts(file.functions[id].name); kaku lib = 0;
+        aida (lib < len(plan.libraries) && dll_key(plan.libraries[lib].name) != dll_key(p[1])) { lib = lib + 1; }
+        moshi (lib == len(plan.libraries)) { array.push(plan.libraries, pe.ImportLibrary { name: p[1], symbols: [] }); }
+        kaku symbols = plan.libraries[lib].symbols; kaku symbol = 0;
+        aida (symbol < len(symbols) && symbols[symbol] != p[2]) { symbol = symbol + 1; }
+        moshi (symbol == len(symbols)) { array.push(symbols, p[2]); plan.libraries[lib] = pe.ImportLibrary { name: plan.libraries[lib].name, symbols: symbols }; }
+        i = i + 1;
+    }
+    // 新符号可能插入已有 Runtime DLL，所以必须在完成合并后统一计算扁平 IAT 索引。
+    i = 0;
+    aida (i < len(order)) {
+        kaku id = order[i]; kaku p = win64c.parts(file.functions[id].name); kaku lib = 0; kaku slot = 0;
+        aida (lib < len(plan.libraries)) {
+            kaku symbols = plan.libraries[lib].symbols; kaku j = 0;
+            aida (j < len(symbols)) { moshi (dll_key(plan.libraries[lib].name) == dll_key(p[1]) && symbols[j] == p[2]) { plan.slots[id] = slot + j; } j = j + 1; }
+            slot = slot + len(symbols); lib = lib + 1;
+        }
+        i = i + 1;
+    }
+    bi = 0; kaku offset = 0;
+    aida (bi < len(original)) {
+        kaku j = 0; aida (j < len(original[bi].symbols)) { array.push(plan.runtime_slots, offset + j); j = j + 1; }
+        offset = offset + len(plan.libraries[bi].symbols); bi = bi + 1;
+    }
+    kaesu plan;
+}
+
+// 负索引仅作本 lowering 的外部补丁标记，在交给 PE Writer 前消解。
+koukai waza patch_imports(plan: ImportPlan, patches: []pe.Patch) -> unit {
+    kaku i = 0;
+    aida (i < len(patches)) {
+        kaku p = patches[i];
+        moshi (p.target == pe.import_section) {
+            kaku slot = p.target_offset;
+            moshi (slot < 0) { slot = -slot - 1; } sore { slot = plan.runtime_slots[slot]; }
+            patches[i] = pe.Patch { section: p.section, offset: p.offset, kind: p.kind, target: p.target, target_offset: slot };
+        }
+        i = i + 1;
+    }
+}
+
+waza normalize(code: x86_64.Assembler, name: string) -> unit {
+    kaku bits = 64; kaku signed = iie;
+    moshi (name == "int8" || name == "uint8") { bits = 8; }
+    moshi (name == "int16" || name == "uint16") { bits = 16; }
+    moshi (name == "int32" || name == "uint32") { bits = 32; }
+    signed = name == "int8" || name == "int16" || name == "int32";
+    moshi (bits < 64) {
+        x86_64.shl_ri(code, x86_64.rax, 64 - bits);
+        moshi (signed) { x86_64.sar_ri(code, x86_64.rax, 64 - bits); } sore { x86_64.shr_ri(code, x86_64.rax, 64 - bits); }
+    }
+}
+
+// Mio 的参数在操作数栈上，C 则使用按位置编号的 GPR/XMM 与 32 字节 Shadow Space。
+// 这不是 System V：RDI/RSI 在 Win64 必须保留；此桥只写 volatile 寄存器与已保存的 RBP。
+// 活跃 Mio 值留在调用者栈/局部槽，C 不可回调或获得 GC 地址，因此不会改变根链。
+koukai waza emit(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.FrameFunction, f: mochi.Function, label: string, slot: int64) -> unit {
+    kaku p = win64c.parts(f.name); kaku count = f.parameter_count;
+    x86_64.label(code, label); kaku begin = len(code.bytes);
+    x86_64.push_r(code, x86_64.rbp); x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    // 操作数深度可为奇数，不能假设进入此桥时已按 C ABI 对齐。
+    // RBP 是展开锚点，后续动态对齐不计入固定 ALLOC，也不伪造栈分配展开码。
+    x86_64.and_ri(code, x86_64.rsp, -16);
+    kaku area = 32; moshi (count > 4) { area = area + (count - 4) * 8; }
+    area = ((area + 15) / 16) * 16; x86_64.sub_ri(code, x86_64.rsp, area);
+    kaku registers: []int64 = [x86_64.rcx, x86_64.rdx, x86_64.r8, x86_64.r9]; kaku i = 0;
+    aida (i < count) {
+        x86_64.mov_load(code, x86_64.rax, x86_64.rbp, 16 + (count - 1 - i) * 8); normalize(code, p[4 + i]);
+        moshi (i < 4) {
+            // 浮点寄存器编号由参数位置决定，不能分别计数整数和浮点参数。
+            moshi (p[4 + i] == "float32") { x86_64.movd_xmm_r(code, i, x86_64.rax); }
+            sore { moshi (p[4 + i] == "float64") { x86_64.movq_xmm_r(code, i, x86_64.rax); }
+                sore { x86_64.mov_rr(code, registers[i], x86_64.rax); } }
+        } sore { x86_64.mov_store(code, x86_64.rsp, 32 + (i - 4) * 8, x86_64.rax); }
+        i = i + 1;
+    }
+    x86_64.byte(code, 255); x86_64.byte(code, 21); kaku at = len(code.bytes);
+    x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
+    array.push(patches, pe.Patch { section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: -slot - 1 });
+    moshi (p[3] == "float32") { x86_64.movd_r_xmm(code, x86_64.rax, 0); }
+    sore { moshi (p[3] == "float64") { x86_64.movq_r_xmm(code, x86_64.rax, 0); }
+        sore { moshi (p[3] != "unit") { normalize(code, p[3]); } } }
+    x86_64.lea(code, x86_64.rsp, x86_64.rbp, 0); x86_64.pop_r(code, x86_64.rbp); x86_64.ret(code);
+    array.push(frames, pe.FrameFunction { begin: begin, end: len(code.bytes), push_offset: 1, set_offset: 4, alloc_offset: 0, alloc_size: 0 });
+}

@@ -4,43 +4,135 @@ yobu "kiso/convert";
 yobu "kiso/array";
 yobu "mio/sys/socket";
 yobu "mio/fs/runtime";
-waza require(ok: bool, label: string) -> unit { moshi (!ok) { chant(label); os.exit(1); } }
+waza require(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        chant(label);
+        os.exit(1);
+    }
+}
 waza exchange(connection: tcp.Connection, server: bool) -> unit {
-    kaku data: []uint8 = [0,1,127,128,255];
-    moshi (!server) { kaku sent=tcp.write_all(connection,data,0,5); require(sent.error==mu && sent.count==5,"send"); }
-    kaku got: []uint8 = [9,9,9,9,9];kaku total=0;
-    aida(total<5){kaku read=tcp.read(connection,got,total,5-total);require(read.error==mu && !read.eof && read.count>0 && read.count<=5-total,"receive");total=total+read.count;}
-    kaku at=0;aida(at<5){require(got[at]==data[at],"payload");at=at+1;}
+    kaku data: []uint8 = [0, 1, 127, 128, 255];
+    moshi (!server) {
+        kaku sent = tcp.write_all(connection, data, 0, 5);
+        require(sent.error == mu && sent.count == 5, "send");
+    }
+    kaku got: []uint8 = [9, 9, 9, 9, 9];
+    kaku total = 0;
+    aida (total<5) {
+        kaku read = tcp.read(connection, got, total, 5 - total);
+        require(read.error == mu && !read.eof && read.count>0 && read.count <= 5 - total, "receive");
+        total = total + read.count;
+    }
+    kaku at = 0;
+    aida (at<5) {
+        require(got[at] == data[at], "payload");
+        at = at + 1;
+    }
     // A successful zero-length read does not mean that the peer closed.
-    kaku zero=tcp.read(connection,got,0,0);require(zero.error==mu && zero.count==0 && !zero.eof,"zero-read-not-eof");
-    moshi(server){kaku sent=tcp.write_all(connection,data,0,5);require(sent.error==mu && sent.count==5,"reply");}
-    sore {kaku eof=tcp.read(connection,got,0,1);require(eof.error==mu && eof.count==0 && eof.eof,"real-eof");}
-    require(tcp.close(connection).error==mu,"close");require(tcp.close(connection).error!=mu,"stale-close");
+    kaku zero = tcp.read(connection, got, 0, 0);
+    require(zero.error == mu && zero.count == 0 && !zero.eof, "zero-read-not-eof");
+    moshi (server) {
+        kaku sent = tcp.write_all(connection, data, 0, 5);
+        require(sent.error == mu && sent.count == 5, "reply");
+    }
+    sore {
+        kaku eof = tcp.read(connection, got, 0, 1);
+        require(eof.error == mu && eof.count == 0 && eof.eof, "real-eof");
+    }
+    require(tcp.close(connection).error == mu, "close");
+    require(tcp.close(connection).error != mu, "stale-close");
 }
 waza main() -> unit {
-    kaku args=os.arguments();require(len(args)==3,"arguments");kaku port=convert.parse_int(args[2]);moshi(port==mu){os.exit(64);kaesu;}
-    kaku address=tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),port);
-    moshi(args[1]=="lifecycle"){
-        kaku result=tcp.listen(address);kaku listener=result.listener;require(result.error==mu && listener!=mu,"listen");moshi(listener!=mu){require(tcp.close_listener(listener).error==mu,"listener-close");require(tcp.close_listener(listener).error!=mu,"listener-stale");}
-        chant("OK");kaesu;
+    kaku args = os.arguments();
+    require(len(args) == 3, "arguments");
+    kaku port = convert.parse_int(args[2]);
+    moshi (port == mu) {
+        os.exit(64);
+        kaesu;
     }
-    moshi(args[1]=="client"){
-        kaku result=tcp.connect(address);kaku connection=result.connection;require(result.error==mu && connection!=mu,"connect");moshi(connection!=mu){exchange(connection,iie);}chant("OK");kaesu;
+    kaku address = tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port);
+    moshi (args[1] == "lifecycle") {
+        kaku result = tcp.listen(address);
+        kaku listener = result.listener;
+        require(result.error == mu && listener != mu, "listen");
+        moshi (listener != mu) {
+            require(tcp.close_listener(listener).error == mu, "listener-close");
+            require(tcp.close_listener(listener).error != mu, "listener-stale");
+        }
+        chant("OK");
+        kaesu;
     }
-    moshi(args[1]=="server"){
-        kaku result=tcp.listen(address);kaku listener=result.listener;require(result.error==mu && listener!=mu,"listen");moshi(listener!=mu){chant("READY");kaku accepted=tcp.accept(listener);kaku connection=accepted.connection;require(accepted.error==mu && connection!=mu,"accept");moshi(connection!=mu){exchange(connection,hai);}require(tcp.close_listener(listener).error==mu,"listener-close");}chant("OK");kaesu;
+    moshi (args[1] == "client") {
+        kaku result = tcp.connect(address);
+        kaku connection = result.connection;
+        require(result.error == mu && connection != mu, "connect");
+        moshi (connection != mu) {
+            exchange(connection, iie);
+        }
+        chant("OK");
+        kaesu;
     }
-    kaku handle=socket.open();kaku status:[]uint8=[255];socket.status(handle,status);require(status[0]==uint8(0),"raw-open");
-    moshi(args[1]=="bounds"){
-        kaku data:[]uint8=[0];kaku io=array.make[uint8](10,uint8(0));socket.read(handle,data,-1,1,io);require(io[9]==uint8(1),"negative-offset");socket.write(handle,data,0,2,io);require(io[9]==uint8(1),"oversized-write");
-        socket.bind_ipv4(handle,[uint8(127)],0,status);require(status[0]==uint8(1),"bad-ip");socket.bind_ipv4(handle,[uint8(127),uint8(0),uint8(0),uint8(1)],-1,status);require(status[0]==uint8(1),"bad-port");socket.listen(handle,-1,status);require(status[0]==uint8(1),"bad-backlog");
-        kaku file=runtime.open("VERSION",0);socket.close(file,status);require(status[0]==uint8(2),"wrong-kind-rejected");runtime.file_status(file,status);require(status[0]==uint8(0),"foreign-file-preserved");runtime.close(file,status);
-        socket.close(handle,status);require(status[0]==uint8(0),"raw-close");socket.status(handle,status);require(status[0]==uint8(2),"stale-status");chant("OK");kaesu;
+    moshi (args[1] == "server") {
+        kaku result = tcp.listen(address);
+        kaku listener = result.listener;
+        require(result.error == mu && listener != mu, "listen");
+        moshi (listener != mu) {
+            chant("READY");
+            kaku accepted = tcp.accept(listener);
+            kaku connection = accepted.connection;
+            require(accepted.error == mu && connection != mu, "accept");
+            moshi (connection != mu) {
+                exchange(connection, hai);
+            }
+            require(tcp.close_listener(listener).error == mu, "listener-close");
+        }
+        chant("OK");
+        kaesu;
     }
-    moshi(args[1]=="reset"){
-        socket.connect_ipv4(handle,[uint8(127),uint8(0),uint8(0),uint8(1)],port,status);require(status[0]==uint8(0),"reset-connect");kaku data:[]uint8=[1];kaku io=array.make[uint8](10,uint8(0));
-        socket.read(handle,data,0,1,io);require(io[9]==uint8(5),"actual-peer-reset");socket.write(handle,data,0,1,io);require(io[9]==uint8(5),"sigpipe-suppressed");socket.close(handle,status);chant("OK");kaesu;
+    kaku handle = socket.open();
+    kaku status: []uint8 = [255];
+    socket.status(handle, status);
+    require(status[0] == uint8(0), "raw-open");
+    moshi (args[1] == "bounds") {
+        kaku data: []uint8 = [0];
+        kaku io = array.make[uint8](10, uint8(0));
+        socket.read(handle, data, -1, 1, io);
+        require(io[9] == uint8(1), "negative-offset");
+        socket.write(handle, data, 0, 2, io);
+        require(io[9] == uint8(1), "oversized-write");
+        socket.bind_ipv4(handle, [uint8(127)], 0, status);
+        require(status[0] == uint8(1), "bad-ip");
+        socket.bind_ipv4(handle, [uint8(127), uint8(0), uint8(0), uint8(1)], -1, status);
+        require(status[0] == uint8(1), "bad-port");
+        socket.listen(handle, -1, status);
+        require(status[0] == uint8(1), "bad-backlog");
+        kaku file = runtime.open("VERSION", 0);
+        socket.close(file, status);
+        require(status[0] == uint8(2), "wrong-kind-rejected");
+        runtime.file_status(file, status);
+        require(status[0] == uint8(0), "foreign-file-preserved");
+        runtime.close(file, status);
+        socket.close(handle, status);
+        require(status[0] == uint8(0), "raw-close");
+        socket.status(handle, status);
+        require(status[0] == uint8(2), "stale-status");
+        chant("OK");
+        kaesu;
     }
-    socket.close(handle,status);os.exit(64);
+    moshi (args[1] == "reset") {
+        socket.connect_ipv4(handle, [uint8(127), uint8(0), uint8(0), uint8(1)], port, status);
+        require(status[0] == uint8(0), "reset-connect");
+        kaku data: []uint8 = [1];
+        kaku io = array.make[uint8](10, uint8(0));
+        socket.read(handle, data, 0, 1, io);
+        require(io[9] == uint8(5), "actual-peer-reset");
+        socket.write(handle, data, 0, 1, io);
+        require(io[9] == uint8(5), "sigpipe-suppressed");
+        socket.close(handle, status);
+        chant("OK");
+        kaesu;
+    }
+    socket.close(handle, status);
+    os.exit(64);
 }
 main();

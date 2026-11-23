@@ -3,45 +3,97 @@
 // allocation and never interpret numeric slots: the compiler/layout gate
 // selects them only for reference storage. Count/alignment/overflow failures
 // Abort/join before returning an error, without authorizing reclamation.
-waza old_bulk_aligned(f:ir.Function,value:int64) -> unit {
- tconstant(f,28,8);ir.put(f,ir.divide_unsigned,29,value,28,0);
- ir.put(f,ir.multiply,29,29,28,0);ir.put(f,ir.equal,29,29,value,0);
- ir.branch(f,ir.zero,29,"invalid");
+waza old_bulk_aligned(f: ir.Function, value: int64) -> unit {
+    tconstant(f, 28, 8);
+    ir.put(f, ir.divide_unsigned, 29, value, 28, 0);
+    ir.put(f, ir.multiply, 29, 29, 28, 0);
+    ir.put(f, ir.equal, 29, 29, value, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
 }
-waza old_bulk_error(f:ir.Function) -> unit {
- ir.branch(f,ir.label,0,"invalid");ir.branch(f,ir.zero,0,"bad_result");
- tconstant(f,5,4);old_error(f,5);ir.invoke_function(f,"gc_old_abort_join",5,[0]);
- ir.branch(f,ir.label,0,"bad_result");treturn(f,4);
+waza old_bulk_error(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "invalid");
+    ir.branch(f, ir.zero, 0, "bad_result");
+    tconstant(f, 5, 4);
+    old_error(f, 5);
+    ir.invoke_function(f, "gc_old_abort_join", 5, [0]);
+    ir.branch(f, ir.label, 0, "bad_result");
+    treturn(f, 4);
 }
 waza old_bulk_copy_program() -> ir.Function {
- // ctx(optional0), destination, source, bytes. Preserve memmove semantics.
- kaku f=ir.function("gc_copy_reference_slots");
- ir.branch(f,ir.zero,3,"done");ir.branch(f,ir.zero,1,"invalid");ir.branch(f,ir.zero,2,"invalid");
- old_bulk_aligned(f,1);old_bulk_aligned(f,2);old_bulk_aligned(f,3);
- ir.put(f,ir.add,13,2,3,0);ir.put(f,ir.less_unsigned,16,13,2,0);ir.branch(f,ir.nonzero,16,"invalid");
- ir.put(f,ir.add,14,1,3,0);ir.put(f,ir.less_unsigned,16,14,1,0);ir.branch(f,ir.nonzero,16,"invalid");
- tconstant(f,12,8);tconstant(f,15,0);
- ir.put(f,ir.less_unsigned,16,2,1,0);ir.branch(f,ir.zero,16,"copy");
- ir.put(f,ir.less_unsigned,16,1,13,0);ir.branch(f,ir.zero,16,"copy");
- tconstant(f,15,1);ir.put(f,ir.subtract,1,14,12,0);ir.put(f,ir.subtract,2,13,12,0);
- ir.branch(f,ir.label,0,"copy");ir.put(f,ir.acquire_load,10,2,0,0);
- ir.branch(f,ir.zero,0,"store");ir.invoke_function(f,"gc_old_prewrite",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");
- ir.branch(f,ir.label,0,"store");ir.put(f,ir.release_store,0,1,10,0);
- ir.put(f,ir.subtract,3,3,12,0);ir.branch(f,ir.zero,3,"done");
- ir.branch(f,ir.zero,15,"forward");ir.put(f,ir.subtract,1,1,12,0);ir.put(f,ir.subtract,2,2,12,0);ir.branch(f,ir.jump,0,"copy");
- ir.branch(f,ir.label,0,"forward");ir.put(f,ir.add,1,1,12,0);ir.put(f,ir.add,2,2,12,0);ir.branch(f,ir.jump,0,"copy");
- ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"done");treturn(f,0);old_bulk_error(f);kaesu f;
+    // ctx(optional0), destination, source, bytes. Preserve memmove semantics.
+    kaku f = ir.function("gc_copy_reference_slots");
+    ir.branch(f, ir.zero, 3, "done");
+    ir.branch(f, ir.zero, 1, "invalid");
+    ir.branch(f, ir.zero, 2, "invalid");
+    old_bulk_aligned(f, 1);
+    old_bulk_aligned(f, 2);
+    old_bulk_aligned(f, 3);
+    ir.put(f, ir.add, 13, 2, 3, 0);
+    ir.put(f, ir.less_unsigned, 16, 13, 2, 0);
+    ir.branch(f, ir.nonzero, 16, "invalid");
+    ir.put(f, ir.add, 14, 1, 3, 0);
+    ir.put(f, ir.less_unsigned, 16, 14, 1, 0);
+    ir.branch(f, ir.nonzero, 16, "invalid");
+    tconstant(f, 12, 8);
+    tconstant(f, 15, 0);
+    ir.put(f, ir.less_unsigned, 16, 2, 1, 0);
+    ir.branch(f, ir.zero, 16, "copy");
+    ir.put(f, ir.less_unsigned, 16, 1, 13, 0);
+    ir.branch(f, ir.zero, 16, "copy");
+    tconstant(f, 15, 1);
+    ir.put(f, ir.subtract, 1, 14, 12, 0);
+    ir.put(f, ir.subtract, 2, 13, 12, 0);
+    ir.branch(f, ir.label, 0, "copy");
+    ir.put(f, ir.acquire_load, 10, 2, 0, 0);
+    ir.branch(f, ir.zero, 0, "store");
+    ir.invoke_function(f, "gc_old_prewrite", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.label, 0, "store");
+    ir.put(f, ir.release_store, 0, 1, 10, 0);
+    ir.put(f, ir.subtract, 3, 3, 12, 0);
+    ir.branch(f, ir.zero, 3, "done");
+    ir.branch(f, ir.zero, 15, "forward");
+    ir.put(f, ir.subtract, 1, 1, 12, 0);
+    ir.put(f, ir.subtract, 2, 2, 12, 0);
+    ir.branch(f, ir.jump, 0, "copy");
+    ir.branch(f, ir.label, 0, "forward");
+    ir.put(f, ir.add, 1, 1, 12, 0);
+    ir.put(f, ir.add, 2, 2, 12, 0);
+    ir.branch(f, ir.jump, 0, "copy");
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    old_bulk_error(f);
+    kaesu f;
 }
 waza old_bulk_clear_program() -> ir.Function {
- // ctx(optional0), destination, bytes. Every dropped pointer is published
- // before its full aligned word is cleared; no torn byte stores are allowed.
- kaku f=ir.function("gc_clear_reference_slots");
- ir.branch(f,ir.zero,2,"done");ir.branch(f,ir.zero,1,"invalid");old_bulk_aligned(f,1);old_bulk_aligned(f,2);tconstant(f,12,8);
- ir.put(f,ir.add,13,1,2,0);ir.put(f,ir.less_unsigned,16,13,1,0);ir.branch(f,ir.nonzero,16,"invalid");
- ir.branch(f,ir.label,0,"clear");ir.branch(f,ir.zero,0,"store");ir.invoke_function(f,"gc_old_prewrite",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");
- ir.branch(f,ir.label,0,"store");tconstant(f,10,0);ir.put(f,ir.release_store,0,1,10,0);
- ir.put(f,ir.subtract,2,2,12,0);ir.branch(f,ir.zero,2,"done");ir.put(f,ir.add,1,1,12,0);ir.branch(f,ir.jump,0,"clear");
- ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"done");treturn(f,0);old_bulk_error(f);kaesu f;
+    // ctx(optional0), destination, bytes. Every dropped pointer is published
+    // before its full aligned word is cleared; no torn byte stores are allowed.
+    kaku f = ir.function("gc_clear_reference_slots");
+    ir.branch(f, ir.zero, 2, "done");
+    ir.branch(f, ir.zero, 1, "invalid");
+    old_bulk_aligned(f, 1);
+    old_bulk_aligned(f, 2);
+    tconstant(f, 12, 8);
+    ir.put(f, ir.add, 13, 1, 2, 0);
+    ir.put(f, ir.less_unsigned, 16, 13, 1, 0);
+    ir.branch(f, ir.nonzero, 16, "invalid");
+    ir.branch(f, ir.label, 0, "clear");
+    ir.branch(f, ir.zero, 0, "store");
+    ir.invoke_function(f, "gc_old_prewrite", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.branch(f, ir.label, 0, "store");
+    tconstant(f, 10, 0);
+    ir.put(f, ir.release_store, 0, 1, 10, 0);
+    ir.put(f, ir.subtract, 2, 2, 12, 0);
+    ir.branch(f, ir.zero, 2, "done");
+    ir.put(f, ir.add, 1, 1, 12, 0);
+    ir.branch(f, ir.jump, 0, "clear");
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    old_bulk_error(f);
+    kaesu f;
 }

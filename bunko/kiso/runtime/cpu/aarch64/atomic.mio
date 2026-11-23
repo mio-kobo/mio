@@ -10,42 +10,48 @@ yobu "kiso/convert";
 koukai waza emit_atomic(code: arm64.Assembler, op: gc.RuntimeOp) -> string {
     moshi (!gc.valid_operation(op) || op.kind < gc.atomic_load || op.kind > gc.fence) { kaesu "INVALID_RUNTIME_OP"; }
     kaku prefix = string.concat("atomic_", convert.format_int(len(code.words)));
-    kaku retry = string.concat(prefix,"_retry"); kaku mismatch = string.concat(prefix,"_mismatch"); kaku done = string.concat(prefix,"_done");
-    moshi (op.order == gc.seq_cst) { arm64.assembler_emit(code,arm64.dmb_ish()); }
-    moshi (op.kind == gc.fence) { moshi (op.order != gc.seq_cst) { arm64.assembler_emit(code,arm64.dmb_ish()); } }
+    kaku retry = string.concat(prefix, "_retry");
+    kaku mismatch = string.concat(prefix, "_mismatch");
+    kaku done = string.concat(prefix, "_done");
+    moshi (op.order == gc.seq_cst) { arm64.assembler_emit(code, arm64.dmb_ish()); }
+    moshi (op.kind == gc.fence) { moshi (op.order != gc.seq_cst) { arm64.assembler_emit(code, arm64.dmb_ish()); } }
     sore { moshi (op.kind == gc.atomic_load) {
-        moshi (op.order == gc.relaxed) { arm64.assembler_emit(code,arm64.ldr_x(0,0,0)); }
-        sore { arm64.assembler_emit(code,arm64.ldar_x(0,0)); }
-    } sore { moshi (op.kind == gc.atomic_store) {
-        moshi (op.order == gc.relaxed) { arm64.assembler_emit(code,arm64.str_x(1,0,0)); }
-        sore { arm64.assembler_emit(code,arm64.stlr_x(1,0)); }
-    } sore {
-        arm64.assembler_emit(code,arm64.add_imm_x(9,0,0,iie));
-        arm64.assembler_label(code,retry);
-        kaku load_acquire = op.order == gc.acquire || op.order == gc.acq_rel || op.order == gc.seq_cst || op.failure_order == gc.acquire;
-        kaku store_release = op.order == gc.release || op.order == gc.acq_rel || op.order == gc.seq_cst;
-        arm64.assembler_emit(code,arm64.ldxr_x(0,9,load_acquire));
-        moshi (op.kind == gc.atomic_cas) {
-            arm64.assembler_emit(code,arm64.cmp_x(0,2)); arm64.assembler_b_cond(code,1,mismatch);
-            arm64.assembler_emit(code,arm64.stxr_x(10,1,9,store_release));
-        } sore {
-            arm64.assembler_emit(code,arm64.add_x(11,0,1));
-            arm64.assembler_emit(code,arm64.stxr_x(10,11,9,store_release));
-        }
-        arm64.assembler_cbnz_x(code,10,retry);
-        arm64.assembler_emit(code,arm64.movz_x(3,1,0)); arm64.assembler_b(code,done);
-        arm64.assembler_label(code,mismatch); arm64.assembler_emit(code,arm64.clrex());
-        arm64.assembler_emit(code,arm64.movz_x(3,0,0)); arm64.assembler_label(code,done);
-    } } }
-    moshi (op.order == gc.seq_cst) { arm64.assembler_emit(code,arm64.dmb_ish()); }
+            moshi (op.order == gc.relaxed) { arm64.assembler_emit(code, arm64.ldr_x(0, 0, 0)); }
+            sore { arm64.assembler_emit(code, arm64.ldar_x(0, 0)); }
+        } sore { moshi (op.kind == gc.atomic_store) {
+                moshi (op.order == gc.relaxed) { arm64.assembler_emit(code, arm64.str_x(1, 0, 0)); }
+                sore { arm64.assembler_emit(code, arm64.stlr_x(1, 0)); }
+            } sore {
+                arm64.assembler_emit(code, arm64.add_imm_x(9, 0, 0, iie));
+                arm64.assembler_label(code, retry);
+                kaku load_acquire = op.order == gc.acquire || op.order == gc.acq_rel || op.order == gc.seq_cst || op.failure_order == gc.acquire;
+                kaku store_release = op.order == gc.release || op.order == gc.acq_rel || op.order == gc.seq_cst;
+                arm64.assembler_emit(code, arm64.ldxr_x(0, 9, load_acquire));
+                moshi (op.kind == gc.atomic_cas) {
+                    arm64.assembler_emit(code, arm64.cmp_x(0, 2));
+                    arm64.assembler_b_cond(code, 1, mismatch);
+                    arm64.assembler_emit(code, arm64.stxr_x(10, 1, 9, store_release));
+                } sore {
+                    arm64.assembler_emit(code, arm64.add_x(11, 0, 1));
+                    arm64.assembler_emit(code, arm64.stxr_x(10, 11, 9, store_release));
+                }
+                arm64.assembler_cbnz_x(code, 10, retry);
+                arm64.assembler_emit(code, arm64.movz_x(3, 1, 0));
+                arm64.assembler_b(code, done);
+                arm64.assembler_label(code, mismatch);
+                arm64.assembler_emit(code, arm64.clrex());
+                arm64.assembler_emit(code, arm64.movz_x(3, 0, 0));
+                arm64.assembler_label(code, done);
+            } } }
+    moshi (op.order == gc.seq_cst) { arm64.assembler_emit(code, arm64.dmb_ish()); }
     kaesu "";
 }
 
 // x0-x7 hold public ABI arguments, native result returned in x0. Caller
 // saves its runtime registers/frame before crossing this boundary. x16 scratch.
-koukai waza emit_import_call(code:arm64.Assembler, table:int64, slot:int64, slots:int64) -> string {
-    moshi(table<0 || table>28 || table==16 || table==18 || slot<0 || slot>=slots || slots<1 || slots>4096){kaesu "INVALID_IMPORT_CALL";}
-    moshi(arm64.assembler_emit(code,arm64.ldr_x(16,table,slot*8))!=mu ||
-        arm64.assembler_emit(code,arm64.blr_x(16))!=mu){kaesu "IMPORT_CALL_ENCODING_FAILURE";}
+koukai waza emit_import_call(code: arm64.Assembler, table: int64, slot: int64, slots: int64) -> string {
+    moshi (table<0 || table>28 || table == 16 || table == 18 || slot<0 || slot >= slots || slots<1 || slots>4096) { kaesu "INVALID_IMPORT_CALL"; }
+    moshi (arm64.assembler_emit(code, arm64.ldr_x(16, table, slot * 8)) != mu ||
+        arm64.assembler_emit(code, arm64.blr_x(16)) != mu) { kaesu "IMPORT_CALL_ENCODING_FAILURE"; }
     kaesu "";
 }

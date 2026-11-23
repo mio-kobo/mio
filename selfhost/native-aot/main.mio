@@ -20,11 +20,19 @@ waza compile_file(file: mochi.File, output: string) -> bool {
         kaesu iie;
     }
     kaku image = macho.executable(macho.ImageSpec { words: lowered.words, constants: lowered.constants,
-        globals: lowered.globals, patches: lowered.patches });
-    moshi (image.error != mu) { diagnostic("E_WRITER native-aot: writer failed"); kaesu iie; }
+            globals: lowered.globals, patches: lowered.patches });
+    moshi (image.error != mu) {
+        diagnostic("E_WRITER native-aot: writer failed");
+        kaesu iie;
+    }
     kaku written = fs.write_all(output, image.bytes);
-    moshi (written.error != mu) { diagnostic("E_IO native-aot: write failed"); kaesu iie; }
-    chant("native-aot: ok"); chant(len(lowered.words)); chant(len(image.bytes));
+    moshi (written.error != mu) {
+        diagnostic("E_IO native-aot: write failed");
+        kaesu iie;
+    }
+    chant("native-aot: ok");
+    chant(len(lowered.words));
+    chant(len(image.bytes));
     kaesu hai;
 }
 

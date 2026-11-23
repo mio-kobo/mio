@@ -1,0 +1,336 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+yobu "selfhost/parser";
+yobu "selfhost/progress";
+yobu "selfhost/resolver";
+
+koukai kata Edit { start: int64; end: int64; text: string; }
+koukai kata Missing { alias: string; member: string; start: int64; end: int64; }
+kata ImportLine { node: parser.Node; start: int64; end: int64; clean: bool; }
+
+waza eol(data: []uint8) -> string {
+    kaku i = 1;
+    aida (i < len(data)) {
+        moshi (data[i] == uint8(10)) {
+            moshi (data[i - 1] == uint8(13)) { kaesu "\r\n"; }
+            kaesu "\n";
+        }
+        i = i + 1;
+    }
+    kaesu "\n";
+}
+
+koukai waza text(data: []uint8, start: int64, end: int64) -> string {
+    kaku out = array.with_capacity[uint8](end - start);
+    kaku i = start;
+    aida (i < end) { array.push(out, data[i]); i = i + 1; }
+    kaku result = string.from_utf8(out);
+    moshi (result == mu) { kaesu ""; }
+    kaesu result;
+}
+
+waza quoted_import(name: string) -> string {
+    // Candidate paths come from the file system. Exclude file names whose
+    // literal spelling would need escaping or could inject source text.
+    kaku data = string.to_bytes(name);
+    kaku i = 0;
+    aida (i < len(data)) {
+        moshi (data[i] < uint8(32) || data[i] == uint8(34) || data[i] == uint8(92)) { kaesu ""; }
+        i = i + 1;
+    }
+    kaesu string.concat("yobu \"", string.concat(name, "\";"));
+}
+
+waza import_line(data: []uint8, node: parser.Node) -> ImportLine {
+    kaku start = node.span.start.offset;
+    kaku end = node.span.end.offset;
+    aida (start > 0 && data[start - 1] != uint8(10)) { start = start - 1; }
+    aida (end < len(data) && data[end] != uint8(10)) { end = end + 1; }
+    moshi (end < len(data)) { end = end + 1; }
+    kaku raw = text(data, node.span.start.offset, node.span.end.offset);
+    kaku clean = string.trim_space(text(data, start, node.span.start.offset)) == "" &&
+        string.trim_space(text(data, node.span.end.offset, end)) == "" &&
+        !string.contains(raw, "/*") && !string.contains(raw, "//") && !string.contains(raw, "\n") &&
+        string.contains(raw, string.concat("\"", string.concat(node.text, "\"")));
+    kaesu ImportLine { node: node, start: start, end: end, clean: clean };
+}
+
+waza bom_size(data: []uint8) -> int64 {
+    moshi (len(data) >= 3 && data[0] == uint8(239) && data[1] == uint8(187) && data[2] == uint8(191)) { kaesu 3; }
+    kaesu 0;
+}
+
+koukai waza insertion(data: []uint8, name: string) -> Edit? {
+    kaku declaration = quoted_import(name);
+    moshi (declaration == "") { kaesu mu; }
+    kaku newline = eol(data);
+    kaku start = bom_size(data);
+    kaesu Edit { start: start, end: start, text: string.concat(declaration, string.concat(newline, newline)) };
+}
+
+koukai waza package_for(analysis: frontend.AnalysisResult, filename: string) -> resolver.ResolvedPackage? {
+    kaku i = 0;
+    aida (i < len(analysis.resolved)) {
+        kaku resolved = analysis.resolved[i];
+        kaku fi = 0;
+        aida (fi < len(resolved.files)) {
+            moshi (resolved.files[fi].path == filename) { kaesu resolved; }
+            fi = fi + 1;
+        }
+        i = i + 1;
+    }
+    kaesu mu;
+}
+
+koukai waza has_alias(resolved: resolver.ResolvedPackage, alias: string) -> bool {
+    kaku i = 0;
+    aida (i < len(resolved.aliases)) {
+        moshi (resolved.aliases[i].name == alias) { kaesu hai; }
+        i = i + 1;
+    }
+    kaesu iie;
+}
+
+koukai waza missing(resolved: resolver.ResolvedPackage, filename: string) -> []Missing {
+    kaku output: []Missing = [];
+    kaku i = 0;
+    aida (i < len(resolved.errors)) {
+        kaku error = resolved.errors[i];
+        i = i + 1;
+        moshi (resolver.resolve_error_kind_code(error.kind) != 0 || error.file_id < 0 || error.node_id < 0) { tsuzuku; }
+        kaku file = resolved.files[error.file_id];
+        moshi (file.path != filename) { tsuzuku; }
+        kaku node = file.ast.nodes[error.node_id];
+        kaku kind = parser.node_kind_code(node.kind);
+        kaku alias = "";
+        kaku member = "";
+        kaku start = node.span.start.offset;
+        kaku end = node.span.end.offset;
+        moshi (kind == 4) {
+            // An unresolved identifier is eligible only as the receiver of
+            // a selector. The resolver has already considered lexical scope.
+            kaku j = error.node_id + 1;
+            aida (j < len(file.ast.nodes)) {
+                kaku parent = file.ast.nodes[j];
+                moshi (parser.node_kind_code(parent.kind) == 27 && len(parent.children) == 1 &&
+                    parent.children[0] == error.node_id) {
+                    alias = node.text;
+                    member = parent.text;
+                    end = parent.span.end.offset;
+                    nukeru;
+                }
+                j = j + 1;
+            }
+        } sore {
+            moshi (kind == 39 || kind == 28 || kind == 30) {
+                kaku parts = string.to_bytes(error.name);
+                kaku dot = bytes.index(parts, uint8(46));
+                moshi (dot > 0) {
+                    alias = text(parts, 0, dot);
+                    member = text(parts, dot + 1, len(parts));
+                    kaku variant = string.index(member, ".");
+                    moshi (variant > 0) { member = text(string.to_bytes(member), 0, variant); }
+                }
+            }
+        }
+        moshi (alias != "" && member != "" && !has_alias(resolved, alias)) {
+            array.push(output, Missing { alias: alias, member: member, start: start, end: end });
+        }
+    }
+    kaesu output;
+}
+
+koukai waza matches(catalog: Index, all: []Missing, item: Missing, current: string, work: progress.Context) -> []Candidate {
+    kaku available = candidates(catalog, item.alias, current, work);
+    kaku output: []Candidate = [];
+    kaku i = 0;
+    aida (i < len(available)) {
+        kaku candidate = available[i];
+        i = i + 1;
+        kaku valid = hai;
+        kaku j = 0;
+        aida (j < len(all) && valid) {
+            moshi (all[j].alias == item.alias) { valid = provides(candidate, all[j].member); }
+            j = j + 1;
+        }
+        moshi (valid) { array.push(output, candidate); }
+    }
+    kaesu output;
+}
+
+waza contains(names: []string, name: string) -> bool {
+    kaku i = 0;
+    aida (i < len(names)) {
+        moshi (names[i] == name) { kaesu hai; }
+        i = i + 1;
+    }
+    kaesu iie;
+}
+
+waza pure_package(analysis: frontend.AnalysisResult, identity: string, visited: []string) -> bool {
+    moshi (contains(visited, identity)) { kaesu hai; }
+    array.push(visited, identity);
+    kaku i = 0;
+    aida (i < len(analysis.resolved)) {
+        kaku package = analysis.resolved[i];
+        i = i + 1;
+        moshi (package.package_path != identity) { tsuzuku; }
+        kaku fi = 0;
+        aida (fi < len(package.files)) {
+            kaku file = package.files[fi];
+            fi = fi + 1;
+            kaku children = file.ast.nodes[file.root].children;
+            kaku ni = 0;
+            aida (ni < len(children)) {
+                kaku kind = parser.node_kind_code(file.ast.nodes[children[ni]].kind);
+                moshi (kind != 1 && kind != 2 && kind != 32 && kind != 34 && kind != 36) { kaesu iie; }
+                ni = ni + 1;
+            }
+        }
+        kaku edge = 0;
+        aida (edge < len(package.dependencies)) {
+            kaku dependency = package.dependencies[edge];
+            moshi (dependency.source == identity && !string.has_prefix(dependency.target, "mio/") &&
+                !pure_package(analysis, dependency.target, visited)) { kaesu iie; }
+            edge = edge + 1;
+        }
+        kaesu hai;
+    }
+    kaesu iie;
+}
+
+waza used(resolved: resolver.ResolvedPackage, alias: string, identity: string) -> bool {
+    // Failed member lookups may not bind their receiver. Preserve those
+    // imports so an unresolved or private member can still be diagnosed.
+    kaku i = 0;
+    aida (i < len(resolved.errors)) {
+        kaku problem = resolved.errors[i];
+        i = i + 1;
+        moshi (problem.file_id < 0 || problem.node_id < 0) { tsuzuku; }
+        kaku file = resolved.files[problem.file_id];
+        kaku node = file.ast.nodes[problem.node_id];
+        kaku kind = parser.node_kind_code(node.kind);
+        moshi (string.has_prefix(problem.name, string.concat(alias, ".")) || problem.name == alias ||
+            (kind == 27 && len(node.children) == 1 && file.ast.nodes[node.children[0]].text == alias)) { kaesu hai; }
+    }
+    i = 0;
+    aida (i < len(resolved.bindings)) {
+        kaku binding = resolved.bindings[i];
+        i = i + 1;
+        kaku symbol = resolved.symbols[binding.symbol_id];
+        kaku file = resolved.files[binding.reference.file_id];
+        kaku node = file.ast.nodes[binding.reference.node_id];
+        moshi (parser.node_kind_code(node.kind) != 1 &&
+            ((symbol.name == alias && resolver.symbol_kind_code(symbol.kind) == 10) ||
+             symbol.package_path == identity)) { kaesu hai; }
+    }
+    kaesu iie;
+}
+
+waza less(left: string, right: string) -> bool {
+    kaku a = string.to_bytes(left);
+    kaku b = string.to_bytes(right);
+    kaku i = 0;
+    aida (i < len(a) && i < len(b)) {
+        moshi (a[i] != b[i]) { kaesu a[i] < b[i]; }
+        i = i + 1;
+    }
+    kaesu len(a) < len(b);
+}
+
+waza add_sorted(names: []string, name: string) -> unit {
+    moshi (contains(names, name)) { kaesu; }
+    kaku i = len(names);
+    array.push(names, name);
+    aida (i > 0 && less(name, names[i - 1])) {
+        names[i] = names[i - 1];
+        i = i - 1;
+    }
+    names[i] = name;
+}
+
+koukai waza organize(data: []uint8, filename: string, analysis: frontend.AnalysisResult, catalog: Index, work: progress.Context) -> Edit? {
+    moshi (bom_size(data) != 0) { kaesu mu; }
+    kaku parsed = parser.parse_with_progress(data, work);
+    moshi (len(parsed.errors) > 0 || progress.cancelled(work)) { kaesu mu; }
+    kaku resolved = package_for(analysis, filename);
+    moshi (resolved != mu) { kaesu organize_resolved(data, filename, analysis, catalog, work, parsed, resolved); }
+    kaesu mu;
+}
+
+waza organize_resolved(data: []uint8, filename: string, analysis: frontend.AnalysisResult, catalog: Index, work: progress.Context, parsed: parser.ParseResult, resolved: resolver.ResolvedPackage) -> Edit? {
+    kaku add: []string = [];
+    kaku unresolved = missing(resolved, filename);
+    kaku handled: []string = [];
+    kaku i = 0;
+    aida (i < len(unresolved) && progress.checkpoint(work)) {
+        kaku item = unresolved[i];
+        i = i + 1;
+        moshi (contains(handled, item.alias)) { tsuzuku; }
+        array.push(handled, item.alias);
+        kaku options = matches(catalog, unresolved, item, resolved.package_path, work);
+        moshi (len(options) == 1 && quoted_import(options[0].name) != "") { add_sorted(add, options[0].name); }
+    }
+    moshi (progress.cancelled(work)) { kaesu mu; }
+    kaku children = parsed.ast.nodes[parsed.root].children;
+    kaku start = 0;
+    kaku end = 0;
+    kaku safe_block = hai;
+    kaku names: []string = [];
+    kaku safe_removal = analysis.error == "";
+    i = 0;
+    aida (i < len(analysis.diagnostics) && safe_removal) {
+        kaku code = analysis.diagnostics[i].code;
+        moshi (code == "E0001" || code == "E0101" || code == "E_IMPORT") { safe_removal = iie; }
+        i = i + 1;
+    }
+    i = 0;
+    aida (i < len(children)) {
+        kaku node = parsed.ast.nodes[children[i]];
+        moshi (parser.node_kind_code(node.kind) != 1) { nukeru; }
+        kaku line = import_line(data, node);
+        moshi (i == 0) { start = line.start; }
+        moshi (!line.clean || (i > 0 && (line.start < end || string.trim_space(text(data, end, line.start)) != ""))) {
+            safe_block = iie;
+            nukeru;
+        }
+        end = line.end;
+        kaku identity = frontend.package_identity(catalog.root, node.text);
+        kaku visited: []string = [];
+        // A module can execute global initializers. Only remove when a
+        // complete check proves its package has declarations alone.
+        moshi (!safe_removal || used(resolved, node.extra, identity) ||
+            !pure_package(analysis, identity, visited)) { add_sorted(names, node.text); }
+        i = i + 1;
+    }
+    moshi (!safe_block) {
+        moshi (len(add) == 0) { kaesu mu; }
+        start = 0;
+        end = 0;
+        names = [];
+    }
+    kaku a = 0;
+    aida (a < len(add)) { add_sorted(names, add[a]); a = a + 1; }
+    kaku builder = string.new_builder();
+    kaku newline = eol(data);
+    a = 0;
+    aida (a < len(names)) {
+        string.write_string(builder, quoted_import(names[a]));
+        string.write_string(builder, newline);
+        a = a + 1;
+    }
+    moshi (start == end && len(names) > 0) { string.write_string(builder, newline); }
+    kaku replacement = string.builder_string(builder);
+    moshi (replacement == text(data, start, end)) { kaesu mu; }
+    kaesu Edit { start: start, end: end, text: replacement };
+}
+
+koukai waza apply(data: []uint8, edit: Edit) -> []uint8 {
+    kaku result = string.new_builder();
+    string.write_string(result, text(data, 0, edit.start));
+    string.write_string(result, edit.text);
+    string.write_string(result, text(data, edit.end, len(data)));
+    kaesu string.to_bytes(string.builder_string(result));
+}

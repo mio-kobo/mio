@@ -10,18 +10,45 @@ yobu "kiso/convert";
 // Native source-to-native integration builder. No manual roots, substituted
 // collector, external compiler, or pre-generated Mochi in the production path.
 waza main() -> unit {
-kaku args=os.arguments();moshi(len(args)!=5){os.exit(64);kaesu;}
-kaku source=frontend.compile_source(args[1],args[2],args[3]);
-moshi(source.error!=""){chant(source.error);os.exit(65);}
-kaku decoded=mochi.decode(source.bytes);kaku file=decoded.value;
-moshi(decoded.error!=mu){os.exit(66);}
-moshi(file==mu){os.exit(66);kaesu;}
-kaku lowered=lower.compile_with_attached_roots(file,1048576,hai);kaku problem=lowered.error;
-moshi(problem!=mu){chant(convert.format_int(lower.error_code(problem)));chant(convert.format_int(lower.error_detail(problem)));os.exit(67);}
-kaku linked=darwin.executable_appended(macho.ImageSpec {words:lowered.words,constants:lowered.constants,globals:lowered.globals,patches:lowered.patches},darwin.thread_symbols(),lower.attached_root_words);
-moshi(linked.error!=""){chant(linked.error);os.exit(68);}
-kaku signed=sign.adhoc_linked(linked.bytes);moshi(signed.error!=""){chant(signed.error);os.exit(69);}
-kaku written=fs.write_all(args[4],signed.bytes);moshi(written.error!=mu){os.exit(70);}
-moshi(os.chmod(args[4],493)!=0){os.exit(71);}
+    kaku args = os.arguments();
+    moshi (len(args) != 5) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku source = frontend.compile_source(args[1], args[2], args[3]);
+    moshi (source.error != "") {
+        chant(source.error);
+        os.exit(65);
+    }
+    kaku decoded = mochi.decode(source.bytes);
+    kaku file = decoded.value;
+    moshi (decoded.error != mu) { os.exit(66); }
+    moshi (file == mu) {
+        os.exit(66);
+        kaesu;
+    }
+    kaku lowered = lower.compile_with_attached_roots(file, 1048576, hai);
+    kaku problem = lowered.error;
+    moshi (problem != mu) {
+        chant(convert.format_int(lower.error_code(problem)));
+        chant(convert.format_int(lower.error_detail(problem)));
+        os.exit(67);
+    }
+    kaku linked = darwin.executable_appended(macho.ImageSpec {
+            words: lowered.words, constants: lowered.constants, globals: lowered.globals, patches: lowered.patches }, darwin.thread_symbols(), lower.attached_root_words);
+    moshi (linked.error != "") {
+        chant(linked.error);
+        os.exit(68);
+    }
+    kaku signed = sign.adhoc_linked(linked.bytes);
+    moshi (signed.error != "") {
+        chant(signed.error);
+        os.exit(69);
+    }
+    kaku written = fs.write_all(args[4], signed.bytes);
+    moshi (written.error != mu) {
+        os.exit(70);
+    }
+    moshi (os.chmod(args[4], 493) != 0) { os.exit(71); }
 }
 main();

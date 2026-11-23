@@ -11,40 +11,94 @@ koukai waza json_error(code: string, message: string) -> string {
     kaesu string.concat("{\"code\":", string.concat(json.quote(code), string.concat(",\"message\":", string.concat(json.quote(message), "}"))));
 }
 koukai waza json_result(name: string, path: string, value: Result) -> string {
-    kaku builder = string.new_builder(); put(builder, "{\"name\":"); put(builder, json.quote(name)); put(builder, ",\"path\":"); put(builder, json.quote(path)); put(builder, ",\"status\":");
-    kaku status = "failed"; moshi (passed(value)) { status = "passed"; } moshi (skipped(value)) { status = "skipped"; } put(builder, json.quote(status)); put(builder, ",\"duration_ms\":"); put(builder, convert.format_int(value.duration_ms));
-    moshi (len(value.failures) > 0) {
-        put(builder, ",\"failures\":["); kaku at = 0;
-        aida (at < len(value.failures)) { moshi (at > 0) { put(builder, ","); } put(builder, json_error("E0602", value.failures[at])); at = at + 1; } put(builder, "]");
+    kaku builder = string.new_builder();
+    put(builder, "{\"name\":");
+    put(builder, json.quote(name));
+    put(builder, ",\"path\":");
+    put(builder, json.quote(path));
+    put(builder, ",\"status\":");
+    kaku status = "failed";
+    moshi (passed(value)) {
+        status = "passed";
     }
-    moshi (value.error != "") { put(builder, ",\"error\":"); put(builder, json_error(value.error_code, value.error)); }
-    moshi (skipped(value)) { put(builder, ",\"skip_reason\":"); put(builder, json.quote(value.skipped)); }
-    put(builder, "}"); kaesu string.builder_string(builder);
+    moshi (skipped(value)) {
+        status = "skipped";
+    }
+    put(builder, json.quote(status));
+    put(builder, ",\"duration_ms\":");
+    put(builder, convert.format_int(value.duration_ms));
+    moshi (len(value.failures) > 0) {
+        put(builder, ",\"failures\":[");
+        kaku at = 0;
+        aida (at < len(value.failures)) {
+            moshi (at > 0) {
+                put(builder, ",");
+            }
+            put(builder, json_error("E0602", value.failures[at]));
+            at = at + 1;
+        }
+        put(builder, "]");
+    }
+    moshi (value.error != "") {
+        put(builder, ",\"error\":");
+        put(builder, json_error(value.error_code, value.error));
+    }
+    moshi (skipped(value)) {
+        put(builder, ",\"skip_reason\":");
+        put(builder, json.quote(value.skipped));
+    }
+    put(builder, "}");
+    kaesu string.builder_string(builder);
 }
 koukai waza seconds(milliseconds: int64) -> string {
-    kaku remainder = milliseconds - (milliseconds / 1000) * 1000; kaku fraction = convert.format_int(remainder);
-    moshi (remainder < 100) { fraction = string.concat("0", fraction); } moshi (remainder < 10) { fraction = string.concat("0", fraction); }
+    kaku remainder = milliseconds - (milliseconds / 1000) * 1000;
+    kaku fraction = convert.format_int(remainder);
+    moshi (remainder < 100) {
+        fraction = string.concat("0", fraction);
+    }
+    moshi (remainder < 10) {
+        fraction = string.concat("0", fraction);
+    }
     kaesu string.concat(convert.format_int(milliseconds / 1000), string.concat(".", fraction));
 }
 koukai waza human_result(package: string, name: string, value: Result, lang: string, style: theme.Theme, short: bool, verbose: bool) -> unit {
     moshi (len(value.stdout) > 0) { fs.write_all("/dev/stdout", value.stdout); }
     moshi (verbose && len(value.stderr) > 0) { fs.write_all("/dev/stderr", value.stderr); }
-    kaku status = i18n.text(lang, i18n.key_test_fail); kaku role = "error";
-    moshi (passed(value)) { status = i18n.text(lang, i18n.key_test_pass); role = "success"; }
-    moshi (skipped(value)) { status = i18n.text(lang, i18n.key_test_skip); role = "warning"; }
+    kaku status = i18n.text(lang, i18n.key_test_fail);
+    kaku role = "error";
+    moshi (passed(value)) {
+        status = i18n.text(lang, i18n.key_test_pass);
+        role = "success";
+    }
+    moshi (skipped(value)) {
+        status = i18n.text(lang, i18n.key_test_skip);
+        role = "warning";
+    }
     moshi (!short) { status = theme.paint(style, role, status); }
     kaku prefix = string.concat("--- ", string.concat(status, string.concat(": ", name)));
     moshi (short) { prefix = string.concat(package, string.concat(":", string.concat(name, string.concat(": ", status)))); }
     chant(string.concat(prefix, string.concat(" (", string.concat(seconds(value.duration_ms), "s)"))));
-    moshi (skipped(value)) { chant(string.concat("    ", string.concat(i18n.text(lang, i18n.key_test_skip), string.concat(": ", value.skipped)))); }
+    moshi (skipped(value)) {
+        chant(string.concat("    ", string.concat(i18n.text(lang, i18n.key_test_skip), string.concat(": ", value.skipped))));
+    }
     kaku at = 0;
     aida (at < len(value.failures)) {
-        kaku lead = string.concat("    ", i18n.text(lang, i18n.key_test_assertion)); moshi (short) { lead = string.concat(package, string.concat(":", string.concat(name, ": E0602"))); }
-        chant(string.concat(lead, string.concat(": ", value.failures[at]))); at = at + 1;
+        kaku lead = string.concat("    ", i18n.text(lang, i18n.key_test_assertion));
+        moshi (short) {
+            lead = string.concat(package, string.concat(":", string.concat(name, ": E0602")));
+        }
+        chant(string.concat(lead, string.concat(": ", value.failures[at])));
+        at = at + 1;
     }
     moshi (value.error != "") {
-        kaku key = i18n.key_test_runtime; moshi (value.error_code == "E0604") { key = i18n.key_test_resource; }
-        kaku lead = string.concat("    ", i18n.text(lang, key)); moshi (short) { lead = string.concat(package, string.concat(":", string.concat(name, string.concat(": ", value.error_code)))); }
+        kaku key = i18n.key_test_runtime;
+        moshi (value.error_code == "E0604") {
+            key = i18n.key_test_resource;
+        }
+        kaku lead = string.concat("    ", i18n.text(lang, key));
+        moshi (short) {
+            lead = string.concat(package, string.concat(":", string.concat(name, string.concat(": ", value.error_code))));
+        }
         chant(string.concat(lead, string.concat(": ", value.error)));
     }
 }

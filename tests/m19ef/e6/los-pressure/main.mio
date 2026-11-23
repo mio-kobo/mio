@@ -1,21 +1,54 @@
 yobu "kiso/array";
 yobu "kiso/os";
-waza garbage()->unit {
- kaku keep:[][]uint8=[];kaku at=0;
- aida(at<40){array.push(keep,array.with_capacity[uint8](131072));at=at+1;}
- chant(len(keep));
+waza garbage() -> unit {
+    kaku keep: [][]uint8 = [];
+    kaku at = 0;
+    aida (at<40) {
+        array.push(keep, array.with_capacity[uint8](131072));
+        at = at + 1;
+    }
+    chant(len(keep));
 }
-waza preserved()->unit {
- kaku live=array.with_capacity[uint8](1048576);array.push(live,uint8(128));array.push(live,uint8(255));
- kaku at=0;aida(at<50){garbage();at=at+1;}
- kaku big=array.with_capacity[uint8](7000000);array.push(big,uint8(41));
- moshi(len(live)!=2 || live[0]!=uint8(128) || live[1]!=uint8(255) || big[0]!=uint8(41)){os.exit(70);kaesu;}
- chant(array.capacity(big));chant(live[0]);chant(live[1]);chant(big[0]);
+waza preserved() -> unit {
+    kaku live = array.with_capacity[uint8](1048576);
+    array.push(live, uint8(128));
+    array.push(live, uint8(255));
+    kaku at = 0;
+    aida (at<50) {
+        garbage();
+        at = at + 1;
+    }
+    kaku big = array.with_capacity[uint8](7000000);
+    array.push(big, uint8(41));
+    moshi (len(live) != 2 || live[0] != uint8(128) || live[1] != uint8(255) || big[0] != uint8(41)) {
+        os.exit(70);
+        kaesu;
+    }
+    chant(array.capacity(big));
+    chant(live[0]);
+    chant(live[1]);
+    chant(big[0]);
 }
-waza main()->unit {
- kaku args=os.arguments();
- moshi(len(args)>1 && args[1]=="preserved"){preserved();kaesu;}
- moshi(len(args)>1 && args[1]=="overlimit"){kaku impossible=array.with_capacity[uint8](9000000);chant(array.capacity(impossible));os.exit(71);kaesu;}moshi(len(args)>1 && args[1]=="garbage"){kaku at=0;aida(at<50){garbage();at=at+1;}}
- kaku big=array.with_capacity[uint8](7000000);chant(array.capacity(big));
+waza main() -> unit {
+    kaku args = os.arguments();
+    moshi (len(args)>1 && args[1] == "preserved") {
+        preserved();
+        kaesu;
+    }
+    moshi (len(args)>1 && args[1] == "overlimit") {
+        kaku impossible = array.with_capacity[uint8](9000000);
+        chant(array.capacity(impossible));
+        os.exit(71);
+        kaesu;
+    }
+    moshi (len(args)>1 && args[1] == "garbage") {
+        kaku at = 0;
+        aida (at<50) {
+            garbage();
+            at = at + 1;
+        }
+    }
+    kaku big = array.with_capacity[uint8](7000000);
+    chant(array.capacity(big));
 }
 main();

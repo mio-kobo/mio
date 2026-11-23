@@ -1,0 +1,25 @@
+// Darwin observe image with MIO_ALLOC_WAIT_TEST=park only. In that image the
+// otherwise-invalid native word handle 0 arms or reads the test rendezvous.
+yobu "mio/thread/runtime";
+yobu "kiso/array";
+
+waza worker() -> int64 {
+    kaku live = [[17, 23]];
+    runtime.word_get(0, 0);
+    kaku after = [19, 29];
+    kaesu live[0][0] + live[0][1] + after[0] + after[1];
+}
+
+waza main() -> int64 {
+    kaku handle = runtime.start(worker);
+    aida (runtime.word_get(0, 1) != 1) {}
+    // The worker is parked. This request enters the stopped Epoch and
+    // collects. The test hook makes the worker race the real native leave.
+    kaku data = array.make[int64](17000, 73);
+    kaku answer = runtime.join(handle);
+    chant(runtime.word_get(0, 1));
+    chant(data[16999]);
+    chant(answer);
+    kaesu 0;
+}
+main();

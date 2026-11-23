@@ -1,15 +1,30 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;next:Node?;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    next: Node?;
+}
 waza run() -> unit {
- kaku head:Node?=mu;kaku i=0;aida(i<1000){head=Node {value:i,next:head};i=i+1;}
- i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}
- kaku started=rt_collect(2);chant(rt_collect(4));
- // Actual configured hard-budget rejection, not a fabricated allocator error.
- kaku large=array.make[uint8](67108864,uint8(7));chant(len(large));
- moshi(head!=mu){chant(head.value);}
+    kaku head: Node?= mu;
+    kaku i = 0;
+    aida (i<1000) {
+        head = Node {
+            value: i, next: head };
+        i = i + 1;
+    }
+    i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    kaku started = rt_collect(2);
+    chant(rt_collect(4));
+    // Actual configured hard-budget rejection, not a fabricated allocator error.
+    kaku large = array.make[uint8](67108864, uint8(7));
+    chant(len(large));
+    moshi (head != mu) { chant(head.value); }
 }
 run();

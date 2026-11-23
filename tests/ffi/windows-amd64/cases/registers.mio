@@ -1,0 +1,12 @@
+waza clobber() -> int64 = c "mio_ffi_fixture.dll" "mio_c_clobber";
+waza unwind() -> int32 = c "mio_ffi_fixture.dll" "mio_c_unwind";
+waza nested(n: int64) -> int64 {
+    kaku a = 100 + n; kaku b = 200 + n;
+    moshi (n == 0) { kaesu a + clobber() + b; }
+    kaesu a + clobber() + b + nested(n - 1);
+}
+kaku i = 0; kaku total = 0;
+aida (i < 100) { total = total + nested(2); i = i + 1; }
+chant(total);
+chant(unwind());
+chant(10 + int64(unwind()));
