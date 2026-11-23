@@ -373,8 +373,12 @@ waza run() -> unit {
         }
         kaku shared_options = pipeline.SharedOptions { soname: soname, linker: linker, link_options: link_options, verbose: opts.verbose, object_only: emit_object };
         compiled = pipeline.build_shared_source(".", entry, bunko, gc_stress, shared_options, output);
+        moshi (compiled.error != "") {
+            source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));
+            moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
+            kaesu;
+        }
         moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
-        moshi (compiled.error != "") { source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis)); kaesu; }
     }
     sore {
     moshi (command == "exec" || command == "disasm") {

@@ -1023,6 +1023,39 @@ def darwin_c_abi(report, cli, work):
     report.check("darwin-c-abi", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
 
 
+def linux_shared(report, cli, work):
+    """Linux x86-64 shared-library generation (docs/linux-amd64-shared-libraries.md), non-required until it has a CI history.
+    tests/shared/linux-amd64/run.py builds four independent libraries and one aggregate from real Mio modules with the compiler built from this
+    source (`mio build --shared`), inspects every file with readelf/nm/objdump/ldd, loads them from a real C host (dlopen, dlsym, calls, dlclose,
+    several libraries at once, a collector stress), runs the negative checks and compares the static executables with the base compiler when one is
+    supplied. PASS requires no FAIL; NOT_RUN is limited to tools the host may lack (file, valgrind) and the optional base-compiler comparison, and is
+    named in the detail. Raw logs land under logs/linux-shared."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    output = report.logs / "linux-shared"
+    code, out, err, seconds = run(report, "linux-shared-run", [sys.executable, ROOT / "tests/shared/linux-amd64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
+    try:
+        checks = json.loads((output / "report.json").read_text(encoding="utf-8"))["checks"]
+    except (OSError, ValueError, KeyError) as problem:
+        report.check("linux-shared", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)), required=False)
+        return
+    count = lambda status: [item["name"] for item in checks if item.get("status") == status]
+    passed, failed, not_run = count("PASS"), count("FAIL"), count("NOT_RUN")
+    allowed = ("file(1) reports", "valgrind", "byte-identical to the base commit")
+    unexpected = [name for name in not_run if not any(item in name for item in allowed)]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if failed:
+        problems.append("FAIL: %s" % ", ".join(failed))
+    if unexpected:
+        problems.append("NOT_RUN: %s" % ", ".join(unexpected))
+    if not passed:
+        problems.append("no check passed")
+    detail = "%d PASS, %d FAIL, %d NOT_RUN%s" % (len(passed), len(failed), len(not_run), " (tools absent: %s)" % ", ".join(not_run) if not_run and not unexpected else "")
+    report.check("linux-shared", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
+
+
 def linux_c_abi(report, cli, work):
     """Linux x86-64 (System V AMD64) C ABI acceptance (docs/linux-amd64-c-ffi.md), non-required until it has a CI history. tests/ffi/linux-amd64/run.py
     compiles real C fixtures with the host GCC (and Clang when installed) into objects, a static archive and a shared library, links them into Mio
@@ -1345,6 +1378,7 @@ def linux(args, target="linux-amd64"):
     contract(report, cli, target, reference=str(refvm), suite="differential")
     if target == "linux-amd64":
         linux_c_abi(report, cli, work / "linux-c-abi")
+        linux_shared(report, cli, work / "linux-shared")
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")

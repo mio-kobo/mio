@@ -18,3 +18,10 @@ C interop (Mio → C, System V AMD64): `cabi_sysv.mio` classifies fixed-prototyp
 Not supported (reported as errors or as run-time "unsupported operation" stubs, never skipped silently):
 string ordering, `chant` of floats, threads, TLS and concurrent collection.
 Tests: `scripts/ci/native_platforms.py` (native compiler and CLI fixed points, `tests/native-differential` and the Runtime ABI contract in the default and `--gc-stress` configurations, compared with the reference VM).
+
+Shared libraries (Linux AMD64): `shared.mio` lowers a program in position-independent mode (the label `pic`: every
+data-area address is a rip-relative `lea` recorded as a `DataRef`, no signal handlers are installed) and generates one
+System V AMD64 entry point per `koukai waza ... export "symbol"` function (arguments converted to the Mio calling
+convention, one-time runtime initialisation, callee-saved registers preserved, boxed scalars converted). The result goes
+to `kiso/aot/elfrel` and the system linker through `selfhost/pipeline/shared_linux.mio`. See
+`docs/linux-amd64-shared-libraries.md`.
