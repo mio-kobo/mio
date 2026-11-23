@@ -1,0 +1,351 @@
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/fs";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "kiso/utf8";
+yobu "selfhost/frontend";
+yobu "selfhost/lexer";
+yobu "selfhost/lsp";
+yobu "selfhost/parser";
+yobu "selfhost/progress";
+
+kata WorkspaceSymbol {
+    name: string;
+    kind: int64;
+    location: string;
+    selection: string;
+    container: string;
+}
+kata WorkspaceFile {
+    path: string;
+    uri: string;
+    open: bool;
+}
+kata WorkspaceSummary {
+    file: WorkspaceFile;
+    symbols: []WorkspaceSymbol;
+    names: []string;
+    scanned: bool;
+}
+kata Workspace {
+    scanned: []bool;
+    disk: []string;
+    summaries: []WorkspaceSummary;
+    incomplete: []bool;
+}
+waza workspace() -> Workspace {
+    kaesu Workspace { scanned: [iie], disk: [], summaries: [], incomplete: [iie] };
+}
+waza inside_root(file: string, root: string) -> bool {
+    moshi (string.has_suffix(root, "/")) { kaesu string.has_prefix(file, root); }
+    kaesu file == root || string.has_prefix(file, string.concat(root, "/"));
+}
+waza workspace_contains(state: Session, file: string) -> bool {
+    kaku at = 0;
+    aida (at < len(state.roots)) {
+        moshi (inside_root(file, frontend.source_identity(state.roots[at]))) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+waza skip_workspace_dir(name: string) -> bool {
+    kaesu string.has_prefix(name, ".") || name == "node_modules" ||
+        name == "vendor" || name == "build" || name == "dist" || name == "out" || name == "target";
+}
+waza workspace_inventory(state: Session) -> bool {
+    moshi (state.workspace.scanned[0]) { kaesu hai; }
+    kaku dirs: []string = [];
+    kaku files: []string = [];
+    kaku seen = Map[string, bool]();
+    kaku incomplete = iie;
+    kaku at = 0;
+    aida (at < len(state.roots)) {
+        array.push(dirs, frontend.source_identity(state.roots[at]));
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(dirs)) {
+        moshi (!progress.pump(state.work)) { kaesu iie; }
+        kaku directory = dirs[at];
+        at = at + 1;
+        moshi (seen[directory] != mu) { tsuzuku; }
+        seen[directory] = hai;
+        kaku listing = fs.read_dir(directory);
+        moshi (listing.error != mu) {
+            incomplete = hai;
+            tsuzuku;
+        }
+        kaku ei = 0;
+        aida (ei < len(listing.entries)) {
+            moshi (!progress.checkpoint(state.work)) { kaesu iie; }
+            kaku entry = listing.entries[ei];
+            kaku file = path.join(directory, entry.name);
+            // Canonical paths also deduplicate nested roots and directory aliases.
+            moshi (entry.is_dir && !skip_workspace_dir(entry.name) && frontend.source_identity(file) == file) {
+                array.push(dirs, file);
+            }
+            moshi (entry.is_file && string.has_suffix(entry.name, ".mio")) {
+                kaku canonical = frontend.source_file_identity(file);
+                moshi (seen[canonical] == mu && inside_root(canonical, directory)) {
+                    seen[canonical] = hai;
+                    array.push(files, canonical);
+                }
+            }
+            ei = ei + 1;
+        }
+    }
+    array.append_all(state.workspace.disk, files);
+    state.workspace.incomplete[0] = incomplete;
+    state.workspace.scanned[0] = hai;
+    kaesu hai;
+}
+waza forget_workspace_summary(index: Workspace, file: string) -> unit {
+    kaku at = 0;
+    aida (at < len(index.summaries)) {
+        moshi (index.summaries[at].file.path == file) {
+            index.summaries[at] = index.summaries[len(index.summaries) - 1];
+            array.truncate(index.summaries, len(index.summaries) - 1);
+            kaesu;
+        }
+        at = at + 1;
+    }
+}
+waza update_workspace_disk(state: Session, file: string, exists: bool) -> unit {
+    moshi (!state.workspace.scanned[0]) { kaesu; }
+    kaku at = 0;
+    aida (at < len(state.workspace.disk)) {
+        moshi (state.workspace.disk[at] == file) {
+            moshi (!exists) {
+                state.workspace.disk[at] = state.workspace.disk[len(state.workspace.disk) - 1];
+                array.truncate(state.workspace.disk, len(state.workspace.disk) - 1);
+            }
+            kaesu;
+        }
+        at = at + 1;
+    }
+    moshi (exists && string.has_suffix(file, ".mio") && workspace_contains(state, file)) {
+        array.push(state.workspace.disk, file);
+    }
+}
+waza watched_workspace_files(state: Session, document: json.Document, params: int64) -> unit {
+    kaku changes = json.member(document, params, "changes");
+    moshi (changes < 0 || document.values[changes].kind != 4) { kaesu; }
+    kaku changed = iie;
+    kaku at = 0;
+    aida (at < len(document.values[changes].children)) {
+        kaku item = document.values[changes].children[at];
+        kaku uri = json.text(document, json.member(document, item, "uri"));
+        kaku parsed = lsp.path_from_uri(uri);
+        kaku event = json.integer(document, json.member(document, item, "type"));
+        at = at + 1;
+        moshi (event != mu) {
+            moshi (parsed.valid && string.has_suffix(parsed.path, ".mio") && event >= 1 && event <= 3) {
+                kaku file = frontend.source_file_identity(parsed.path);
+                update_workspace_disk(state, file, event != 3 && fs.is_file(file));
+                forget_workspace_summary(state.workspace, file);
+                changed = hai;
+            }
+        }
+    }
+    moshi (changed) {
+        array.truncate(state.cache, 0);
+        state.schedule[2] = state.schedule[2] + 1;
+        at = 0;
+        aida (at < len(state.documents.documents)) {
+            mark_dirty(state, state.documents.documents[at].uri);
+            at = at + 1;
+        }
+    }
+}
+waza workspace_files(state: Session) -> []WorkspaceFile {
+    kaku files: []WorkspaceFile = [];
+    kaku seen = Map[string, bool]();
+    kaku at = len(state.documents.documents) - 1;
+    aida (at >= 0) {
+        kaku doc = state.documents.documents[at];
+        kaku file = analysis_path(state, doc.uri);
+        moshi (file != "" && !string.has_prefix(file, "<embedded>/") && seen[file] == mu) {
+            seen[file] = hai;
+            array.push(files, WorkspaceFile { path: file, uri: doc.uri, open: hai });
+        }
+        at = at - 1;
+    }
+    at = 0;
+    aida (at < len(state.workspace.disk)) {
+        kaku file = state.workspace.disk[at];
+        moshi (seen[file] == mu) {
+            seen[file] = hai;
+            array.push(files, WorkspaceFile { path: file, uri: lsp.file_uri(file), open: iie });
+        }
+        at = at + 1;
+    }
+    kaesu files;
+}
+waza collect_workspace_symbols(output: []WorkspaceSymbol, uri: string, source: lsp.SemanticSource, parsed: parser.ParseResult, nodes: []int64, container: string) -> unit {
+    kaku at = 0;
+    aida (at < len(nodes)) {
+        kaku node = parsed.ast.nodes[nodes[at]];
+        kaku kind = parser.node_kind_code(node.kind);
+        kaku symbol = -1;
+        moshi (kind == 2) { symbol = 3; }
+        moshi (kind == 14) { symbol = 2; }
+        moshi (kind == 32) { symbol = 4; }
+        moshi (kind == 34) { symbol = 6; }
+        moshi (kind == 36) { symbol = 7; }
+        moshi (kind == 35) { symbol = 8; }
+        moshi (kind == 45) { symbol = 13; }
+        moshi (symbol >= 0 && node.text != "") {
+            kaku selection = lsp.semantic_selection(source, node.span, node.text, iie);
+            kaku location = string.concat("{\"uri\":", string.concat(json.quote(uri),
+                string.concat(",\"range\":", string.concat(range_json(source.buffer, node.span.start.offset, node.span.end.offset), "}"))));
+            array.push(output, WorkspaceSymbol { name: node.text, kind: lsp_symbol_kind(symbol), location: location,
+                selection: range_json(source.buffer, selection.start.offset, selection.end.offset), container: container });
+            moshi (symbol == 6 || symbol == 7) {
+                collect_workspace_symbols(output, uri, source, parsed, node.children, node.text);
+            }
+        }
+        at = at + 1;
+    }
+}
+waza workspace_summary(state: Session, file: WorkspaceFile) -> WorkspaceSummary? {
+    kaku at = 0;
+    aida (at < len(state.workspace.summaries)) {
+        kaku cached = state.workspace.summaries[at];
+        moshi (cached.file.path == file.path && cached.file.uri == file.uri && cached.file.open == file.open) { kaesu cached; }
+        at = at + 1;
+    }
+    kaku text = "";
+    moshi (file.open) {
+        kaku doc = lsp.snapshot(state.documents, file.uri);
+        moshi (doc == mu) { kaesu mu; }
+        text = doc.text;
+    } sore {
+        kaku disk = fs.read_all(file.path);
+        moshi (disk.error != mu) { kaesu mu; }
+        kaku decoded = string.from_utf8(disk.data);
+        moshi (decoded == mu) { kaesu mu; }
+        text = decoded;
+    }
+    kaku buffer = lsp.text_buffer(text);
+    kaku parsed = parser.parse_with_progress(buffer.data, state.work);
+    moshi (progress.cancelled(state.work)) { kaesu mu; }
+    kaku source = lsp.SemanticSource { path: file.path, buffer: buffer, tokens: parsed.tokens };
+    kaku names: []string = [];
+    at = 0;
+    aida (at < len(parsed.tokens)) {
+        moshi (lexer.token_kind_code(parsed.tokens[at].kind) == 2) { array.push(names, parsed.tokens[at].literal); }
+        at = at + 1;
+    }
+    kaku symbols: []WorkspaceSymbol = [];
+    moshi (parsed.root >= 0) {
+        collect_workspace_symbols(symbols, file.uri, source, parsed, parsed.ast.nodes[parsed.root].children, "");
+    }
+    kaku summary = WorkspaceSummary { file: file, symbols: symbols, names: names, scanned: len(parsed.tokens) > 0 };
+    forget_workspace_summary(state.workspace, file.path);
+    array.push(state.workspace.summaries, summary);
+    kaesu summary;
+}
+
+waza search_runes(text: string) -> []int64 {
+    kaku data = string.to_bytes(text);
+    kaku result: []int64 = [];
+    kaku at = 0;
+    aida (at < len(data)) {
+        kaku decoded = utf8.decode_one(data, at);
+        kaku value = int64(decoded.value);
+        moshi (value >= 65 && value <= 90) { value = value + 32; }
+        array.push(result, value);
+        at = at + decoded.width;
+    }
+    kaesu result;
+}
+waza workspace_score(text: string, query: []int64) -> int64 {
+    moshi (len(query) == 0) { kaesu 0; }
+    kaku name = search_runes(text);
+    kaku at = 0;
+    kaku next = 0;
+    kaku score = -1;
+    aida (at < len(name)) {
+        moshi (name[at] == query[0] && at + len(query) <= len(name)) {
+            kaku run = 1;
+            aida (run < len(query) && name[at + run] == query[run]) { run = run + 1; }
+            moshi (run == len(query)) {
+                moshi (at == 0) { kaesu 0; }
+                kaesu 1;
+            }
+        }
+        moshi (next < len(query) && name[at] == query[next]) { next = next + 1; }
+        moshi (next == len(query)) { score = 2; }
+        at = at + 1;
+    }
+    kaesu score;
+}
+kata ScoredSymbol {
+    symbol: WorkspaceSymbol;
+    score: int64;
+}
+waza workspace_symbol_less(left: ScoredSymbol, right: ScoredSymbol) -> bool {
+    moshi (left.score != right.score) { kaesu left.score < right.score; }
+    moshi (left.symbol.name != right.symbol.name) { kaesu label_less(left.symbol.name, right.symbol.name); }
+    kaesu label_less(left.symbol.location, right.symbol.location);
+}
+waza workspace_symbols_request(state: Session, document: json.Document, params: int64, id: string) -> string {
+    kaku node = json.member(document, params, "query");
+    moshi (node < 0 || document.values[node].kind != 3) { kaesu error_response(id, -32602, "missing workspace symbol query"); }
+    moshi (!workspace_inventory(state)) { kaesu error_response(id, -32800, "Request cancelled"); }
+    kaku query = search_runes(string.trim_space(json.text(document, node)));
+    kaku files = workspace_files(state);
+    kaku best: []ScoredSymbol = [];
+    kaku at = 0;
+    aida (at < len(files)) {
+        moshi (!progress.checkpoint(state.work)) { kaesu error_response(id, -32800, "Request cancelled"); }
+        kaku summary = workspace_summary(state, files[at]);
+        moshi (summary != mu) {
+            kaku si = 0;
+            aida (si < len(summary.symbols)) {
+                kaku symbol = summary.symbols[si];
+                kaku score = workspace_score(symbol.name, query);
+                kaku item = ScoredSymbol { symbol: symbol, score: score };
+                moshi (score >= 0 && (len(best) < 200 || workspace_symbol_less(item, best[199]))) {
+                    moshi (len(best) == 200) { best[199] = item; }
+                    sore { array.push(best, item); }
+                    kaku bi = len(best) - 1;
+                    aida (bi > 0 && workspace_symbol_less(item, best[bi - 1])) {
+                        best[bi] = best[bi - 1];
+                        bi = bi - 1;
+                    }
+                    best[bi] = item;
+                }
+                si = si + 1;
+            }
+        }
+        at = at + 1;
+    }
+    kaku output = string.new_builder();
+    string.write_string(output, "[");
+    at = 0;
+    aida (at < len(best)) {
+        kaku symbol = best[at].symbol;
+        moshi (at > 0) { string.write_string(output, ","); }
+        string.write_string(output, "{\"name\":");
+        string.write_string(output, json.quote(symbol.name));
+        string.write_string(output, ",\"kind\":");
+        string.write_string(output, convert.format_int(symbol.kind));
+        string.write_string(output, ",\"location\":");
+        string.write_string(output, symbol.location);
+        // SymbolInformation has no separate selection field. Supply it as
+        // metadata while keeping the standard location for older clients.
+        string.write_string(output, ",\"selectionRange\":");
+        string.write_string(output, symbol.selection);
+        moshi (symbol.container != "") {
+            string.write_string(output, ",\"containerName\":");
+            string.write_string(output, json.quote(symbol.container));
+        }
+        string.write_string(output, "}");
+        at = at + 1;
+    }
+    string.write_string(output, "]");
+    kaesu response(id, string.builder_string(output));
+}
