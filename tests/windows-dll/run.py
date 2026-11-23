@@ -197,7 +197,9 @@ def main():
             diagnostic = result.stdout+result.stderr
             require((b"error[" in diagnostic) if name in ("inferred", "duplicate") else (b"E_DLL_" in diagnostic), "explicit source or DLL diagnostic")
             require(not target.exists(), "failed build produced no DLL")
-        run("negative-target", [mio, "build", ROOT / "tests/windows-dll/fixtures/math", "--target", "linux-amd64", "--emit=dll"], success=False)
+        result = run("negative-target", [mio, "build", ROOT / "tests/windows-dll/fixtures/math", "--target", "linux-amd64", "--emit=dll", "--lang", "ja-JP"], success=False)
+        diagnostic = (result.stdout+result.stderr).decode("utf-8")
+        require("E_DLL_OPTIONS" in diagnostic and "ネイティブ" in diagnostic, "localized DLL option diagnostic")
         exe = output / "regression.exe"
         run("exe-build", [mio, "build", ROOT / "tests/windows-dll/exe.mio", "--target", "windows-amd64", "--bunko-root", ROOT / "bunko", "-o", exe])
         result = run("exe-execute", [exe])
