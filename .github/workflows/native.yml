@@ -3,7 +3,7 @@ name: Mio Native / 6 platforms
 # Version archive branches (Mio-2.1.1, Mio-2.2.0, Mio-3.0.0, ...) are validated by the same workflow.
 # (scripts/ci/native_platforms.py). Engines are reported separately: Stage A of the Linux compiler is produced by the
 # pure-Mio backend running in the Go reference VM ("go-hosted", never called a seed); every later stage and every test
-# runs as a native image on the named runner. The trusted GF4 Native Seed is not available to hosted runners and is
+# runs as a native image on the named runner. The trusted Native Seed (bootstrap-v2.1.0-seed.1) is not available to hosted runners and is
 # always recorded NOT_RUN. A required check that is not PASS fails the run; nothing here ignores a failure.
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
   pull_request:
-    branches: ['Mio-[0-9]*']
+    branches: ['Mio-[0-9]*', 'EXP/windows-amd64-c-ffi']
   push:
     branches: ['runtime-abi/**']
 permissions:
@@ -49,6 +49,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # Development packages for tests/ffi/linux-amd64-dynamic: the zlib, SQLite3 and OpenSSL shared-library modules.
+      - name: Install the native module build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev libsqlite3-dev libssl-dev
       - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
         run: go build -o build/native/refvm ./tests/windows-amd64/refvm
       - id: native
@@ -143,6 +148,9 @@ jobs:
             build/native/${{ matrix.target }}/native-differential/results.json
             build/native/${{ matrix.target }}/native-differential/*.std*
             build/native/${{ matrix.target }}/examples/
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.json
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.log
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.mio
           if-no-files-found: error
           retention-days: 7
   # The three additional targets live in their own reusable workflows (one native runner each) and are required here.

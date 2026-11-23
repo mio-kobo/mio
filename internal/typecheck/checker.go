@@ -36,6 +36,7 @@ type Checker struct {
 	globals      map[resolver.Symbol]struct{}
 	structs      map[string]StructDefinition
 	enums        map[string]EnumDefinition
+	cPrototypes  map[string]string
 	nodeTypes    map[ast.Expression]Kind
 
 	returnTypes         []Kind
@@ -382,15 +383,15 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 
 			// 基础非空类型继续使用原有相等规则
 			switch left {
-			case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString:
+			case KindInt8, KindInt16, KindInt32, KindInt, KindUint8, KindUint16, KindUint32, KindFloat32, KindFloat, KindBool, KindString, KindCPtr, KindUint64:
 				return KindBool, nil
 
 			default:
-				return KindInvalid, fmt.Errorf(
-					"operator %s does not support %s operands",
-					n.Operator,
-					left,
-				)
+				cause := fmt.Errorf("operator %s does not support %s operands", n.Operator, left)
+				if left == KindNil || left == KindUnit || left.IsArray() {
+					return KindInvalid, typeDiagnostic("E0302", "这些操作数不支持相等比较", n.Span(), left.String(), right.String(), cause)
+				}
+				return KindInvalid, cause
 			}
 
 		// 逻辑运算
@@ -478,6 +479,18 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 			return KindInvalid, err
 		}
 		target := integerKind(n.Target)
+		if n.Target == "cptr" {
+			zero, ok := n.Arguments[0].(*ast.IntegerLiteral)
+			if !ok || zero.Value != 0 || zero.Overflow {
+				return KindInvalid, fmt.Errorf("E_FFI_POINTER only cptr(0) constructs a native pointer")
+			}
+			n.Source = source.String()
+			return KindCPtr, nil
+		}
+		if n.Target == "uint64" && source.IsInteger() || n.Target == "int64" && source == KindUint64 {
+			n.Source = source.String()
+			return Kind(n.Target), nil
+		}
 		if target.IsInteger() {
 			if target == KindInt && (!source.IsInteger() || source == KindInt) && source != KindFloat && source != KindFloat32 {
 				return KindInvalid, fmt.Errorf("conversion to int64 requires float64, got %s", source)

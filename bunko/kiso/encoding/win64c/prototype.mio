@@ -1,0 +1,99 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// 显式的空指令 native stub 协议：DLL、导出名、返回类型、参数类型。
+// 复用 Mochi 名称槽，不改变文件版本、普通调用指令或 Runtime ABI。
+koukai teisu prefix = "$win64c|";
+koukai waza is_external(name: string) -> bool { kaesu string.has_prefix(name, prefix); }
+koukai waza parts(name: string) -> []string {
+    kaku result: []string = []; kaku word: []uint8 = [];
+    kaku bytes = string.to_bytes(name); kaku i = 0;
+    aida (i < len(bytes)) {
+        moshi (bytes[i] == uint8(124)) {
+            kaku text = string.from_utf8(word); moshi (text != mu) { array.push(result, text); }
+            word = [];
+        } sore { array.push(word, bytes[i]); }
+        i = i + 1;
+    }
+    kaku last = string.from_utf8(word); moshi (last != mu) { array.push(result, last); }
+    kaesu result;
+}
+koukai waza valid_name(name: string, dll: bool) -> bool {
+    kaku bytes = string.to_bytes(name); kaku i = 0;
+    moshi (len(bytes) == 0 || len(bytes) > 255) { kaesu iie; }
+    aida (i < len(bytes)) {
+        kaku c = int64(bytes[i]);
+        moshi (c < 33 || c > 126 || c == 124 || c == 47 || c == 92 || c == 58) { kaesu iie; }
+        i = i + 1;
+    }
+    moshi (dll) {
+        kaku n = len(bytes);
+        moshi (n <= 4 || bytes[n - 4] != uint8(46)) { kaesu iie; }
+        moshi (bytes[n - 3] != uint8(100) && bytes[n - 3] != uint8(68)) { kaesu iie; }
+        moshi (bytes[n - 2] != uint8(108) && bytes[n - 2] != uint8(76)) { kaesu iie; }
+        moshi (bytes[n - 1] != uint8(108) && bytes[n - 1] != uint8(76)) { kaesu iie; }
+    }
+    kaesu hai;
+}
+// 描述符与既有 Mio 标量表示一致；uint64/cptr 是不受 GC 管理的完整 64 位。
+koukai waza descriptor(name: string) -> int64 {
+    moshi (name == "unit") { kaesu 0; }
+    moshi (name == "int64" || name == "uint64" || name == "cptr") { kaesu 1; }
+    moshi (name == "float64") { kaesu 2; }
+    moshi (name == "float32") { kaesu 3; }
+    moshi (name == "int8") { kaesu 12; }
+    moshi (name == "int16") { kaesu 13; }
+    moshi (name == "int32") { kaesu 14; }
+    moshi (name == "uint8") { kaesu 15; }
+    moshi (name == "uint16") { kaesu 16; }
+    moshi (name == "uint32") { kaesu 17; }
+    kaesu -1;
+}
+koukai waza validate(name: string, count: int64, returns: bool) -> string {
+    kaku p = parts(name);
+    moshi (len(p) != 4 + count || count > 256) { kaesu "E_FFI_PROTOTYPE invalid Windows AMD64 C prototype"; }
+    moshi (p[0] != "$win64c" || !valid_name(p[1], hai) || !valid_name(p[2], iie)) { kaesu "E_FFI_NAME invalid DLL or export name"; }
+    moshi (descriptor(p[3]) < 0 || (p[3] != "unit") != returns) { kaesu "E_FFI_TYPE unsupported C return type"; }
+    kaku i = 4;
+    aida (i < len(p)) { moshi (descriptor(p[i]) <= 0) { kaesu "E_FFI_TYPE unsupported C parameter type"; } i = i + 1; }
+    moshi (dll_identity(p[1]) == "mio.dynamic.dll") {
+        moshi (count < 1 || count > 13) { kaesu "E_FFI_PROTOTYPE dynamic calls require a uint64 function token and at most 12 native arguments"; }
+        moshi (p[4] != "uint64") { kaesu "E_FFI_PROTOTYPE dynamic calls require a uint64 function token and at most 12 native arguments"; }
+    }
+    kaesu "";
+}
+
+// Exact (not hashed) fixed signature: return nibble, then up to 12 parameter
+// nibbles; argument count lives at bit 56. Distinct source types stay distinct.
+koukai waza native_tag(name: string) -> int64 {
+    kaku names: []string = ["unit", "int64", "uint64", "cptr", "float64", "float32", "int8", "uint8", "int16", "uint16", "int32", "uint32"];
+    kaku i = 0; aida (i < len(names)) { moshi (names[i] == name) { kaesu i; } i = i + 1; } kaesu -1;
+}
+koukai waza native_signature(result: string, parameters: []string) -> int64 {
+    kaku value = native_tag(result); moshi (value < 0 || len(parameters) > 12) { kaesu -1; }
+    kaku factor = 16; kaku i = 0;
+    aida (i < len(parameters)) {
+        kaku tag = native_tag(parameters[i]); moshi (tag <= 0) { kaesu -1; }
+        value = value + tag * factor; factor = factor * 16; i = i + 1;
+    }
+    kaesu value + len(parameters) * 72057594037927936;
+}
+koukai waza key(dll: string, symbol: string, result: string, parameters: []string) -> string {
+    kaku name = string.concat(prefix, string.concat(dll, string.concat("|", string.concat(symbol, string.concat("|", result)))));
+    kaku i = 0; aida (i < len(parameters)) { name = string.concat(name, string.concat("|", parameters[i])); i = i + 1; }
+    kaesu name;
+}
+
+koukai waza dll_identity(name: string) -> string {
+    kaku bytes = string.to_bytes(name); kaku i = 0;
+    aida (i < len(bytes)) { moshi (bytes[i] >= uint8(65) && bytes[i] <= uint8(90)) { bytes[i] = uint8(int64(bytes[i]) + 32); } i = i + 1; }
+    kaku result = string.from_utf8(bytes); moshi (result != mu) { kaesu result; } kaesu "";
+}
+koukai waza conflicts(left: string, right: string) -> bool {
+    kaku p = parts(left); kaku q = parts(right);
+    moshi (len(p) < 4 || len(q) < 4) { kaesu iie; }
+    moshi (dll_identity(p[1]) != dll_identity(q[1]) || p[2] != q[2]) { kaesu iie; }
+    moshi (len(p) != len(q)) { kaesu hai; }
+    kaku i = 3; aida (i < len(p)) { moshi (p[i] != q[i]) { kaesu hai; } i = i + 1; }
+    kaesu iie;
+}

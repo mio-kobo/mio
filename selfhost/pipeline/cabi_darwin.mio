@@ -1,0 +1,196 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lower";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/binary";
+yobu "kiso/encoding/mochi";
+yobu "kiso/fs";
+yobu "kiso/os";
+yobu "kiso/runtime/os/darwin";
+yobu "kiso/string";
+
+koukai waza has_c_declarations(file: mochi.File) -> bool {
+    kaku at = 0;
+    aida (at < len(file.functions)) {
+        moshi (cabi.is_external(file.functions[at].name)) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+waza c_link_error(detail: string) -> NativeBuildResult { kaesu NativeBuildResult { bytes: [], error: detail }; }
+
+waza assembly_include(out: string.StringBuilder, file: string, offset: int64, size: int64) -> unit {
+    moshi (size <= 0) { kaesu; }
+    string.write_string(out, ".incbin \"");
+    string.write_string(out, file);
+    string.write_string(out, "\", ");
+    string.write_string(out, convert.format_int(offset));
+    string.write_string(out, ", ");
+    string.write_string(out, convert.format_int(size));
+    string.write_string(out, "\n");
+}
+
+waza assembly_address(out: string.StringBuilder, register: int64, target: string, offset: int64, page: bool) -> unit {
+    kaku reg = string.concat("x", convert.format_int(register));
+    moshi (page) { string.write_string(out, "adrp "); }
+    sore { string.write_string(out, "add "); string.write_string(out, reg); string.write_string(out, ", "); }
+    string.write_string(out, reg); string.write_string(out, ", ");
+    string.write_string(out, target); string.write_string(out, "+");
+    string.write_string(out, convert.format_int(offset));
+    moshi (page) { string.write_string(out, "@PAGE\n"); }
+    sore { string.write_string(out, "@PAGEOFF\n"); }
+}
+
+waza assembly_branch(out: string.StringBuilder, opcode: string, symbol: string) -> unit {
+    string.write_string(out, opcode);
+    string.write_string(out, " _");
+    string.write_string(out, symbol);
+    string.write_string(out, "\n");
+}
+
+// 保留 Mio 发出的机器码和内部跳转。只有跨 section 的地址对和
+// BL 外部符号交给系统汇编器，分别生成 PAGE21/PAGEOFF12 和 BRANCH26。
+waza c_assembly(file: mochi.File, lowered: lower.LowerResult, code_path: string, constants_path: string, workers: bool) -> string {
+    kaku count = len(lowered.words);
+    kaku patches = array.make[int64](count, 0);
+    kaku at = 0;
+    aida (at < len(lowered.patches)) {
+        kaku patch = lowered.patches[at];
+        patches[patch.at_word] = at + 1;
+        moshi (patch.add_at_word >= 0) { patches[patch.add_at_word] = -at - 1; }
+        at = at + 1;
+    }
+    kaku calls = array.make[int64](count, -1);
+    kaku names: []string = [];
+    at = 0;
+    aida (at < len(lowered.labels)) {
+        kaku label = lowered.labels[at];
+        moshi (string.has_prefix(label.name, "cabi_call_")) {
+            // 通过原始函数 ID 读取已校验的符号。固定原型不参与泛型特化。
+            kaku id = 0; kaku bytes = string.to_bytes(label.name); kaku bi = 10;
+            aida (bi < len(bytes)) { id = id * 10 + int64(bytes[bi]) - 48; bi = bi + 1; }
+            kaku fn = file.functions[id];
+            kaku signature = cabi.signature(fn.name, fn.parameter_count, fn.returns_value);
+            calls[label.word] = len(names);
+            array.push(names, signature.symbol);
+        }
+        at = at + 1;
+    }
+    kaku exit_word = -1; at = 0;
+    aida (at < len(lowered.labels)) {
+        moshi (lowered.labels[at].name == "cabi_process_exit") { exit_word = lowered.labels[at].word; nukeru; }
+        at = at + 1;
+    }
+
+    kaku out = string.new_builder();
+    string.write_string(out, ".text\n.p2align 2\n.globl _main\n_main:\nL_mio_text:\n");
+    kaku start = 0; at = 0;
+    aida (at < count) {
+        kaku index = patches[at];
+        moshi (index != 0 || calls[at] >= 0 || at == exit_word) {
+            assembly_include(out, code_path, start * 4, (at - start) * 4);
+            moshi (at == exit_word) { assembly_branch(out, "b", "exit"); }
+            sore { moshi (calls[at] >= 0) { assembly_branch(out, "bl", names[calls[at]]); }
+            sore {
+                kaku page = index > 0;
+                moshi (!page) { index = -index; }
+                kaku patch = lowered.patches[index - 1];
+                kaku targets = ["L_mio_text", "L_mio_const", "L_mio_data"];
+                assembly_address(out, patch.register, targets[patch.target.kind], patch.target_offset, page);
+            } }
+            start = at + 1;
+        }
+        at = at + 1;
+    }
+    assembly_include(out, code_path, start * 4, (count - start) * 4);
+    string.write_string(out, ".const\n.p2align 3\nL_mio_const:\n");
+    assembly_include(out, constants_path, 0, len(lowered.constants));
+    string.write_string(out, ".data\n.p2align 3\nL_mio_data:\n");
+    moshi (lowered.globals > 0) {
+        string.write_string(out, string.concat(".space ", string.concat(convert.format_int(lowered.globals * 8), "\n")));
+    }
+    moshi (workers) {
+        kaku imports = darwin.worker_symbols();
+        at = 0;
+        aida (at < len(imports)) {
+            string.write_string(out, string.concat(".quad ", string.concat(imports[at], "\n")));
+            at = at + 1;
+        }
+        string.write_string(out, string.concat(".space ", string.concat(convert.format_int(lower.worker_root_words * 8), "\n")));
+    }
+    kaesu string.builder_string(out);
+}
+
+waza duplicate_c_prototype(file: mochi.File) -> string {
+    kaku names: []string = []; kaku prototypes: []string = []; kaku at = 0;
+    aida (at < len(file.functions)) {
+        kaku fn = file.functions[at];
+        moshi (cabi.is_external(fn.name)) {
+            kaku declaration = cabi.signature(fn.name, fn.parameter_count, fn.returns_value);
+            moshi (!declaration.valid) { kaesu "E_CABI invalid Mochi C prototype"; }
+            kaku i = 0;
+            aida (i < len(names)) {
+                moshi (!declaration.indirect && names[i] == declaration.symbol && prototypes[i] != fn.name) {
+                    kaesu string.concat("E_CABI conflicting prototypes for ", declaration.symbol);
+                }
+                i = i + 1;
+            }
+            array.push(names, declaration.symbol);
+            array.push(prototypes, fn.name);
+        }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+waza link_c_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, options: []string) -> NativeBuildResult {
+    moshi (host_target() != "darwin-arm64") { kaesu c_link_error("E_CABI linking requires an Apple Silicon macOS host"); }
+    kaku invalid = duplicate_c_prototype(file);
+    moshi (invalid != "") { kaesu c_link_error(invalid); }
+    kaku directory = string.concat(temporary_root(), string.concat("/mio-cabi-", convert.format_int(os.pid())));
+    kaku created = fs.create_dir(directory);
+    moshi (created.error != mu) { kaesu c_link_error("E_CABI cannot create a private link directory"); }
+    moshi (os.chmod(directory, 448) != 0) {
+        os.remove_dir(directory); kaesu c_link_error("E_CABI cannot protect the link directory");
+    }
+    kaku result = link_c_in_directory(file, lowered, workers, options, directory);
+    os.remove(string.concat(directory, "/code.bin"));
+    os.remove(string.concat(directory, "/const.bin"));
+    os.remove(string.concat(directory, "/program.s"));
+    os.remove(string.concat(directory, "/program"));
+    os.remove_dir(directory);
+    kaesu result;
+}
+
+waza link_c_in_directory(file: mochi.File, lowered: lower.LowerResult, workers: bool,
+    options: []string, directory: string) -> NativeBuildResult {
+    kaku code = string.concat(directory, "/code.bin");
+    kaku constants = string.concat(directory, "/const.bin");
+    kaku assembly = string.concat(directory, "/program.s");
+    kaku image = string.concat(directory, "/program");
+    kaku machine = binary.writer(len(lowered.words) * 4);
+    kaku at = 0;
+    aida (at < len(lowered.words)) {
+        moshi (binary.writer_write_u32_le(machine, lowered.words[at]) != mu) {
+            kaesu c_link_error("E_CABI cannot serialize ARM64 machine code");
+        }
+        at = at + 1;
+    }
+    kaku a = fs.write_all(code, binary.writer_bytes(machine));
+    kaku b = fs.write_all(constants, lowered.constants);
+    kaku c = fs.write_all(assembly, string.to_bytes(c_assembly(file, lowered, code, constants, workers)));
+    moshi (a.error != mu || b.error != mu || c.error != mu) { kaesu c_link_error("E_CABI cannot write linker inputs"); }
+    kaku tool = "/usr/bin/xcrun";
+    kaku arguments = [tool, "--sdk", "macosx", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+        "-Wl,-adhoc_codesign", "-o", image, assembly];
+    array.append_all(arguments, options);
+    // spawn 直接传递 argv，保留系统链接器的标准错误及退出状态。
+    kaku status = os.spawn(tool, arguments);
+    moshi (status != 0) {
+        kaesu c_link_error(string.concat("E_CABI_LINK Apple clang/linker failed with status ", convert.format_int(status)));
+    }
+    kaku linked = fs.read_all(image);
+    moshi (linked.error != mu || len(linked.data) == 0) { kaesu c_link_error("E_CABI_LINK cannot read linked executable"); }
+    kaesu NativeBuildResult { bytes: linked.data, error: "" };
+}

@@ -537,6 +537,53 @@ func TestMioTypecheckerDifferential(t *testing.T) {
 	}
 }
 
+// TestEqualityOperandContract checks == and != against the operand contract
+// asserted by the reference tests (cmd/mio/array_test.go, string_nil_test.go,
+// chant_test.go): scalars, bool and string compare; arrays, mu == mu and unit
+// operands do not. Struct, enum, Map, function and same-type nullable
+// equality are deliberately absent: they await a maintainer decision.
+func TestEqualityOperandContract(t *testing.T) {
+	cases := []struct {
+		source     string
+		wantReject bool
+	}{
+		{"chant(1 == 2);", false},
+		{"kaku a: uint8 = 1; kaku b: uint8 = 1; chant(a != b);", false},
+		{"chant(1.5 == 2.5);", false},
+		{"chant(hai == iie);", false},
+		{"chant(\"a\" == \"b\");", false},
+		{"kaku a: int64? = 1; chant(a == mu);", false},
+		{"kaku l = [1]; kaku r = [1]; chant(l == r);", true},
+		{"kaku l = [1]; chant(l != l);", true},
+		{"chant(mu == mu);", true},
+		{"waza f() -> unit { } chant(f() == f());", true},
+	}
+	sources := make([]string, len(cases))
+	for index, item := range cases {
+		sources[index] = item.source
+	}
+	actual, _ := runMioTypecheck(t, sources)
+	for index, item := range cases {
+		_, _, goErr := runGoTypecheckDetailed(item.source)
+		if (goErr != nil) != item.wantReject {
+			t.Errorf("Go error=%v, want rejection=%v: %s", goErr, item.wantReject, item.source)
+		}
+		if (actual[index].errors != 0) != item.wantReject {
+			t.Errorf("Mio errors=%d, want rejection=%v: %s", actual[index].errors, item.wantReject, item.source)
+		}
+		if item.wantReject {
+			var diag *diagnostic.Diagnostic
+			if !errors.As(goErr, &diag) || diag.Code != "E0302" {
+				t.Errorf("Go expected E0302, got %v: %s", goErr, item.source)
+			} else if len(actual[index].errorDetails) == 0 || actual[index].errorDetails[0].code != diag.Code {
+				t.Errorf("Mio expected E0302, got %+v: %s", actual[index].errorDetails, item.source)
+			} else if label, ok := diag.PrimaryLabel(); !ok || actual[index].errorDetails[0].start != label.Span.Start.Offset {
+				t.Errorf("equality diagnostic highlights different operands: %s", item.source)
+			}
+		}
+	}
+}
+
 // 测试逐表达式静态类型与泛型替换结果一致
 func TestMioTypecheckerNodeTypeDifferential(t *testing.T) {
 	sources := []string{
@@ -785,12 +832,14 @@ func TestMioTypecheckerSelfAndBunkoSources(t *testing.T) {
 		{path: "kiso/fs", directory: "bunko/kiso/fs", dependencies: []string{"kiso/array", "kiso/io"}},
 		{path: "kiso/path", directory: "bunko/kiso/path", dependencies: []string{"kiso/array", "kiso/string"}},
 		{path: "kiso/encoding/binary", directory: "bunko/kiso/encoding/binary", dependencies: []string{"kiso/array"}},
+		{path: "kiso/encoding/win64c", directory: "bunko/kiso/encoding/win64c", dependencies: []string{"kiso/array", "kiso/string"}},
 		{path: "kiso/testing", directory: "bunko/kiso/testing"},
 		{path: "selfhost/progress", directory: "selfhost/progress"},
 		{path: "selfhost/lexer", directory: "selfhost/lexer", dependencies: []string{"kiso/array", "kiso/string", "kiso/utf8", "selfhost/progress"}},
-		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
+		{path: "kiso/aot/cabi", directory: "bunko/kiso/aot/cabi", dependencies: []string{"kiso/array", "kiso/string"}},
+		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
 		{path: "selfhost/resolver", directory: "selfhost/resolver", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress"}},
-		{path: "selfhost/typecheck", directory: "selfhost/typecheck", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress", "selfhost/resolver"}},
+		{path: "selfhost/typecheck", directory: "selfhost/typecheck", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress", "selfhost/resolver"}},
 	}
 	root := typecheckRoot(t)
 	directory := t.TempDir()

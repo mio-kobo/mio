@@ -3,15 +3,43 @@ yobu "kiso/aot/arm64";
 // into unmanaged mappings. Never execute GC/TLS/locks in a fork child.
 // Caller owns its native frame and exact managed argument roots. On all paths
 // the existing exec cleanup releases every copied mapping before returning.
-waza emit_worker_spawn_invoke(code:arm64.Assembler) -> unit {
+waza emit_worker_spawn_invoke(code: arm64.Assembler) -> unit {
     // pid_t and wait status are32-bit OS outputs in zeroed native words.
-    emit(code,arm64.str_x(31,31,88));emit(code,arm64.str_x(31,31,0));
-    mov(code,5,2);mov(code,4,1);mov(code,1,0);emit(code,arm64.add_imm_x(0,31,88,iie));bits(code,2,0);bits(code,3,0);
-    arm64.assembler_bl(code,"attached_native_enter");arm64.assembler_bl(code,"worker_posix_spawn");arm64.assembler_bl(code,"attached_native_leave");
-    arm64.assembler_cbnz_x(code,0,"nativeos_worker_spawn_error");
-    arm64.assembler_label(code,"nativeos_worker_spawn_wait");emit(code,arm64.ldr_x(0,31,88));emit(code,arm64.add_imm_x(1,31,0,iie));bits(code,2,0);bits(code,3,0);bits(code,16,7);emit(code,arm64.svc(128));
-    arm64.assembler_b_cond(code,3,"nativeos_worker_spawn_status");emit(code,arm64.cmp_imm_x(0,4,iie));arm64.assembler_b_cond(code,0,"nativeos_worker_spawn_wait");
-    arm64.assembler_label(code,"nativeos_worker_spawn_error");emit(code,arm64.sub_x(0,31,0));arm64.assembler_b(code,"nativeos_exec_failure");
-    arm64.assembler_label(code,"nativeos_worker_spawn_status");emit(code,arm64.ldr_x(9,31,0));bits(code,10,127);emit(code,arm64.and_x(10,9,10));arm64.assembler_cbnz_x(code,10,"nativeos_worker_spawn_signal");emit(code,arm64.lsr_x(0,9,8));bits(code,10,255);emit(code,arm64.and_x(0,0,10));arm64.assembler_b(code,"nativeos_exec_failure");
-    arm64.assembler_label(code,"nativeos_worker_spawn_signal");emit(code,arm64.add_imm_x(0,10,128,iie));arm64.assembler_b(code,"nativeos_exec_failure");
+    emit(code, arm64.str_x(31, 31, 88));
+    emit(code, arm64.str_x(31, 31, 0));
+    mov(code, 5, 2);
+    mov(code, 4, 1);
+    mov(code, 1, 0);
+    emit(code, arm64.add_imm_x(0, 31, 88, iie));
+    bits(code, 2, 0);
+    bits(code, 3, 0);
+    arm64.assembler_bl(code, "attached_native_enter");
+    arm64.assembler_bl(code, "worker_posix_spawn");
+    arm64.assembler_bl(code, "attached_native_leave");
+    arm64.assembler_cbnz_x(code, 0, "nativeos_worker_spawn_error");
+    arm64.assembler_label(code, "nativeos_worker_spawn_wait");
+    emit(code, arm64.ldr_x(0, 31, 88));
+    emit(code, arm64.add_imm_x(1, 31, 0, iie));
+    bits(code, 2, 0);
+    bits(code, 3, 0);
+    bits(code, 16, 7);
+    emit(code, arm64.svc(128));
+    arm64.assembler_b_cond(code, 3, "nativeos_worker_spawn_status");
+    emit(code, arm64.cmp_imm_x(0, 4, iie));
+    arm64.assembler_b_cond(code, 0, "nativeos_worker_spawn_wait");
+    arm64.assembler_label(code, "nativeos_worker_spawn_error");
+    emit(code, arm64.sub_x(0, 31, 0));
+    arm64.assembler_b(code, "nativeos_exec_failure");
+    arm64.assembler_label(code, "nativeos_worker_spawn_status");
+    emit(code, arm64.ldr_x(9, 31, 0));
+    bits(code, 10, 127);
+    emit(code, arm64.and_x(10, 9, 10));
+    arm64.assembler_cbnz_x(code, 10, "nativeos_worker_spawn_signal");
+    emit(code, arm64.lsr_x(0, 9, 8));
+    bits(code, 10, 255);
+    emit(code, arm64.and_x(0, 0, 10));
+    arm64.assembler_b(code, "nativeos_exec_failure");
+    arm64.assembler_label(code, "nativeos_worker_spawn_signal");
+    emit(code, arm64.add_imm_x(0, 10, 128, iie));
+    arm64.assembler_b(code, "nativeos_exec_failure");
 }

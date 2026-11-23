@@ -5,7 +5,7 @@ import signal, struct, subprocess, sys, time, traceback, uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SEED = pathlib.Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio')
-SEED_SHA = '4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
+SEED_SHA = 'be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79'
 
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def save(path, value): path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')

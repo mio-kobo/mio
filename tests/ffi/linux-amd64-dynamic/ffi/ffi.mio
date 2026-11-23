@@ -1,0 +1,233 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// Mio FFI ABI v1 for Linux x86-64 (System V AMD64). See docs/linux-dynamic-libraries.md.
+//
+// A Library is a dlopen handle; a Symbol is a dlsym address together with the signature
+// the caller promised. Every call re-checks that the library is still loaded, that the
+// symbol was resolved with exactly the signature of the call, and that the pointer is
+// not null before the native call is issued, so an unloaded library or a mismatched
+// signature produces an error value instead of an arbitrary native call.
+//
+// Signature letters (result ":" parameters): v void, i int32, u uint32, l int64, z uint64/size_t,
+// f float32, d float64, b bool (C uint8_t 0/1), p pointer/handle (opaque cptr),
+// n buffer: the data of a []uint8, passed as the address of its first byte for the duration
+// of the call; the length is passed explicitly as the following "z" parameter.
+
+koukai teisu rtld_now = 2;
+koukai teisu rtld_local = 0;
+
+waza c_dlopen(path: []uint8, flags: int32) -> cptr = c "dlopen";
+waza c_dlsym(handle: cptr, name: []uint8) -> cptr = c "dlsym";
+waza c_dlclose(handle: cptr) -> int32 = c "dlclose";
+waza c_dlerror() -> cptr = c "dlerror";
+waza c_strlen(text: cptr) -> uint64 = c "strlen";
+waza c_copy_out(destination: []uint8, source: cptr, size: uint64) -> cptr = c "memcpy";
+
+// state[0]: 1 open, 2 closed
+koukai kata Library { path: string; handle: cptr; state: []int64; error: string; }
+koukai kata Symbol { library: Library; name: string; signature: string; shape: int64; address: cptr; error: []string; }
+
+waza failed_library(path: string, error: string) -> Library {
+    kaesu Library { path: path, handle: cptr(0), state: [0], error: error };
+}
+
+koukai waza cstring(text: string) -> []uint8 {
+    kaku bytes = string.to_bytes(text);
+    array.push(bytes, uint8(0));
+    kaesu bytes;
+}
+
+waza has_nul(text: string) -> bool {
+    kaku bytes = string.to_bytes(text);
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0)) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+// The message dlerror() holds for this thread, or fallback when there is none.
+koukai waza last_error(fallback: string) -> string {
+    kaku message = c_dlerror();
+    moshi (message == cptr(0)) { kaesu fallback; }
+    kaku size = int64(c_strlen(message));
+    moshi (size <= 0 || size > 65536) { kaesu fallback; }
+    kaku copy: []uint8 = array.make[uint8](size, uint8(0));
+    c_copy_out(copy, message, uint64(size));
+    kaku text = string.from_utf8(copy);
+    moshi (text == mu) { kaesu fallback; }
+    kaesu text;
+}
+
+koukai waza is_open(library: Library) -> bool { kaesu library.state[0] == 1; }
+
+// ffi.open: RTLD_NOW | RTLD_LOCAL. The path must be absolute or contain a "/" (for example
+// "./libfoo.so"): a bare name would silently search the system library path.
+koukai waza open(path: string) -> Library {
+    moshi (len(string.to_bytes(path)) == 0) { kaesu failed_library(path, "E_FFI_PATH empty library path"); }
+    moshi (has_nul(path)) { kaesu failed_library(path, "E_FFI_PATH library path contains a NUL byte"); }
+    moshi (!string.contains(path, "/")) {
+        kaesu failed_library(path, "E_FFI_PATH library path must be absolute or contain a directory part such as ./libname.so");
+    }
+    kaku handle = c_dlopen(cstring(path), int32(rtld_now + rtld_local));
+    moshi (handle == cptr(0)) { kaesu failed_library(path, string.concat("E_FFI_LOAD ", last_error("dlopen failed"))); }
+    kaesu Library { path: path, handle: handle, state: [1], error: "" };
+}
+
+koukai waza failed(library: Library) -> bool { kaesu library.error != ""; }
+
+waza failed_symbol(library: Library, name: string, signature: string, error: string) -> Symbol {
+    kaesu Symbol { library: library, name: name, signature: signature, shape: 0, address: cptr(0), error: [error] };
+}
+
+waza valid_signature(signature: string) -> bool {
+    kaku bytes = string.to_bytes(signature);
+    moshi (len(bytes) > 16) { kaesu iie; }
+    kaku colon = 0 - 1;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku letter = int64(bytes[at]);
+        moshi (letter == 58) {
+            moshi (colon >= 0) { kaesu iie; }
+            colon = at;
+        } sore {
+            // v i u l z f d b p n
+            moshi (!(letter == 118 || letter == 105 || letter == 117 || letter == 108 || letter == 122 || letter == 102 ||
+                    letter == 100 || letter == 98 || letter == 112 || letter == 110)) { kaesu iie; }
+            // v is only a result; the result is exactly one letter
+            moshi (letter == 118 && at != 0) { kaesu iie; }
+            moshi (letter == 110 && (colon < 0)) { kaesu iie; }
+        }
+        at = at + 1;
+    }
+    kaesu colon == 1;
+}
+
+// A signature is at most 16 letters; its shape is the injective base-12 number of its letters, so a
+// call checks one integer instead of comparing strings.
+koukai waza shape_of(signature: string) -> int64 {
+    kaku bytes = string.to_bytes(signature);
+    kaku value = 0;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku letter = int64(bytes[at]);
+        kaku code = 0;
+        moshi (letter == 58) { code = 1; }
+        moshi (letter == 118) { code = 2; }
+        moshi (letter == 105) { code = 3; }
+        moshi (letter == 117) { code = 4; }
+        moshi (letter == 108) { code = 5; }
+        moshi (letter == 122) { code = 6; }
+        moshi (letter == 102) { code = 7; }
+        moshi (letter == 100) { code = 8; }
+        moshi (letter == 98) { code = 9; }
+        moshi (letter == 112) { code = 10; }
+        moshi (letter == 110) { code = 11; }
+        value = value * 12 + code;
+        at = at + 1;
+    }
+    kaesu value;
+}
+
+// Resolve name in library. The signature records what the caller claims the C prototype to be.
+koukai waza symbol(library: Library, name: string, signature: string) -> Symbol {
+    moshi (failed(library)) { kaesu failed_symbol(library, name, signature, "E_FFI_STATE the library did not load"); }
+    moshi (!is_open(library)) { kaesu failed_symbol(library, name, signature, "E_FFI_CLOSED the library is closed"); }
+    moshi (len(string.to_bytes(name)) == 0 || has_nul(name)) { kaesu failed_symbol(library, name, signature, "E_FFI_SYMBOL invalid symbol name"); }
+    moshi (!valid_signature(signature)) { kaesu failed_symbol(library, name, signature, "E_FFI_SIGNATURE invalid signature"); }
+    // dlerror() must be cleared first: NULL is a legal symbol value in general, an error is not.
+    c_dlerror();
+    kaku address = c_dlsym(library.handle, cstring(name));
+    moshi (address == cptr(0)) {
+        kaesu failed_symbol(library, name, signature, string.concat("E_FFI_SYMBOL ", last_error("symbol not found")));
+    }
+    kaesu Symbol { library: library, name: name, signature: signature, shape: shape_of(signature), address: address, error: [""] };
+}
+
+koukai waza error(symbol: Symbol) -> string { kaesu symbol.error[0]; }
+
+// ffi.close: unload. Closing twice, or closing a library that never loaded, is an error string.
+koukai waza close(library: Library) -> string {
+    moshi (failed(library)) { kaesu "E_FFI_STATE the library did not load"; }
+    moshi (!is_open(library)) { kaesu "E_FFI_CLOSED the library is already closed"; }
+    library.state[0] = 2;
+    moshi (c_dlclose(library.handle) != int32(0)) { kaesu string.concat("E_FFI_CLOSE ", last_error("dlclose failed")); }
+    kaesu "";
+}
+
+// The gate in front of every native call. Returns hai when the call may proceed; otherwise the
+// reason is in the symbol's error slot and no native call is made.
+koukai waza ready(symbol: Symbol, shape: int64) -> bool {
+    symbol.error[0] = "";
+    moshi (symbol.address == cptr(0)) { symbol.error[0] = "E_FFI_STATE the symbol was not resolved"; kaesu iie; }
+    moshi (!is_open(symbol.library)) { symbol.error[0] = "E_FFI_CLOSED the library was unloaded"; kaesu iie; }
+    moshi (symbol.shape != shape) { symbol.error[0] = "E_FFI_SIGNATURE the call does not match the resolved signature"; kaesu iie; }
+    kaesu hai;
+}
+
+// Shapes used by the wrappers below (base-12 letter codes, see shape_of):
+//   1311 = "b:i"
+//   14072 = "d:dd"
+//   12331 = "f:ff"
+//   37 = "i:"
+//   5367 = "i:ii"
+//   65603 = "i:nzn"
+//   454 = "i:p"
+//   5459 = "i:pn"
+//   8849 = "l:ll"
+//   1284906 = "l:nznz"
+//   8915 = "l:pn"
+//   1283898 = "l:pnnz"
+//   121 = "p:"
+//   7194 = "u:nz"
+//   310 = "v:p"
+//   10650 = "z:nz"
+
+waza raw_i32_ii(f: cptr, a: int32, b: int32) -> int32 = c "mio_ffi_indirect";
+waza raw_i64_ll(f: cptr, a: int64, b: int64) -> int64 = c "mio_ffi_indirect";
+waza raw_f32_ff(f: cptr, a: float32, b: float32) -> float32 = c "mio_ffi_indirect";
+waza raw_f64_dd(f: cptr, a: float64, b: float64) -> float64 = c "mio_ffi_indirect";
+waza raw_bool_i(f: cptr, a: int32) -> bool = c "mio_ffi_indirect";
+waza raw_z_nz(f: cptr, data: []uint8, size: uint64) -> uint64 = c "mio_ffi_indirect";
+waza raw_u_nz(f: cptr, data: []uint8, size: uint64) -> uint32 = c "mio_ffi_indirect";
+waza raw_p_(f: cptr) -> cptr = c "mio_ffi_indirect";
+waza raw_i_p(f: cptr, handle: cptr) -> int32 = c "mio_ffi_indirect";
+waza raw_v_p(f: cptr, handle: cptr) -> unit = c "mio_ffi_indirect";
+waza raw_l_nznz(f: cptr, a: []uint8, an: uint64, b: []uint8, bn: uint64) -> int64 = c "mio_ffi_indirect";
+waza raw_l_pn(f: cptr, handle: cptr, text: []uint8) -> int64 = c "mio_ffi_indirect";
+waza raw_i_pn(f: cptr, handle: cptr, text: []uint8) -> int32 = c "mio_ffi_indirect";
+waza raw_l_pnnz(f: cptr, handle: cptr, text: []uint8, out: []uint8, size: uint64) -> int64 = c "mio_ffi_indirect";
+waza raw_i_nzn(f: cptr, data: []uint8, size: uint64, out: []uint8) -> int32 = c "mio_ffi_indirect";
+
+// Typed call wrappers. Each is one fixed System V prototype; the wrapper refuses to call unless
+// the symbol was resolved with the same signature string. On refusal the result is zero and
+// ffi.error(symbol) holds the reason.
+koukai waza call_i_ii(s: Symbol, a: int32, b: int32) -> int32 { moshi (!ready(s, 5367)) { kaesu int32(0); } kaesu raw_i32_ii(s.address, a, b); }
+koukai waza call_l_ll(s: Symbol, a: int64, b: int64) -> int64 { moshi (!ready(s, 8849)) { kaesu 0; } kaesu raw_i64_ll(s.address, a, b); }
+koukai waza call_f_ff(s: Symbol, a: float32, b: float32) -> float32 { moshi (!ready(s, 12331)) { kaesu float32(0.0); } kaesu raw_f32_ff(s.address, a, b); }
+koukai waza call_d_dd(s: Symbol, a: float64, b: float64) -> float64 { moshi (!ready(s, 14072)) { kaesu 0.0; } kaesu raw_f64_dd(s.address, a, b); }
+koukai waza call_b_i(s: Symbol, a: int32) -> bool { moshi (!ready(s, 1311)) { kaesu iie; } kaesu raw_bool_i(s.address, a); }
+koukai waza call_z_nz(s: Symbol, data: []uint8) -> uint64 { moshi (!ready(s, 10650)) { kaesu uint64(0); } kaesu raw_z_nz(s.address, data, uint64(len(data))); }
+koukai waza call_u_nz(s: Symbol, data: []uint8) -> uint32 { moshi (!ready(s, 7194)) { kaesu uint32(0); } kaesu raw_u_nz(s.address, data, uint64(len(data))); }
+koukai waza call_p_(s: Symbol) -> cptr { moshi (!ready(s, 121)) { kaesu cptr(0); } kaesu raw_p_(s.address); }
+koukai waza call_i_p(s: Symbol, handle: cptr) -> int32 { moshi (!ready(s, 454)) { kaesu int32(0); } kaesu raw_i_p(s.address, handle); }
+koukai waza call_v_p(s: Symbol, handle: cptr) -> unit { moshi (!ready(s, 310)) { kaesu; } raw_v_p(s.address, handle); }
+// compress/decompress: (input, output) buffers, each followed by its length
+koukai waza call_l_nznz(s: Symbol, a: []uint8, b: []uint8) -> int64 {
+    moshi (!ready(s, 1284906)) { kaesu 0; }
+    kaesu raw_l_nznz(s.address, a, uint64(len(a)), b, uint64(len(b)));
+}
+koukai waza call_l_pn(s: Symbol, handle: cptr, text: []uint8) -> int64 { moshi (!ready(s, 8915)) { kaesu 0; } kaesu raw_l_pn(s.address, handle, text); }
+koukai waza call_i_pn(s: Symbol, handle: cptr, text: []uint8) -> int32 { moshi (!ready(s, 5459)) { kaesu int32(0); } kaesu raw_i_pn(s.address, handle, text); }
+koukai waza call_l_pnnz(s: Symbol, handle: cptr, text: []uint8, out: []uint8) -> int64 {
+    moshi (!ready(s, 1283898)) { kaesu 0; }
+    kaesu raw_l_pnnz(s.address, handle, text, out, uint64(len(out)));
+}
+koukai waza call_i_nzn(s: Symbol, data: []uint8, out: []uint8) -> int32 {
+    moshi (!ready(s, 65603)) { kaesu int32(0); }
+    kaesu raw_i_nzn(s.address, data, uint64(len(data)), out);
+}
+waza raw_i_(f: cptr) -> int32 = c "mio_ffi_indirect";
+koukai waza call_i_(s: Symbol) -> int32 { moshi (!ready(s, 37)) { kaesu int32(0); } kaesu raw_i_(s.address); }

@@ -1,0 +1,119 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/macho";
+yobu "kiso/convert";
+yobu "kiso/encoding/mochi";
+yobu "kiso/string";
+
+koukai waza c_call_label(id: int64) -> string {
+    kaesu string.concat("cabi_call_", convert.format_int(id));
+}
+
+waza c_argument_size(kind: int64) -> int64 {
+    moshi (kind == 97 || kind == 98 || kind == 108) { kaesu 1; }
+    moshi (kind == 99 || kind == 100) { kaesu 2; }
+    moshi (kind == 101 || kind == 102 || kind == 105) { kaesu 4; }
+    kaesu 8;
+}
+
+waza c_floating(kind: int64) -> bool { kaesu kind == 105 || kind == 106; }
+
+waza c_align(value: int64, boundary: int64) -> int64 {
+    kaesu ((value + boundary - 1) / boundary) * boundary;
+}
+
+// Darwin 的窄整数寄存器参数由调用者扩展到 Wn。回到 Mio 时，
+// 有符号返回值扩展到整个 Xn，浮点返回值原样搬回整数寄存器。
+waza c_normalize(code: arm64.Assembler, kind: int64, reg: int64, returned: bool) -> unit {
+    kaku word = 0;
+    moshi (kind == 97) { word = 318767104 + 7 * 1024; }
+    moshi (kind == 99) { word = 318767104 + 15 * 1024; }
+    moshi (returned && (kind == 97 || kind == 99 || kind == 101)) {
+        word = 2470445056 + (c_argument_size(kind) * 8 - 1) * 1024;
+    }
+    moshi (kind == 98 || kind == 100 || (returned && kind == 102)) {
+        word = 1392508928 + (c_argument_size(kind) * 8 - 1) * 1024;
+    }
+    moshi (kind == 108) { word = 1392508928; }
+    moshi (word != 0) { emit(code, arm64.Instruction { word: uint32(word + reg * 33), error: mu }); }
+}
+
+waza c_store_stack(code: arm64.Assembler, size: int64, offset: int64) -> unit {
+    moshi (size == 1) { emit(code, arm64.strb_w(9, 31, offset)); }
+    moshi (size == 2) { emit(code, arm64.strh_w(9, 31, offset)); }
+    moshi (size == 4) { emit(code, arm64.str_w(9, 31, offset)); }
+    moshi (size == 8) { emit(code, arm64.str_x(9, 31, offset)); }
+}
+
+waza c_stack_bytes(signature: cabi.Signature) -> int64 {
+    kaku gp = 0; kaku fp = 0; kaku bytes = 0; kaku at = 0;
+    aida (at < len(signature.parameters)) {
+        kaku kind = signature.parameters[at]; kaku size = c_argument_size(kind);
+        moshi ((c_floating(kind) && fp >= 8) || (!c_floating(kind) && gp >= 8)) { bytes = c_align(bytes, size) + size; }
+        moshi (c_floating(kind)) { fp = fp + 1; } sore { gp = gp + 1; }
+        at = at + 1;
+    }
+    kaesu c_align(bytes, 16);
+}
+
+waza emit_c_body(code: arm64.Assembler, patches: []macho.AddressPatch, signature: cabi.Signature,
+    id: int64, data_base: int64) -> unit {
+    // Mio 的入口已经把参数保存在 x21 的机器字槽中。两组 C 参数寄存器
+    // 独立耗尽；溢出参数按原型顺序、自然对齐紧凑放在 Darwin 栈上。
+    kaku workers = worker_roots_enabled(code);
+    moshi (workers) { wr_poll(code, patches, data_base, "gc_block_enter"); }
+    kaku frame = c_stack_bytes(signature);
+    moshi (frame > 0) { emit(code, arm64.sub_imm_x(31, 31, frame, iie)); }
+    kaku gp = 0; kaku fp = 0; kaku offset = 0; kaku at = 0;
+    aida (at < len(signature.parameters)) {
+        kaku kind = signature.parameters[at]; kaku size = c_argument_size(kind);
+        moshi (c_floating(kind) && fp < 8) {
+            emit(code, arm64.ldr_x(9, 21, at * 8));
+            kaku bits = 505872384; moshi (kind == 106) { bits = 2657550336; }
+            emit(code, arm64.Instruction { word: uint32(bits + 9 * 32 + fp), error: mu });
+            fp = fp + 1;
+        } sore { moshi (!c_floating(kind) && gp < 8) {
+            emit(code, arm64.ldr_x(gp, 21, at * 8));
+            c_normalize(code, kind, gp, iie);
+            gp = gp + 1;
+        } sore {
+            offset = c_align(offset, size);
+            emit(code, arm64.ldr_x(9, 21, at * 8));
+            c_store_stack(code, size, offset);
+            offset = offset + size;
+        } }
+        at = at + 1;
+    }
+    arm64.assembler_label(code, c_call_label(id));
+    // Mach-O 的 ARM64_RELOC_BRANCH26 由系统汇编器从此槽产生。
+    emit(code, arm64.bl(0));
+    moshi (frame > 0) { emit(code, arm64.add_imm_x(31, 31, frame, iie)); }
+    moshi (signature.result == 105) { emit(code, arm64.Instruction { word: uint32(505806848), error: mu }); }
+    moshi (signature.result == 106) { emit(code, arm64.Instruction { word: uint32(2657484800), error: mu }); }
+    c_normalize(code, signature.result, 0, hai);
+    moshi (workers) {
+        // C 看不到 Mio 引用；已有调用帧的根继续由 GC 管理。进入阻塞区
+        // 释放当前 mutator，返回时用私有栈槽跨协议调用保留 C 结果。
+        emit(code, arm64.sub_imm_x(31, 31, 16, iie)); emit(code, arm64.str_x(0, 31, 0));
+        wr_current(code, patches, data_base); wr_call(code, "gc_block_leave");
+        emit(code, arm64.ldr_x(0, 31, 0)); emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    }
+}
+
+// 只有会解析 C 符号的 Mach-O 链接路径可以开启这个入口。
+koukai waza compile_with_c(file: mochi.File, capacity: int64, gc_stress: bool,
+    observation: bool, start: int64, join: int64, retention: bool) -> LowerResult {
+    moshi (start < 0 && join < 0) {
+        kaesu compile_worker_target(file, gc_stress, capacity, observation, iie, iie, [],
+            iie, 32768, iie, iie, 0, hai, 0, hai);
+    }
+    moshi (start < 0 || start >= len(file.functions) || join < 0 || join >= len(file.functions) || start == join) {
+        kaesu failed(LowerError.InvalidFunction());
+    }
+    kaku s = file.functions[start]; kaku j = file.functions[join];
+    moshi (s.parameter_count != 1 || !s.returns_value || j.parameter_count != 1 || !j.returns_value) {
+        kaesu failed(LowerError.InvalidFunction());
+    }
+    kaesu compile_worker_target(file, gc_stress, capacity, observation, iie, hai, [start, join, -1, -1],
+        iie, 32768, iie, iie, 3, retention, 0, hai);
+}

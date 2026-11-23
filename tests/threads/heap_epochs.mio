@@ -1,0 +1,94 @@
+// Heap-exclusion classification of the cooperative thread build (Darwin ARM64 lowers every heap opcode behind a stopped Epoch unless the
+// opcode is proven not to need one). Each function below has a fixed expectation, checked statically by tests/threads/heap_epochs.py on the
+// emitted image (cross-build is enough), and every function is also run here from several threads and must give the same result as the
+// same call made sequentially: an Epoch-free body that raced with an Epoch-owning mutation would corrupt one of these totals.
+//   scalar_loop   only non-captured, non-nullable scalar locals          -> no heap-entering site
+//   read_loop     scalar locals plus array index/len and struct field reads -> no heap-entering site
+//   alloc_only    struct/array literals bound to non-captured locals plus field/index reads -> no heap-entering site (allocation lock build)
+//   ref_store     array element stores and an allocation                  -> keeps its sites
+//   captured      a local shared with a closure (captured cell)           -> keeps its sites
+//   nullable      a nullable scalar local (assignment boxes)              -> keeps its sites
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Point { x: int64; y: int64; }
+
+waza scalar_loop(n: int64) -> int64 {
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) { t = t + i * 3 - (i / 7); i = i + 1; }
+    kaesu t;
+}
+
+waza read_loop(a: []int64, p: Point, n: int64) -> int64 {
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) { t = t + a[i - (i / len(a)) * len(a)] + p.x + len(a); i = i + 1; }
+    kaesu t;
+}
+
+waza alloc_only(n: int64) -> int64 {
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) { kaku p = Point { x: i, y: i + 1 }; kaku a = [i, i + 2, i + 3]; t = t + p.y + a[2] - a[0]; i = i + 1; }
+    kaesu t;
+}
+
+waza ref_store(n: int64) -> int64 {
+    kaku cell = [0, 0];
+    kaku i = 0;
+    aida (i < n) { cell[0] = cell[0] + i; cell[1] = cell[0]; i = i + 1; }
+    kaesu cell[1];
+}
+
+waza captured(n: int64) -> int64 {
+    kaku total = 0;
+    kaku add = waza (v: int64) -> int64 { total = total + v; kaesu total; };
+    kaku i = 0;
+    aida (i < n) { add(i); i = i + 1; }
+    kaesu total;
+}
+
+waza nullable(n: int64) -> int64 {
+    kaku maybe: int64? = mu;
+    kaku t = 0;
+    kaku i = 0;
+    aida (i < n) {
+        moshi (i - (i / 3) * 3 == 0) { maybe = i; }
+        moshi (maybe != mu) { t = t + 1; }
+        i = i + 1;
+    }
+    kaesu t;
+}
+
+waza shared_array() -> []int64 { kaku a: []int64 = []; kaku i = 0; aida (i < 64) { array.push(a, i * i); i = i + 1; } kaesu a; }
+
+waza mixed(seed: int64) -> int64 {
+    kaku a = shared_array();
+    kaku p = Point { x: seed, y: seed + 1 };
+    kaku t = scalar_loop(20000 + seed) + read_loop(a, p, 20000) + alloc_only(30000 + seed) + ref_store(5000 + seed) + captured(3000) + nullable(3000);
+    kaesu t;
+}
+
+waza w0() -> int64 { kaesu mixed(0); }
+waza w1() -> int64 { kaesu mixed(1); }
+waza w2() -> int64 { kaesu mixed(2); }
+waza w3() -> int64 { kaesu mixed(3); }
+
+waza run() -> int64 {
+    kaku h0 = thread.start(w0);
+    kaku h1 = thread.start(w1);
+    kaku h2 = thread.start(w2);
+    kaku h3 = thread.start(w3);
+    kaku r0 = thread.join(h0);
+    kaku r1 = thread.join(h1);
+    kaku r2 = thread.join(h2);
+    kaku r3 = thread.join(h3);
+    chant(r0 == mixed(0));
+    chant(r1 == mixed(1));
+    chant(r2 == mixed(2));
+    chant(r3 == mixed(3));
+    chant(r0 + r1 + r2 + r3);
+    kaesu 0;
+}
+run();

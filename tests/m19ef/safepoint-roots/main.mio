@@ -10,54 +10,239 @@ yobu "kiso/os";
 yobu "kiso/fs";
 yobu "kiso/string";
 // Native handshake/root-transfer witness only, not managed collection acceptance.
-waza n(f:ir.Function,r:int64,v:int64) -> unit {ir.put(f,ir.constant,r,0,0,v);}
-waza ld(f:ir.Function,r:int64,off:int64) -> unit {ir.put(f,ir.load,r,0,0,off);}
-waza st(f:ir.Function,off:int64,r:int64) -> unit {ir.put(f,ir.store,0,0,r,off);}
-waza set(f:ir.Function,off:int64,v:int64) -> unit {n(f,31,v);st(f,off,31);}
-waza ok(f:ir.Function,r:int64) -> unit {ir.branch(f,ir.nonzero,r,"fail");}
-waza eq(f:ir.Function,a:int64,b:int64) -> unit {ir.put(f,ir.equal,30,a,b,0);ir.branch(f,ir.zero,30,"fail");}
-waza finish(f:ir.Function) -> unit {ir.branch(f,ir.label,0,"fail");n(f,31,90);ir.call(f,gc.abort_runtime,31,[31]);}
+waza n(f: ir.Function, r: int64, v: int64) -> unit { ir.put(f, ir.constant, r, 0, 0, v); }
+waza ld(f: ir.Function, r: int64, off: int64) -> unit { ir.put(f, ir.load, r, 0, 0, off); }
+waza st(f: ir.Function, off: int64, r: int64) -> unit { ir.put(f, ir.store, 0, 0, r, off); }
+waza set(f: ir.Function, off: int64, v: int64) -> unit {
+    n(f, 31, v);
+    st(f, off, 31);
+}
+waza ok(f: ir.Function, r: int64) -> unit { ir.branch(f, ir.nonzero, r, "fail"); }
+waza eq(f: ir.Function, a: int64, b: int64) -> unit {
+    ir.put(f, ir.equal, 30, a, b, 0);
+    ir.branch(f, ir.zero, 30, "fail");
+}
+waza finish(f: ir.Function) -> unit {
+    ir.branch(f, ir.label, 0, "fail");
+    n(f, 31, 90);
+    ir.call(f, gc.abort_runtime, 31, [31]);
+}
 waza worker() -> ir.Function {
-    kaku f=ir.function("worker");ld(f,31,gc.thread_imports);ir.put(f,ir.imports,0,31,0,0);ir.invoke_function(f,"thread_enter",1,[0]);ok(f,1);ir.put(f,ir.address,10,0,0,512);ir.put(f,ir.address,11,0,0,640);ir.put(f,ir.address,12,0,0,656);n(f,13,0);n(f,14,1);
-    ir.branch(f,ir.label,0,"loop");ir.put(f,ir.add,13,13,14,0);st(f,576,13);ir.put(f,ir.store,0,11,13,8);ir.put(f,ir.store,0,12,13,8);
-    ir.put(f,ir.store,0,10,11,16);ir.put(f,ir.store,0,10,12,24);ir.invoke_function(f,"gc_poll",1,[0,10]);ok(f,1);ir.put(f,ir.acquire_load,1,0,0,gc.thread_stop);ir.branch(f,ir.zero,1,"loop");
-    ir.invoke_function(f,"thread_leave",1,[0]);ok(f,1);ir.put(f,ir.result,0,1,0,0);finish(f);kaesu f;
+    kaku f = ir.function("worker");
+    ld(f, 31, gc.thread_imports);
+    ir.put(f, ir.imports, 0, 31, 0, 0);
+    ir.invoke_function(f, "thread_enter", 1, [0]);
+    ok(f, 1);
+    ir.put(f, ir.address, 10, 0, 0, 512);
+    ir.put(f, ir.address, 11, 0, 0, 640);
+    ir.put(f, ir.address, 12, 0, 0, 656);
+    n(f, 13, 0);
+    n(f, 14, 1);
+    ir.branch(f, ir.label, 0, "loop");
+    ir.put(f, ir.add, 13, 13, 14, 0);
+    st(f, 576, 13);
+    ir.put(f, ir.store, 0, 11, 13, 8);
+    ir.put(f, ir.store, 0, 12, 13, 8);
+    ir.put(f, ir.store, 0, 10, 11, 16);
+    ir.put(f, ir.store, 0, 10, 12, 24);
+    ir.invoke_function(f, "gc_poll", 1, [0, 10]);
+    ok(f, 1);
+    ir.put(f, ir.acquire_load, 1, 0, 0, gc.thread_stop);
+    ir.branch(f, ir.zero, 1, "loop");
+    ir.invoke_function(f, "thread_leave", 1, [0]);
+    ok(f, 1);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    finish(f);
+    kaesu f;
 }
 waza visitor() -> ir.Function {
-    kaku f=ir.function("visit");ld(f,2,gc.thread_user);ir.put(f,ir.load,3,1,0,0);n(f,4,1234);eq(f,3,4);
-    ir.put(f,ir.load,3,2,0,8);n(f,4,1);ir.put(f,ir.add,3,3,4,0);ir.put(f,ir.store,0,2,3,8);
-    ir.put(f,ir.load,3,2,0,0);ir.put(f,ir.add,3,3,1,0);ir.put(f,ir.store,0,2,3,0);n(f,3,0);ir.put(f,ir.result,0,3,0,0);finish(f);kaesu f;
+    kaku f = ir.function("visit");
+    ld(f, 2, gc.thread_user);
+    ir.put(f, ir.load, 3, 1, 0, 0);
+    n(f, 4, 1234);
+    eq(f, 3, 4);
+    ir.put(f, ir.load, 3, 2, 0, 8);
+    n(f, 4, 1);
+    ir.put(f, ir.add, 3, 3, 4, 0);
+    ir.put(f, ir.store, 0, 2, 3, 8);
+    ir.put(f, ir.load, 3, 2, 0, 0);
+    ir.put(f, ir.add, 3, 3, 1, 0);
+    ir.put(f, ir.store, 0, 2, 3, 0);
+    n(f, 3, 0);
+    ir.put(f, ir.result, 0, 3, 0, 0);
+    finish(f);
+    kaesu f;
 }
 waza configure() -> ir.Function {
     // ctx, registry, imports are supplied by native caller; all owned buffers
     // are separate from the managed heap and all user-global slots.
-    kaku f=ir.function("configure");set(f,gc.thread_version,3);st(f,gc.thread_registry,1);st(f,gc.thread_imports,2);
-    ir.put(f,ir.address,3,0,0,288);st(f,gc.thread_mutex,3);ir.put(f,ir.address,3,0,0,352);st(f,gc.thread_condition,3);
-    ir.put(f,ir.address,3,0,0,512);st(f,gc.thread_shadow,3);n(f,4,0);ir.put(f,ir.store,0,3,4,0);n(f,4,2);ir.put(f,ir.store,0,3,4,8);ir.put(f,ir.address,4,0,0,640);ir.put(f,ir.store,0,3,4,16);ir.put(f,ir.address,4,0,0,656);ir.put(f,ir.store,0,3,4,24);
-    set(f,640,1234);set(f,656,1234);ir.function_pointer(f,"worker",3);st(f,gc.thread_entry,3);n(f,1,0);ir.put(f,ir.result,0,1,0,0);kaesu f;
+    kaku f = ir.function("configure");
+    set(f, gc.thread_version, 3);
+    st(f, gc.thread_registry, 1);
+    st(f, gc.thread_imports, 2);
+    ir.put(f, ir.address, 3, 0, 0, 288);
+    st(f, gc.thread_mutex, 3);
+    ir.put(f, ir.address, 3, 0, 0, 352);
+    st(f, gc.thread_condition, 3);
+    ir.put(f, ir.address, 3, 0, 0, 512);
+    st(f, gc.thread_shadow, 3);
+    n(f, 4, 0);
+    ir.put(f, ir.store, 0, 3, 4, 0);
+    n(f, 4, 2);
+    ir.put(f, ir.store, 0, 3, 4, 8);
+    ir.put(f, ir.address, 4, 0, 0, 640);
+    ir.put(f, ir.store, 0, 3, 4, 16);
+    ir.put(f, ir.address, 4, 0, 0, 656);
+    ir.put(f, ir.store, 0, 3, 4, 24);
+    set(f, 640, 1234);
+    set(f, 656, 1234);
+    ir.function_pointer(f, "worker", 3);
+    st(f, gc.thread_entry, 3);
+    n(f, 1, 0);
+    ir.put(f, ir.result, 0, 1, 0, 0);
+    kaesu f;
 }
 waza run() -> ir.Function {
-    kaku f=ir.function("run");ld(f,2,gc.thread_imports);ir.function_pointer(f,"visit",3);ir.put(f,ir.store,0,2,3,darwin.thread_symbol_count*8);
-    set(f,gc.thread_version,3);ir.put(f,ir.address,10,0,0,400);st(f,gc.thread_registry,10);n(f,1,3);ir.put(f,ir.store,0,10,1,0);ir.put(f,ir.address,11,0,0,1024);st(f,gc.thread_user,11);
-    ir.put(f,ir.address,20,0,0,2048);ir.put(f,ir.address,21,0,0,4096);ir.invoke_function(f,"configure",1,[20,10,2]);ok(f,1);ir.invoke_function(f,"configure",1,[21,10,2]);ok(f,1);
-    ir.invoke_function(f,"thread_open",1,[20]);ok(f,1);ir.invoke_function(f,"thread_open",1,[21]);ok(f,1);
-    ir.invoke_function(f,"platform_now",12,[]);n(f,13,1000000000);ir.put(f,ir.add,12,12,13,0);
-    ir.branch(f,ir.label,0,"ready");ir.put(f,ir.acquire_load,1,10,0,8);n(f,2,2);ir.put(f,ir.equal,1,1,2,0);ir.branch(f,ir.nonzero,1,"epochs");ir.invoke_function(f,"platform_now",1,[]);ir.put(f,ir.less_unsigned,1,1,12,0);ir.branch(f,ir.zero,1,"fail");ir.branch(f,ir.jump,0,"ready");
-    ir.branch(f,ir.label,0,"epochs");n(f,22,0);
-    ir.branch(f,ir.label,0,"epoch");n(f,1,0);ir.invoke_function(f,"gc_begin",2,[0,1]);ok(f,2);ir.put(f,ir.load,23,20,0,576);ir.put(f,ir.load,24,21,0,576);
-    n(f,1,0);ir.put(f,ir.store,0,11,1,0);ir.put(f,ir.store,0,11,1,8);ir.invoke_function(f,"gc_scan_roots",1,[0]);ok(f,1);ir.put(f,ir.load,1,11,0,8);n(f,2,4);eq(f,1,2);
-    n(f,25,1000);ir.branch(f,ir.label,0,"hold");n(f,1,1);ir.put(f,ir.subtract,25,25,1,0);ir.branch(f,ir.nonzero,25,"hold");ir.put(f,ir.load,1,20,0,576);eq(f,1,23);ir.put(f,ir.load,1,21,0,576);eq(f,1,24);
-    ir.invoke_function(f,"gc_end",1,[0]);ok(f,1);n(f,1,1);ir.put(f,ir.add,22,22,1,0);n(f,2,1000);ir.put(f,ir.less_unsigned,1,22,2,0);ir.branch(f,ir.nonzero,1,"epoch");
-    ir.invoke_function(f,"thread_close",1,[20]);ok(f,1);ir.invoke_function(f,"thread_close",1,[21]);ok(f,1);ir.put(f,ir.acquire_load,1,10,0,8);n(f,2,0);eq(f,1,2);ir.put(f,ir.acquire_load,1,10,0,32);eq(f,1,2);ir.put(f,ir.load,1,20,0,576);ir.branch(f,ir.zero,1,"fail");ir.put(f,ir.load,2,21,0,576);ir.branch(f,ir.zero,2,"fail");
-    ir.put(f,ir.store,0,11,22,16);ir.put(f,ir.store,0,11,1,24);ir.put(f,ir.store,0,11,2,32);n(f,1,40);ir.call(f,103,2,[11,1]);n(f,1,0);ir.call(f,gc.abort_runtime,2,[1]);finish(f);kaesu f;
+    kaku f = ir.function("run");
+    ld(f, 2, gc.thread_imports);
+    ir.function_pointer(f, "visit", 3);
+    ir.put(f, ir.store, 0, 2, 3, darwin.thread_symbol_count * 8);
+    set(f, gc.thread_version, 3);
+    ir.put(f, ir.address, 10, 0, 0, 400);
+    st(f, gc.thread_registry, 10);
+    n(f, 1, 3);
+    ir.put(f, ir.store, 0, 10, 1, 0);
+    ir.put(f, ir.address, 11, 0, 0, 1024);
+    st(f, gc.thread_user, 11);
+    ir.put(f, ir.address, 20, 0, 0, 2048);
+    ir.put(f, ir.address, 21, 0, 0, 4096);
+    ir.invoke_function(f, "configure", 1, [20, 10, 2]);
+    ok(f, 1);
+    ir.invoke_function(f, "configure", 1, [21, 10, 2]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_open", 1, [20]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_open", 1, [21]);
+    ok(f, 1);
+    ir.invoke_function(f, "platform_now", 12, []);
+    n(f, 13, 1000000000);
+    ir.put(f, ir.add, 12, 12, 13, 0);
+    ir.branch(f, ir.label, 0, "ready");
+    ir.put(f, ir.acquire_load, 1, 10, 0, 8);
+    n(f, 2, 2);
+    ir.put(f, ir.equal, 1, 1, 2, 0);
+    ir.branch(f, ir.nonzero, 1, "epochs");
+    ir.invoke_function(f, "platform_now", 1, []);
+    ir.put(f, ir.less_unsigned, 1, 1, 12, 0);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.branch(f, ir.jump, 0, "ready");
+    ir.branch(f, ir.label, 0, "epochs");
+    n(f, 22, 0);
+    ir.branch(f, ir.label, 0, "epoch");
+    n(f, 1, 0);
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ok(f, 2);
+    ir.put(f, ir.load, 23, 20, 0, 576);
+    ir.put(f, ir.load, 24, 21, 0, 576);
+    n(f, 1, 0);
+    ir.put(f, ir.store, 0, 11, 1, 0);
+    ir.put(f, ir.store, 0, 11, 1, 8);
+    ir.invoke_function(f, "gc_scan_roots", 1, [0]);
+    ok(f, 1);
+    ir.put(f, ir.load, 1, 11, 0, 8);
+    n(f, 2, 4);
+    eq(f, 1, 2);
+    n(f, 25, 1000);
+    ir.branch(f, ir.label, 0, "hold");
+    n(f, 1, 1);
+    ir.put(f, ir.subtract, 25, 25, 1, 0);
+    ir.branch(f, ir.nonzero, 25, "hold");
+    ir.put(f, ir.load, 1, 20, 0, 576);
+    eq(f, 1, 23);
+    ir.put(f, ir.load, 1, 21, 0, 576);
+    eq(f, 1, 24);
+    ir.invoke_function(f, "gc_end", 1, [0]);
+    ok(f, 1);
+    n(f, 1, 1);
+    ir.put(f, ir.add, 22, 22, 1, 0);
+    n(f, 2, 1000);
+    ir.put(f, ir.less_unsigned, 1, 22, 2, 0);
+    ir.branch(f, ir.nonzero, 1, "epoch");
+    ir.invoke_function(f, "thread_close", 1, [20]);
+    ok(f, 1);
+    ir.invoke_function(f, "thread_close", 1, [21]);
+    ok(f, 1);
+    ir.put(f, ir.acquire_load, 1, 10, 0, 8);
+    n(f, 2, 0);
+    eq(f, 1, 2);
+    ir.put(f, ir.acquire_load, 1, 10, 0, 32);
+    eq(f, 1, 2);
+    ir.put(f, ir.load, 1, 20, 0, 576);
+    ir.branch(f, ir.zero, 1, "fail");
+    ir.put(f, ir.load, 2, 21, 0, 576);
+    ir.branch(f, ir.zero, 2, "fail");
+    ir.put(f, ir.store, 0, 11, 22, 16);
+    ir.put(f, ir.store, 0, 11, 1, 24);
+    ir.put(f, ir.store, 0, 11, 2, 32);
+    n(f, 1, 40);
+    ir.call(f, 103, 2, [11, 1]);
+    n(f, 1, 0);
+    ir.call(f, gc.abort_runtime, 2, [1]);
+    finish(f);
+    kaesu f;
 }
-waza fatal(text:string) -> unit {fs.write_all("/dev/stderr",string.to_bytes(string.concat(text,"\n")));os.exit(1);}
-waza emit(c:arm64.Assembler,word:arm64.Instruction) -> unit {moshi(arm64.assembler_emit(c,word)!=mu){fatal("instruction");}}
-waza addr(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64,offset:int64) -> unit {kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:offset,register:r});}
+waza fatal(text: string) -> unit {
+    fs.write_all("/dev/stderr", string.to_bytes(string.concat(text, "\n")));
+    os.exit(1);
+}
+waza emit(c: arm64.Assembler, word: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, word) != mu) { fatal("instruction"); } }
+waza addr(c: arm64.Assembler, p: []macho.AddressPatch, r: int64, offset: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: offset, register: r });
+}
 waza main() -> unit {
-    kaku args=os.arguments();moshi(len(args)!=2){fatal("output path");}kaku f=gc.cooperative_thread_program(iie);array.append_all(f,gc.safepoint_program(2));array.append_all(f,darwin.thread_platform_program());array.push(f,worker());array.push(f,visitor());array.push(f,configure());array.push(f,run());
-    kaku bindings=darwin.thread_bindings();array.push(bindings,ir.Binding {operation:gc.gc_visit_root_operation,slot:darwin.thread_symbol_count,arguments:[0,1],result_bits:64});
-    kaku c=arm64.assembler();kaku p:[]macho.AddressPatch=[];addr(c,p,7,2052*8);addr(c,p,0,(2052+darwin.thread_symbol_count+1)*8);emit(c,arm64.str_x(7,0,gc.thread_imports));arm64.assembler_bl(c,"sp_run");emit(c,arm64.ret());
-    kaku err=aarch64.emit_program(c,f,bindings,darwin.thread_symbol_count+1,"sp");moshi(err!=""){fatal(err);}kaku words=arm64.assembler_assemble(c);moshi(words.error!=mu){fatal("assembly");}
-    kaku image=darwin.executable_appended(macho.ImageSpec {words:words.words,constants:[],globals:2052,patches:p},darwin.thread_symbols(),1025);moshi(image.error!=""){fatal(image.error);}kaku signed=sign.adhoc_linked(image.bytes);moshi(signed.error!=""){fatal(signed.error);}moshi(fs.write_all(args[1],signed.bytes).error!=mu || os.chmod(args[1],448)!=0){fatal("write");}
-}main();
+    kaku args = os.arguments();
+    moshi (len(args) != 2) {
+        fatal("output path");
+    }
+    kaku f = gc.cooperative_thread_program(iie);
+    array.append_all(f, gc.safepoint_program(2));
+    array.append_all(f, darwin.thread_platform_program());
+    array.push(f, worker());
+    array.push(f, visitor());
+    array.push(f, configure());
+    array.push(f, run());
+    kaku bindings = darwin.thread_bindings();
+    array.push(bindings, ir.Binding {
+            operation: gc.gc_visit_root_operation, slot: darwin.thread_symbol_count, arguments: [0, 1], result_bits: 64 });
+    kaku c = arm64.assembler();
+    kaku p: []macho.AddressPatch = [];
+    addr(c, p, 7, 2052 * 8);
+    addr(c, p, 0, (2052 + darwin.thread_symbol_count + 1) * 8);
+    emit(c, arm64.str_x(7, 0, gc.thread_imports));
+    arm64.assembler_bl(c, "sp_run");
+    emit(c, arm64.ret());
+    kaku err = aarch64.emit_program(c, f, bindings, darwin.thread_symbol_count + 1, "sp");
+    moshi (err != "") {
+        fatal(err);
+    }
+    kaku words = arm64.assembler_assemble(c);
+    moshi (words.error != mu) {
+        fatal("assembly");
+    }
+    kaku image = darwin.executable_appended(macho.ImageSpec {
+            words: words.words, constants: [], globals: 2052, patches: p }, darwin.thread_symbols(), 1025);
+    moshi (image.error != "") {
+        fatal(image.error);
+    }
+    kaku signed = sign.adhoc_linked(image.bytes);
+    moshi (signed.error != "") {
+        fatal(signed.error);
+    }
+    moshi (fs.write_all(args[1], signed.bytes).error != mu || os.chmod(args[1], 448) != 0) {
+        fatal("write");
+    }
+} main();

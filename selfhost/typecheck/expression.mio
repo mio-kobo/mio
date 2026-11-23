@@ -467,6 +467,9 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
             moshi (type_kind_code(env.result.types[left].kind) == 12 && declared_nullable_operand(env, file_id, node.children[1])) { nil_ok = hai; }
             moshi (type_kind_code(env.result.types[right].kind) == 12 && declared_nullable_operand(env, file_id, node.children[0])) { nil_ok = hai; }
             moshi (left != right && !nil_ok) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[1], left, right, "equality operands must have the same type"); kaesu 0; }
+            // Equality is not defined on mu itself, unit, or arrays (the Go reference frontend rejects them as well).
+            kaku equality_kind = type_kind_code(env.result.types[left].kind);
+            moshi (left == right && (equality_kind == 12 || equality_kind == 13 || equality_kind == 15)) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0302", file_id, node_id, left, right, "equality is not defined for these operands"); kaesu 0; }
             kaesu set_node_type(env, file_id, node_id, builtin_type(env, "bool"));
         }
         moshi (node.operator == 20 || node.operator == 21) {
@@ -481,6 +484,24 @@ waza check_expression(env: TypeEnvironment, file_id: int64, node_id: int64) -> i
         moshi (len(node.children) != 2) { add_type_error(env, TypeErrorKind.ArgumentCount(), "E0303", file_id, node_id, 0, 0, "conversion expects one argument"); kaesu 0; }
         kaku source = check_expression(env, file_id, node.children[1]);
         kaku target = builtin_type(env, node.text);
+        moshi (node.text == "cptr") {
+            kaku operand = node_at(env, file_id, node.children[1]);
+            moshi (parser.node_kind_code(operand.kind) == 5 && operand.integer == 0) {
+                kaesu set_node_type(env, file_id, node_id, target);
+            }
+            add_type_error(env, TypeErrorKind.InvalidConversion(), "E_CABI", file_id, node_id, target, source,
+                "cptr(0) constructs null; other C pointers must come from C");
+            kaesu 0;
+        }
+        moshi (node.text == "uint64") {
+            moshi (is_integer(env.result, source)) { kaesu set_node_type(env, file_id, node_id, target); }
+            add_type_error(env, TypeErrorKind.InvalidConversion(), "E_CABI", file_id, node_id, target, source,
+                "uint64 conversion requires a Mio integer");
+            kaesu 0;
+        }
+        moshi (node.text == "int64" && source == builtin_type(env, "uint64")) {
+            kaesu set_node_type(env, file_id, node_id, target);
+        }
         moshi (target == 0 || !is_numeric(env.result, target) || !is_numeric(env.result, source) || target == source) { add_type_error(env, TypeErrorKind.InvalidConversion(), "E0302", file_id, node_id, target, source, "invalid numeric conversion"); kaesu 0; }
         kaesu set_node_type(env, file_id, node_id, target);
     }

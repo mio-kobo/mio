@@ -1,94 +1,362 @@
-// Shadow descriptor v2 is additive: direct frames retain their original ABI.
-koukai teisu shadow_indirect_factor=4294967296;
-// Cooperative thread/registry ABI v3 extends the v2 registry with two words.
-// The object heap ABI is unchanged. All algorithms here emit neutral runtime IR.
-koukai teisu gc_registry_bytes=80;
-koukai teisu gc_registry_epoch=48;
-koukai teisu gc_registry_owner=56;
-koukai teisu gc_registry_heartbeat=64;
-koukai teisu gc_registry_phase=72;
-koukai teisu gc_handshake=1;
-koukai teisu gc_stopped=2;
-koukai teisu thread_gc_parked=3;
-koukai teisu gc_visit_root_operation=200;
-waza gc_heartbeat(f:ir.Function,registry:int64) -> unit {
-    ir.put(f,ir.load,29,registry,0,gc_registry_heartbeat);tconstant(f,30,1);ir.put(f,ir.add,29,29,30,0);ir.put(f,ir.release_store,0,registry,29,gc_registry_heartbeat);
+// Shadow descriptor v2 为增量扩展：直接帧保留原有 ABI。
+koukai teisu shadow_indirect_factor = 4294967296;
+
+// 协作式线程/注册表 ABI v3 在 v2 注册表基础上扩展了两个字；对象堆 ABI 保持不变。
+// 此处所有算法均生成中立 Runtime IR。
+koukai teisu gc_registry_bytes = 80;
+koukai teisu gc_registry_epoch = 48;
+koukai teisu gc_registry_owner = 56;
+koukai teisu gc_registry_heartbeat = 64;
+koukai teisu gc_registry_phase = 72;
+koukai teisu gc_handshake = 1;
+koukai teisu gc_stopped = 2;
+koukai teisu thread_gc_parked = 3;
+koukai teisu gc_visit_root_operation = 200;
+
+waza gc_heartbeat(f: ir.Function, registry: int64) -> unit {
+    ir.put(f, ir.load, 29, registry, 0, gc_registry_heartbeat);
+    tconstant(f, 30, 1);
+    ir.put(f, ir.add, 29, 29, 30, 0);
+    ir.put(f, ir.release_store, 0, registry, 29, gc_registry_heartbeat);
 }
+
 waza gc_park_locked_program() -> ir.Function {
-    // Caller holds this context's mutex. On return it still holds that mutex.
-    // A returned error never authorizes resuming while a collector is active.
-    // A stuck owner causes process abort rather than releasing live root frames.
-    kaku f=ir.function("gc_park_locked");tprepare(f);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"idle");ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.nonzero,12,"idle");
-    tload(f,13,thread_progress);ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);ir.put(f,ir.release_store,0,0,12,thread_ack_epoch);ir.put(f,ir.copy,19,12,0,0);tpublish(f,thread_progress,thread_gc_parked);
-    ir.put(f,ir.acquire_load,15,10,0,gc_registry_heartbeat);ir.invoke_function(f,"platform_now",14,[]);tconstant(f,16,30000000000);ir.put(f,ir.add,14,14,16,0);
-    ir.branch(f,ir.label,0,"wait");ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"resumed");ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);ir.put(f,ir.release_store,0,0,12,thread_ack_epoch);ir.put(f,ir.copy,19,12,0,0);
-    ir.put(f,ir.acquire_load,12,10,0,gc_registry_heartbeat);ir.put(f,ir.equal,17,12,15,0);ir.branch(f,ir.nonzero,17,"check_deadline");ir.put(f,ir.copy,15,12,0,0);ir.invoke_function(f,"platform_now",14,[]);ir.put(f,ir.add,14,14,16,0);
-    ir.branch(f,ir.label,0,"check_deadline");ir.invoke_function(f,"platform_now",17,[]);ir.put(f,ir.less_unsigned,18,17,14,0);ir.branch(f,ir.zero,18,"fatal");
-    tload(f,2,thread_mutex);tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",5,[3,2,4]);ir.branch(f,ir.zero,5,"wait");tcheck(f,5,1,"wait");terror(f,5);ir.branch(f,ir.jump,0,"wait");
-    // Publish the Epoch actually acknowledged while parked. A new owner can
-    // publish its next Epoch after our zero-owner load; do not label that
-    // unacknowledged future request as a completed park.
-    ir.branch(f,ir.label,0,"resumed");ir.put(f,ir.release_store,0,0,19,thread_seen_epoch);ir.put(f,ir.release_store,0,0,13,thread_progress);treturn(f,0);
-    ir.branch(f,ir.label,0,"idle");treturn(f,0);
-    ir.branch(f,ir.label,0,"fatal");tconstant(f,1,81);ir.call(f,abort_runtime,1,[1]);treturn(f,3);kaesu f;
+    // 并发前置条件：调用方必须已持有本上下文的 thread_mutex，返回时仍保持持有该锁。
+    // 若返回错误，绝不允许在收集器仍处于活跃状态时恢复执行；
+    // 若收集器持有者卡死（600 秒无心跳推进），将直接中止进程（abort_runtime），避免释放仍在使用中的根帧。
+    kaku f = ir.function("gc_park_locked");
+    tprepare(f);
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.branch(f, ir.zero, 11, "idle");
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.nonzero, 12, "idle");
+
+    tload(f, 13, thread_progress);
+    ir.put(f, ir.acquire_load, 12, 10, 0, gc_registry_epoch);
+    ir.put(f, ir.release_store, 0, 0, 12, thread_ack_epoch);
+    ir.put(f, ir.copy, 19, 12, 0, 0);
+    tpublish(f, thread_progress, thread_gc_parked);
+
+    ir.put(f, ir.acquire_load, 15, 10, 0, gc_registry_heartbeat);
+    ir.invoke_function(f, "platform_now", 14, []);
+    tconstant(f, 16, 600000000000);
+    ir.put(f, ir.add, 14, 14, 16, 0);
+
+    ir.branch(f, ir.label, 0, "wait");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.branch(f, ir.zero, 11, "resumed");
+    ir.put(f, ir.acquire_load, 12, 10, 0, gc_registry_epoch);
+    ir.put(f, ir.release_store, 0, 0, 12, thread_ack_epoch);
+    ir.put(f, ir.copy, 19, 12, 0, 0);
+
+    ir.put(f, ir.acquire_load, 12, 10, 0, gc_registry_heartbeat);
+    ir.put(f, ir.equal, 17, 12, 15, 0);
+    ir.branch(f, ir.nonzero, 17, "check_deadline");
+    ir.put(f, ir.copy, 15, 12, 0, 0);
+    ir.invoke_function(f, "platform_now", 14, []);
+    ir.put(f, ir.add, 14, 14, 16, 0);
+
+    ir.branch(f, ir.label, 0, "check_deadline");
+    ir.invoke_function(f, "platform_now", 17, []);
+    ir.put(f, ir.less_unsigned, 18, 17, 14, 0);
+    ir.branch(f, ir.zero, 18, "fatal");
+
+    tload(f, 2, thread_mutex);
+    tload(f, 3, thread_condition);
+    tconstant(f, 4, 10000000);
+    ir.invoke_function(f, "platform_wait", 5, [3, 2, 4]);
+    ir.branch(f, ir.zero, 5, "wait");
+    tcheck(f, 5, 1, "wait");
+    terror(f, 5);
+    ir.branch(f, ir.jump, 0, "wait");
+
+    // 仅发布在停靠期间实际确认过的 Epoch：在读取到 owner 为 0 之后，新的收集器可能立即发起下一轮 Epoch，
+    // 不能把尚未确认的新请求误标记为已完成停靠。
+    ir.branch(f, ir.label, 0, "resumed");
+    ir.put(f, ir.release_store, 0, 0, 19, thread_seen_epoch);
+    ir.put(f, ir.release_store, 0, 0, 13, thread_progress);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "idle");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "fatal");
+    tconstant(f, 1, 81);
+    ir.call(f, abort_runtime, 1, [1]);
+    treturn(f, 3);
+    kaesu f;
 }
+
 waza gc_poll_program() -> ir.Function {
-    kaku f=ir.function("gc_poll");tprepare(f);ir.put(f,ir.release_store,0,0,1,thread_shadow);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.zero,11,"done");ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.nonzero,12,"done");
-    tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"fatal");ir.invoke_function(f,"gc_park_locked",3,[0]);ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"fatal");ir.put(f,ir.result,0,3,0,0);
-    ir.branch(f,ir.label,0,"done");treturn(f,0);
-    ir.branch(f,ir.label,0,"fatal");tconstant(f,1,82);ir.call(f,abort_runtime,1,[1]);treturn(f,3);kaesu f;
+    kaku f = ir.function("gc_poll");
+    tprepare(f);
+    ir.put(f, ir.release_store, 0, 0, 1, thread_shadow);
+
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.nonzero, 12, "done");
+
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "fatal");
+    ir.invoke_function(f, "gc_park_locked", 3, [0]);
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "fatal");
+    ir.put(f, ir.result, 0, 3, 0, 0);
+
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "fatal");
+    tconstant(f, 1, 82);
+    ir.call(f, abort_runtime, 1, [1]);
+    treturn(f, 3);
+    kaesu f;
 }
+
 waza gc_end_program() -> ir.Function {
-    // The owner retains the registry lock throughout root scanning/collection.
-    // Unpublish before wake; periodic waits also observe release if wake fails.
-    kaku f=ir.function("gc_end");tprepare(f);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.zero,12,"not_owner");
-    tconstant(f,12,0);ir.put(f,ir.release_store,0,10,12,gc_registry_phase);ir.put(f,ir.release_store,0,10,12,gc_registry_owner);ir.put(f,ir.load,11,10,0,32);
-    ir.branch(f,ir.label,0,"wake");ir.branch(f,ir.zero,11,"unlock");ir.put(f,ir.load,12,11,0,thread_condition);ir.invoke_function(f,"platform_wake_all",1,[12]);ir.put(f,ir.load,11,11,0,thread_next);ir.branch(f,ir.jump,0,"wake");
-    ir.branch(f,ir.label,0,"unlock");ir.invoke_function(f,"registry_unlock",1,[0]);treturn(f,0);
-    ir.branch(f,ir.label,0,"not_owner");treturn(f,4);kaesu f;
+    // 收集器在整个根扫描与回收期间始终持有注册表锁。
+    // 必须先清除 phase 与 owner 再逐个唤醒等待线程；即便唤醒丢失，等待线程的 10 ms 周期性检查也会观察到释放。
+    kaku f = ir.function("gc_end");
+    tprepare(f);
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "not_owner");
+
+    tconstant(f, 12, 0);
+    ir.put(f, ir.release_store, 0, 10, 12, gc_registry_phase);
+    ir.put(f, ir.release_store, 0, 10, 12, gc_registry_owner);
+    ir.put(f, ir.load, 11, 10, 0, 32);
+
+    ir.branch(f, ir.label, 0, "wake");
+    ir.branch(f, ir.zero, 11, "unlock");
+    ir.put(f, ir.load, 12, 11, 0, thread_condition);
+    ir.invoke_function(f, "platform_wake_all", 1, [12]);
+    ir.put(f, ir.load, 11, 11, 0, thread_next);
+    ir.branch(f, ir.jump, 0, "wake");
+
+    ir.branch(f, ir.label, 0, "unlock");
+    ir.invoke_function(f, "registry_unlock", 1, [0]);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "not_owner");
+    treturn(f, 4);
+    kaesu f;
 }
+
 waza gc_begin_program() -> ir.Function {
-    kaku f=ir.function("gc_begin");tprepare(f);ir.invoke_function(f,"gc_poll",2,[0,1]);ir.invoke_function(f,"registry_lock",2,[0]);ir.branch(f,ir.nonzero,2,"failed_lock");
-    tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.branch(f,ir.nonzero,11,"unlock_failed");ir.put(f,ir.load,11,10,0,gc_registry_epoch);tconstant(f,12,-1);ir.put(f,ir.equal,12,11,12,0);ir.branch(f,ir.nonzero,12,"unlock_failed");
-    tconstant(f,12,1);ir.put(f,ir.add,11,11,12,0);ir.put(f,ir.release_store,0,10,11,gc_registry_epoch);ir.put(f,ir.release_store,0,0,11,thread_ack_epoch);ir.put(f,ir.release_store,0,10,12,gc_registry_phase);ir.put(f,ir.release_store,0,10,0,gc_registry_owner);gc_heartbeat(f,10);
-    ir.invoke_function(f,"platform_now",20,[]);tconstant(f,21,1000000000);ir.put(f,ir.add,20,20,21,0);
-    ir.branch(f,ir.label,0,"retry");ir.put(f,ir.load,13,10,0,32);tconstant(f,14,0);
-    ir.branch(f,ir.label,0,"member");ir.branch(f,ir.zero,13,"check_all");ir.put(f,ir.equal,15,13,0,0);ir.branch(f,ir.nonzero,15,"next");
-    ir.put(f,ir.acquire_load,15,13,0,thread_error);ir.branch(f,ir.nonzero,15,"abort");ir.put(f,ir.load,16,13,0,thread_mutex);ir.invoke_function(f,"platform_trylock",17,[16]);tcheck(f,17,1,"not_ready");ir.branch(f,ir.nonzero,17,"abort");
-    ir.put(f,ir.acquire_load,18,13,0,thread_progress);tcheck(f,18,thread_parked,"ack_blocked");tcheck(f,18,thread_finished,"ack_blocked");
-    tcheck(f,18,thread_gc_parked,"check_parked_ack");ir.branch(f,ir.jump,0,"not_ready_unlock");
-    ir.branch(f,ir.label,0,"check_parked_ack");ir.put(f,ir.acquire_load,18,13,0,thread_ack_epoch);ir.put(f,ir.equal,18,18,11,0);ir.branch(f,ir.nonzero,18,"ready_unlock");
-    ir.branch(f,ir.label,0,"not_ready_unlock");tconstant(f,14,1);ir.branch(f,ir.jump,0,"ready_unlock");
-    ir.branch(f,ir.label,0,"ack_blocked");ir.put(f,ir.release_store,0,13,11,thread_ack_epoch);
-    ir.branch(f,ir.label,0,"ready_unlock");ir.call(f,ir.mutex_unlock,17,[16]);ir.branch(f,ir.nonzero,17,"abort");ir.branch(f,ir.jump,0,"next");
-    ir.branch(f,ir.label,0,"not_ready");tconstant(f,14,1);
-    ir.branch(f,ir.label,0,"next");ir.put(f,ir.load,13,13,0,thread_next);ir.branch(f,ir.jump,0,"member");
-    ir.branch(f,ir.label,0,"check_all");ir.branch(f,ir.zero,14,"stopped");ir.invoke_function(f,"platform_now",21,[]);ir.put(f,ir.less_unsigned,21,21,20,0);ir.branch(f,ir.nonzero,21,"retry");
-    ir.branch(f,ir.label,0,"abort");ir.invoke_function(f,"gc_end",2,[0]);treturn(f,2);
-    ir.branch(f,ir.label,0,"stopped");tconstant(f,12,gc_stopped);ir.put(f,ir.release_store,0,10,12,gc_registry_phase);gc_heartbeat(f,10);treturn(f,0);
-    ir.branch(f,ir.label,0,"unlock_failed");ir.invoke_function(f,"registry_unlock",2,[0]);treturn(f,4);
-    ir.branch(f,ir.label,0,"failed_lock");ir.put(f,ir.result,0,2,0,0);kaesu f;
+    kaku f = ir.function("gc_begin");
+    tprepare(f);
+    ir.invoke_function(f, "gc_poll", 2, [0, 1]);
+    ir.invoke_function(f, "registry_lock", 2, [0]);
+    ir.branch(f, ir.nonzero, 2, "failed_lock");
+
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.branch(f, ir.nonzero, 11, "unlock_failed");
+    ir.put(f, ir.load, 11, 10, 0, gc_registry_epoch);
+    tconstant(f, 12, -1);
+    ir.put(f, ir.equal, 12, 11, 12, 0);
+    ir.branch(f, ir.nonzero, 12, "unlock_failed");
+
+    tconstant(f, 12, 1);
+    ir.put(f, ir.add, 11, 11, 12, 0);
+    ir.put(f, ir.release_store, 0, 10, 11, gc_registry_epoch);
+    ir.put(f, ir.release_store, 0, 0, 11, thread_ack_epoch);
+    ir.put(f, ir.release_store, 0, 10, 12, gc_registry_phase);
+    ir.put(f, ir.release_store, 0, 10, 0, gc_registry_owner);
+    gc_heartbeat(f, 10);
+
+    // 给予所有线程 120 秒到达 Safepoint：过载机器上线程可能数秒得不到调度
+    ir.invoke_function(f, "platform_now", 20, []);
+    tconstant(f, 21, 120000000000);
+    ir.put(f, ir.add, 20, 20, 21, 0);
+
+    ir.branch(f, ir.label, 0, "retry");
+    ir.put(f, ir.load, 13, 10, 0, 32);
+    tconstant(f, 14, 0);
+
+    ir.branch(f, ir.label, 0, "member");
+    ir.branch(f, ir.zero, 13, "check_all");
+    ir.put(f, ir.equal, 15, 13, 0, 0);
+    ir.branch(f, ir.nonzero, 15, "next");
+
+    ir.put(f, ir.acquire_load, 15, 13, 0, thread_error);
+    ir.branch(f, ir.nonzero, 15, "abort");
+    ir.put(f, ir.load, 16, 13, 0, thread_mutex);
+    ir.invoke_function(f, "platform_trylock", 17, [16]);
+    tcheck(f, 17, 1, "not_ready");
+    ir.branch(f, ir.nonzero, 17, "abort");
+
+    ir.put(f, ir.acquire_load, 18, 13, 0, thread_progress);
+    tcheck(f, 18, thread_parked, "ack_blocked");
+    tcheck(f, 18, thread_finished, "ack_blocked");
+    tcheck(f, 18, thread_gc_parked, "check_parked_ack");
+    ir.branch(f, ir.jump, 0, "not_ready_unlock");
+
+    ir.branch(f, ir.label, 0, "check_parked_ack");
+    ir.put(f, ir.acquire_load, 18, 13, 0, thread_ack_epoch);
+    ir.put(f, ir.equal, 18, 18, 11, 0);
+    ir.branch(f, ir.nonzero, 18, "ready_unlock");
+
+    ir.branch(f, ir.label, 0, "not_ready_unlock");
+    tconstant(f, 14, 1);
+    ir.branch(f, ir.jump, 0, "ready_unlock");
+
+    ir.branch(f, ir.label, 0, "ack_blocked");
+    ir.put(f, ir.release_store, 0, 13, 11, thread_ack_epoch);
+
+    ir.branch(f, ir.label, 0, "ready_unlock");
+    ir.call(f, ir.mutex_unlock, 17, [16]);
+    ir.branch(f, ir.nonzero, 17, "abort");
+    ir.branch(f, ir.jump, 0, "next");
+
+    ir.branch(f, ir.label, 0, "not_ready");
+    tconstant(f, 14, 1);
+
+    ir.branch(f, ir.label, 0, "next");
+    ir.put(f, ir.load, 13, 13, 0, thread_next);
+    ir.branch(f, ir.jump, 0, "member");
+
+    ir.branch(f, ir.label, 0, "check_all");
+    ir.branch(f, ir.zero, 14, "stopped");
+    ir.invoke_function(f, "platform_now", 21, []);
+    ir.put(f, ir.less_unsigned, 21, 21, 20, 0);
+    ir.branch(f, ir.nonzero, 21, "retry");
+
+    ir.branch(f, ir.label, 0, "abort");
+    ir.invoke_function(f, "gc_end", 2, [0]);
+    treturn(f, 2);
+
+    ir.branch(f, ir.label, 0, "stopped");
+    tconstant(f, 12, gc_stopped);
+    ir.put(f, ir.release_store, 0, 10, 12, gc_registry_phase);
+    gc_heartbeat(f, 10);
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "unlock_failed");
+    ir.invoke_function(f, "registry_unlock", 2, [0]);
+    treturn(f, 4);
+
+    ir.branch(f, ir.label, 0, "failed_lock");
+    ir.put(f, ir.result, 0, 2, 0, 0);
+    kaesu f;
 }
-waza gc_scan_frames_program(max_roots:int64) -> ir.Function {
-    // arg0 coordinator, arg1 exact compiler-produced frame. Descriptor low32
-    // is total entries, high32 is the leading indirect global-slot count.
-    // Old direct frames keep high32==0. Globals are dereferenced only here,
-    // after gc_scan_roots verified stopped ownership and every thread epoch.
-    kaku f=ir.function("gc_scan_frames");tprepare(f);ir.put(f,ir.copy,10,1,0,0);tconstant(f,11,0);
-    ir.branch(f,ir.label,0,"frame");ir.branch(f,ir.zero,10,"done");tconstant(f,12,1024);ir.put(f,ir.less_unsigned,12,11,12,0);ir.branch(f,ir.zero,12,"invalid");tconstant(f,12,1);ir.put(f,ir.add,11,11,12,0);
-    ir.put(f,ir.load,12,10,0,8);tconstant(f,20,shadow_indirect_factor);ir.put(f,ir.divide_unsigned,19,12,20,0);ir.put(f,ir.multiply,20,19,20,0);ir.put(f,ir.subtract,12,12,20,0);ir.put(f,ir.less_unsigned,20,12,19,0);ir.branch(f,ir.nonzero,20,"invalid");tconstant(f,13,max_roots+1);ir.put(f,ir.less_unsigned,13,12,13,0);ir.branch(f,ir.zero,13,"invalid");tconstant(f,13,0);ir.put(f,ir.address,14,10,0,16);tconstant(f,15,8);
-    ir.branch(f,ir.label,0,"value");ir.put(f,ir.equal,16,13,12,0);ir.branch(f,ir.nonzero,16,"next_frame");ir.put(f,ir.multiply,16,13,15,0);ir.put(f,ir.add,16,14,16,0);ir.put(f,ir.load,17,16,0,0);ir.put(f,ir.less_unsigned,20,13,19,0);ir.branch(f,ir.zero,20,"direct_value");ir.branch(f,ir.zero,17,"invalid");ir.put(f,ir.load,17,17,0,0);ir.branch(f,ir.label,0,"direct_value");ir.call(f,gc_visit_root_operation,18,[0,17,2]);ir.branch(f,ir.nonzero,18,"invalid");tconstant(f,16,1);ir.put(f,ir.add,13,13,16,0);ir.branch(f,ir.jump,0,"value");
-    ir.branch(f,ir.label,0,"next_frame");ir.put(f,ir.load,10,10,0,0);ir.branch(f,ir.jump,0,"frame");
-    ir.branch(f,ir.label,0,"done");treturn(f,0);
-    ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+
+waza gc_scan_frames_program(max_roots: int64) -> ir.Function {
+    // arg0 为协调器句柄，arg1 为编译器生成的精确 Shadow Frame 链头。
+    // 描述符低 32 位为总条目数，高 32 位为前导间接全局槽位计数（旧直接帧保持高 32 位为 0）。
+    // 仅在 gc_scan_roots 验证已持有 stopped 所有权及全部线程 Epoch 后，才解引用全局槽位。
+    kaku f = ir.function("gc_scan_frames");
+    tprepare(f);
+    ir.put(f, ir.copy, 10, 1, 0, 0);
+    tconstant(f, 11, 0);
+
+    ir.branch(f, ir.label, 0, "frame");
+    ir.branch(f, ir.zero, 10, "done");
+    tconstant(f, 12, 1024);
+    ir.put(f, ir.less_unsigned, 12, 11, 12, 0);
+    ir.branch(f, ir.zero, 12, "invalid");
+    tconstant(f, 12, 1);
+    ir.put(f, ir.add, 11, 11, 12, 0);
+
+    ir.put(f, ir.load, 12, 10, 0, 8);
+    tconstant(f, 20, shadow_indirect_factor);
+    ir.put(f, ir.divide_unsigned, 19, 12, 20, 0);
+    ir.put(f, ir.multiply, 20, 19, 20, 0);
+    ir.put(f, ir.subtract, 12, 12, 20, 0);
+    ir.put(f, ir.less_unsigned, 20, 12, 19, 0);
+    ir.branch(f, ir.nonzero, 20, "invalid");
+    tconstant(f, 13, max_roots + 1);
+    ir.put(f, ir.less_unsigned, 13, 12, 13, 0);
+    ir.branch(f, ir.zero, 13, "invalid");
+    tconstant(f, 13, 0);
+    ir.put(f, ir.address, 14, 10, 0, 16);
+    tconstant(f, 15, 8);
+
+    ir.branch(f, ir.label, 0, "value");
+    ir.put(f, ir.equal, 16, 13, 12, 0);
+    ir.branch(f, ir.nonzero, 16, "next_frame");
+    ir.put(f, ir.multiply, 16, 13, 15, 0);
+    ir.put(f, ir.add, 16, 14, 16, 0);
+    ir.put(f, ir.load, 17, 16, 0, 0);
+    ir.put(f, ir.less_unsigned, 20, 13, 19, 0);
+    ir.branch(f, ir.zero, 20, "direct_value");
+    ir.branch(f, ir.zero, 17, "invalid");
+    ir.put(f, ir.load, 17, 17, 0, 0);
+
+    ir.branch(f, ir.label, 0, "direct_value");
+    ir.call(f, gc_visit_root_operation, 18, [0, 17, 2]);
+    ir.branch(f, ir.nonzero, 18, "invalid");
+    tconstant(f, 16, 1);
+    ir.put(f, ir.add, 13, 13, 16, 0);
+    ir.branch(f, ir.jump, 0, "value");
+
+    ir.branch(f, ir.label, 0, "next_frame");
+    ir.put(f, ir.load, 10, 10, 0, 0);
+    ir.branch(f, ir.jump, 0, "frame");
+
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
+
 waza gc_scan_roots_program() -> ir.Function {
-    kaku f=ir.function("gc_scan_roots");tprepare(f);tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.zero,12,"invalid");ir.put(f,ir.acquire_load,11,10,0,gc_registry_phase);tcheck(f,11,gc_stopped,"scan");treturn(f,4);
-    ir.branch(f,ir.label,0,"scan");tload(f,13,thread_member);ir.branch(f,ir.nonzero,13,"members");tload(f,14,thread_shadow);ir.invoke_function(f,"gc_scan_frames",15,[0,14,1]);ir.branch(f,ir.nonzero,15,"invalid");ir.branch(f,ir.label,0,"members");ir.put(f,ir.load,11,10,0,32);ir.put(f,ir.acquire_load,12,10,0,gc_registry_epoch);
-    ir.branch(f,ir.label,0,"member");ir.branch(f,ir.zero,11,"done");ir.put(f,ir.acquire_load,13,11,0,thread_ack_epoch);ir.put(f,ir.equal,13,13,12,0);ir.branch(f,ir.zero,13,"invalid");ir.put(f,ir.acquire_load,14,11,0,thread_shadow);ir.invoke_function(f,"gc_scan_frames",15,[0,14,1]);ir.branch(f,ir.nonzero,15,"invalid");gc_heartbeat(f,10);ir.put(f,ir.load,11,11,0,thread_next);ir.branch(f,ir.jump,0,"member");
-    ir.branch(f,ir.label,0,"done");treturn(f,0);
-    ir.branch(f,ir.label,0,"invalid");treturn(f,4);kaesu f;
+    kaku f = ir.function("gc_scan_roots");
+    tprepare(f);
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "invalid");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_phase);
+    tcheck(f, 11, gc_stopped, "scan");
+    treturn(f, 4);
+
+    ir.branch(f, ir.label, 0, "scan");
+    tload(f, 13, thread_member);
+    ir.branch(f, ir.nonzero, 13, "members");
+    tload(f, 14, thread_shadow);
+    ir.invoke_function(f, "gc_scan_frames", 15, [0, 14, 1]);
+    ir.branch(f, ir.nonzero, 15, "invalid");
+
+    ir.branch(f, ir.label, 0, "members");
+    ir.put(f, ir.load, 11, 10, 0, 32);
+    ir.put(f, ir.acquire_load, 12, 10, 0, gc_registry_epoch);
+
+    ir.branch(f, ir.label, 0, "member");
+    ir.branch(f, ir.zero, 11, "done");
+    ir.put(f, ir.acquire_load, 13, 11, 0, thread_ack_epoch);
+    ir.put(f, ir.equal, 13, 13, 12, 0);
+    ir.branch(f, ir.zero, 13, "invalid");
+    ir.put(f, ir.acquire_load, 14, 11, 0, thread_shadow);
+    ir.invoke_function(f, "gc_scan_frames", 15, [0, 14, 1]);
+    ir.branch(f, ir.nonzero, 15, "invalid");
+    gc_heartbeat(f, 10);
+    ir.put(f, ir.load, 11, 11, 0, thread_next);
+    ir.branch(f, ir.jump, 0, "member");
+
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    kaesu f;
 }
-koukai waza safepoint_program(max_roots_per_frame:int64) -> []ir.Function {
-    kaesu [gc_park_locked_program(),gc_poll_program(),gc_begin_program(),gc_end_program(),gc_scan_frames_program(max_roots_per_frame),gc_scan_roots_program()];
+
+koukai waza safepoint_program(max_roots_per_frame: int64) -> []ir.Function {
+    kaesu [
+        gc_park_locked_program(),
+        gc_poll_program(),
+        gc_begin_program(),
+        gc_end_program(),
+        gc_scan_frames_program(max_roots_per_frame),
+        gc_scan_roots_program()
+    ];
 }

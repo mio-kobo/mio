@@ -14,14 +14,14 @@ kata ResolverState {
 waza add_scope(state: ResolverState, kind: ScopeKind, parent: int64, owner_function: int64) -> int64 {
     kaku id = len(state.result.scopes);
     array.push(state.result.scopes, Scope {
-        id: id,
-        kind: kind,
-        parent: parent,
-        owner_function: owner_function,
-        symbols: array.with_capacity[int64](8),
-        keys: array.make[string](16, ""),
-        values: array.make[int64](16, -1)
-    });
+            id: id,
+            kind: kind,
+            parent: parent,
+            owner_function: owner_function,
+            symbols: array.with_capacity[int64](8),
+            keys: array.make[string](16, ""),
+            values: array.make[int64](16, -1)
+        });
     kaesu id;
 }
 
@@ -60,7 +60,11 @@ waza grow_scope_table(state: ResolverState, scope_id: int64) -> unit {
     array.truncate(scope.keys, 0);
     array.truncate(scope.values, 0);
     kaku index = 0;
-    aida (index < capacity) { array.push(scope.keys, ""); array.push(scope.values, -1); index = index + 1; }
+    aida (index < capacity) {
+        array.push(scope.keys, "");
+        array.push(scope.values, -1);
+        index = index + 1;
+    }
     index = 0;
     aida (index < len(old_keys)) {
         moshi (old_keys[index] != "") { scope_insert_table(scope, old_keys[index], old_values[index]); }
@@ -93,13 +97,13 @@ waza resolve_name(state: ResolverState, scope_id: int64, name: string) -> int64 
 waza add_error(state: ResolverState, kind: ResolveErrorKind, file_id: int64, node_id: int64, name: string, related: NodeRef) -> unit {
     kaku span = state.result.files[file_id].ast.nodes[node_id].span;
     array.push(state.result.errors, ResolveError {
-        kind: kind,
-        file_id: file_id,
-        node_id: node_id,
-        span: span,
-        name: name,
-        related: related
-    });
+            kind: kind,
+            file_id: file_id,
+            node_id: node_id,
+            span: span,
+            name: name,
+            related: related
+        });
 }
 
 waza define_symbol(state: ResolverState, file_id: int64, node_id: int64, name: string, kind: SymbolKind, public: bool) -> int64 {
@@ -130,11 +134,11 @@ waza define_symbol(state: ResolverState, file_id: int64, node_id: int64, name: s
     array.push(state.result.scopes[state.current_scope[0]].symbols, id);
     moshi (scope_kind_code(state.result.scopes[state.current_scope[0]].kind) == 1) {
         array.push(state.result.members, PackageMember {
-            package_path: state.result.package_path,
-            name: name,
-            symbol_id: id,
-            public: public
-        });
+                package_path: state.result.package_path,
+                name: name,
+                symbol_id: id,
+                public: public
+            });
     }
     kaesu id;
 }
@@ -161,10 +165,10 @@ waza bind_symbol(state: ResolverState, file_id: int64, node_id: int64, symbol_id
         }
     }
     array.push(state.result.bindings, Binding {
-        reference: NodeRef { file_id: file_id, node_id: node_id },
-        symbol_id: symbol_id,
-        capture: captured
-    });
+            reference: NodeRef { file_id: file_id, node_id: node_id },
+            symbol_id: symbol_id,
+            capture: captured
+        });
 }
 
 waza enter_scope(state: ResolverState, kind: ScopeKind) -> int64 {

@@ -97,6 +97,10 @@ func (c *Checker) resolveType(ref *ast.TypeRef, parameters map[string]struct{}) 
 		return FunctionOf(params, result), nil
 	}
 	switch ref.Name {
+	case "cptr":
+		return KindCPtr, nil
+	case "uint64":
+		return KindUint64, nil
 	case "int8":
 		return KindInt8, nil
 	case "int16":

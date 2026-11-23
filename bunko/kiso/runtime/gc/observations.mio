@@ -3,8 +3,8 @@ yobu "kiso/runtime/ir";
 // gcActive, sequence. These are architecture-neutral 64-bit metadata slots.
 // The old raw memory.snapshot leaf is a single-thread / externally-owned ABI;
 // its plain sequence does not synchronize readers with writers.
-koukai teisu memory_snapshot_words=8;
-koukai teisu memory_snapshot_bytes=64;
+koukai teisu memory_snapshot_words = 8;
+koukai teisu memory_snapshot_bytes = 64;
 // ctx, precise shadow, heap, private aligned 64-byte destination, and a
 // separate aligned availability-word destination (0 Unknown, nonzero Known).
 // Availability is copied under the SAME protection/version as the eight fields;
@@ -17,25 +17,71 @@ koukai teisu memory_snapshot_bytes=64;
 // failure after acquisition retains ownership for the existing fatal protocol;
 // the caller must not use a partial destination or resume arbitrary heap work.
 waza memory_snapshot_program() -> ir.Function {
- kaku f=ir.function("gc_memory_snapshot");
- ir.branch(f,ir.zero,0,"invalid");ir.branch(f,ir.zero,2,"invalid");ir.branch(f,ir.zero,3,"invalid");ir.branch(f,ir.zero,4,"invalid");
- tconstant(f,6,8);ir.put(f,ir.divide_unsigned,5,3,6,0);ir.put(f,ir.multiply,5,5,6,0);ir.put(f,ir.equal,5,5,3,0);ir.branch(f,ir.zero,5,"invalid");
- tconstant(f,6,8);ir.put(f,ir.divide_unsigned,5,4,6,0);ir.put(f,ir.multiply,5,5,6,0);ir.put(f,ir.equal,5,5,4,0);ir.branch(f,ir.zero,5,"invalid");
- tload(f,5,thread_version);tconstant(f,6,3);ir.put(f,ir.equal,5,5,6,0);ir.branch(f,ir.zero,5,"invalid");
- tload(f,5,thread_registered);tconstant(f,6,1);ir.put(f,ir.equal,5,5,6,0);ir.branch(f,ir.zero,5,"invalid");
- tprepare(f);tload(f,10,thread_registry);ir.branch(f,ir.zero,10,"invalid");ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,22,11,0,0);
- ir.invoke_function(f,"gc_heap_enter",5,[0,1]);ir.branch(f,ir.nonzero,5,"failed");
- ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.zero,12,"invalid_owned");
- ir.put(f,ir.acquire_load,11,10,0,gc_registry_phase);tconstant(f,12,gc_stopped);ir.put(f,ir.equal,12,11,12,0);ir.branch(f,ir.zero,12,"invalid_owned");
- ir.put(f,ir.acquire_load,23,2,0,2656);tconstant(f,6,2);ir.put(f,ir.divide_unsigned,5,23,6,0);ir.put(f,ir.multiply,5,5,6,0);ir.put(f,ir.equal,5,5,23,0);ir.branch(f,ir.zero,5,"invalid_owned");
- ir.put(f,ir.load,25,2,0,2752);
- kaku offsets=[2640,2648,2760,2616,2608,2632,2664,2656];kaku i=0;
- aida(i<len(offsets)){ir.put(f,ir.load,24,2,0,offsets[i]);ir.put(f,ir.store,0,3,24,i*8);i=i+1;}
- ir.put(f,ir.acquire_load,24,2,0,2656);ir.put(f,ir.equal,5,23,24,0);ir.branch(f,ir.zero,5,"invalid_owned");
- ir.put(f,ir.store,0,4,25,0);
- ir.branch(f,ir.nonzero,22,"owned");ir.invoke_function(f,"gc_end",5,[0]);ir.put(f,ir.result,0,5,0,0);
- ir.branch(f,ir.label,0,"owned");treturn(f,0);
- ir.branch(f,ir.label,0,"invalid_owned");treturn(f,4);
- ir.branch(f,ir.label,0,"invalid");treturn(f,4);
- ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,5,0,0);kaesu f;
+    kaku f = ir.function("gc_memory_snapshot");
+    ir.branch(f, ir.zero, 0, "invalid");
+    ir.branch(f, ir.zero, 2, "invalid");
+    ir.branch(f, ir.zero, 3, "invalid");
+    ir.branch(f, ir.zero, 4, "invalid");
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 5, 3, 6, 0);
+    ir.put(f, ir.multiply, 5, 5, 6, 0);
+    ir.put(f, ir.equal, 5, 5, 3, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 5, 4, 6, 0);
+    ir.put(f, ir.multiply, 5, 5, 6, 0);
+    ir.put(f, ir.equal, 5, 5, 4, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tload(f, 5, thread_version);
+    tconstant(f, 6, 3);
+    ir.put(f, ir.equal, 5, 5, 6, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tload(f, 5, thread_registered);
+    tconstant(f, 6, 1);
+    ir.put(f, ir.equal, 5, 5, 6, 0);
+    ir.branch(f, ir.zero, 5, "invalid");
+    tprepare(f);
+    tload(f, 10, thread_registry);
+    ir.branch(f, ir.zero, 10, "invalid");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 22, 11, 0, 0);
+    ir.invoke_function(f, "gc_heap_enter", 5, [0, 1]);
+    ir.branch(f, ir.nonzero, 5, "failed");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "invalid_owned");
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_phase);
+    tconstant(f, 12, gc_stopped);
+    ir.put(f, ir.equal, 12, 11, 12, 0);
+    ir.branch(f, ir.zero, 12, "invalid_owned");
+    ir.put(f, ir.acquire_load, 23, 2, 0, 2656);
+    tconstant(f, 6, 2);
+    ir.put(f, ir.divide_unsigned, 5, 23, 6, 0);
+    ir.put(f, ir.multiply, 5, 5, 6, 0);
+    ir.put(f, ir.equal, 5, 5, 23, 0);
+    ir.branch(f, ir.zero, 5, "invalid_owned");
+    ir.put(f, ir.load, 25, 2, 0, 2752);
+    kaku offsets = [2640, 2648, 2760, 2616, 2608, 2632, 2664, 2656];
+    kaku i = 0;
+    aida (i<len(offsets)) {
+        ir.put(f, ir.load, 24, 2, 0, offsets[i]);
+        ir.put(f, ir.store, 0, 3, 24, i * 8);
+        i = i + 1;
+    }
+    ir.put(f, ir.acquire_load, 24, 2, 0, 2656);
+    ir.put(f, ir.equal, 5, 23, 24, 0);
+    ir.branch(f, ir.zero, 5, "invalid_owned");
+    ir.put(f, ir.store, 0, 4, 25, 0);
+    ir.branch(f, ir.nonzero, 22, "owned");
+    ir.invoke_function(f, "gc_end", 5, [0]);
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    ir.branch(f, ir.label, 0, "owned");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid_owned");
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 5, 0, 0);
+    kaesu f;
 }

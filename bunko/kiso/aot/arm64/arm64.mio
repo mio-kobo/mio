@@ -15,7 +15,10 @@ koukai sentaku EncodeError {
     InvalidPatch;
 }
 
-koukai kata Instruction { word: uint32; error: EncodeError?; }
+koukai kata Instruction {
+    word: uint32;
+    error: EncodeError?;
+}
 
 waza instruction(value: int64) -> Instruction {
     moshi (value < 0 || value > 4294967295) {
@@ -30,21 +33,34 @@ waza register_error(rd: int64) -> EncodeError? {
 }
 
 waza three_registers(rd: int64, rn: int64, rm: int64) -> EncodeError? {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu failure; }
-    failure = register_error(rn); moshi (failure != mu) { kaesu failure; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu failure;
+    }
+    failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu failure;
+    }
     kaesu register_error(rm);
 }
 
 waza mask_signed(value: int64, bits: int64) -> int64 {
     kaku modulus = 1;
     kaku index = 0;
-    aida (index < bits) { modulus = modulus * 2; index = index + 1; }
+    aida (index < bits) {
+        modulus = modulus * 2;
+        index = index + 1;
+    }
     moshi (value < 0) { kaesu value + modulus; }
     kaesu value;
 }
 
 waza move_wide(base: int64, rd: int64, immediate: int64, shift: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (immediate < 0 || immediate > 65535 || shift < 0 || shift > 3) {
         kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() };
     }
@@ -56,7 +72,11 @@ koukai waza movk_x(rd: int64, immediate: int64, shift: int64) -> Instruction { k
 koukai waza movn_x(rd: int64, immediate: int64, shift: int64) -> Instruction { kaesu move_wide(2457862144, rd, immediate, shift); }
 
 koukai waza movz_w(rd: int64, immediate: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (immediate < 0 || immediate > 65535) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
     kaesu instruction(1384120320 + immediate * 32 + rd);
 }
@@ -79,31 +99,68 @@ koukai waza sdiv_x(rd: int64, rn: int64, rm: int64) -> Instruction { kaesu data_
 koukai waza udiv_x(rd: int64, rn: int64, rm: int64) -> Instruction { kaesu data_register(2596276224, rd, rn, rm); }
 
 koukai waza msub_x(rd: int64, rn: int64, rm: int64, ra: int64) -> Instruction {
-    kaku failure = three_registers(rd, rn, rm); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    failure = register_error(ra); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = three_registers(rd, rn, rm);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    failure = register_error(ra);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     kaesu instruction(2600501248 + rm * 65536 + ra * 1024 + rn * 32 + rd);
 }
 
 koukai waza cmp_x(rn: int64, rm: int64) -> Instruction { kaesu subs_x(31, rn, rm); }
 
 waza immediate_arithmetic(base: int64, rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    failure = register_error(rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (immediate < 0 || immediate > 4095) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
-    kaku shift_field = 0; moshi (shift12) { shift_field = 4194304; }
+    kaku shift_field = 0;
+    moshi (shift12) {
+        shift_field = 4194304;
+    }
     kaesu instruction(base + shift_field + immediate * 1024 + rn * 32 + rd);
 }
 
-koukai waza add_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2432696320, rd, rn, immediate, shift12); }
-koukai waza sub_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(3506438144, rd, rn, immediate, shift12); }
-koukai waza cmp_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(4043309056, 31, rn, immediate, shift12); }
+koukai waza add_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction {
+    kaesu immediate_arithmetic(2432696320, rd, rn, immediate, shift12);
+}
+koukai waza sub_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction {
+    kaesu immediate_arithmetic(3506438144, rd, rn, immediate, shift12);
+}
+koukai waza cmp_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction {
+    kaesu immediate_arithmetic(4043309056, 31, rn, immediate, shift12);
+}
 // ADDS (immediate); CMN Xn, #imm is ADDS XZR, Xn, #imm and sets the carry flag when Xn + imm wraps (Xn >= -imm unsigned).
-koukai waza adds_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2969567232, rd, rn, immediate, shift12); }
-koukai waza cmn_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction { kaesu immediate_arithmetic(2969567232, 31, rn, immediate, shift12); }
+koukai waza adds_imm_x(rd: int64, rn: int64, immediate: int64, shift12: bool) -> Instruction {
+    kaesu immediate_arithmetic(2969567232, rd, rn, immediate, shift12);
+}
+koukai waza cmn_imm_x(rn: int64, immediate: int64, shift12: bool) -> Instruction {
+    kaesu immediate_arithmetic(2969567232, 31, rn, immediate, shift12);
+}
 
 koukai waza add_imm_w(rd: int64, rn: int64, immediate: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    failure = register_error(rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (immediate < 0 || immediate > 4095) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
     kaesu instruction(285212672 + immediate * 1024 + rn * 32 + rd);
 }
@@ -111,19 +168,37 @@ koukai waza add_imm_w(rd: int64, rn: int64, immediate: int64) -> Instruction {
 // CSET Wd,cond is the CSINC alias with both inputs equal to WZR and the
 // condition inverted.  Writing Wd deliberately clears the upper 32 bits.
 koukai waza cset_w(rd: int64, condition: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (condition < 0 || condition > 15) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidCondition() }; }
-    kaku inverted = condition + 1; moshi (inverted - (inverted / 2) * 2 == 0) { inverted = condition - 1; }
+    kaku inverted = condition + 1;
+    moshi (inverted - (inverted / 2) * 2 == 0) {
+        inverted = condition - 1;
+    }
     kaesu instruction(446629856 + inverted * 4096 + rd);
 }
 
 waza shift_alias(base: int64, rd: int64, rn: int64, shift: int64, left: bool) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    failure = register_error(rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (shift < 0 || shift > 63) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
     kaku immr = shift;
     kaku imms = 63;
-    moshi (left) { immr = (64 - shift) - ((64 - shift) / 64) * 64; imms = 63 - shift; }
+    moshi (left) {
+        immr = (64 - shift) - ((64 - shift) / 64) * 64;
+        imms = 63 - shift;
+    }
     kaesu instruction(base + immr * 65536 + imms * 1024 + rn * 32 + rd);
 }
 
@@ -133,8 +208,16 @@ koukai waza asr_x(rd: int64, rn: int64, shift: int64) -> Instruction { kaesu shi
 koukai waza lsrv_x(rd: int64, rn: int64, rm: int64) -> Instruction { kaesu data_register(2596283392, rd, rn, rm); }
 
 waza load_store(base: int64, rt: int64, rn: int64, byte_offset: int64, scale: int64) -> Instruction {
-    kaku failure = register_error(rt); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    failure = register_error(rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rt);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (byte_offset < 0 || byte_offset - (byte_offset / scale) * scale != 0) {
         kaesu Instruction { word: uint32(0), error: EncodeError.MisalignedOffset() };
     }
@@ -145,7 +228,11 @@ waza load_store(base: int64, rt: int64, rn: int64, byte_offset: int64, scale: in
 
 // LDR/STR Xt, [Xn, Xm] (register offset, LSL #0).
 waza load_store_register(base: int64, rt: int64, rn: int64, rm: int64) -> Instruction {
-    kaku failure = three_registers(rt, rn, rm); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = three_registers(rt, rn, rm);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     kaesu Instruction { word: uint32(base + rm * 65536 + rn * 32 + rt), error: mu };
 }
 // LDR Xt, [Xn, Xm, LSL #3] and LDRB Wt, [Xn, Xm].
@@ -165,7 +252,11 @@ koukai waza str_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kae
 koukai waza ldrh_w(rt: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu load_store(2034237440, rt, rn, byte_offset, 2); }
 
 waza pair_offset(base: int64, rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
-    kaku failure = three_registers(rt, rt2, rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = three_registers(rt, rt2, rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (byte_offset < -512 || byte_offset > 504) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
     moshi (byte_offset - (byte_offset / 8) * 8 != 0) {
         kaesu Instruction { word: uint32(0), error: EncodeError.MisalignedOffset() };
@@ -174,13 +265,24 @@ waza pair_offset(base: int64, rt: int64, rt2: int64, rn: int64, byte_offset: int
     kaesu instruction(base + mask_signed(scaled, 7) * 32768 + rt2 * 1024 + rn * 32 + rt);
 }
 
-koukai waza stp_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu pair_offset(2835349504, rt, rt2, rn, byte_offset); }
-koukai waza ldp_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu pair_offset(2839543808, rt, rt2, rn, byte_offset); }
-koukai waza stp_pre_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu pair_offset(2843738112, rt, rt2, rn, byte_offset); }
-koukai waza ldp_post_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction { kaesu pair_offset(2831155200, rt, rt2, rn, byte_offset); }
+koukai waza stp_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
+    kaesu pair_offset(2835349504, rt, rt2, rn, byte_offset);
+}
+koukai waza ldp_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
+    kaesu pair_offset(2839543808, rt, rt2, rn, byte_offset);
+}
+koukai waza stp_pre_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
+    kaesu pair_offset(2843738112, rt, rt2, rn, byte_offset);
+}
+koukai waza ldp_post_x(rt: int64, rt2: int64, rn: int64, byte_offset: int64) -> Instruction {
+    kaesu pair_offset(2831155200, rt, rt2, rn, byte_offset);
+}
 
 waza branch(base: int64, delta_words: int64) -> Instruction {
-    moshi (delta_words < -33554432 || delta_words > 33554431) { kaesu Instruction { word: uint32(0), error: EncodeError.BranchOutOfRange() }; }
+    moshi (delta_words < -33554432 || delta_words > 33554431) {
+        kaesu Instruction {
+            word: uint32(0), error: EncodeError.BranchOutOfRange() };
+    }
     kaesu instruction(base + mask_signed(delta_words, 26));
 }
 koukai waza b(delta_words: int64) -> Instruction { kaesu branch(335544320, delta_words); }
@@ -193,7 +295,11 @@ koukai waza b_cond(condition: int64, delta_words: int64) -> Instruction {
 }
 
 waza compare_branch(base: int64, rt: int64, delta_words: int64) -> Instruction {
-    kaku failure = register_error(rt); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rt);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (delta_words < -262144 || delta_words > 262143) { kaesu Instruction { word: uint32(0), error: EncodeError.BranchOutOfRange() }; }
     kaesu instruction(base + mask_signed(delta_words, 19) * 32 + rt);
 }
@@ -201,7 +307,11 @@ koukai waza cbz_x(rt: int64, delta_words: int64) -> Instruction { kaesu compare_
 koukai waza cbnz_x(rt: int64, delta_words: int64) -> Instruction { kaesu compare_branch(3036676096, rt, delta_words); }
 
 waza register_branch(base: int64, rn: int64) -> Instruction {
-    kaku failure = register_error(rn); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rn);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     kaesu instruction(base + rn * 32);
 }
 koukai waza br_x(rn: int64) -> Instruction { kaesu register_branch(3592355840, rn); }
@@ -210,8 +320,15 @@ koukai waza ret_x(rn: int64) -> Instruction { kaesu register_branch(3596550144, 
 koukai waza ret() -> Instruction { kaesu ret_x(30); }
 
 koukai waza adr(rd: int64, delta_bytes: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
-    moshi (delta_bytes < -1048576 || delta_bytes > 1048575) { kaesu Instruction { word: uint32(0), error: EncodeError.BranchOutOfRange() }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
+    moshi (delta_bytes < -1048576 || delta_bytes > 1048575) {
+        kaesu Instruction {
+            word: uint32(0), error: EncodeError.BranchOutOfRange() };
+    }
     kaku encoded = mask_signed(delta_bytes, 21);
     kaku low = encoded - (encoded / 4) * 4;
     kaesu instruction(268435456 + low * 536870912 + (encoded / 4) * 32 + rd);
@@ -220,7 +337,11 @@ koukai waza adr(rd: int64, delta_bytes: int64) -> Instruction {
 // pc_offset and target_offset are offsets from the same 4 KiB-aligned image
 // base. Mach-O itself remains 16 KiB aligned; ADRP architecture pages do not.
 koukai waza adrp_offset(rd: int64, pc_offset: int64, target_offset: int64) -> Instruction {
-    kaku failure = register_error(rd); moshi (failure != mu) { kaesu Instruction { word: uint32(0), error: failure }; }
+    kaku failure = register_error(rd);
+    moshi (failure != mu) {
+        kaesu Instruction {
+            word: uint32(0), error: failure };
+    }
     moshi (pc_offset < 0 || target_offset < 0) { kaesu Instruction { word: uint32(0), error: EncodeError.InvalidImmediate() }; }
     kaku pages = target_offset / 4096 - pc_offset / 4096;
     moshi (pages < -1048576 || pages > 1048575) { kaesu Instruction { word: uint32(0), error: EncodeError.BranchOutOfRange() }; }
@@ -243,16 +364,34 @@ koukai waza fcmp_d(vn: int64, vm: int64) -> Instruction { kaesu data_register(50
 koukai waza scvtf_d(vd: int64, rn: int64) -> Instruction { kaesu data_register(2657222656, vd, rn, 0); }
 koukai waza fcvtzs_x(rd: int64, vn: int64) -> Instruction { kaesu data_register(2658664448, rd, vn, 0); }
 
-koukai kata Label { name: string; word: int64; }
+koukai kata Label {
+    name: string;
+    word: int64;
+}
 // kind: 0=B, 1=BL, 2=B.cond, 3=CBZ, 4=CBNZ. Keeping the discriminator
 // separate from its operand also makes relocation records layout-stable when
 // stored in generic arrays by the current native self-hosted backend.
-koukai kata Fixup { at_word: int64; target: string; kind: int64; operand: int64; }
-koukai kata Assembler { words: []uint32; labels: []Label; label_index: [][]int64; fixups: []Fixup; errors: []EncodeError; }
-koukai kata AssembleResult { words: []uint32; error: EncodeError?; }
+koukai kata Fixup {
+    at_word: int64;
+    target: string;
+    kind: int64;
+    operand: int64;
+}
+koukai kata Assembler {
+    words: []uint32;
+    labels: []Label;
+    label_index: [][]int64;
+    fixups: []Fixup;
+    errors: []EncodeError;
+}
+koukai kata AssembleResult {
+    words: []uint32;
+    error: EncodeError?;
+}
 
 koukai waza assembler() -> Assembler {
-    kaesu Assembler { words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), label_index: [array.make[int64](32, 0)], fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
+    kaesu Assembler {
+        words: array.with_capacity[uint32](32), labels: array.with_capacity[Label](8), label_index: [array.make[int64](32, 0)], fixups: array.with_capacity[Fixup](8), errors: array.with_capacity[EncodeError](1) };
 }
 
 // Windows ABI mode (label "windows_abi") works the same way with the routine windows_syscall (Win32 calls through the IAT).
@@ -263,7 +402,10 @@ koukai waza assembler() -> Assembler {
 // Darwin images stay byte-identical.
 koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeError? {
     kaku failure = encoded.error;
-    moshi (failure != mu) { array.push(value.errors, failure); kaesu failure; }
+    moshi (failure != mu) {
+        array.push(value.errors, failure);
+        kaesu failure;
+    }
     moshi (encoded.word == uint32(3556773889)) {
         kaku adapter = "";
         moshi (find_label(value, "linux_abi") >= 0) { adapter = "linux_syscall"; }
@@ -280,35 +422,61 @@ koukai waza assembler_emit(value: Assembler, encoded: Instruction) -> EncodeErro
 }
 
 waza label_hash(name: string, capacity: int64) -> int64 {
-    kaku hash = 0; kaku i = 0; kaku data = string.to_bytes(name);
-    aida (i < len(data)) { hash = hash * 131 + int64(data[i]); hash = hash - (hash / capacity) * capacity; i = i + 1; }
+    kaku hash = 0;
+    kaku i = 0;
+    kaku data = string.to_bytes(name);
+    aida (i < len(data)) {
+        hash = hash * 131 + int64(data[i]);
+        hash = hash - (hash / capacity) * capacity;
+        i = i + 1;
+    }
     kaesu hash;
 }
 
 waza index_label(table: []int64, labels: []Label, index: int64) -> unit {
     kaku slot = label_hash(labels[index].name, len(table));
-    aida (table[slot] != 0) { slot = slot + 1; moshi (slot == len(table)) { slot = 0; } }
+    aida (table[slot] != 0) {
+        slot = slot + 1;
+        moshi (slot == len(table)) {
+            slot = 0;
+        }
+    }
     table[slot] = index + 1;
 }
 
 waza find_label(value: Assembler, name: string) -> int64 {
-    kaku table = value.label_index[0]; kaku slot = label_hash(name, len(table)); kaku probes = 0;
+    kaku table = value.label_index[0];
+    kaku slot = label_hash(name, len(table));
+    kaku probes = 0;
     aida (probes < len(table)) {
-        kaku index = table[slot] - 1; moshi (index < 0) { kaesu -1; }
+        kaku index = table[slot] - 1;
+        moshi (index < 0) {
+            kaesu -1;
+        }
         moshi (value.labels[index].name == name) { kaesu value.labels[index].word; }
-        slot = slot + 1; moshi (slot == len(table)) { slot = 0; } probes = probes + 1;
+        slot = slot + 1;
+        moshi (slot == len(table)) {
+            slot = 0;
+        }
+        probes = probes + 1;
     }
     kaesu -1;
 }
 
 koukai waza assembler_label(value: Assembler, name: string) -> EncodeError? {
     moshi (find_label(value, name) >= 0) {
-        kaku failure = EncodeError.DuplicateLabel(name); array.push(value.errors, failure); kaesu failure;
+        kaku failure = EncodeError.DuplicateLabel(name);
+        array.push(value.errors, failure);
+        kaesu failure;
     }
     kaku table = value.label_index[0];
     moshi ((len(value.labels) + 1) * 2 >= len(table)) {
-        table = array.make[int64](len(table) * 2, 0); kaku i = 0;
-        aida (i < len(value.labels)) { index_label(table, value.labels, i); i = i + 1; }
+        table = array.make[int64](len(table) * 2, 0);
+        kaku i = 0;
+        aida (i < len(value.labels)) {
+            index_label(table, value.labels, i);
+            i = i + 1;
+        }
         value.label_index[0] = table;
     }
     array.push(value.labels, Label { name: name, word: len(value.words) });
@@ -329,15 +497,27 @@ waza assembler_fixup(value: Assembler, target: string, kind: int64, operand: int
 koukai waza assembler_b(value: Assembler, target: string) -> EncodeError? { kaesu assembler_fixup(value, target, 0, 0); }
 koukai waza assembler_bl(value: Assembler, target: string) -> EncodeError? { kaesu assembler_fixup(value, target, 1, 0); }
 koukai waza assembler_b_cond(value: Assembler, condition: int64, target: string) -> EncodeError? {
-    moshi (condition < 0 || condition > 15) { kaku failure = EncodeError.InvalidCondition(); array.push(value.errors, failure); kaesu failure; }
+    moshi (condition < 0 || condition > 15) {
+        kaku failure = EncodeError.InvalidCondition();
+        array.push(value.errors, failure);
+        kaesu failure;
+    }
     kaesu assembler_fixup(value, target, 2, condition);
 }
 koukai waza assembler_cbz_x(value: Assembler, reg: int64, target: string) -> EncodeError? {
-    kaku failure = register_error(reg); moshi (failure != mu) { array.push(value.errors, failure); kaesu failure; }
+    kaku failure = register_error(reg);
+    moshi (failure != mu) {
+        array.push(value.errors, failure);
+        kaesu failure;
+    }
     kaesu assembler_fixup(value, target, 3, reg);
 }
 koukai waza assembler_cbnz_x(value: Assembler, reg: int64, target: string) -> EncodeError? {
-    kaku failure = register_error(reg); moshi (failure != mu) { array.push(value.errors, failure); kaesu failure; }
+    kaku failure = register_error(reg);
+    moshi (failure != mu) {
+        array.push(value.errors, failure);
+        kaesu failure;
+    }
     kaesu assembler_fixup(value, target, 4, reg);
 }
 

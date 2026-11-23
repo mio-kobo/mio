@@ -53,11 +53,18 @@ waza test_loopback_roundtrip_eof_and_errors() -> unit {
     kaku client = connect(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
     testing.expect(client.error == mu, "connect to the listener succeeds");
     kaku maybe_out = client.connection;
-    moshi (maybe_out == mu) { close_listener(listener); kaesu; }
+    moshi (maybe_out == mu) {
+        close_listener(listener);
+        kaesu;
+    }
     kaku accepted = accept(listener);
     testing.expect(accepted.error == mu, "accept returns the pending connection");
     kaku maybe_in = accepted.connection;
-    moshi (maybe_in == mu) { close(maybe_out); close_listener(listener); kaesu; }
+    moshi (maybe_in == mu) {
+        close(maybe_out);
+        close_listener(listener);
+        kaesu;
+    }
     kaku outgoing = maybe_out;
     kaku incoming = maybe_in;
     moshi (hai) {
@@ -109,18 +116,27 @@ waza test_backlog_and_io_adapters() -> unit {
     kaku client = connect(ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
     testing.expect(client.error == mu, "connect with an explicit listen backlog succeeds");
     kaku maybe_out = client.connection;
-    moshi (maybe_out == mu) { close_listener(listener); kaesu; }
+    moshi (maybe_out == mu) {
+        close_listener(listener);
+        kaesu;
+    }
     kaku accepted = accept(listener);
     testing.expect(accepted.error == mu, "accept with an explicit listen backlog succeeds");
     kaku maybe_in = accepted.connection;
-    moshi (maybe_in == mu) { close(maybe_out); close_listener(listener); kaesu; }
-    kaku outgoing = maybe_out; kaku incoming = maybe_in;
+    moshi (maybe_in == mu) {
+        close(maybe_out);
+        close_listener(listener);
+        kaesu;
+    }
+    kaku outgoing = maybe_out;
+    kaku incoming = maybe_in;
     kaku sent = io.write_all(writer(outgoing), [77, 105, 111], 0, 3);
     testing.expect(sent.count == 3 && sent.error == mu, "io.write_all through the connection writer");
     kaku buffer = array.make[uint8](3, uint8(0));
     kaku got = io.read_full(reader(incoming), buffer, 0, 3);
     testing.expect(got.count == 3 && buffer[0] == uint8(77) && buffer[2] == uint8(111), "io.read_full through the connection reader");
-    close(outgoing); close(incoming);
+    close(outgoing);
+    close(incoming);
     testing.expect(close_listener(listener).error == mu, "the listener closes");
 }
 
@@ -140,7 +156,10 @@ waza test_stale_connection_after_slot_reuse() -> unit {
     moshi (listener == mu) { kaesu; }
     kaku first = connect(address).connection;
     testing.expect(first != mu, "the initial client connects");
-    moshi (first == mu) { close_listener(listener); kaesu; }
+    moshi (first == mu) {
+        close_listener(listener);
+        kaesu;
+    }
     kaku peer = accept(listener).connection;
     testing.expect(peer != mu, "the initial client is accepted");
     testing.expect(close(first).error == mu, "the original client closes");
@@ -148,7 +167,10 @@ waza test_stale_connection_after_slot_reuse() -> unit {
 
     kaku replacement = connect(address).connection;
     testing.expect(replacement != mu, "the replacement client connects");
-    moshi (replacement == mu) { close_listener(listener); kaesu; }
+    moshi (replacement == mu) {
+        close_listener(listener);
+        kaesu;
+    }
     kaku next_peer = accept(listener).connection;
     testing.expect(next_peer != mu, "the replacement client is accepted");
     kaku data: []uint8 = [uint8(42)];

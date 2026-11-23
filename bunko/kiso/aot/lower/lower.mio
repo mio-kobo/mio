@@ -1,4 +1,5 @@
 yobu "kiso/aot/arm64";
+yobu "kiso/aot/cabi";
 yobu "kiso/aot/lower/nativefs";
 yobu "kiso/aot/lower/types";
 yobu "kiso/aot/macho";
@@ -655,6 +656,79 @@ waza is_raw_producer(opcode: int64) -> bool {
         (opcode >= 50 && opcode <= 55) || opcode == 32 || opcode == 60;
 }
 
+// Opcodes whose body needs no stopped Epoch in the cooperative thread builds.
+//
+// Why an Epoch-free body is safe: gc_begin returns only after every registered thread that is not blocked has acknowledged the Epoch at a
+// solved poll, and a thread acknowledges only at the poll in front of an opcode. So an opcode body that runs without an Epoch of its own is
+// never concurrent with an Epoch owner (an owner waits for it to finish), with a collection, or with any other Epoch-owning mutation. It can
+// only run concurrently with other Epoch-free bodies, which therefore must not write memory that another thread reads. Allocation
+// (runtime_alloc) enters its own Epoch, so exempting an opcode never exempts an allocation. The argument needs every mutation to be a full
+// stop-the-world Epoch: a protocol with a separate, cheaper heap lock (docs/darwin-thread-heap-exclusion-design.md) must re-audit the array
+// reads (31, 32, 60: length and payload pointer are two words that a push can replace) before keeping them Epoch-free.
+//   scalar slot store (19, 23, 49): a non-nullable integer/float/bool value into a global slot or into a non-captured local. The body is one
+//     plain store into __DATA or this thread's own frame: no heap word, header, remembered set, barrier or boxing is involved, and the shadow
+//     roots published before it are unchanged by it. Reference, nullable (boxing allocates) and captured-cell (heap cell + barrier) targets keep the Epoch.
+//   read-only opcodes (32 len, 34 is-nil, 37 field, 39/40 enum tag/payload, 47 upvalue read, 60 capacity, 31 index): loads only, with checks that
+//     end in runtime_error. They write no heap memory and cannot allocate; an index read whose result would be boxed (nullable scalar element)
+//     keeps the Epoch because the box is allocated.
+//   register-only opcodes (50-53 float/int conversions, 55 integer range conversion): arithmetic on the popped operand and a push, failing through
+//     runtime_error; 66 (type constraint) emits no code at all, it only annotates the stack top for the type analysis.
+waza heap_step_exempt(code:arm64.Assembler,type_result:types.TypeAnalysis,function_id:int64,offset:int64,opcode:int64,operand:int64,instruction_width:int64) -> bool {
+    kaku node=-1;
+    moshi(opcode==19 && operand>=0 && operand<len(type_result.globals)){node=type_result.globals[operand];}
+    moshi((opcode==23 || (opcode==49 && !old_sweep_enabled(code))) && function_id>=0){
+        moshi(operand>=0 && operand<len(type_result.locals[function_id])){
+            moshi(!type_result.cells[function_id][operand]){node=type_result.locals[function_id][operand];}
+        }
+    }
+    // With the allocation lock: a reference (non-nullable-scalar) value into a non-captured local is one plain store into this thread's own frame
+    // (emit_local): no barrier (the barrier and cell code run only for captured locals), no boxing, no heap word. The value stays reachable from the
+    // published operand/local roots exactly as before, and a collector only scans this frame while the thread stands at a poll.
+    moshi(node>=0 && (opcode==23 || opcode==49) && alloc_lock_enabled(code) && types.type_kind(type_result,node)!=types.type_unknown && !is_nullable_scalar(type_result,node)){kaesu hai;}
+    moshi(node>=0){
+        kaku kind=types.type_kind(type_result,node);
+        moshi(!types.type_nullable(type_result,node) && (kind==types.type_integer || kind==types.type_float32 || kind==types.type_float64 || kind==types.type_bool)){kaesu hai;}
+    }
+    // Allocation-only constructors (30 and 56 array literal, 57 array of n copies, 36 struct literal, 38 enum value) when the allocation lock exists:
+    // their bodies allocate through runtime_alloc, which takes the allocation lock (a fast path that never collects) or, when it cannot, its own
+    // Epoch, and then only initialize the fresh, unpublished object and pop/push this thread's operand stack. No barrier, remembered-set write or
+    // store into a published object occurs (emit_object, emit_array_construct), so they need no Epoch of their own.
+    moshi(alloc_lock_enabled(code) && (opcode==30 || opcode==36 || opcode==38 || opcode==56 || opcode==57)){kaesu hai;}
+    moshi(opcode==32 || opcode==34 || opcode==37 || opcode==39 || opcode==40 || opcode==47 || opcode==60){kaesu hai;}
+    moshi((opcode>=50 && opcode<=53) || opcode==55 || opcode==66){kaesu hai;}
+    moshi(opcode==31){
+        kaku after_read=type_result.blocks[function_id+1].entry[offset+instruction_width];
+        moshi(len(after_read)>0){moshi(!is_nullable_scalar(type_result,after_read[len(after_read)-1])){kaesu hai;}}
+    }
+    kaesu iie;
+}
+
+// Bounded epoch retention (cooperative thread builds, docs/darwin-thread-heap-exclusion-design.md section 8). An epoch entered by one opcode is kept
+// by the following opcodes of the same straight-line run instead of being released by the next poll and entered again. A run ends (the next poll
+// releases the epoch) at a branch target, at any opcode that branches, calls, returns or prints, and after retain_limit opcodes.
+teisu retain_limit = 16;
+// Heap-lock allocation is compiled in (label worker_alloc_lock) for cooperative thread builds that retain epochs, are not collection-stressed and are
+// not old-heap prototype builds; every other image is byte-identical to one built before the feature existed.
+waza alloc_lock_stress_enabled(code: arm64.Assembler) -> bool { kaesu arm64.assembler_label_word(code, "worker_alloc_lock_stress") >= 0; }
+waza alloc_lock_enabled(code: arm64.Assembler) -> bool { kaesu arm64.assembler_label_word(code, "worker_alloc_lock") >= 0; }
+waza epoch_breaker(opcode: int64) -> bool {
+    kaesu opcode == 17 || opcode == 18 || opcode == 22 || opcode == 25 || opcode == 26 || opcode == 27 || opcode == 45 || opcode == 67;
+}
+// true at every offset that some jump (17, 18) can reach: a run never continues into it.
+waza jump_targets(data: []uint8) -> []bool {
+    kaku targets: []bool = [];
+    kaku i = 0;
+    aida (i <= len(data)) { array.push(targets, iie); i = i + 1; }
+    kaku at = 0;
+    aida (at < len(data)) {
+        kaku code = int64(data[at]); kaku step = width(code);
+        moshi (step == 0) { kaesu targets; }
+        moshi (code == 17 || code == 18) { kaku target = operand_u16(data, at); moshi (target >= 0 && target <= len(data)) { targets[target] = hai; } }
+        at = at + step;
+    }
+    kaesu targets;
+}
+
 waza emit_nullable_box(code: arm64.Assembler, patches: []macho.AddressPatch,
     type_result: types.TypeAnalysis, function_id: int64, after: []int64) -> bool {
     // The produced raw scalar is never published under its boxed result type.
@@ -1148,6 +1222,7 @@ waza emit_call(code: arm64.Assembler, patches: []macho.AddressPatch,
 waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: mochi.File,
     type_result: types.TypeAnalysis, ids: []int64, data: []uint8, prefix: string, function_id: int64) -> LowerError? {
     kaku offset = 0;
+    kaku targets = jump_targets(data); kaku held = iie; kaku run = 0;
     aida (offset < len(data)) {
         arm64.assembler_label(code, block_label(prefix, offset));
         kaku live_depth = len(type_result.blocks[function_id + 1].entry[offset]);
@@ -1170,37 +1245,25 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
         moshi (attached_roots_enabled(code)) {
             kaku roots=emit_shadow_push(code,patches,type_result,function_id,type_result.blocks[function_id+1].entry[offset]);
             moshi(roots<0){kaesu LowerError.UnsafeType((function_id+1)*1000000+offset*100+opcode);}
-            arm64.assembler_bl(code,"attached_roots_poll");
             kaku heap_step=opcode>=30 || opcode==19 || opcode==23;
-            moshi(old_sweep_enabled(code)){
-                // Keep every solved Safepoint, but a non-nullable scalar store
-                // into a global or a non-captured native local changes no heap
-                // edge/header/remembered metadata and requires no STW epoch.
-                // Cell stores, references and all allocation paths stay owned.
-                kaku node=-1;
-                moshi(opcode==19 && operand>=0 && operand<len(type_result.globals)){node=type_result.globals[operand];}
-                moshi(opcode==23 && function_id>=0){
-                    moshi(operand>=0 && operand<len(type_result.locals[function_id])){
-                        moshi(!type_result.cells[function_id][operand]){node=type_result.locals[function_id][operand];}
-                    }
-                }
-                moshi(node>=0){
-                    kaku kind=types.type_kind(type_result,node);
-                    moshi(!types.type_nullable(type_result,node) && (kind==types.type_integer || kind==types.type_float32 || kind==types.type_float64 || kind==types.type_bool)){heap_step=iie;}
-                }
-                // Nonallocating readers do not change metadata or publish
-                // edges. They run to the next poll without acknowledging a
-                // new stop in the middle of a read; closed Sweep claims cannot
-                // contain a legitimately reachable old operand. Nullable raw
-                // boxing index paths remain conservatively heap-owned.
-                moshi(opcode==32 || opcode==34 || opcode==37 || opcode==39 || opcode==40 || opcode==47 || opcode==60){heap_step=iie;}
-                moshi(opcode==31){
-                    kaku after_read=type_result.blocks[function_id+1].entry[offset+instruction_width];
-                    moshi(len(after_read)>0){moshi(!is_nullable_scalar(type_result,after_read[len(after_read)-1])){heap_step=iie;}}
-                }
-            }
+            // A heap step enters a stopped Epoch (heap exclusion) before the opcode body. It is needed only when the body can allocate, publish a
+            // reference, run a write barrier or touch captured-cell storage; see heap_step_exempt for the audited exemptions. The solved Safepoint
+            // poll and the shadow-root publication above stay for EVERY opcode.
+            moshi(heap_step && heap_step_exempt(code,type_result,function_id,offset,opcode,operand,instruction_width)){heap_step=iie;}
+            // Retention: the poll of an opcode that continues a straight-line run of this thread's epoch republishes the roots but does not release
+            // the epoch (attached_roots_retain). Never in old_mark/old_sweep builds, never into a branch target, never for an opcode that branches,
+            // calls, returns or prints (the epoch is released BEFORE it, so nothing blocks or runs long while holding it), never beyond retain_limit.
+            kaku retain = iie;
+            moshi(worker_roots_enabled(code) && arm64.assembler_label_word(code,"worker_no_retention")<0 && !old_sweep_enabled(code) && !old_mark_proto_enabled(code) && held && run < retain_limit && !targets[offset] && !epoch_breaker(opcode)){retain = hai;}
+            moshi(retain){arm64.assembler_bl(code,"attached_roots_retain");}
+            sore{arm64.assembler_bl(code,"attached_roots_poll");}
             moshi(worker_roots_enabled(code) && heap_step){
                 arm64.assembler_bl(code,"attached_heap_enter");
+            }
+            moshi(epoch_breaker(opcode)){held = iie; run = 0;}
+            sore {
+                moshi(heap_step){ held = hai; moshi(retain){run = run + 1;} sore {run = 0;} }
+                sore { moshi(retain){run = run + 1;} sore {held = iie; run = 0;} }
             }
             moshi(old_mark_proto_enabled(code)){
                 kaku change=opcode>=30 && opcode!=31 && opcode!=32 && opcode!=33 && opcode!=35 && opcode!=48 && opcode!=30 && opcode!=36 && opcode!=38 && opcode!=44 && opcode!=46 && opcode!=56 && opcode!=57 && opcode!=58 && opcode!=62 && opcode!=40 && opcode!=54 && opcode!=55 && opcode!=65 && opcode!=34 && opcode!=37 && opcode!=39 && opcode!=45 && opcode!=47 && opcode!=49 && opcode!=60 && opcode!=66 && opcode!=67 && opcode!=41 && opcode!=42 && opcode!=43 && opcode!=59 && opcode!=61 && opcode!=63 && opcode!=64 && opcode!=50 && opcode!=51 && opcode!=52 && opcode!=53;
@@ -1386,7 +1449,7 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
         moshi (opcode == 25) {
             moshi (operand < 0 || operand >= len(file.functions)) { kaesu LowerError.InvalidFunction(); }
             kaku target = file.functions[operand];
-            moshi (len(target.captures) != 0 || (len(target.instructions) == 0 && nativefs.operation(target.name) == nativefs.op_none && !types.is_testing_report(target.name))) { kaesu LowerError.UnsupportedClosure(); }
+            moshi (len(target.captures) != 0 || (len(target.instructions) == 0 && !cabi.is_external(target.name) && nativefs.operation(target.name) == nativefs.op_none && !types.is_testing_report(target.name))) { kaesu LowerError.UnsupportedClosure(); }
             kaku entries = type_result.blocks[function_id + 1].entry[offset];
             kaku parameter = types.forwarded_parameter(target);
             moshi (sha256_native_call(code, type_result, entries, target)) { emit_sha256_native_call(code); parameter = -2; }
@@ -1873,19 +1936,33 @@ waza emit_free_head(code: arm64.Assembler, class: int64, head: int64) -> unit {
 
 waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: bool) -> unit {
     kaku name="runtime_alloc";moshi(worker_roots_enabled(code)){name="runtime_alloc_legacy";}
+    // Heap-lock allocation (docs/darwin-thread-heap-exclusion-design.md, section 11): runtime_alloc_try is the same allocator with x21 = 256 (try mode).
+    // In try mode every edge that would collect, grow the heap, map a large object or report out-of-memory returns 0 instead, without any side effect,
+    // and the caller falls back to the ordinary Epoch path. The caller holds the allocation lock; nothing here polls or blocks.
+    kaku lock=alloc_lock_enabled(code);
+    moshi(lock){
+        arm64.assembler_label(code, "runtime_alloc_try");
+        emit(code, arm64.stp_pre_x(29, 30, 31, -16)); emit(code, arm64.add_imm_x(29, 31, 0, iie));
+        emit(code, arm64.stp_pre_x(19, 20, 31, -16)); emit(code, arm64.stp_pre_x(21, 22, 31, -16));
+        move_x(code, 19, 0); move_x(code, 20, 1); emit(code, arm64.movz_x(21, 256, 0));
+        arm64.assembler_b(code, "runtime_alloc_body");
+    }
     arm64.assembler_label(code, name);
     emit(code, arm64.stp_pre_x(29, 30, 31, -16)); emit(code, arm64.add_imm_x(29, 31, 0, iie));
     emit(code, arm64.stp_pre_x(19, 20, 31, -16)); emit(code, arm64.stp_pre_x(21, 22, 31, -16));
     move_x(code, 19, 0); move_x(code, 20, 1); emit(code, arm64.movz_x(21, 0, 0));
+    arm64.assembler_label(code, "runtime_alloc_body");
     move_bits(code, 9, uint32(0), uint32(runtime_max_heap_bytes));
     emit(code, arm64.cmp_x(19, 9)); arm64.assembler_b_cond(code, 8, "runtime_alloc_fail");
     moshi (gc_stress) {
+        moshi(alloc_lock_stress_enabled(code)){emit(code,arm64.cmp_imm_x(21,256,iie));arm64.assembler_b_cond(code,2,"runtime_stress_try_skip");}
         moshi(old_mark_proto_enabled(code)){
             arm64.assembler_bl(code,"old_stress_minor");arm64.assembler_cbz_x(code,9,"runtime_stress_major");arm64.assembler_bl(code,"gen_minor");arm64.assembler_b(code,"runtime_stress_collected");arm64.assembler_label(code,"runtime_stress_major");
         }
         arm64.assembler_bl(code,"runtime_collect");
         moshi(old_mark_proto_enabled(code)){arm64.assembler_label(code,"runtime_stress_collected");}
         emit(code,arm64.movz_x(21,1,0));
+        moshi(alloc_lock_stress_enabled(code)){arm64.assembler_label(code,"runtime_stress_try_skip");}
     }
     arm64.assembler_bl(code,"memory_sample");
     arm64.assembler_label(code, "runtime_alloc_retry");
@@ -1895,6 +1972,7 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     emit(code,arm64.ldr_x(9,23,memory_Goal)); emit(code,arm64.cmp_x(10,9)); arm64.assembler_b_cond(code,8,"los_alloc_exhausted");
     emit(code,arm64.ldr_x(10,23,los_Threshold)); arm64.assembler_cbnz_x(code,10,"los_threshold_ready");
     move_bits(code,10,uint32(0),uint32(131072)); arm64.assembler_label(code,"los_threshold_ready"); emit(code,arm64.cmp_x(22,10)); arm64.assembler_b_cond(code,3,"los_alloc_small");
+    moshi(lock){emit(code,arm64.cmp_imm_x(21,256,iie)); arm64.assembler_b_cond(code,2,"los_alloc_exhausted");}
     arm64.assembler_bl(code,"los_alloc"); arm64.assembler_cbnz_x(code,0,"runtime_alloc_done"); arm64.assembler_b(code,"los_alloc_exhausted");
     arm64.assembler_label(code,"los_alloc_small");
     move_x(code,0,23); emit(code,arm64.add_imm_x(1,23,3072,iie)); emit(code,arm64.ldr_x(2,23,8)); emit(code,arm64.sub_x(3,2,1)); emit(code,arm64.ldr_x(4,23,0)); emit(code,arm64.sub_x(4,4,1)); emit(code,arm64.add_x(4,4,22)); emit(code,arm64.movz_x(5,0,0)); arm64.assembler_bl(code,"memory.commit"); arm64.assembler_cbz_x(code,0,"los_alloc_exhausted");
@@ -1932,6 +2010,7 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     emit(code, arm64.ldr_x(13, 23, 0)); emit(code, arm64.add_x(14, 13, 22)); emit(code, arm64.ldr_x(9, 23, 8)); emit(code, arm64.cmp_x(14, 9));
     arm64.assembler_b_cond(code, 9, "runtime_alloc_bump");
     arm64.assembler_label(code,"los_alloc_exhausted");
+    moshi(lock){kaku real=block_label("runtime_alloc_real_",len(code.words)); emit(code,arm64.cmp_imm_x(21,256,iie)); arm64.assembler_b_cond(code,3,real); emit(code,arm64.movz_x(0,0,0)); arm64.assembler_b(code,"runtime_alloc_done"); arm64.assembler_label(code,real);}
     emit(code, arm64.cmp_imm_x(21, 2, iie)); arm64.assembler_b_cond(code, 2, "runtime_alloc_fail");
     emit(code, arm64.add_imm_x(21, 21, 1, iie)); emit(code, arm64.cmp_imm_x(21, 1, iie));
     arm64.assembler_b_cond(code, 1, "gen_alloc_major");
@@ -1944,7 +2023,9 @@ waza emit_runtime_alloc(code: arm64.Assembler, gc_stress: bool, observation: boo
     move_x(code,0,19); arm64.assembler_bl(code,"memory_grow"); arm64.assembler_b(code, "runtime_alloc_retry");
     arm64.assembler_label(code, "runtime_alloc_bump");
     emit(code, arm64.str_x(14, 23, 0)); emit(code, arm64.str_x(20, 13, 0)); emit(code, arm64.sub_imm_x(9, 22, 16, iie)); emit(code, arm64.str_x(9, 13, 8)); emit(code, arm64.add_imm_x(0, 13, 16, iie)); arm64.assembler_b(code, "runtime_alloc_done");
-    arm64.assembler_label(code, "runtime_alloc_fail"); emit(code,arm64.add_imm_x(9,19,31,iie)); emit(code,arm64.movn_x(10,15,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.str_x(9,23,2816)); emit(code, arm64.movz_x(0, 0, 0));
+    arm64.assembler_label(code, "runtime_alloc_fail");
+    moshi(lock){kaku real=block_label("runtime_alloc_real_",len(code.words)); emit(code,arm64.cmp_imm_x(21,256,iie)); arm64.assembler_b_cond(code,3,real); emit(code,arm64.movz_x(0,0,0)); arm64.assembler_b(code,"runtime_alloc_done"); arm64.assembler_label(code,real);}
+    emit(code,arm64.add_imm_x(9,19,31,iie)); emit(code,arm64.movn_x(10,15,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.str_x(9,23,2816)); emit(code, arm64.movz_x(0, 0, 0));
     arm64.assembler_label(code, "runtime_alloc_done");
     arm64.assembler_cbz_x(code, 0, "gen_alloc_registered"); arm64.assembler_bl(code, "gen_register");
     arm64.assembler_label(code, "gen_alloc_registered");
@@ -2266,7 +2347,29 @@ koukai waza compile_with_public_threads(file:mochi.File,capacity:int64,gc_stress
     moshi(start_id<0 || start_id>=len(file.functions) || join_id<0 || join_id>=len(file.functions) || start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
     kaku s=file.functions[start_id];kaku j=file.functions[join_id];
     moshi(s.parameter_count!=1 || !s.returns_value || j.parameter_count!=1 || !j.returns_value){kaesu failed(LowerError.InvalidFunction());}
-    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3);
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,hai,0,iie);
+}
+// Diagnostic build of the public thread image (mio build --observe): the heap observation record of the single-threaded runtime (collection counts,
+// pause histogram, live/peak bytes, on stderr at exit) plus per-thread timing counters of the epoch protocol (worker_roots.mio, label worker_observe,
+// printed as `mio-thread name=value` lines on stderr by the main thread when it ends). `retention` false builds the same image without bounded epoch
+// retention so the epoch counts of the two can be compared. Never used for timing; a normal build contains none of this code.
+// Test-only image (MIO_ALLOC_LOCK_STRESS=1 with --observe): the real allocation lock fast path next to frequent real collections. See
+// docs/darwin-thread-heap-exclusion-design.md section 12. Never selected by default.
+koukai waza compile_with_public_threads_lock_stress(file:mochi.File,capacity:int64,start_id:int64,join_id:int64,violate:bool) -> LowerResult {
+    moshi(start_id<0||join_id<0||start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaku mode=1;moshi(violate){mode=2;}
+    kaesu compile_worker_target(file,hai,capacity,hai,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,hai,mode,iie);
+}
+// Test-only entry that forces the allocation wait guard and kernel errno paths.
+koukai waza compile_with_public_threads_wait_test(file:mochi.File,capacity:int64,start_id:int64,join_id:int64,mode:int64) -> LowerResult {
+    moshi(start_id<0||join_id<0||start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaesu compile_worker_target(file,mode==5,capacity,hai,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,hai,mode,iie);
+}
+koukai waza compile_with_public_threads_observed(file:mochi.File,capacity:int64,gc_stress:bool,start_id:int64,join_id:int64,retention:bool) -> LowerResult {
+    moshi(start_id<0 || start_id>=len(file.functions) || join_id<0 || join_id>=len(file.functions) || start_id==join_id){kaesu failed(LowerError.InvalidFunction());}
+    kaku s=file.functions[start_id];kaku j=file.functions[join_id];
+    moshi(s.parameter_count!=1 || !s.returns_value || j.parameter_count!=1 || !j.returns_value){kaesu failed(LowerError.InvalidFunction());}
+    kaesu compile_worker_target(file,gc_stress,capacity,hai,iie,hai,[start_id,join_id,-1,-1],iie,32768,iie,iie,3,retention,0,iie);
 }
 // Experimental Old collector with typed SATB and coordinated allocation/Minor.
 // Unsupported writes still Abort/join. This is not full E4 capability acceptance.
@@ -2295,24 +2398,41 @@ waza compile_old_profile(file:mochi.File,capacity:int64,queue_slots:int64,gc_str
     kaesu compile_worker_impl(file,gc_stress,capacity,iie,iie,hai,bindings,hai,queue_slots,full_sweep,release_fault);
 }
 waza compile_worker_impl(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool) -> LowerResult {
-    kaesu compile_worker_target(input_file,gc_stress,capacity,observation,adaptive,attached,worker_bindings,old_proto,queue_slots,full_sweep,release_fault,0);
+    kaesu compile_worker_target(input_file,gc_stress,capacity,observation,adaptive,attached,worker_bindings,old_proto,queue_slots,full_sweep,release_fault,0,hai,0,iie);
 }
 // Linux AArch64 target: the same lowering and runtime as Darwin, with every Darwin system call routed through the
 // linux_syscall adapter (linuxabi.mio). The caller links the words with an ELF container (kiso/aot/linuxarm64).
 koukai waza compile_linux_arm64(file: mochi.File, capacity: int64, gc_stress: bool) -> LowerResult {
-    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,1);
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,1,hai,0,iie);
 }
 // Windows ARM64 target: the same lowering and runtime, with every Darwin system call routed through the windows_syscall adapter
 // (winabi.mio, Win32 imports) and a PE entry routine windows_start. The caller packages the words with kiso/aot/winarm64.
 koukai waza compile_windows_arm64(file: mochi.File, capacity: int64, gc_stress: bool) -> LowerResult {
-    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,2);
+    kaesu compile_worker_target(file,gc_stress,capacity,iie,iie,iie,[],iie,32768,iie,iie,2,hai,0,iie);
 }
-waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool, abi: int64) -> LowerResult {
+waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: int64, observation: bool, adaptive: bool, attached:bool, worker_bindings:[]int64, old_proto:bool, queue_slots:int64, full_sweep:bool, release_fault:bool, abi: int64, retention: bool, lock_stress: int64, allow_c: bool) -> LowerResult {
+    moshi (mochi.has_win64_c(input_file)) { kaesu failed(LowerError.UnsupportedNative(-64)); }
     kaku file = input_file;
     kaku metadata_bytes = runtime_metadata_bytes;
     moshi (observation) { metadata_bytes = observation_metadata_bytes; }
     moshi (capacity < 64 || capacity > runtime_max_heap_bytes || capacity - (capacity / 16) * 16 != 0) { kaesu failed(LowerError.InvalidOperand(1)); }
     moshi (file.version < 1 || file.version > 16 || file.global_count < 0 || file.global_count > 2048) { kaesu failed(LowerError.InvalidOperand(1)); }
+    kaku ffi = iie; kaku scan = 0;
+    aida (scan < len(file.functions)) {
+        kaku function = file.functions[scan];
+        moshi (cabi.is_external(function.name)) {
+            kaku signature = cabi.signature(function.name, function.parameter_count, function.returns_value);
+            // 间接调用和 []uint8 数据指针参数只有 Linux x86-64 后端实现。
+            kaku linux_only = signature.indirect; kaku lp = 0;
+            aida (lp < len(signature.parameters)) { moshi (signature.parameters[lp] == 109) { linux_only = hai; } lp = lp + 1; }
+            moshi (!allow_c || !signature.valid || linux_only || len(function.instructions) != 0 ||
+                len(function.captures) != 0 || function.local_count != function.parameter_count) {
+                kaesu failed(LowerError.UnsupportedNative((scan + 1) * 1000000));
+            }
+            ffi = hai;
+        }
+        scan = scan + 1;
+    }
     kaku malformed = instruction_error(file); moshi (malformed != mu) { kaesu failed(malformed); }
     kaku specialized = specialize(file);
     file = specialized.file;
@@ -2345,6 +2465,17 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi(attached){arm64.assembler_label(code,"attached_roots_enabled");}
     moshi(len(worker_bindings)>0){arm64.assembler_label(code,"worker_roots_enabled");}
     moshi(abi!=3){arm64.assembler_label(code,"worker_evidence");}
+    moshi(observation && abi==3 && len(worker_bindings)>0){arm64.assembler_label(code,"worker_observe");}
+    moshi(!retention){arm64.assembler_label(code,"worker_no_retention");}
+    moshi(len(worker_bindings)>0 && retention && (!gc_stress || lock_stress>0) && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock");}
+    moshi(lock_stress>0 && len(worker_bindings)>0 && retention && abi==3 && observation && gc_stress && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock_stress");}
+    moshi(lock_stress==2 && len(worker_bindings)>0 && retention && abi==3 && observation && gc_stress && !old_proto && !full_sweep){arm64.assembler_label(code,"worker_alloc_lock_violate");}
+    moshi(observation && abi==3 && len(worker_bindings)>0 && lock_stress>=3){
+        arm64.assembler_label(code,"worker_alloc_wait_test");
+        moshi(lock_stress==3){arm64.assembler_label(code,"worker_alloc_wait_owner_test");}
+        moshi(lock_stress==4){arm64.assembler_label(code,"worker_alloc_wait_error_test");}
+        moshi(lock_stress==5){arm64.assembler_label(code,"worker_alloc_wait_park_test");}
+    }
     moshi(old_proto){arm64.assembler_label(code,"old_mark_proto_enabled");}
     moshi(full_sweep){arm64.assembler_label(code,"old_sweep_enabled");}
     moshi(release_fault){arm64.assembler_label(code,"sweep_unmap_fault_enabled");}
@@ -2395,6 +2526,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi(worker_roots_enabled(code) && arm64.assembler_label_word(code,"worker_evidence")>=0){arm64.assembler_bl(code,"attached_workers_join_all");}
     moshi (uses_testing_packet(file)) { emit_testing_completion(code); }
     moshi (managed && observation) { arm64.assembler_bl(code, "observation_dump"); }
+    moshi (arm64.assembler_label_word(code,"worker_observe")>=0) { arm64.assembler_bl(code,"worker_observation_dump"); }
     moshi (native_fs) { arm64.assembler_bl(code, "nativefs_cleanup"); }
     moshi(attached){arm64.assembler_bl(code,"attached_roots_close");}
     moshi (testing) {
@@ -2402,6 +2534,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
         emit(code, arm64.cmp_imm_x(9, 0, iie)); emit(code, arm64.cset_w(0, 1));
     }
     sore { emit(code, arm64.movz_x(0, 0, 0)); }
+    moshi (ffi) { arm64.assembler_label(code, "cabi_process_exit"); }
     emit(code, arm64.movz_x(16, 1, 0)); emit(code, arm64.svc(128));
     emit_get_field_routine(code); emit_string_equal_routines(code); emit_sha256_native_routine(code);
     arm64.assembler_label(code, "runtime_error");
@@ -2433,7 +2566,8 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
         kaku function = file.functions[id];
         moshi (function.id != id) { kaesu failed(LowerError.UnsupportedClosure()); }
         kaku native_op = nativefs.operation(function.name);
-        moshi (len(function.instructions) == 0 && native_op == nativefs.op_none && !types.is_testing_report(function.name)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
+        kaku external = cabi.is_external(function.name);
+        moshi (len(function.instructions) == 0 && !external && native_op == nativefs.op_none && !types.is_testing_report(function.name)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
         arm64.assembler_label(code, function_label(id));
         moshi (!function_reachable[id]) { arm64.assembler_b(code, "runtime_error"); }
         sore {
@@ -2441,7 +2575,9 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
             moshi(worker_roots_enabled(code) && native_op==25){kaesu failed(LowerError.UnsupportedNative((id+1)*1000000));}
             problem = emit_function_prologue(code, function); moshi (problem != mu) { kaesu failed(problem); }
             kaku bridge=-1;kaku bi=0;aida(bi<len(worker_bindings)){moshi(worker_bindings[bi]==id){bridge=bi;}bi=bi+1;}
-            moshi(bridge>=0){
+            moshi (external) {
+                emit_c_body(code, patches, cabi.signature(function.name, function.parameter_count, function.returns_value), id, adapter_base);
+            } sore { moshi(bridge>=0){
                 kaku roots=emit_shadow_push(code,patches,type_result,id,[]);moshi(roots<0){kaesu failed(LowerError.UnsafeType(id));}
                 emit(code,arm64.ldr_x(0,21,0));kaku names=["attached_worker_start","attached_worker_join","attached_worker_wait","attached_worker_collect"];
                 arm64.assembler_bl(code,names[bridge]);emit_shadow_pop(code,roots);arm64.assembler_b(code,function_end_label(id));
@@ -2457,7 +2593,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
                 problem = emit_block(code, patches, file, type_result, ids, function.instructions, string.concat(function_label(id), "_"), id);
                 moshi (problem != mu) { kaesu failed(problem); }
             }
-            } } emit_function_epilogue(code, id);
+            } } } emit_function_epilogue(code, id);
         }
         id = id + 1;
     }

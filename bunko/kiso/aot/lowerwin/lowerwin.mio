@@ -4,6 +4,8 @@ yobu "kiso/aot/x86_64";
 yobu "kiso/array";
 yobu "kiso/convert";
 yobu "kiso/encoding/mochi";
+yobu "kiso/encoding/win64c";
+yobu "kiso/aot/win64abi";
 yobu "kiso/string";
 
 // Pure Mio Mochi -> Windows AMD64 PE32+ lowering, scalar subset (no heap, no GC).
@@ -15,7 +17,10 @@ yobu "kiso/string";
 // Every emitted function (program functions, entry, runtime routines) is a frame-pointer function with matching
 // RUNTIME_FUNCTION / UNWIND_INFO: push rbp; mov rbp,rsp; [sub rsp,N]; epilogue = lea rsp,[rbp]; pop rbp; ret.
 // Anything outside the supported subset is a compile error: nothing is ignored and there is no VM fallback.
-koukai kata LowerResult { bytes: []uint8; error: string; }
+koukai kata LowerResult {
+    bytes: []uint8;
+    error: string;
+}
 
 koukai teisu io_failure_exit = 111;
 waza failed(message: string) -> LowerResult { kaesu LowerResult { bytes: [], error: message }; }
@@ -33,9 +38,24 @@ waza constant_value(constant: mochi.Constant) -> int64 {
     kaku high = int64(constant.bits.high);
     kaku low = int64(constant.bits.low);
     kaku tag = int64(constant.tag);
-    moshi (tag == 5) { moshi (low >= 128) { kaesu low - 256; } kaesu low; }
-    moshi (tag == 6) { moshi (low >= 32768) { kaesu low - 65536; } kaesu low; }
-    moshi (tag == 7) { moshi (low >= 2147483648) { kaesu low - 4294967296; } kaesu low; }
+    moshi (tag == 5) {
+        moshi (low >= 128) {
+            kaesu low - 256;
+        }
+        kaesu low;
+    }
+    moshi (tag == 6) {
+        moshi (low >= 32768) {
+            kaesu low - 65536;
+        }
+        kaesu low;
+    }
+    moshi (tag == 7) {
+        moshi (low >= 2147483648) {
+            kaesu low - 4294967296;
+        }
+        kaesu low;
+    }
     moshi (tag >= 8) { kaesu low; }
     moshi (high >= 2147483648) { high = high - 4294967296; }
     kaesu high * 4294967296 + low;
@@ -63,7 +83,7 @@ waza close_frame(code: x86_64.Assembler, frames: []pe.FrameFunction, begin: int6
     kaku alloc_offset = 0;
     moshi (alloc > 0) { alloc_offset = 11; }
     array.push(frames, pe.FrameFunction { begin: begin, end: len(code.bytes), push_offset: 1, set_offset: 4,
-        alloc_offset: alloc_offset, alloc_size: alloc });
+            alloc_offset: alloc_offset, alloc_size: alloc });
 }
 
 waza emit_epilogue(code: x86_64.Assembler) -> unit {
@@ -76,7 +96,8 @@ waza emit_epilogue(code: x86_64.Assembler) -> unit {
 waza import_call(code: x86_64.Assembler, patches: []pe.Patch, index: int64) -> unit {
     kaku at = len(code.bytes);
     x86_64.mov_ri(code, x86_64.r11, 0);
-    array.push(patches, pe.Patch { section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.import_section, target_offset: index });
+    array.push(patches, pe.Patch {
+            section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.import_section, target_offset: index });
     x86_64.call_memory(code, x86_64.r11, 0);
 }
 
@@ -84,7 +105,8 @@ waza import_call(code: x86_64.Assembler, patches: []pe.Patch, index: int64) -> u
 waza global_address(code: x86_64.Assembler, patches: []pe.Patch, slot: int64) -> unit {
     kaku at = len(code.bytes);
     x86_64.mov_ri(code, x86_64.rcx, 0);
-    array.push(patches, pe.Patch { section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.data_section, target_offset: slot * 8 });
+    array.push(patches, pe.Patch {
+            section: pe.text_section, offset: at + 2, kind: pe.va64, target: pe.data_section, target_offset: slot * 8 });
 }
 
 // ---- runtime routines (Win64 boundary) -----------------------------------------------------------------------------
@@ -234,7 +256,10 @@ waza data_string(code: x86_64.Assembler, label: string, text: string) -> unit {
     x86_64.label(code, label);
     kaku bytes = string.to_bytes(text);
     kaku at = 0;
-    aida (at < len(bytes)) { x86_64.byte(code, int64(bytes[at])); at = at + 1; }
+    aida (at < len(bytes)) {
+        x86_64.byte(code, int64(bytes[at]));
+        at = at + 1;
+    }
 }
 
 waza emit_runtime(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.FrameFunction) -> unit {
@@ -255,7 +280,11 @@ waza emit_runtime(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.Fram
 waza emit_word(code: x86_64.Assembler, value: int64) -> unit {
     kaku rest = value;
     kaku at = 0;
-    aida (at < 8) { x86_64.byte(code, rest - (rest / 256) * 256); rest = rest / 256; at = at + 1; }
+    aida (at < 8) {
+        x86_64.byte(code, rest - (rest / 256) * 256);
+        rest = rest / 256;
+        at = at + 1;
+    }
 }
 
 // Constant strings are immutable string objects in .text (kind 6 | size << 8, gc word, length, bytes); no heap, no GC.
@@ -269,7 +298,10 @@ waza emit_string_constants(code: x86_64.Assembler, file: mochi.File) -> unit {
             emit_word(code, 0);
             emit_word(code, len(constant.data));
             kaku at = 0;
-            aida (at < len(constant.data)) { x86_64.byte(code, int64(constant.data[at])); at = at + 1; }
+            aida (at < len(constant.data)) {
+                x86_64.byte(code, int64(constant.data[at]));
+                at = at + 1;
+            }
         }
         index = index + 1;
     }
@@ -344,14 +376,17 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
             kaku tag = int64(constant.tag);
             moshi (tag == 2) { x86_64.lea_label(code, x86_64.rax, string_label(operand)); }
             moshi (tag == 1 || (tag >= 5 && tag <= 10)) { x86_64.mov_ri(code, x86_64.rax, constant_value(constant)); }
-            moshi (tag != 1 && tag != 2 && !(tag >= 5 && tag <= 10)) { kaesu string.concat("UNSUPPORTED_CONSTANT_TAG ", convert.format_int(tag)); }
+            moshi (tag != 1 && tag != 2 && !(tag >= 5 && tag <= 10)) {
+                kaesu string.concat("UNSUPPORTED_CONSTANT_TAG ", convert.format_int(tag));
+            }
             x86_64.push_r(code, x86_64.rax);
         }
         moshi (opcode == 2 || opcode == 4 || opcode == 5 || opcode == 6) {
             kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 0), iie);
             moshi (bad == "") { bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 1), iie); }
             moshi (bad != "") { kaesu bad; }
-            x86_64.pop_r(code, x86_64.rcx); x86_64.pop_r(code, x86_64.rax);
+            x86_64.pop_r(code, x86_64.rcx);
+            x86_64.pop_r(code, x86_64.rax);
             moshi (opcode == 2) { x86_64.add_rr(code, x86_64.rax, x86_64.rcx); }
             moshi (opcode == 4) { x86_64.sub_rr(code, x86_64.rax, x86_64.rcx); }
             moshi (opcode == 5) { x86_64.imul_rr(code, x86_64.rax, x86_64.rcx); }
@@ -377,7 +412,8 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
         moshi (opcode == 7) {
             kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 0), iie);
             moshi (bad != "") { kaesu bad; }
-            x86_64.pop_r(code, x86_64.rax); x86_64.neg_r(code, x86_64.rax);
+            x86_64.pop_r(code, x86_64.rax);
+            x86_64.neg_r(code, x86_64.rax);
             emit_normalize(code, types.integer_descriptor(analysis, stack_node(analysis, function_id, offset, 0)));
             x86_64.push_r(code, x86_64.rax);
         }
@@ -388,7 +424,9 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
         moshi (opcode == 10) {
             kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 0), hai);
             moshi (bad != "") { kaesu bad; }
-            x86_64.pop_r(code, x86_64.rax); x86_64.mov_ri(code, x86_64.rcx, 1); x86_64.xor_rr(code, x86_64.rax, x86_64.rcx);
+            x86_64.pop_r(code, x86_64.rax);
+            x86_64.mov_ri(code, x86_64.rcx, 1);
+            x86_64.xor_rr(code, x86_64.rax, x86_64.rcx);
             x86_64.push_r(code, x86_64.rax);
         }
         moshi (opcode >= 11 && opcode <= 16) {
@@ -396,7 +434,8 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
             kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 0), equality);
             moshi (bad == "") { bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 1), equality); }
             moshi (bad != "") { kaesu bad; }
-            x86_64.pop_r(code, x86_64.rcx); x86_64.pop_r(code, x86_64.rax);
+            x86_64.pop_r(code, x86_64.rcx);
+            x86_64.pop_r(code, x86_64.rax);
             x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
             x86_64.setcc_rax(code, condition_for(opcode));
             x86_64.push_r(code, x86_64.rax);
@@ -405,7 +444,8 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
         moshi (opcode == 18) {
             kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, 0), hai);
             moshi (bad != "") { kaesu bad; }
-            x86_64.pop_r(code, x86_64.rax); x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+            x86_64.pop_r(code, x86_64.rax);
+            x86_64.test_rr(code, x86_64.rax, x86_64.rax);
             x86_64.jcc(code, x86_64.cc_e, block_label(prefix, operand));
         }
         moshi (opcode == 19 || opcode == 20) {
@@ -414,10 +454,18 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
             moshi (node < 0) { kaesu "MISSING_TYPE_INFO"; }
             moshi (types.type_nullable(analysis, node)) { kaesu "UNSUPPORTED_NULLABLE"; }
             kaku kind = types.type_kind(analysis, node);
-            moshi (kind != types.type_integer && kind != types.type_bool && kind != types.type_string_id) { kaesu string.concat("UNSUPPORTED_GLOBAL_TYPE ", convert.format_int(kind)); }
+            moshi (kind != types.type_integer && kind != types.type_bool && kind != types.type_string_id) {
+                kaesu string.concat("UNSUPPORTED_GLOBAL_TYPE ", convert.format_int(kind));
+            }
             global_address(code, patches, operand);
-            moshi (opcode == 19) { x86_64.pop_r(code, x86_64.rax); x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax); }
-            moshi (opcode == 20) { x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 0); x86_64.push_r(code, x86_64.rax); }
+            moshi (opcode == 19) {
+                x86_64.pop_r(code, x86_64.rax);
+                x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rax);
+            }
+            moshi (opcode == 20) {
+                x86_64.mov_load(code, x86_64.rax, x86_64.rcx, 0);
+                x86_64.push_r(code, x86_64.rax);
+            }
         }
         moshi (opcode == 22) {
             kaku node = stack_node(analysis, function_id, offset, 0);
@@ -438,10 +486,18 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
             moshi (node < 0) { kaesu "MISSING_TYPE_INFO"; }
             moshi (types.type_nullable(analysis, node)) { kaesu "UNSUPPORTED_NULLABLE"; }
             kaku kind = types.type_kind(analysis, node);
-            moshi (kind != types.type_integer && kind != types.type_bool && kind != types.type_string_id) { kaesu string.concat("UNSUPPORTED_LOCAL_TYPE ", convert.format_int(kind)); }
+            moshi (kind != types.type_integer && kind != types.type_bool && kind != types.type_string_id) {
+                kaesu string.concat("UNSUPPORTED_LOCAL_TYPE ", convert.format_int(kind));
+            }
             kaku disp = local_disp(parameters, operand);
-            moshi (opcode == 24) { x86_64.mov_load(code, x86_64.rax, x86_64.rbp, disp); x86_64.push_r(code, x86_64.rax); }
-            moshi (opcode != 24) { x86_64.pop_r(code, x86_64.rax); x86_64.mov_store(code, x86_64.rbp, disp, x86_64.rax); }
+            moshi (opcode == 24) {
+                x86_64.mov_load(code, x86_64.rax, x86_64.rbp, disp);
+                x86_64.push_r(code, x86_64.rax);
+            }
+            moshi (opcode != 24) {
+                x86_64.pop_r(code, x86_64.rax);
+                x86_64.mov_store(code, x86_64.rbp, disp, x86_64.rax);
+            }
         }
         moshi (opcode == 25) {
             moshi (operand >= len(file.functions)) { kaesu "INVALID_FUNCTION_INDEX"; }
@@ -449,7 +505,9 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
             kaku argument = 0;
             aida (argument < callee.parameter_count) {
                 kaku bad = scalar_operand(analysis, stack_node(analysis, function_id, offset, argument), hai);
-                moshi (bad != "" && types.type_kind(analysis, stack_node(analysis, function_id, offset, argument)) != types.type_string_id) { kaesu bad; }
+                moshi (bad != "" && types.type_kind(analysis, stack_node(analysis, function_id, offset, argument)) != types.type_string_id) {
+                    kaesu bad;
+                }
                 argument = argument + 1;
             }
             x86_64.call(code, function_label(operand));
@@ -468,7 +526,7 @@ waza emit_block(code: x86_64.Assembler, patches: []pe.Patch, file: mochi.File, a
 }
 
 waza emit_function(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.FrameFunction, file: mochi.File,
-    analysis: types.TypeAnalysis, index: int64, reachable: bool) -> string {
+    analysis: types.TypeAnalysis, index: int64, reachable: bool, import_slot: int64) -> string {
     kaku function = file.functions[index];
     moshi (!reachable) {
         kaku begin = open_frame(code, function_label(index), 0);
@@ -478,6 +536,7 @@ waza emit_function(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.Fra
         kaesu "";
     }
     moshi (len(function.captures) != 0) { kaesu string.concat(function.name, ": UNSUPPORTED_CLOSURE"); }
+    moshi (win64c.is_external(function.name)) { win64abi.emit(code, patches, frames, function, function_label(index), import_slot); kaesu ""; }
     moshi (len(function.instructions) == 0) {
         moshi (!native_exit(function.name) || function.parameter_count != 1 || function.returns_value) {
             kaesu string.concat("UNSUPPORTED_NATIVE_FUNCTION ", function.name);
@@ -501,7 +560,10 @@ waza emit_function(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.Fra
     moshi (locals > 0) {
         x86_64.mov_ri(code, x86_64.rax, 0);
         kaku slot = 0;
-        aida (slot < locals) { x86_64.mov_store(code, x86_64.rbp, -8 * (slot + 1), x86_64.rax); slot = slot + 1; }
+        aida (slot < locals) {
+            x86_64.mov_store(code, x86_64.rbp, -8 * (slot + 1), x86_64.rax);
+            slot = slot + 1;
+        }
     }
     kaku body = emit_block(code, patches, file, analysis, function.instructions, string.concat("f", convert.format_int(index)), index, function.parameter_count);
     moshi (body != "") { kaesu string.concat(function.name, string.concat(": ", body)); }
@@ -511,6 +573,9 @@ waza emit_function(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.Fra
 }
 
 koukai waza compile(file: mochi.File) -> LowerResult {
+    kaku reached = types.reachable_functions(file);
+    kaku plan = win64abi.imports(file, reached, [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["GetStdHandle", "WriteFile", "ExitProcess"] }]);
+    moshi (plan.error != "") { kaesu failed(plan.error); }
     kaku analysis = types.analyze_types(file);
     kaku code = x86_64.assembler();
     kaku patches: []pe.Patch = [];
@@ -523,10 +588,9 @@ koukai waza compile(file: mochi.File) -> LowerResult {
     x86_64.call(code, "rt.exit");
     emit_epilogue(code);
     close_frame(code, frames, begin, 0);
-    kaku reached = types.reachable_functions(file);
     kaku index = 0;
     aida (index < len(file.functions)) {
-        kaku failure = emit_function(code, patches, frames, file, analysis, index, reached[index]);
+        kaku failure = emit_function(code, patches, frames, file, analysis, index, reached[index], plan.slots[index]);
         moshi (failure != "") { kaesu failed(failure); }
         index = index + 1;
     }
@@ -534,9 +598,10 @@ koukai waza compile(file: mochi.File) -> LowerResult {
     emit_string_constants(code, file);
     kaku assembled = x86_64.assemble(code);
     moshi (assembled.error != "") { kaesu failed(assembled.error); }
+    win64abi.patch_imports(plan, patches);
     kaku image = pe.executable_framed(pe.ImageSpec { text: assembled.bytes, rdata: [], data: [], zero_fill: 8 * file.global_count, entry: 0,
-        imports: [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["GetStdHandle", "WriteFile", "ExitProcess"] }],
-        patches: patches, unwind: [] }, frames);
+            imports: plan.libraries,
+            patches: patches, unwind: [] }, frames);
     moshi (image.error != mu) { kaesu failed("PE_IMAGE_ERROR"); }
     kaesu LowerResult { bytes: image.bytes, error: "" };
 }

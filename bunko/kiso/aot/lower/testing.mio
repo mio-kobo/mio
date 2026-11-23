@@ -18,7 +18,7 @@ waza testing_counter_address(code: arm64.Assembler, patches: []macho.AddressPatc
     emit(code, arm64.Instruction { word: uint32(0), error: mu });
     emit(code, arm64.Instruction { word: uint32(0), error: mu });
     array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1,
-        target: macho.data_target(), target_offset: slot * 8, register: 8 });
+            target: macho.data_target(), target_offset: slot * 8, register: 8 });
 }
 
 // report records every failure and returns normally, as the reference recorder
@@ -26,35 +26,72 @@ waza testing_counter_address(code: arm64.Assembler, patches: []macho.AddressPatc
 // the first failed expectation or turn a failed assertion into success.
 waza emit_testing_report(code: arm64.Assembler, patches: []macho.AddressPatch, slot: int64,
     analysis: types.TypeAnalysis, function_id: int64, packet: bool) -> unit {
-    emit(code, arm64.ldr_x(9, 21, 0)); emit_unbox_register(code, analysis, analysis.locals[function_id][0], 9);
+    emit(code, arm64.ldr_x(9, 21, 0));
+    emit_unbox_register(code, analysis, analysis.locals[function_id][0], 9);
     arm64.assembler_cbnz_x(code, 9, "testing_report_done");
-    moshi(worker_roots_enabled(code)){arm64.assembler_bl(code,"attached_heap_enter");}
+    moshi (worker_roots_enabled(code)) { arm64.assembler_bl(code, "attached_heap_enter"); }
     testing_counter_address(code, patches, slot);
-    emit(code, arm64.ldr_x(9, 8, 0)); emit(code, arm64.add_imm_x(9, 9, 1, iie)); emit(code, arm64.str_x(9, 8, 0));
-    emit(code, arm64.ldr_x(9, 21, 8)); emit_string_view(code);
+    emit(code, arm64.ldr_x(9, 8, 0));
+    emit(code, arm64.add_imm_x(9, 9, 1, iie));
+    emit(code, arm64.str_x(9, 8, 0));
+    emit(code, arm64.ldr_x(9, 21, 8));
+    emit_string_view(code);
     moshi (packet) {
-        emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(13, 31, 0)); emit(code, arm64.str_x(10, 31, 8));
+        emit(code, arm64.sub_imm_x(31, 31, 32, iie));
+        emit(code, arm64.str_x(13, 31, 0));
+        emit(code, arm64.str_x(10, 31, 8));
         // Length-prefixed bytes preserve newlines/NUL and distinguish assertion
         // data from user stderr. Only test-linked images ever write fd 3.
-        emit(code, arm64.movz_x(0, 3, 0)); emit(code, arm64.add_imm_x(1, 31, 8, iie)); emit(code, arm64.movz_x(2, 8, 0)); emit(code, arm64.movz_x(16, 4, 0)); emit_print_boundary(code);
-        emit(code, arm64.movz_x(0, 3, 0)); emit(code, arm64.ldr_x(1, 31, 0)); emit(code, arm64.ldr_x(2, 31, 8)); emit(code, arm64.movz_x(16, 4, 0)); emit_print_boundary(code);
-        emit(code, arm64.ldr_x(13, 31, 0)); emit(code, arm64.ldr_x(10, 31, 8)); emit(code, arm64.add_imm_x(31, 31, 32, iie));
+        emit(code, arm64.movz_x(0, 3, 0));
+        emit(code, arm64.add_imm_x(1, 31, 8, iie));
+        emit(code, arm64.movz_x(2, 8, 0));
+        emit(code, arm64.movz_x(16, 4, 0));
+        emit_print_boundary(code);
+        emit(code, arm64.movz_x(0, 3, 0));
+        emit(code, arm64.ldr_x(1, 31, 0));
+        emit(code, arm64.ldr_x(2, 31, 8));
+        emit(code, arm64.movz_x(16, 4, 0));
+        emit_print_boundary(code);
+        emit(code, arm64.ldr_x(13, 31, 0));
+        emit(code, arm64.ldr_x(10, 31, 8));
+        emit(code, arm64.add_imm_x(31, 31, 32, iie));
     }
-    emit(code, arm64.movz_x(0, 2, 0)); move_x(code, 1, 13); move_x(code, 2, 10);
-    emit(code, arm64.movz_x(16, 4, 0)); emit_print_boundary(code);
+    emit(code, arm64.movz_x(0, 2, 0));
+    move_x(code, 1, 13);
+    move_x(code, 2, 10);
+    emit(code, arm64.movz_x(16, 4, 0));
+    emit_print_boundary(code);
     // A separate stack byte supplies the newline without an embedded string.
-    emit(code, arm64.sub_imm_x(31, 31, 16, iie)); emit(code, arm64.movz_x(9, 10, 0)); emit(code, arm64.strb_w(9, 31, 0));
-    emit(code, arm64.movz_x(0, 2, 0)); emit(code, arm64.add_imm_x(1, 31, 0, iie)); emit(code, arm64.movz_x(2, 1, 0));
-    emit(code, arm64.movz_x(16, 4, 0)); emit_print_boundary(code); emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    emit(code, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(code, arm64.movz_x(9, 10, 0));
+    emit(code, arm64.strb_w(9, 31, 0));
+    emit(code, arm64.movz_x(0, 2, 0));
+    emit(code, arm64.add_imm_x(1, 31, 0, iie));
+    emit(code, arm64.movz_x(2, 1, 0));
+    emit(code, arm64.movz_x(16, 4, 0));
+    emit_print_boundary(code);
+    emit(code, arm64.add_imm_x(31, 31, 16, iie));
     arm64.assembler_label(code, "testing_report_done");
 }
 
 waza uses_testing_packet(file: mochi.File) -> bool {
     kaku at = 0;
-    aida (at < len(file.functions)) { moshi (types.is_testing_packet(file.functions[at].name)) { kaesu hai; } at = at + 1; }
+    aida (at < len(file.functions)) {
+        moshi (types.is_testing_packet(file.functions[at].name)) {
+            kaesu hai;
+        }
+        at = at + 1;
+    }
     kaesu iie;
 }
 waza emit_testing_completion(code: arm64.Assembler) -> unit {
-    emit(code, arm64.sub_imm_x(31, 31, 16, iie)); emit(code, arm64.movn_x(9, 0, 0)); emit(code, arm64.str_x(9, 31, 0));
-    emit(code, arm64.movz_x(0, 3, 0)); emit(code, arm64.add_imm_x(1, 31, 0, iie)); emit(code, arm64.movz_x(2, 8, 0)); emit(code, arm64.movz_x(16, 4, 0)); emit_print_boundary(code); emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    emit(code, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(code, arm64.movn_x(9, 0, 0));
+    emit(code, arm64.str_x(9, 31, 0));
+    emit(code, arm64.movz_x(0, 3, 0));
+    emit(code, arm64.add_imm_x(1, 31, 0, iie));
+    emit(code, arm64.movz_x(2, 8, 0));
+    emit(code, arm64.movz_x(16, 4, 0));
+    emit_print_boundary(code);
+    emit(code, arm64.add_imm_x(31, 31, 16, iie));
 }

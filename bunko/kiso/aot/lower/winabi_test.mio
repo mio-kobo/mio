@@ -4,7 +4,12 @@ yobu "kiso/testing";
 
 waza win_label(labels: []arm64.Label, name: string) -> int64 {
     kaku at = 0;
-    aida (at < len(labels)) { moshi (labels[at].name == name) { kaesu labels[at].word; } at = at + 1; }
+    aida (at < len(labels)) {
+        moshi (labels[at].name == name) {
+            kaesu labels[at].word;
+        }
+        at = at + 1;
+    }
     kaesu -1;
 }
 
@@ -12,8 +17,14 @@ waza test_windows_target_routes_every_darwin_syscall_through_the_win32_adapter()
     kaku dar = compile(empty_v14([]));
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
     testing.expect(dar.error == mu && win.error == mu, "both targets lower");
-    kaku at = 0; kaku count = 0;
-    aida (at < len(win.words)) { moshi (win.words[at] == uint32(3556773889)) { count = count + 1; } at = at + 1; }
+    kaku at = 0;
+    kaku count = 0;
+    aida (at < len(win.words)) {
+        moshi (win.words[at] == uint32(3556773889)) {
+            count = count + 1;
+        }
+        at = at + 1;
+    }
     testing.expect(count == 0, "no Darwin SVC #128 survives in a Windows image");
     testing.expect(win_label(win.labels, "windows_syscall") >= 0 && win_label(win.labels, "windows_abi") == 0 && win_label(win.labels, "windows_main") == 0, "windows_abi and windows_main sit at the first word");
     testing.expect(win_label(dar.labels, "windows_syscall") < 0 && win_label(dar.labels, "windows_abi") < 0, "the Darwin image has no adapter");
@@ -23,14 +34,23 @@ waza test_windows_target_routes_every_darwin_syscall_through_the_win32_adapter()
 // Every Win32 call is an IAT call: ADRP/ADD of the slot (patch target kind 3) then ldr x16, [x16]; blr x16.
 waza test_windows_adapter_calls_win32_through_iat_patches() -> unit {
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
-    kaku at = 0; kaku slots: []int64 = [];
+    kaku at = 0;
+    kaku slots: []int64 = [];
     aida (at < len(win.patches)) {
         moshi (win.patches[at].target.kind == 3) {
-            moshi (win.patches[at].register != 16 || win.patches[at].add_at_word != win.patches[at].at_word + 1) { testing.fail("an IAT patch must be an ADRP/ADD pair into x16"); }
+            moshi (win.patches[at].register != 16 || win.patches[at].add_at_word != win.patches[at].at_word + 1) {
+                testing.fail("an IAT patch must be an ADRP/ADD pair into x16");
+            }
             kaku next = win.words[win.patches[at].add_at_word + 1];
             testing.expect(next == arm64.ldr_x(16, 16, 0).word && win.words[win.patches[at].add_at_word + 2] == arm64.blr_x(16).word, "the slot is loaded and called");
-            kaku seen = iie; kaku s = 0;
-            aida (s < len(slots)) { moshi (slots[s] == win.patches[at].target_offset) { seen = hai; } s = s + 1; }
+            kaku seen = iie;
+            kaku s = 0;
+            aida (s < len(slots)) {
+                moshi (slots[s] == win.patches[at].target_offset) {
+                    seen = hai;
+                }
+                s = s + 1;
+            }
             moshi (!seen) { array_push_slot(slots, win.patches[at].target_offset); }
         }
         at = at + 1;
@@ -87,14 +107,17 @@ waza test_windows_process_emulation_exists_and_never_writes_x18() -> unit {
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
     testing.expect(win_label(win.labels, "wx_fork") > 0 && win_label(win.labels, "wx_resume") > win_label(win.labels, "wx_fork"), "fork and the parent resume routine exist");
     testing.expect(win_label(win.labels, "wx_execve") > 0 && win_label(win.labels, "wx_child_done") > 0 && win_label(win.labels, "wx_wait4") > 0 && win_label(win.labels, "wx_poll") > 0, "execve, child completion, wait4 and poll exist");
-    kaku at = win_label(win.labels, "windows_syscall"); kaku bad = 0;
+    kaku at = win_label(win.labels, "windows_syscall");
+    kaku bad = 0;
     aida (at < len(win.words)) {
         // the destination register Rd/Rt is bits 0..4: no instruction of the adapter region may target x18 as a plain
         // destination of ADD/SUB/MOV/LDR immediate forms (the common encodings used here)
         kaku w = int64(win.words[at]);
         kaku rd = w - (w / 32) * 32;
         kaku top = w / 16777216;
-        moshi (rd == 18 && (top == 145 || top == 209 || top == 210 || top == 242 || top == 249 || top == 56 || top == 57 || top == 184 || top == 185 || top == 170)) { bad = bad + 1; }
+        moshi (rd == 18 && (top == 145 || top == 209 || top == 210 || top == 242 || top == 249 || top == 56 || top == 57 || top == 184 || top == 185 || top == 170)) {
+            bad = bad + 1;
+        }
         at = at + 1;
     }
     testing.expect(bad == 0, "no ADD/SUB/MOVZ/MOVK/LDR/STR-load form writes x18 in the Windows code");
@@ -114,15 +137,24 @@ waza test_windows_adapter_allocates_16_byte_aligned_frames() -> unit {
 waza test_windows_resume_restores_callee_saved_registers_and_frame_pointer() -> unit {
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
     kaku resume = win_label(win.labels, "wx_resume");
-    kaku found_x29 = iie; kaku found_x27 = iie; kaku at = resume;
+    kaku found_x29 = iie;
+    kaku found_x27 = iie;
+    kaku at = resume;
     aida (at < resume + 80) {
         moshi (win.words[at] == arm64.ldr_x(29, 16, 200).word) { found_x29 = hai; }
         moshi (win.words[at] == arm64.ldp_x(27, 28, 16, 184).word) { found_x27 = hai; }
         at = at + 1;
     }
     testing.expect(found_x29 && found_x27, "wx_resume reloads x29 and x19-x28 from the fork context");
-    kaku fork = win_label(win.labels, "wx_fork"); kaku saved = iie; at = fork;
-    aida (at < fork + 120) { moshi (win.words[at] == arm64.str_x(29, 11, 200).word) { saved = hai; } at = at + 1; }
+    kaku fork = win_label(win.labels, "wx_fork");
+    kaku saved = iie;
+    at = fork;
+    aida (at < fork + 120) {
+        moshi (win.words[at] == arm64.str_x(29, 11, 200).word) {
+            saved = hai;
+        }
+        at = at + 1;
+    }
     testing.expect(saved, "wx_fork stores x29 in the context");
 }
 
@@ -132,11 +164,24 @@ waza test_windows_adapter_has_winsock_blocks_and_wsa_error_mapping() -> unit {
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
     testing.expect(win.error == mu, "the adapter assembles (no out-of-range compare immediates)");
     kaku names = ["wx_socket", "wx_bind", "wx_connect", "wx_listen", "wx_accept", "wx_setsockopt", "wx_close_socket", "wx_net_failed"];
-    kaku at = 0; kaku missing = 0;
-    aida (at < len(names)) { moshi (win_label(win.labels, names[at]) < 0) { missing = missing + 1; } at = at + 1; }
+    kaku at = 0;
+    kaku missing = 0;
+    aida (at < len(names)) {
+        moshi (win_label(win.labels, names[at]) < 0) {
+            missing = missing + 1;
+        }
+        at = at + 1;
+    }
     testing.expect(missing == 0, "every socket block exists");
-    kaku imports = windows_imports(); kaku seen = 0; at = 0;
-    aida (at < len(imports)) { moshi (imports[at] == "ws2_32.dll") { seen = seen + 1; } at = at + 2; }
+    kaku imports = windows_imports();
+    kaku seen = 0;
+    at = 0;
+    aida (at < len(imports)) {
+        moshi (imports[at] == "ws2_32.dll") {
+            seen = seen + 1;
+        }
+        at = at + 2;
+    }
     testing.expect(seen == 13, "thirteen ws2_32 imports, grouped after kernel32");
 }
 
@@ -150,7 +195,9 @@ waza test_windows_zero_length_io_returns_without_a_win32_call() -> unit {
 // SO_REUSEADDR (Darwin 4) becomes SO_EXCLUSIVEADDRUSE (0xFFFFFFFB = movz #65531; movk #65535, lsl #16) so a live port cannot be hijacked.
 waza test_windows_reuseaddr_becomes_exclusiveaddruse() -> unit {
     kaku win = compile_windows_arm64(empty_v14([]), 1073741824, iie);
-    kaku at = win_label(win.labels, "wx_setsockopt_real"); kaku found = iie; kaku end = at + 40;
+    kaku at = win_label(win.labels, "wx_setsockopt_real");
+    kaku found = iie;
+    kaku end = at + 40;
     aida (at < end) {
         moshi (win.words[at] == arm64.movz_x(2, 65531, 0).word && win.words[at + 1] == arm64.movk_x(2, 65535, 1).word) { found = hai; }
         at = at + 1;

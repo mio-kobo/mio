@@ -3,231 +3,319 @@ yobu "kiso/encoding/binary";
 yobu "kiso/string";
 yobu "kiso/testing";
 
-waza sample() -> ImageSpec {kaesu ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[]};}
-waza u16(bytes:[]uint8, at:int64) -> int64 {kaesu int64(binary.read_u16_le(bytes,at).value);}
-waza u32(bytes:[]uint8, at:int64) -> int64 {kaesu int64(binary.read_u32_le(bytes,at).value);}
-waza u64(bytes:[]uint8, at:int64) -> int64 {kaesu binary.read_i64_le(bytes,at).value;}
+waza sample() -> ImageSpec { kaesu ImageSpec { text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] }; }
+waza u16(bytes: []uint8, at: int64) -> int64 { kaesu int64(binary.read_u16_le(bytes, at).value); }
+waza u32(bytes: []uint8, at: int64) -> int64 { kaesu int64(binary.read_u32_le(bytes, at).value); }
+waza u64(bytes: []uint8, at: int64) -> int64 { kaesu binary.read_i64_le(bytes, at).value; }
 
 waza test_headers_and_determinism() -> unit {
-    kaku image=executable(sample());testing.expect(image.error==mu,"minimal image accepted");
-    testing.expect(len(image.bytes)==1024 && image.layout.headers_size==512 && image.layout.image_size==8192,"separate file/section alignment");
-    kaku b=image.bytes;
-    testing.expect(u16(b,0)==23117 && u32(b,60)==128 && u32(b,128)==17744,"DOS and PE signatures");
-    testing.expect(u16(b,132)==34404 && u16(b,134)==1 && u16(b,148)==240 && u16(b,150)==35,"AMD64 COFF fixed image");
-    testing.expect(u16(b,152)==523 && u32(b,168)==4096 && u64(b,176)==5368709120,"PE32+ entry and image base");
-    testing.expect(u32(b,184)==4096 && u32(b,188)==512 && u32(b,208)==8192 && u32(b,212)==512,"optional header sizes");
-    testing.expect(u16(b,220)==3 && u16(b,222)==256 && u32(b,260)==16,"console NX image and directory count");
-    testing.expect(u32(b,400)==1 && u32(b,404)==4096 && u32(b,408)==512 && u32(b,412)==512 && u32(b,428)==1610612768,"text section header and RX flags");
-    testing.expect(b[512]==uint8(195) && b[1023]==uint8(0),"code and raw padding");
-    kaku again=executable(sample());kaku same=len(b)==len(again.bytes);kaku i=0;
-    aida(i<len(b)){moshi(b[i]!=again.bytes[i]){same=iie;}i=i+1;}testing.expect(same,"timestamps and all padding deterministic");
+    kaku image = executable(sample());
+    testing.expect(image.error == mu, "minimal image accepted");
+    testing.expect(len(image.bytes) == 1024 && image.layout.headers_size == 512 && image.layout.image_size == 8192, "separate file/section alignment");
+    kaku b = image.bytes;
+    testing.expect(u16(b, 0) == 23117 && u32(b, 60) == 128 && u32(b, 128) == 17744, "DOS and PE signatures");
+    testing.expect(u16(b, 132) == 34404 && u16(b, 134) == 1 && u16(b, 148) == 240 && u16(b, 150) == 35, "AMD64 COFF fixed image");
+    testing.expect(u16(b, 152) == 523 && u32(b, 168) == 4096 && u64(b, 176) == 5368709120, "PE32+ entry and image base");
+    testing.expect(u32(b, 184) == 4096 && u32(b, 188) == 512 && u32(b, 208) == 8192 && u32(b, 212) == 512, "optional header sizes");
+    testing.expect(u16(b, 220) == 3 && u16(b, 222) == 256 && u32(b, 260) == 16, "console NX image and directory count");
+    testing.expect(u32(b, 400) == 1 && u32(b, 404) == 4096 && u32(b, 408) == 512 && u32(b, 412) == 512 && u32(b, 428) == 1610612768, "text section header and RX flags");
+    testing.expect(b[512] == uint8(195) && b[1023] == uint8(0), "code and raw padding");
+    kaku again = executable(sample());
+    kaku same = len(b) == len(again.bytes);
+    kaku i = 0;
+    aida (i<len(b)) {
+        moshi (b[i] != again.bytes[i]) {
+            same = iie;
+        }
+        i = i + 1;
+    }
+    testing.expect(same, "timestamps and all padding deterministic");
 }
 
 waza test_sections_nonzero_entry_and_zero_fill() -> unit {
-    kaku image=executable(ImageSpec {text:[144,195],rdata:[1,0,255],data:[7],zero_fill:8192,entry:1,imports:[],patches:[],unwind:[]});
-    testing.expect(image.error==mu && len(image.layout.sections)==3,"three initialized sections accepted");
-    testing.expect(u32(image.bytes,168)==4097 && image.layout.file_size==2048 && image.layout.image_size==24576,"nonzero entry and virtual extent");
-    testing.expect(image.layout.sections[1].rva==8192 && image.layout.sections[1].flags==1073741888,"rdata is read-only");
-    testing.expect(image.layout.sections[2].rva==12288 && image.layout.sections[2].virtual_size==8193 && image.layout.sections[2].raw_size==512,"data initialized prefix and BSS extent");
-    testing.expect(image.bytes[1024]==uint8(1) && image.bytes[1025]==uint8(0) && image.bytes[1536]==uint8(7),"input bytes preserve embedded NUL");
-    kaku bss=executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:4097,entry:0,imports:[],patches:[],unwind:[]});
-    testing.expect(bss.error==mu && bss.layout.sections[1].offset==0 && bss.layout.sections[1].raw_size==0,"pure BSS has no file payload");
-    testing.expect(bss.layout.file_size==1024 && bss.layout.image_size==16384 && u32(bss.bytes,164)==4097,"pure BSS size accounting");
+    kaku image = executable(ImageSpec { text: [144, 195], rdata: [1, 0, 255], data: [7], zero_fill: 8192, entry: 1, imports: [], patches: [], unwind: [] });
+    testing.expect(image.error == mu && len(image.layout.sections) == 3, "three initialized sections accepted");
+    testing.expect(u32(image.bytes, 168) == 4097 && image.layout.file_size == 2048 && image.layout.image_size == 24576, "nonzero entry and virtual extent");
+    testing.expect(image.layout.sections[1].rva == 8192 && image.layout.sections[1].flags == 1073741888, "rdata is read-only");
+    testing.expect(image.layout.sections[2].rva == 12288 && image.layout.sections[2].virtual_size == 8193 && image.layout.sections[2].raw_size == 512, "data initialized prefix and BSS extent");
+    testing.expect(image.bytes[1024] == uint8(1) && image.bytes[1025] == uint8(0) && image.bytes[1536] == uint8(7), "input bytes preserve embedded NUL");
+    kaku bss = executable(ImageSpec { text: [195], rdata: [], data: [], zero_fill: 4097, entry: 0, imports: [], patches: [], unwind: [] });
+    testing.expect(bss.error == mu && bss.layout.sections[1].offset == 0 && bss.layout.sections[1].raw_size == 0, "pure BSS has no file payload");
+    testing.expect(bss.layout.file_size == 1024 && bss.layout.image_size == 16384 && u32(bss.bytes, 164) == 4097, "pure BSS size accounting");
 }
 
 waza test_file_and_page_boundaries() -> unit {
-    kaku text=array.make[uint8](4096,uint8(195));
-    kaku exact=executable(ImageSpec {text:text,rdata:[1],data:[],zero_fill:0,entry:4095,imports:[],patches:[],unwind:[]});
-    testing.expect(exact.error==mu && exact.layout.sections[1].rva==8192 && exact.layout.sections[1].offset==4608,"exact page does not insert extra page");
-    array.push(text,uint8(195));
-    kaku extra=executable(ImageSpec {text:text,rdata:[1],data:[],zero_fill:0,entry:4096,imports:[],patches:[],unwind:[]});
-    testing.expect(extra.error==mu && extra.layout.sections[0].raw_size==4608 && extra.layout.sections[1].rva==12288,"one byte crosses both alignment boundaries");
+    kaku text = array.make[uint8](4096, uint8(195));
+    kaku exact = executable(ImageSpec { text: text, rdata: [1], data: [], zero_fill: 0, entry: 4095, imports: [], patches: [], unwind: [] });
+    testing.expect(exact.error == mu && exact.layout.sections[1].rva == 8192 && exact.layout.sections[1].offset == 4608, "exact page does not insert extra page");
+    array.push(text, uint8(195));
+    kaku extra = executable(ImageSpec { text: text, rdata: [1], data: [], zero_fill: 0, entry: 4096, imports: [], patches: [], unwind: [] });
+    testing.expect(extra.error == mu && extra.layout.sections[0].raw_size == 4608 && extra.layout.sections[1].rva == 12288, "one byte crosses both alignment boundaries");
 }
 
 waza test_named_imports_and_iat_layout() -> unit {
-    kaku libraries:[]ImportLibrary=[ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess","WriteFile"]},ImportLibrary {name:"USER32.dll",symbols:["MessageBoxA"]}];
-    kaku image=executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:libraries,patches:[],unwind:[]});
-    testing.expect(image.error==mu && len(image.layout.sections)==2,"multiple DLLs accepted");
-    kaku b=image.bytes;kaku base=image.layout.sections[1].offset;kaku rva=image.layout.sections[1].rva;
-    testing.expect(u32(b,272)==rva && u32(b,276)==60 && u32(b,360)==image.layout.iat_rva && u32(b,364)==40,"import and IAT directories include terminators");
-    testing.expect(u32(b,base)==rva+64 && u32(b,base+20)==rva+88 && u32(b,base+40)==0 && u32(b,base+56)==0,"aligned ILT and null descriptor");
-    testing.expect(image.layout.iat_rva==rva+104 && u32(b,base+16)==rva+104 && u32(b,base+36)==rva+128,"distinct IAT ranges per DLL");
-    testing.expect(u64(b,base+64)==u64(b,base+104) && u64(b,base+72)==u64(b,base+112) && u64(b,base+80)==0 && u64(b,base+120)==0,"ILT/IAT thunks and null slots");
-    kaku hint=u64(b,base+64)-rva;
-    testing.expect(hint-(hint/2)*2==0 && u16(b,base+hint)==0 && b[base+hint+2]==uint8(69),"aligned hint/name records");
-    kaku name=u32(b,base+12)-rva;testing.expect(b[base+name]==uint8(75) && b[base+name+12]==uint8(0),"DLL string terminated");
+    kaku libraries: []ImportLibrary = [ImportLibrary {
+            name: "KERNEL32.dll", symbols: ["ExitProcess", "WriteFile"] }, ImportLibrary {
+            name: "USER32.dll", symbols: ["MessageBoxA"] }
+    ];
+    kaku image = executable(ImageSpec { text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: libraries, patches: [], unwind: [] });
+    testing.expect(image.error == mu && len(image.layout.sections) == 2, "multiple DLLs accepted");
+    kaku b = image.bytes;
+    kaku base = image.layout.sections[1].offset;
+    kaku rva = image.layout.sections[1].rva;
+    testing.expect(u32(b, 272) == rva && u32(b, 276) == 60 && u32(b, 360) == image.layout.iat_rva && u32(b, 364) == 40, "import and IAT directories include terminators");
+    testing.expect(u32(b, base) == rva + 64 && u32(b, base + 20) == rva + 88 && u32(b, base + 40) == 0 && u32(b, base + 56) == 0, "aligned ILT and null descriptor");
+    testing.expect(image.layout.iat_rva == rva + 104 && u32(b, base + 16) == rva + 104 && u32(b, base + 36) == rva + 128, "distinct IAT ranges per DLL");
+    testing.expect(u64(b, base + 64) == u64(b, base + 104) && u64(b, base + 72) == u64(b, base + 112) && u64(b, base + 80) == 0 && u64(b, base + 120) == 0, "ILT/IAT thunks and null slots");
+    kaku hint = u64(b, base + 64) - rva;
+    testing.expect(hint - (hint / 2) * 2 == 0 && u16(b, base + hint) == 0 && b[base + hint + 2] == uint8(69), "aligned hint/name records");
+    kaku name = u32(b, base + 12) - rva;
+    testing.expect(b[base + name] == uint8(75) && b[base + name + 12] == uint8(0), "DLL string terminated");
 }
 
 waza test_rva_and_relative_patches_do_not_mutate_inputs() -> unit {
-    kaku text:[]uint8=[0,0,0,0,0,0,0,0,195];kaku data:[]uint8=[0,0,0,0];
-    kaku image=executable(ImageSpec {text:text,rdata:[7],data:data,zero_fill:16,entry:8,imports:[],patches:[
-        Patch {section:text_section,offset:0,kind:rel32,target:rdata_section,target_offset:0},
-        Patch {section:text_section,offset:4,kind:rva32,target:data_section,target_offset:19},
-        Patch {section:data_section,offset:0,kind:rel32,target:text_section,target_offset:8}],unwind:[]});
-    testing.expect(image.error==mu && u32(image.bytes,512)==4092,"forward RIP displacement");
-    testing.expect(u32(image.bytes,516)==12307 && u32(image.bytes,1536)==4294959108,"RVA to BSS and backward rel32");
-    testing.expect(text[0]==uint8(0) && text[4]==uint8(0) && data[0]==uint8(0),"caller arrays remain unchanged");
-    testing.expect(u32(image.bytes,304)==0 && u16(image.bytes,150)==35,"relative/RVA patches do not create base relocations");
+    kaku text: []uint8 = [0, 0, 0, 0, 0, 0, 0, 0, 195];
+    kaku data: []uint8 = [0, 0, 0, 0];
+    kaku image = executable(ImageSpec { text: text, rdata: [7], data: data, zero_fill: 16, entry: 8, imports: [], patches: [
+                Patch { section: text_section, offset: 0, kind: rel32, target: rdata_section, target_offset: 0 },
+                Patch { section: text_section, offset: 4, kind: rva32, target: data_section, target_offset: 19 },
+                Patch { section: data_section, offset: 0, kind: rel32, target: text_section, target_offset: 8 }], unwind: [] });
+    testing.expect(image.error == mu && u32(image.bytes, 512) == 4092, "forward RIP displacement");
+    testing.expect(u32(image.bytes, 516) == 12307 && u32(image.bytes, 1536) == 4294959108, "RVA to BSS and backward rel32");
+    testing.expect(text[0] == uint8(0) && text[4] == uint8(0) && data[0] == uint8(0), "caller arrays remain unchanged");
+    testing.expect(u32(image.bytes, 304) == 0 && u16(image.bytes, 150) == 35, "relative/RVA patches do not create base relocations");
 }
 
 waza test_iat_patch_uses_flat_symbol_index() -> unit {
-    kaku image=executable(ImageSpec {text:[0,0,0,0,195],rdata:[],data:[],zero_fill:0,entry:4,
-        imports:[ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess"]},ImportLibrary {name:"USER32.dll",symbols:["MessageBoxA"]}],
-        patches:[Patch {section:text_section,offset:0,kind:rva32,target:import_section,target_offset:1}],unwind:[]});
-    testing.expect(image.error==mu && u32(image.bytes,512)==image.layout.iat_rva+16,"flattened index skips per-library terminator");
+    kaku image = executable(ImageSpec { text: [0, 0, 0, 0, 195], rdata: [], data: [], zero_fill: 0, entry: 4,
+            imports: [ImportLibrary { name: "KERNEL32.dll", symbols: ["ExitProcess"] }, ImportLibrary { name: "USER32.dll", symbols: ["MessageBoxA"] }],
+            patches: [Patch { section: text_section, offset: 0, kind: rva32, target: import_section, target_offset: 1 }], unwind: [] });
+    testing.expect(image.error == mu && u32(image.bytes, 512) == image.layout.iat_rva + 16, "flattened index skips per-library terminator");
 }
 
 waza test_dir64_blocks_are_sorted_and_padded() -> unit {
-    kaku text=array.make[uint8](8208,uint8(0));
-    kaku image=executable(ImageSpec {text:text,rdata:[1],data:[],zero_fill:0,entry:8,imports:[],patches:[
-        Patch {section:text_section,offset:8192,kind:va64,target:rdata_section,target_offset:0},
-        Patch {section:text_section,offset:4096,kind:va64,target:text_section,target_offset:8},
-        Patch {section:text_section,offset:0,kind:va64,target:text_section,target_offset:8},
-        Patch {section:text_section,offset:16,kind:va64,target:text_section,target_offset:8}],unwind:[]});
-    testing.expect(image.error==mu && len(image.layout.sections)==3,"relocation section appended");
-    kaku s=image.layout.sections[2];kaku b=image.bytes;kaku at=s.offset;
-    testing.expect(u16(b,150)==34 && u16(b,222)==352 && u32(b,304)==s.rva && u32(b,308)==36,"relocation directory and ASLR flags");
-    testing.expect(u32(b,at)==4096 && u32(b,at+4)==12 && u16(b,at+8)==40960 && u16(b,at+10)==40976,"two entries on first page");
-    testing.expect(u32(b,at+12)==8192 && u32(b,at+16)==12 && u16(b,at+20)==40960 && u16(b,at+22)==0,"odd block padded with ABSOLUTE");
-    testing.expect(u32(b,at+24)==12288 && u64(b,image.layout.sections[0].offset+8192)==image_base+16384,"later block and patched absolute VA");
+    kaku text = array.make[uint8](8208, uint8(0));
+    kaku image = executable(ImageSpec { text: text, rdata: [1], data: [], zero_fill: 0, entry: 8, imports: [], patches: [
+                Patch { section: text_section, offset: 8192, kind: va64, target: rdata_section, target_offset: 0 },
+                Patch { section: text_section, offset: 4096, kind: va64, target: text_section, target_offset: 8 },
+                Patch { section: text_section, offset: 0, kind: va64, target: text_section, target_offset: 8 },
+                Patch { section: text_section, offset: 16, kind: va64, target: text_section, target_offset: 8 }], unwind: [] });
+    testing.expect(image.error == mu && len(image.layout.sections) == 3, "relocation section appended");
+    kaku s = image.layout.sections[2];
+    kaku b = image.bytes;
+    kaku at = s.offset;
+    testing.expect(u16(b, 150) == 34 && u16(b, 222) == 352 && u32(b, 304) == s.rva && u32(b, 308) == 36, "relocation directory and ASLR flags");
+    testing.expect(u32(b, at) == 4096 && u32(b, at + 4) == 12 && u16(b, at + 8) == 40960 && u16(b, at + 10) == 40976, "two entries on first page");
+    testing.expect(u32(b, at + 12) == 8192 && u32(b, at + 16) == 12 && u16(b, at + 20) == 40960 && u16(b, at + 22) == 0, "odd block padded with ABSOLUTE");
+    testing.expect(u32(b, at + 24) == 12288 && u64(b, image.layout.sections[0].offset + 8192) == image_base + 16384, "later block and patched absolute VA");
 }
 
 waza test_unwind_small_large_and_leaf_records() -> unit {
-    kaku image=executable(ImageSpec {text:array.make[uint8](64,uint8(195)),rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[
-        UnwindFunction {begin:0,end:16,prolog_size:4,stack_size:40,stack_offset:4},
-        UnwindFunction {begin:16,end:32,prolog_size:7,stack_size:136,stack_offset:7},
-        UnwindFunction {begin:32,end:64,prolog_size:0,stack_size:0,stack_offset:0}]});
-    testing.expect(image.error==mu && len(image.layout.sections)==3,"pdata/xdata emitted");
-    kaku p=image.layout.sections[1];kaku x=image.layout.sections[2];kaku b=image.bytes;
-    testing.expect(u32(b,288)==p.rva && u32(b,292)==36 && u32(b,p.offset)==4096 && u32(b,p.offset+4)==4112 && u32(b,p.offset+8)==x.rva,"exception directory and function range");
-    testing.expect(b[x.offset]==uint8(1) && b[x.offset+2]==uint8(1) && b[x.offset+4]==uint8(4) && b[x.offset+5]==uint8(66),"UWOP_ALLOC_SMALL 40 bytes");
-    testing.expect(b[x.offset+10]==uint8(2) && b[x.offset+13]==uint8(1) && u16(b,x.offset+14)==17,"UWOP_ALLOC_LARGE scaled 136 bytes");
-    testing.expect(u32(b,p.offset+32)==x.rva+16 && x.virtual_size==20 && b[x.offset+18]==uint8(0),"aligned leaf record without codes");
+    kaku image = executable(ImageSpec { text: array.make[uint8](64, uint8(195)), rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [
+                UnwindFunction { begin: 0, end: 16, prolog_size: 4, stack_size: 40, stack_offset: 4 },
+                UnwindFunction { begin: 16, end: 32, prolog_size: 7, stack_size: 136, stack_offset: 7 },
+                UnwindFunction { begin: 32, end: 64, prolog_size: 0, stack_size: 0, stack_offset: 0 }] });
+    testing.expect(image.error == mu && len(image.layout.sections) == 3, "pdata/xdata emitted");
+    kaku p = image.layout.sections[1];
+    kaku x = image.layout.sections[2];
+    kaku b = image.bytes;
+    testing.expect(u32(b, 288) == p.rva && u32(b, 292) == 36 && u32(b, p.offset) == 4096 && u32(b, p.offset + 4) == 4112 && u32(b, p.offset + 8) == x.rva, "exception directory and function range");
+    testing.expect(b[x.offset] == uint8(1) && b[x.offset + 2] == uint8(1) && b[x.offset + 4] == uint8(4) && b[x.offset + 5] == uint8(66), "UWOP_ALLOC_SMALL 40 bytes");
+    testing.expect(b[x.offset + 10] == uint8(2) && b[x.offset + 13] == uint8(1) && u16(b, x.offset + 14) == 17, "UWOP_ALLOC_LARGE scaled 136 bytes");
+    testing.expect(u32(b, p.offset + 32) == x.rva + 16 && x.virtual_size == 20 && b[x.offset + 18] == uint8(0), "aligned leaf record without codes");
 }
 
 waza test_invalid_inputs_fail_without_bytes() -> unit {
-    kaku bad=executable(ImageSpec {text:[],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[]});
-    testing.expect(bad.error!=mu && len(bad.bytes)==0,"empty text rejected");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:1,imports:[],patches:[],unwind:[]}).error!=mu,"entry at end rejected");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:-1,entry:0,imports:[],patches:[],unwind:[]}).error!=mu,"negative BSS rejected");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:9223372036854775807,entry:0,imports:[],patches:[],unwind:[]}).error!=mu,"huge BSS checked before alignment/addition");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:maximum_image_size,entry:0,imports:[],patches:[],unwind:[]}).error!=mu,"total virtual image bound includes headers/text");
+    kaku bad = executable(ImageSpec { text: [], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] });
+    testing.expect(bad.error != mu && len(bad.bytes) == 0, "empty text rejected");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 0, entry: 1, imports: [], patches: [], unwind: [] }).error != mu, "entry at end rejected");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: -1, entry: 0, imports: [], patches: [], unwind: [] }).error != mu, "negative BSS rejected");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 9223372036854775807, entry: 0, imports: [], patches: [], unwind: [] }).error != mu, "huge BSS checked before alignment/addition");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: maximum_image_size, entry: 0, imports: [], patches: [], unwind: [] }).error != mu, "total virtual image bound includes headers/text");
 }
 
 waza test_invalid_import_names_and_duplicates() -> unit {
-    testing.expect(!valid_imports([ImportLibrary {name:"",symbols:["ExitProcess"]}]),"empty DLL");
-    testing.expect(!valid_imports([ImportLibrary {name:"KERNEL32.dll",symbols:[]}]),"empty symbol list");
-    kaku nul=string.from_utf8([69,0,120]);testing.expect(nul!=mu,"valid UTF8 test input");
-    moshi(nul!=mu){testing.expect(!valid_imports([ImportLibrary {name:"KERNEL32.dll",symbols:[nul]}]),"embedded NUL rejected");}
-    testing.expect(!valid_imports([ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess","ExitProcess"]}]),"duplicate symbol rejected");
-    testing.expect(!valid_imports([ImportLibrary {name:"KERNEL32.dll",symbols:["ExitProcess"]},ImportLibrary {name:"KERNEL32.dll",symbols:["WriteFile"]}]),"duplicate DLL rejected");
-    testing.expect(!ascii_name("日本語.dll"),"non-ASCII names outside bounded writer contract");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:[ImportLibrary {name:"",symbols:["X"]}],patches:[],unwind:[]}).error!=mu,"invalid imports rejected at public boundary");
+    testing.expect(!valid_imports([ImportLibrary { name: "", symbols: ["ExitProcess"] }]), "empty DLL");
+    testing.expect(!valid_imports([ImportLibrary { name: "KERNEL32.dll", symbols: [] }]), "empty symbol list");
+    kaku nul = string.from_utf8([69, 0, 120]);
+    testing.expect(nul != mu, "valid UTF8 test input");
+    moshi (nul != mu) { testing.expect(!valid_imports([ImportLibrary { name: "KERNEL32.dll", symbols: [nul] }]), "embedded NUL rejected"); }
+    testing.expect(!valid_imports([ImportLibrary { name: "KERNEL32.dll", symbols: ["ExitProcess", "ExitProcess"] }]), "duplicate symbol rejected");
+    testing.expect(!valid_imports([ImportLibrary {
+                    name: "KERNEL32.dll", symbols: ["ExitProcess"] }, ImportLibrary {
+                    name: "KERNEL32.dll", symbols: ["WriteFile"] }
+            ]), "duplicate DLL rejected");
+    testing.expect(!ascii_name("日本語.dll"), "non-ASCII names outside bounded writer contract");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [ImportLibrary {
+                        name: "", symbols: ["X"] }
+                ], patches: [], unwind: [] }).error != mu, "invalid imports rejected at public boundary");
 }
 
 waza test_invalid_patch_ranges_kinds_and_overlap() -> unit {
-    kaku text=array.make[uint8](16,uint8(0));
-    kaku bad:[]Patch=[
-        Patch {section:0,offset:0,kind:rva32,target:text_section,target_offset:0},
-        Patch {section:text_section,offset:-1,kind:rva32,target:text_section,target_offset:0},
-        Patch {section:text_section,offset:13,kind:rva32,target:text_section,target_offset:0},
-        Patch {section:text_section,offset:0,kind:99,target:text_section,target_offset:0},
-        Patch {section:text_section,offset:0,kind:va64,target:text_section,target_offset:16},
-        Patch {section:text_section,offset:0,kind:rva32,target:import_section,target_offset:0},
-        Patch {section:text_section,offset:0,kind:rva32,target:rdata_section,target_offset:0}];
-    kaku i=0;aida(i<len(bad)){
-        kaku image=executable(ImageSpec {text:text,rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[bad[i]],unwind:[]});
-        testing.expect(image.error!=mu && len(image.bytes)==0,"malformed patch fails closed");i=i+1;
+    kaku text = array.make[uint8](16, uint8(0));
+    kaku bad: []Patch = [
+        Patch { section: 0, offset: 0, kind: rva32, target: text_section, target_offset: 0 },
+        Patch { section: text_section, offset: -1, kind: rva32, target: text_section, target_offset: 0 },
+        Patch { section: text_section, offset: 13, kind: rva32, target: text_section, target_offset: 0 },
+        Patch { section: text_section, offset: 0, kind: 99, target: text_section, target_offset: 0 },
+        Patch { section: text_section, offset: 0, kind: va64, target: text_section, target_offset: 16 },
+        Patch { section: text_section, offset: 0, kind: rva32, target: import_section, target_offset: 0 },
+        Patch { section: text_section, offset: 0, kind: rva32, target: rdata_section, target_offset: 0 }];
+    kaku i = 0; aida (i<len(bad)) {
+        kaku image = executable(ImageSpec { text: text, rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [bad[i]], unwind: [] });
+        testing.expect(image.error != mu && len(image.bytes) == 0, "malformed patch fails closed");
+        i = i + 1;
     }
-    testing.expect(executable(ImageSpec {text:text,rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[
-        Patch {section:text_section,offset:0,kind:va64,target:text_section,target_offset:0},
-        Patch {section:text_section,offset:4,kind:rva32,target:text_section,target_offset:0}],unwind:[]}).error!=mu,"overlapping patch writes rejected");
+    testing.expect(executable(ImageSpec { text: text, rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [
+                    Patch { section: text_section, offset: 0, kind: va64, target: text_section, target_offset: 0 },
+                    Patch {
+                        section: text_section, offset: 4, kind: rva32, target: text_section, target_offset: 0 }
+                ], unwind: [] }).error != mu, "overlapping patch writes rejected");
 }
 
 waza test_invalid_unwind_ranges_and_limits() -> unit {
-    kaku bad:[]UnwindFunction=[
-        UnwindFunction {begin:-1,end:8,prolog_size:4,stack_size:40,stack_offset:4},
-        UnwindFunction {begin:0,end:65,prolog_size:4,stack_size:40,stack_offset:4},
-        UnwindFunction {begin:0,end:8,prolog_size:9,stack_size:40,stack_offset:4},
-        UnwindFunction {begin:0,end:8,prolog_size:4,stack_size:41,stack_offset:4},
-        UnwindFunction {begin:0,end:8,prolog_size:4,stack_size:40,stack_offset:5},
-        UnwindFunction {begin:0,end:8,prolog_size:4,stack_size:524288,stack_offset:4}];
-    kaku i=0;aida(i<len(bad)){testing.expect(!valid_unwind([bad[i]],64),"malformed unwind rejected");i=i+1;}
-    testing.expect(!valid_unwind([UnwindFunction {begin:0,end:16,prolog_size:0,stack_size:0,stack_offset:0},UnwindFunction {begin:8,end:32,prolog_size:0,stack_size:0,stack_offset:0}],64),"overlapping/unsorted ranges rejected");
-    testing.expect(valid_unwind([UnwindFunction {begin:0,end:8,prolog_size:4,stack_size:524280,stack_offset:4}],64),"maximum supported large allocation accepted");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[bad[0]]}).error!=mu,"invalid unwind rejected at public boundary");
+    kaku bad: []UnwindFunction = [
+        UnwindFunction { begin: -1, end: 8, prolog_size: 4, stack_size: 40, stack_offset: 4 },
+        UnwindFunction { begin: 0, end: 65, prolog_size: 4, stack_size: 40, stack_offset: 4 },
+        UnwindFunction { begin: 0, end: 8, prolog_size: 9, stack_size: 40, stack_offset: 4 },
+        UnwindFunction { begin: 0, end: 8, prolog_size: 4, stack_size: 41, stack_offset: 4 },
+        UnwindFunction { begin: 0, end: 8, prolog_size: 4, stack_size: 40, stack_offset: 5 },
+        UnwindFunction { begin: 0, end: 8, prolog_size: 4, stack_size: 524288, stack_offset: 4 }];
+    kaku i = 0;
+    aida (i<len(bad)) {
+        testing.expect(!valid_unwind([bad[i]], 64), "malformed unwind rejected");
+        i = i + 1;
+    }
+    testing.expect(!valid_unwind([UnwindFunction {
+                    begin: 0, end: 16, prolog_size: 0, stack_size: 0, stack_offset: 0 }, UnwindFunction {
+                    begin: 8, end: 32, prolog_size: 0, stack_size: 0, stack_offset: 0 }
+            ], 64), "overlapping/unsorted ranges rejected");
+    testing.expect(valid_unwind([UnwindFunction {
+                    begin: 0, end: 8, prolog_size: 4, stack_size: 524280, stack_offset: 4 }
+            ], 64), "maximum supported large allocation accepted");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [bad[0]] }).error != mu, "invalid unwind rejected at public boundary");
 }
 
 waza test_virtual_image_limit_without_large_file_allocation() -> unit {
-    kaku exact=executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:maximum_image_size-8192,entry:0,imports:[],patches:[],unwind:[]});
-    testing.expect(exact.error==mu && exact.layout.image_size==maximum_image_size && len(exact.bytes)==1024,"maximum virtual image uses zero-fill without allocating it in file");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:maximum_image_size-8191,entry:0,imports:[],patches:[],unwind:[]}).error!=mu,"one extra virtual byte exceeds aligned image bound");
+    kaku exact = executable(ImageSpec {
+            text: [195], rdata: [], data: [], zero_fill: maximum_image_size - 8192, entry: 0, imports: [], patches: [], unwind: [] });
+    testing.expect(exact.error == mu && exact.layout.image_size == maximum_image_size && len(exact.bytes) == 1024, "maximum virtual image uses zero-fill without allocating it in file");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: maximum_image_size - 8191, entry: 0, imports: [], patches: [], unwind: [] }).error != mu, "one extra virtual byte exceeds aligned image bound");
 }
 
 waza test_collection_and_name_limits_fail_closed() -> unit {
-    kaku too_many=array.make[ImportLibrary](257,ImportLibrary {name:"X.dll",symbols:["X"]});
-    testing.expect(!valid_imports(too_many),"DLL count limit");
-    testing.expect(!valid_imports([ImportLibrary {name:"X.dll",symbols:array.make[string](4097,"X")}]),"total symbol count limit");
-    kaku long_name=string.from_utf8(array.make[uint8](256,uint8(65)));
-    moshi(long_name!=mu){testing.expect(!ascii_name(long_name),"import name length limit");}
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:array.make[Patch](4097,Patch {section:text_section,offset:0,kind:rva32,target:text_section,target_offset:0}),unwind:[]}).error!=mu,"patch count bound before writes");
-    testing.expect(!valid_unwind(array.make[UnwindFunction](4097,UnwindFunction {begin:0,end:1,prolog_size:0,stack_size:0,stack_offset:0}),1),"unwind count bound");
+    kaku too_many = array.make[ImportLibrary](257, ImportLibrary { name: "X.dll", symbols: ["X"] });
+    testing.expect(!valid_imports(too_many), "DLL count limit");
+    testing.expect(!valid_imports([ImportLibrary { name: "X.dll", symbols: array.make[string](4097, "X") }]), "total symbol count limit");
+    kaku long_name = string.from_utf8(array.make[uint8](256, uint8(65)));
+    moshi (long_name != mu) { testing.expect(!ascii_name(long_name), "import name length limit"); }
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: array.make[Patch](4097, Patch {
+                        section: text_section, offset: 0, kind: rva32, target: text_section, target_offset: 0 }), unwind: [] }).error != mu, "patch count bound before writes");
+    testing.expect(!valid_unwind(array.make[UnwindFunction](4097, UnwindFunction {
+                    begin: 0, end: 1, prolog_size: 0, stack_size: 0, stack_offset: 0 }), 1), "unwind count bound");
 }
 
-waza frame_spec() -> ImageSpec {kaesu ImageSpec {text:[85,72,137,229,72,131,236,16,72,137,236,93,195,85,72,137,229,195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[]};}
+waza frame_spec() -> ImageSpec {
+    kaesu ImageSpec {
+        text: [85, 72, 137, 229, 72, 131, 236, 16, 72, 137, 236, 93, 195, 85, 72, 137, 229, 195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] };
+}
 waza test_frame_pointer_unwind_records() -> unit {
-    kaku frames=[FrameFunction {begin:0,end:13,push_offset:1,set_offset:4,alloc_offset:8,alloc_size:16}, FrameFunction {begin:13,end:18,push_offset:1,set_offset:4,alloc_offset:0,alloc_size:0}];
-    kaku image=executable_framed(frame_spec(),frames);testing.expect(image.error==mu,"frame image accepted");
-    kaku b=image.bytes;kaku pd=0;kaku xd=0;kaku i=0;
-    aida(i<len(image.layout.sections)){moshi(image.layout.sections[i].name==".pdata"){pd=image.layout.sections[i].offset;}moshi(image.layout.sections[i].name==".xdata"){xd=image.layout.sections[i].offset;}i=i+1;}
-    testing.expect(pd>0 && xd>0 && u32(b,pd)==4096 && u32(b,pd+4)==4109 && u32(b,pd+12)==4109 && u32(b,pd+16)==4114,"runtime function ranges");
-    testing.expect(b[xd]==uint8(1) && b[xd+1]==uint8(8) && b[xd+2]==uint8(3) && b[xd+3]==uint8(5),"header: prolog 8, 3 codes, frame rbp offset 0");
-    testing.expect(b[xd+4]==uint8(8) && b[xd+5]==uint8(18) && b[xd+6]==uint8(4) && b[xd+7]==uint8(3) && b[xd+8]==uint8(1) && b[xd+9]==uint8(80),"alloc 16, set_fpreg, push rbp in reverse order");
-    testing.expect(b[xd+12]==uint8(1) && b[xd+13]==uint8(4) && b[xd+14]==uint8(2),"leaf-less record without alloc has 2 codes");
+    kaku frames = [FrameFunction {
+            begin: 0, end: 13, push_offset: 1, set_offset: 4, alloc_offset: 8, alloc_size: 16 }, FrameFunction {
+            begin: 13, end: 18, push_offset: 1, set_offset: 4, alloc_offset: 0, alloc_size: 0 }
+    ];
+    kaku image = executable_framed(frame_spec(), frames);
+    testing.expect(image.error == mu, "frame image accepted");
+    kaku b = image.bytes;
+    kaku pd = 0;
+    kaku xd = 0;
+    kaku i = 0;
+    aida (i<len(image.layout.sections)) {
+        moshi (image.layout.sections[i].name == ".pdata") {
+            pd = image.layout.sections[i].offset;
+        }
+        moshi (image.layout.sections[i].name == ".xdata") {
+            xd = image.layout.sections[i].offset;
+        }
+        i = i + 1;
+    }
+    testing.expect(pd>0 && xd>0 && u32(b, pd) == 4096 && u32(b, pd + 4) == 4109 && u32(b, pd + 12) == 4109 && u32(b, pd + 16) == 4114, "runtime function ranges");
+    testing.expect(b[xd] == uint8(1) && b[xd + 1] == uint8(8) && b[xd + 2] == uint8(3) && b[xd + 3] == uint8(5), "header: prolog 8, 3 codes, frame rbp offset 0");
+    testing.expect(b[xd + 4] == uint8(8) && b[xd + 5] == uint8(18) && b[xd + 6] == uint8(4) && b[xd + 7] == uint8(3) && b[xd + 8] == uint8(1) && b[xd + 9] == uint8(80), "alloc 16, set_fpreg, push rbp in reverse order");
+    testing.expect(b[xd + 12] == uint8(1) && b[xd + 13] == uint8(4) && b[xd + 14] == uint8(2), "leaf-less record without alloc has 2 codes");
 }
 waza test_frame_pointer_unwind_rejects_bad_records() -> unit {
-    kaku good=FrameFunction {begin:0,end:13,push_offset:1,set_offset:4,alloc_offset:8,alloc_size:16};
-    testing.expect(executable_framed(frame_spec(),[good]).error==mu,"baseline accepted");
-    testing.expect(executable_framed(frame_spec(),[FrameFunction {begin:0,end:13,push_offset:1,set_offset:4,alloc_offset:8,alloc_size:12}]).error!=mu,"unaligned alloc");
-    testing.expect(executable_framed(frame_spec(),[FrameFunction {begin:0,end:13,push_offset:1,set_offset:4,alloc_offset:3,alloc_size:16}]).error!=mu,"alloc before set_fpreg");
-    testing.expect(executable_framed(frame_spec(),[FrameFunction {begin:0,end:13,push_offset:0,set_offset:4,alloc_offset:0,alloc_size:0}]).error!=mu,"zero push offset");
-    testing.expect(executable_framed(frame_spec(),[FrameFunction {begin:0,end:99,push_offset:1,set_offset:4,alloc_offset:0,alloc_size:0}]).error!=mu,"range beyond text");
-    testing.expect(executable_framed(frame_spec(),[FrameFunction {begin:0,end:13,push_offset:1,set_offset:4,alloc_offset:7,alloc_size:0}]).error!=mu,"offset without alloc");
-    testing.expect(executable_framed(frame_spec(),[good,good]).error!=mu,"overlapping records");
-    testing.expect(executable(ImageSpec {text:[195],rdata:[],data:[],zero_fill:0,entry:0,imports:[],patches:[],unwind:[UnwindFunction {begin:0,end:1,prolog_size:0,stack_size:0,stack_offset:0}]}).error==mu,"legacy unwind still works");
+    kaku good = FrameFunction { begin: 0, end: 13, push_offset: 1, set_offset: 4, alloc_offset: 8, alloc_size: 16 };
+    testing.expect(executable_framed(frame_spec(), [good]).error == mu, "baseline accepted");
+    testing.expect(executable_framed(frame_spec(), [FrameFunction {
+                    begin: 0, end: 13, push_offset: 1, set_offset: 4, alloc_offset: 8, alloc_size: 12 }
+            ]).error != mu, "unaligned alloc");
+    testing.expect(executable_framed(frame_spec(), [FrameFunction {
+                    begin: 0, end: 13, push_offset: 1, set_offset: 4, alloc_offset: 3, alloc_size: 16 }
+            ]).error != mu, "alloc before set_fpreg");
+    testing.expect(executable_framed(frame_spec(), [FrameFunction {
+                    begin: 0, end: 13, push_offset: 0, set_offset: 4, alloc_offset: 0, alloc_size: 0 }
+            ]).error != mu, "zero push offset");
+    testing.expect(executable_framed(frame_spec(), [FrameFunction {
+                    begin: 0, end: 99, push_offset: 1, set_offset: 4, alloc_offset: 0, alloc_size: 0 }
+            ]).error != mu, "range beyond text");
+    testing.expect(executable_framed(frame_spec(), [FrameFunction {
+                    begin: 0, end: 13, push_offset: 1, set_offset: 4, alloc_offset: 7, alloc_size: 0 }
+            ]).error != mu, "offset without alloc");
+    testing.expect(executable_framed(frame_spec(), [good, good]).error != mu, "overlapping records");
+    testing.expect(executable(ImageSpec {
+                text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [UnwindFunction {
+                        begin: 0, end: 1, prolog_size: 0, stack_size: 0, stack_offset: 0 }
+                ] }).error == mu, "legacy unwind still works");
 }
 
 waza test_stack_reserve_is_configurable_and_validated() -> unit {
-    kaku image=executable_sized(frame_spec(),[],67108864);
-    testing.expect(image.error==mu && u64(image.bytes,224)==67108864,"stack reserve written to the optional header");
-    testing.expect(u64(executable_framed(frame_spec(),[]).bytes,224)==1048576,"default stays 1 MiB");
-    testing.expect(executable_sized(frame_spec(),[],1000).error!=mu && executable_sized(frame_spec(),[],0).error!=mu,"invalid reserve rejected");
+    kaku image = executable_sized(frame_spec(), [], 67108864);
+    testing.expect(image.error == mu && u64(image.bytes, 224) == 67108864, "stack reserve written to the optional header");
+    testing.expect(u64(executable_framed(frame_spec(), []).bytes, 224) == 1048576, "default stays 1 MiB");
+    testing.expect(executable_sized(frame_spec(), [], 1000).error != mu && executable_sized(frame_spec(), [], 0).error != mu, "invalid reserve rejected");
 }
 
 waza test_fixed_data_rva_placement() -> unit {
-    kaku spec=ImageSpec {text:[195],rdata:[],data:[],zero_fill:64,entry:0,imports:[],patches:[],unwind:[]};
-    kaku image=executable_placed(spec,[],1048576,33554432);
-    testing.expect(image.error==mu,"fixed data rva accepted");
-    kaku data=0;kaku i=0;aida(i<len(image.layout.sections)){moshi(image.layout.sections[i].kind==data_section){data=image.layout.sections[i].rva;}i=i+1;}
-    testing.expect(data==33554432 && image.layout.image_size==33558528,"data section sits at the requested RVA");
-    testing.expect(len(image.bytes)==1024,"the RVA gap costs no file bytes");
-    testing.expect(executable_placed(spec,[],1048576,100).error!=mu,"unaligned rva rejected");
-    testing.expect(executable_placed(spec,[],1048576,4096).error==mu,"rva 4096 selects the data-first layout");
-    testing.expect(executable_placed(spec,[],1048576,8192).error==mu,"rva right after text accepted");
-    testing.expect(executable_placed(spec,[],1048576,0).error==mu,"zero keeps sequential layout");
+    kaku spec = ImageSpec { text: [195], rdata: [], data: [], zero_fill: 64, entry: 0, imports: [], patches: [], unwind: [] };
+    kaku image = executable_placed(spec, [], 1048576, 33554432);
+    testing.expect(image.error == mu, "fixed data rva accepted");
+    kaku data = 0;
+    kaku i = 0;
+    aida (i<len(image.layout.sections)) {
+        moshi (image.layout.sections[i].kind == data_section) {
+            data = image.layout.sections[i].rva;
+        }
+        i = i + 1;
+    }
+    testing.expect(data == 33554432 && image.layout.image_size == 33558528, "data section sits at the requested RVA");
+    testing.expect(len(image.bytes) == 1024, "the RVA gap costs no file bytes");
+    testing.expect(executable_placed(spec, [], 1048576, 100).error != mu, "unaligned rva rejected");
+    testing.expect(executable_placed(spec, [], 1048576, 4096).error == mu, "rva 4096 selects the data-first layout");
+    testing.expect(executable_placed(spec, [], 1048576, 8192).error == mu, "rva right after text accepted");
+    testing.expect(executable_placed(spec, [], 1048576, 0).error == mu, "zero keeps sequential layout");
 }
 
 waza test_data_first_layout_has_no_gap() -> unit {
-    kaku spec=ImageSpec {text:[195],rdata:[],data:[],zero_fill:5000,entry:0,imports:[],patches:[],unwind:[]};
-    kaku image=executable_placed(spec,[],1048576,4096);
-    testing.expect(image.error==mu && len(image.layout.sections)==2,"data-first image accepted");
-    testing.expect(image.layout.sections[0].kind==data_section && image.layout.sections[0].rva==4096 && image.layout.sections[0].raw_size==0,"data first at 0x1000, no raw bytes");
-    testing.expect(image.layout.sections[1].kind==text_section && image.layout.sections[1].rva==12288 && image.layout.sections[1].offset==512,"text follows the page-aligned data");
-    testing.expect(u32(image.bytes,168)==12288 && u32(image.bytes,172)==12288 && image.layout.image_size==16384,"entry and BaseOfCode point at text; image size has no gap");
+    kaku spec = ImageSpec { text: [195], rdata: [], data: [], zero_fill: 5000, entry: 0, imports: [], patches: [], unwind: [] };
+    kaku image = executable_placed(spec, [], 1048576, 4096);
+    testing.expect(image.error == mu && len(image.layout.sections) == 2, "data-first image accepted");
+    testing.expect(image.layout.sections[0].kind == data_section && image.layout.sections[0].rva == 4096 && image.layout.sections[0].raw_size == 0, "data first at 0x1000, no raw bytes");
+    testing.expect(image.layout.sections[1].kind == text_section && image.layout.sections[1].rva == 12288 && image.layout.sections[1].offset == 512, "text follows the page-aligned data");
+    testing.expect(u32(image.bytes, 168) == 12288 && u32(image.bytes, 172) == 12288 && image.layout.image_size == 16384, "entry and BaseOfCode point at text; image size has no gap");
 }
 
 waza test_arm64_machine_type_is_explicit() -> unit {
-    kaku spec = ImageSpec { text: [uint8(31), uint8(32), uint8(3), uint8(213)], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] };
+    kaku spec = ImageSpec {
+        text: [uint8(31), uint8(32), uint8(3), uint8(213)], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] };
     kaku arm = executable_machine(spec, [], 1048576, 0, machine_arm64);
     testing.expect(arm.error == mu, "an ARM64 image builds");
     testing.expect(arm.bytes[132] == uint8(100) && arm.bytes[133] == uint8(170), "IMAGE_FILE_MACHINE_ARM64 = 0xAA64");

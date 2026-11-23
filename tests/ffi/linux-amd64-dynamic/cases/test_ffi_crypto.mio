@@ -1,0 +1,39 @@
+yobu "../ffi";
+yobu "../support";
+yobu "kiso/array";
+yobu "kiso/crypto/sha256";
+yobu "kiso/string";
+
+kaku run = support.begin("test_ffi_crypto");
+kaku lib = ffi.open(support.absolute("libmio_crypto.so"));
+support.expect(run, "open", !ffi.failed(lib));
+kaku sha = ffi.symbol(lib, "mio_sha256", "i:nzn");
+
+waza digest(sha_symbol: ffi.Symbol, text: string) -> string {
+    kaku out: []uint8 = array.make[uint8](32, uint8(0));
+    kaku rc = ffi.call_i_nzn(sha_symbol, string.to_bytes(text), out);
+    moshi (rc != int32(0)) { kaesu "error"; }
+    kaesu support.hex(out);
+}
+
+// NIST / FIPS 180-4 test vectors
+support.expect(run, "empty", digest(sha, "") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+support.expect(run, "abc", digest(sha, "abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+support.expect(run, "448-bit message", digest(sha, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+support.expect(run, "quick brown fox", digest(sha, "The quick brown fox jumps over the lazy dog") == "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592");
+
+// OpenSSL agrees with Mio's own SHA-256 on a large input
+kaku big: []uint8 = array.make[uint8](1000003, uint8(0));
+kaku i = 0;
+aida (i < len(big)) { big[i] = uint8(support.mod(i * 31 + 7, 256)); i = i + 1; }
+kaku native_out: []uint8 = array.make[uint8](32, uint8(0));
+support.expect(run, "large input status", ffi.call_i_nzn(sha, big, native_out) == int32(0));
+support.expect(run, "large input matches kiso/crypto/sha256", support.hex(native_out) == support.hex(sha256.sum(big)));
+
+// error code: output buffer is the caller's responsibility, a null-equivalent is not representable,
+// so check that distinct inputs give distinct digests and the result is deterministic
+support.expect(run, "deterministic", digest(sha, "mio") == digest(sha, "mio"));
+support.expect(run, "different inputs differ", digest(sha, "mio") != digest(sha, "Mio"));
+support.expect(run, "no ffi error", ffi.error(sha) == "");
+support.expect(run, "close", ffi.close(lib) == "");
+support.finish(run);

@@ -343,7 +343,7 @@ testing.expect(hai, "pure codegen testing runtime");
 	fmt.Fprintf(&source, "kaku parsed%d = parser.parse(string.to_bytes(%s));\n", appIndex, strconv.Quote(verificationSource))
 	fmt.Fprintf(&source, "kaku files%d: []resolver.SourceFile = [resolver.SourceFile { file_id: 0, path: \"stage5/app.mio\", ast: parsed%d.ast, root: parsed%d.root }];\n", appIndex, appIndex, appIndex)
 	fmt.Fprintf(&source, "kaku resolved_dependencies%d: []resolver.ResolvedPackage = []; kaku type_dependencies%d: []typecheck.TypeCheckResult = [];\n", appIndex, appIndex)
-	for dependencyIndex := 0; dependencyIndex < 11; dependencyIndex++ {
+	for dependencyIndex := 0; dependencyIndex <= indexes["kiso/testing"]; dependencyIndex++ {
 		fmt.Fprintf(&source, "array.push(resolved_dependencies%d, package%d); array.push(type_dependencies%d, checked%d);\n", appIndex, dependencyIndex, appIndex, dependencyIndex)
 	}
 	fmt.Fprintf(&source, "kaku package%d = resolver.resolve_package(\"stage5/app\", files%d, resolved_dependencies%d); kaku checked%d = typecheck.check_package(package%d, type_dependencies%d);\n", appIndex, appIndex, appIndex, appIndex, appIndex, appIndex)
@@ -387,13 +387,15 @@ func TestCodegenSelfAndBunkoSources(t *testing.T) {
 		{path: "kiso/fs", directory: "bunko/kiso/fs", dependencies: []string{"kiso/array", "kiso/io"}},
 		{path: "kiso/path", directory: "bunko/kiso/path", dependencies: []string{"kiso/array", "kiso/string"}},
 		{path: "kiso/encoding/binary", directory: "bunko/kiso/encoding/binary", dependencies: []string{"kiso/array"}},
+		{path: "kiso/encoding/win64c", directory: "bunko/kiso/encoding/win64c", dependencies: []string{"kiso/array", "kiso/string"}},
 		{path: "kiso/testing", directory: "bunko/kiso/testing"},
 		{path: "selfhost/progress", directory: "selfhost/progress"},
 		{path: "selfhost/lexer", directory: "selfhost/lexer", dependencies: []string{"kiso/array", "kiso/string", "kiso/utf8", "selfhost/progress"}},
-		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
+		{path: "kiso/aot/cabi", directory: "bunko/kiso/aot/cabi", dependencies: []string{"kiso/array", "kiso/string"}},
+		{path: "selfhost/parser", directory: "selfhost/parser", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "kiso/utf8", "selfhost/lexer", "selfhost/progress"}},
 		{path: "selfhost/resolver", directory: "selfhost/resolver", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress"}},
-		{path: "selfhost/typecheck", directory: "selfhost/typecheck", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress", "selfhost/resolver"}},
-		{path: "selfhost/codegen", directory: "selfhost/codegen", dependencies: []string{"kiso/array", "kiso/convert", "kiso/string", "selfhost/lexer", "selfhost/parser", "selfhost/progress", "selfhost/resolver", "selfhost/typecheck"}},
+		{path: "selfhost/typecheck", directory: "selfhost/typecheck", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "selfhost/parser", "selfhost/progress", "selfhost/resolver"}},
+		{path: "selfhost/codegen", directory: "selfhost/codegen", dependencies: []string{"kiso/aot/cabi", "kiso/encoding/win64c", "kiso/array", "kiso/convert", "kiso/string", "selfhost/lexer", "selfhost/parser", "selfhost/progress", "selfhost/resolver", "selfhost/typecheck"}},
 	}
 	root := codegenRoot(t)
 	artifact := filepath.Join(t.TempDir(), "selfhost.mochi")

@@ -19,7 +19,11 @@ waza emit_float_words_0(code: arm64.Assembler) -> unit {
         uint32(2453668207), uint32(3527410159), uint32(3103808495), uint32(2853372896)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_1(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -36,7 +40,11 @@ waza emit_float_words_1(code: arm64.Assembler) -> unit {
         uint32(1384121861), uint32(941910853), uint32(4043310212), uint32(1426063178)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_2(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -53,7 +61,11 @@ waza emit_float_words_2(code: arm64.Assembler) -> unit {
         uint32(4043310623), uint32(1409286381), uint32(3506439683), uint32(946039685)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_3(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -70,7 +82,11 @@ waza emit_float_words_3(code: arm64.Assembler) -> unit {
         uint32(1384121800), uint32(939529768), uint32(3531604003), uint32(3943694463)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_4(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -87,7 +103,11 @@ waza emit_float_words_4(code: arm64.Assembler) -> unit {
         uint32(939529768), uint32(1384120648), uint32(939529768), uint32(3531604000)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_5(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -104,7 +124,11 @@ waza emit_float_words_5(code: arm64.Assembler) -> unit {
         uint32(1409286241), uint32(3108002789), uint32(872415717), uint32(2852717536)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_words_6(code: arm64.Assembler) -> unit {
     kaku words: []uint32 = [
@@ -117,17 +141,27 @@ waza emit_float_words_6(code: arm64.Assembler) -> unit {
         uint32(3596551104), uint32(3531604000), uint32(3596551104), uint32(3531603968), uint32(3596551104)
     ];
     kaku index = 0;
-    aida (index < len(words)) { emit(code, arm64.Instruction { word: words[index], error: mu }); index = index + 1; }
+    aida (index < len(words)) {
+        emit(code, arm64.Instruction {
+                word: words[index], error: mu });
+        index = index + 1;
+    }
 }
 waza emit_float_output_runtime(code: arm64.Assembler) -> unit {
     arm64.assembler_label(code, "print_float");
     // The opaque relocation-free formatter touches only scalar stack data.
     // Keep its whole native interval blocked, without inserting words into
     // its internal relative branches or interpreting numeric bits as roots.
-    moshi(worker_roots_enabled(code)){
-        emit(code,arm64.sub_imm_x(31,31,16,iie));emit(code,arm64.str_x(30,31,0));
-        arm64.assembler_bl(code,"attached_native_enter");arm64.assembler_bl(code,"print_float_scalar_body");arm64.assembler_bl(code,"attached_native_leave");
-        emit(code,arm64.ldr_x(30,31,0));emit(code,arm64.add_imm_x(31,31,16,iie));emit(code,arm64.ret());arm64.assembler_label(code,"print_float_scalar_body");
+    moshi (worker_roots_enabled(code)) {
+        emit(code, arm64.sub_imm_x(31, 31, 16, iie));
+        emit(code, arm64.str_x(30, 31, 0));
+        arm64.assembler_bl(code, "attached_native_enter");
+        arm64.assembler_bl(code, "print_float_scalar_body");
+        arm64.assembler_bl(code, "attached_native_leave");
+        emit(code, arm64.ldr_x(30, 31, 0));
+        emit(code, arm64.add_imm_x(31, 31, 16, iie));
+        emit(code, arm64.ret());
+        arm64.assembler_label(code, "print_float_scalar_body");
     }
     emit_float_words_0(code);
     emit_float_words_1(code);

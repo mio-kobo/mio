@@ -2,8 +2,11 @@ package typecheck
 
 import (
 	"fmt"
+	"strings"
 
 	"Mio/internal/ast"
+	"Mio/internal/cabi"
+	"Mio/internal/ffi"
 	"Mio/internal/resolver"
 )
 
@@ -49,6 +52,10 @@ func resolveTypeRef(ref *ast.TypeRef) (Kind, error) {
 	}
 
 	switch ref.Name {
+	case "cptr":
+		return KindCPtr, nil
+	case "uint64":
+		return KindUint64, nil
 	case "int8":
 		return KindInt8, nil
 	case "int16":
@@ -107,6 +114,30 @@ func (c *Checker) registerFunctionSignature(
 	if fn == nil || fn.Name == nil {
 		return fmt.Errorf("invalid function declaration")
 	}
+	if fn.CABI {
+		params := make([]string, len(fn.Parameters))
+		for i, p := range fn.Parameters {
+			if p.DeclaredType == nil || p.DeclaredType.Element != nil || len(p.DeclaredType.Args) != 0 {
+				return fmt.Errorf("E_FFI_TYPE explicit scalar C parameter required")
+			}
+			params[i] = p.DeclaredType.Name
+		}
+		if fn.ReturnType == nil || fn.ReturnType.Element != nil || len(fn.ReturnType.Args) != 0 || len(fn.TypeParams) != 0 {
+			return fmt.Errorf("E_FFI_TYPE explicit scalar C return required")
+		}
+		if err := ffi.Validate(ffi.Key(fn.CDLL, fn.CSymbol, fn.ReturnType.Name, params), len(params), fn.ReturnType.Name != "unit"); err != nil {
+			return err
+		}
+		if c.cPrototypes == nil {
+			c.cPrototypes = make(map[string]string)
+		}
+		identity := strings.ToLower(fn.CDLL) + "|" + fn.CSymbol
+		prototype := strings.Join(append([]string{fn.ReturnType.Name}, params...), "|")
+		if previous, ok := c.cPrototypes[identity]; ok && previous != prototype {
+			return fmt.Errorf("E_FFI_PROTOTYPE conflicting C export prototypes")
+		}
+		c.cPrototypes[identity] = prototype
+	}
 
 	// 获取函数声明对应的符号
 	symbol, ok := c.resolver.BindingOf(fn.Name)
@@ -122,6 +153,37 @@ func (c *Checker) registerFunctionSignature(
 			"%q is not a function symbol",
 			fn.Name.Name,
 		)
+	}
+
+	if fn.CSymbol != "" && !fn.CABI {
+		const prototypeError = "E_CABI C ABI requires a fixed prototype with explicit scalar parameters and a scalar or unit result"
+		if fn.ReturnType == nil || len(fn.TypeParams) != 0 || len(fn.Parameters) > 256 ||
+			!cabi.ValidSymbol(fn.CSymbol) || len(fn.Body.Statements) != 0 ||
+			cabi.TypeCode(fn.ReturnType.Name) == "" || len(fn.ReturnType.Args) != 0 {
+			return fmt.Errorf("%s", prototypeError)
+		}
+		for index, param := range fn.Parameters {
+			if param.DeclaredType == nil || len(param.DeclaredType.Args) != 0 {
+				return fmt.Errorf("%s", prototypeError)
+			}
+			element := ""
+			if param.DeclaredType.Element != nil {
+				if len(param.DeclaredType.Element.Args) != 0 || param.DeclaredType.Element.Element != nil {
+					return fmt.Errorf("%s", prototypeError)
+				}
+				element = param.DeclaredType.Element.Name
+			}
+			code := cabi.ParamCode(param.DeclaredType.Name, element)
+			if code == "" || code == "v" {
+				return fmt.Errorf("%s", prototypeError)
+			}
+			if fn.CSymbol == cabi.IndirectSymbol && index == 0 && code != "k" {
+				return fmt.Errorf("E_CABI an indirect C call takes the function pointer (cptr) as its first parameter")
+			}
+		}
+		if fn.CSymbol == cabi.IndirectSymbol && len(fn.Parameters) == 0 {
+			return fmt.Errorf("E_CABI an indirect C call takes the function pointer (cptr) as its first parameter")
+		}
 	}
 
 	// 函数必须声明返回类型

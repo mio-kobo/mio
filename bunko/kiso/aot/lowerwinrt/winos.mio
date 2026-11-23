@@ -55,7 +55,11 @@ koukai teisu heap_commit_step = 16777216;
 koukai teisu mark_stack_size = 536870912;
 
 // Packages cannot hold mutable globals, so the collected unwind records and patches travel in a context.
-koukai kata WinContext { patches: []pe.Patch; frames: []pe.FrameFunction; sockets: bool; }
+koukai kata WinContext {
+    patches: []pe.Patch;
+    frames: []pe.FrameFunction;
+    sockets: bool;
+}
 // .data is the first section, at RVA 0x1000 (pe.executable_placed data-first layout): every absolute data address is a
 // link-time constant and the image has no RVA gap.
 koukai teisu data_rva = 4096;
@@ -80,7 +84,7 @@ waza close_frame(code: x86_64.Assembler, ctx: WinContext, begin: int64, alloc: i
     kaku alloc_offset = 0;
     moshi (alloc > 0) { alloc_offset = 11; }
     array.push(ctx.frames, pe.FrameFunction { begin: begin, end: len(code.bytes), push_offset: 1, set_offset: 4,
-        alloc_offset: alloc_offset, alloc_size: alloc });
+            alloc_offset: alloc_offset, alloc_size: alloc });
 }
 
 waza emit_epilogue(code: x86_64.Assembler) -> unit {
@@ -94,8 +98,12 @@ waza import_call(code: x86_64.Assembler, ctx: WinContext, index: int64) -> unit 
     x86_64.byte(code, 255);
     x86_64.byte(code, 21);
     kaku at = len(code.bytes);
-    x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0); x86_64.byte(code, 0);
-    array.push(ctx.patches, pe.Patch { section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: index });
+    x86_64.byte(code, 0);
+    x86_64.byte(code, 0);
+    x86_64.byte(code, 0);
+    x86_64.byte(code, 0);
+    array.push(ctx.patches, pe.Patch {
+            section: pe.text_section, offset: at, kind: pe.rel32, target: pe.import_section, target_offset: index });
 }
 
 // rt.exit: rcx = status. Never returns.
@@ -445,7 +453,11 @@ waza emit_win_syscall(code: x86_64.Assembler, ctx: WinContext) -> unit {
     x86_64.mov_ri(code, x86_64.rcx, scratch_path());
     kaku nul: []int64 = [78, 0, 85, 0, 76, 0, 0, 0];
     kaku k = 0;
-    aida (k < len(nul)) { x86_64.mov_ri(code, x86_64.rdx, nul[k]); x86_64.mov_store8(code, x86_64.rcx, k, x86_64.rdx); k = k + 1; }
+    aida (k < len(nul)) {
+        x86_64.mov_ri(code, x86_64.rdx, nul[k]);
+        x86_64.mov_store8(code, x86_64.rcx, k, x86_64.rdx);
+        k = k + 1;
+    }
     x86_64.jmp(code, "rt.syscall.open_flags");
     // UTF-8 -> UTF-16 into the scratch buffer
     x86_64.label(code, "rt.syscall.open_convert");
@@ -863,17 +875,54 @@ waza emit_win_syscall(code: x86_64.Assembler, ctx: WinContext) -> unit {
     emit_epilogue(code);
     close_frame(code, ctx, begin, 0);
     x86_64.label(code, "rt.text.dev_stdin");
-    x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
-    x86_64.byte(code, 115); x86_64.byte(code, 116); x86_64.byte(code, 100); x86_64.byte(code, 105); x86_64.byte(code, 110); x86_64.byte(code, 0);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 101);
+    x86_64.byte(code, 118);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 115);
+    x86_64.byte(code, 116);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 105);
+    x86_64.byte(code, 110);
+    x86_64.byte(code, 0);
     x86_64.label(code, "rt.text.dev_stdout");
-    x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
-    x86_64.byte(code, 115); x86_64.byte(code, 116); x86_64.byte(code, 100); x86_64.byte(code, 111); x86_64.byte(code, 117); x86_64.byte(code, 116); x86_64.byte(code, 0);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 101);
+    x86_64.byte(code, 118);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 115);
+    x86_64.byte(code, 116);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 111);
+    x86_64.byte(code, 117);
+    x86_64.byte(code, 116);
+    x86_64.byte(code, 0);
     x86_64.label(code, "rt.text.dev_null");
-    x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
-    x86_64.byte(code, 110); x86_64.byte(code, 117); x86_64.byte(code, 108); x86_64.byte(code, 108); x86_64.byte(code, 0);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 101);
+    x86_64.byte(code, 118);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 110);
+    x86_64.byte(code, 117);
+    x86_64.byte(code, 108);
+    x86_64.byte(code, 108);
+    x86_64.byte(code, 0);
     x86_64.label(code, "rt.text.dev_stderr");
-    x86_64.byte(code, 47); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 118); x86_64.byte(code, 47);
-    x86_64.byte(code, 115); x86_64.byte(code, 116); x86_64.byte(code, 100); x86_64.byte(code, 101); x86_64.byte(code, 114); x86_64.byte(code, 114); x86_64.byte(code, 0);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 101);
+    x86_64.byte(code, 118);
+    x86_64.byte(code, 47);
+    x86_64.byte(code, 115);
+    x86_64.byte(code, 116);
+    x86_64.byte(code, 100);
+    x86_64.byte(code, 101);
+    x86_64.byte(code, 114);
+    x86_64.byte(code, 114);
+    x86_64.byte(code, 0);
 }
 
 // rt.win_args: builds the Linux-style argument/environment block described in runtime_os.mio and stores its address in

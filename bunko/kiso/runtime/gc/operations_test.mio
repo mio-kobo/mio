@@ -1,7 +1,10 @@
 yobu "kiso/testing";
 waza test_memory_order_contract() -> unit {
     kaku kind = atomic_load;
-    aida (kind <= protect) { testing.expect(valid_operation(operation(kind)) == (kind != fence), "all semantic opcodes validated, relaxed fence rejected"); kind = kind + 1; }
+    aida (kind <= protect) {
+        testing.expect(valid_operation(operation(kind)) == (kind != fence), "all semantic opcodes validated, relaxed fence rejected");
+        kind = kind + 1;
+    }
     testing.expect(!valid_operation(atomic_test(atomic_load, release, relaxed, 8)), "load cannot release");
     testing.expect(!valid_operation(atomic_test(atomic_store, acquire, relaxed, 8)), "store cannot acquire");
     testing.expect(!valid_operation(atomic_test(atomic_cas, release, acquire, 8)), "CAS failure cannot acquire beyond release success");
@@ -12,13 +15,18 @@ waza test_memory_order_contract() -> unit {
     testing.expect(!valid_operation(operation(100)), "unknown opcode fails closed");
 }
 waza atomic_test(kind: int64, order: int64, fail: int64, alignment: int64) -> RuntimeOp {
-    kaesu RuntimeOp {kind:kind,address:0,value:1,expected:2,result:3,status:4,order:order,failure_order:fail,alignment:alignment,epoch:0};
+    kaesu RuntimeOp { kind: kind, address: 0, value: 1, expected: 2, result: 3, status: 4, order: order, failure_order: fail, alignment: alignment, epoch: 0 };
 }
 waza test_mock_emission_and_layout_contract() -> unit {
-    kaku trace = mock_trace(); kaku at = atomic_load;
+    kaku trace = mock_trace();
+    kaku at = atomic_load;
     aida (at <= protect) {
-        kaku order = relaxed; moshi (at == fence) { order = seq_cst; }
-        testing.expect(mock_emit(trace, atomic_test(at, order, relaxed, 8)), "mock records every operation kind"); at = at + 1;
+        kaku order = relaxed;
+        moshi (at == fence) {
+            order = seq_cst;
+        }
+        testing.expect(mock_emit(trace, atomic_test(at, order, relaxed, 8)), "mock records every operation kind");
+        at = at + 1;
     }
     testing.expect(len(trace.operations) == protect && len(trace.errors) == 0, "semantic trace has no target instructions");
     testing.expect(!mock_emit(trace, operation(0)) && len(trace.operations) == protect && len(trace.errors) == 1, "invalid op never enters emitted stream");
@@ -27,13 +35,19 @@ waza test_mock_emission_and_layout_contract() -> unit {
 }
 
 waza test_extended_thread_runtime_operations() -> unit {
-    kaku at=tls_create;aida(at<=condition_destroy){testing.expect(valid_operation(operation(at)), "thread resource operations have semantic op identities");at=at+1;}
-    kaku program=thread_program(iie);kaku at_function=0;
-    aida(at_function<len(program)){
-        kaku f=program[at_function];kaku at_step=0;
-        aida(at_step<len(f.steps)){
+    kaku at = tls_create;
+    aida (at <= condition_destroy) {
+        testing.expect(valid_operation(operation(at)), "thread resource operations have semantic op identities");
+        at = at + 1;
+    }
+    kaku program = thread_program(iie);
+    kaku at_function = 0;
+    aida (at_function<len(program)) {
+        kaku f = program[at_function];
+        kaku at_step = 0;
+        aida (at_step<len(f.steps)) {
             testing.expect(ir.valid_step(f.steps[at_step]), "production lifecycle emits valid neutral IR");
-            at_step=at_step+1;
-        }at_function=at_function+1;
+            at_step = at_step + 1;
+        } at_function = at_function + 1;
     }
 }

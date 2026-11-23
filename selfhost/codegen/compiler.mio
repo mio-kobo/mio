@@ -1,7 +1,9 @@
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/convert";
 yobu "kiso/string";
 yobu "selfhost/parser";
+yobu "kiso/encoding/win64c";
 yobu "selfhost/resolver";
 yobu "selfhost/typecheck";
 
@@ -195,7 +197,7 @@ waza array_descriptor(state: CompilerState, requested_type_id: int64) -> int64 {
     moshi (code == 1) { descriptor = 12; }
     moshi (code == 2) { descriptor = 13; }
     moshi (code == 3) { descriptor = 14; }
-    moshi (code == 4) { descriptor = 1; }
+    moshi (code == 4 || code == 20 || code == 21) { descriptor = 1; }
     moshi (code == 5) { descriptor = 15; }
     moshi (code == 6) { descriptor = 16; }
     moshi (code == 7) { descriptor = 17; }
@@ -339,8 +341,13 @@ waza emit_function_literal(state: CompilerState, parent: CompileContext, file_id
 waza emit_conversion(state: CompilerState, context: CompileContext, file_id: int64, node_id: int64) -> bool {
     kaku node = state.resolved.files[file_id].ast.nodes[node_id];
     moshi (len(node.children) != 2 || !emit_expression(state, context, file_id, node.children[1])) { kaesu iie; }
+    moshi (node.text == "cptr" || node.text == "uint64") { kaesu hai; }
     kaku source = node_type(state, file_id, node.children[1]);
     kaku source_code = typecheck.type_kind_code(state.checked.types[source].kind);
+    moshi (node.text == "cptr") { kaesu hai; }
+    moshi (node.text == "uint64" || (node.text == "int64" && source_code == 21)) {
+        emit_u8(context.emitter, OP_INTEGER_CONVERT, 4); kaesu hai;
+    }
     moshi (node.text == "float32") { moshi (source_code <= 7) { emit0(context.emitter, OP_INT_TO_FLOAT32); } sore { emit0(context.emitter, OP_FLOAT64_TO_FLOAT32); } kaesu hai; }
     moshi (node.text == "float64") { moshi (source_code == 8) { emit0(context.emitter, OP_FLOAT32_TO_FLOAT64); } sore { emit0(context.emitter, OP_INT_TO_FLOAT); } kaesu hai; }
     moshi (node.text == "int64" && source_code == 8) { emit0(context.emitter, OP_FLOAT32_TO_INT); kaesu hai; }
@@ -748,11 +755,37 @@ waza compile_function_body(state: CompilerState, reference: resolver.NodeRef, id
         moshi(context.emitter.failed[0]){add_error(state,CompileErrorKind.LimitExceeded(),reference.file_id,reference.node_id,context.emitter.detail[0]);}
 }
 
+waza compile_c_declaration(state: CompilerState, reference: resolver.NodeRef, node: parser.Node, id: int64) -> unit {
+    kaku symbol = binding_of(state, reference.file_id, reference.node_id);
+    kaku at = 0;
+    aida (at < len(state.checked.signatures) && state.checked.signatures[at].symbol_id != symbol) { at = at + 1; }
+    moshi (at == len(state.checked.signatures)) {
+        add_error(state, CompileErrorKind.UnsupportedNode(), reference.file_id, reference.node_id, "missing C ABI signature"); kaesu;
+    }
+    kaku signature = state.checked.signatures[at];
+    kaku result = cabi.type_code(state.checked.types[signature.result].name);
+    moshi (win64c.is_external(node.extra)) {
+        state.layout.functions[id] = FunctionLayout { id: id, name: node.extra, parameter_count: node.operator,
+            local_count: node.operator, returns_value: result != "v", captures: [], instructions: [] };
+        kaesu;
+    }
+    kaku name = string.concat(cabi.prefix, string.concat(node.extra, string.concat(":", result)));
+    at = 0;
+    aida (at < len(signature.parameters)) {
+        name = string.concat(name, typecheck.c_parameter_code(state.checked, signature.parameters[at]));
+        at = at + 1;
+    }
+    state.layout.functions[id] = FunctionLayout { id: id, name: name, parameter_count: node.operator,
+        local_count: node.operator, returns_value: result != "v", captures: [], instructions: [] };
+}
+
 waza compile_functions(state: CompilerState) -> unit {
     kaku local_index = 0;
     aida (local_index < len(state.function_nodes)) {
         kaku reference=state.function_nodes[local_index];kaku node=state.resolved.files[reference.file_id].ast.nodes[reference.node_id];
-        compile_function_body(state,reference,state.function_layout_ids[local_index],node.text,state.typed && node.integer>0);
+        kaku id = state.function_layout_ids[local_index];
+        moshi (node.extra != "") { compile_c_declaration(state, reference, node, id); }
+        sore { compile_function_body(state, reference, id, node.text, state.typed && node.integer > 0); }
         local_index = local_index + 1;
     }
 }
@@ -840,6 +873,7 @@ waza compile_modules_mode(packages: []resolver.ResolvedPackage, checked_packages
         aida (ri < len(registry_ids)) {
             kaku id = registry_ids[ri]; kaku fn = layout.functions[id];
             kaku name = string.concat(registry_packages[ri], string.concat("::", registry_names[ri]));
+            moshi (cabi.is_external(fn.name) || win64c.is_external(fn.name)) { name = fn.name; }
             layout.functions[id] = FunctionLayout { id: fn.id, name: name, parameter_count: fn.parameter_count,
                 local_count: fn.local_count, returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
             ri = ri + 1;

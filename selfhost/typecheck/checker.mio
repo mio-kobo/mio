@@ -1,7 +1,9 @@
 yobu "selfhost/progress";
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
 yobu "kiso/string";
 yobu "selfhost/parser";
+yobu "kiso/encoding/win64c";
 yobu "selfhost/resolver";
 
 waza type_parameters(env: TypeEnvironment, file_id: int64, node: parser.Node) -> []TypeParameter {
@@ -156,6 +158,7 @@ waza fill_type_declarations(env: TypeEnvironment) -> unit {
 }
 
 waza register_function_signatures(env: TypeEnvironment) -> unit {
+    kaku c_prototypes: []string = [];
     kaku file_id = 0;
     aida (file_id < len(env.resolved.files)) {
         kaku root = node_at(env, file_id, env.resolved.files[file_id].root);
@@ -164,6 +167,26 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
             kaku node_id = root.children[index];
             kaku node = node_at(env, file_id, node_id);
             moshi (parser.node_kind_code(node.kind) == 32) {
+                moshi (win64c.is_external(node.extra)) {
+                    kaku problem = win64c.validate(node.extra, node.operator, win64c.parts(node.extra)[3] != "unit");
+                    kaku previous = 0;
+                    aida (previous < len(c_prototypes)) {
+                        moshi (win64c.conflicts(node.extra, c_prototypes[previous])) { problem = "E_FFI_PROTOTYPE conflicting C export prototypes"; }
+                        previous = previous + 1;
+                    }
+                    array.push(c_prototypes, node.extra);
+                    // 检查 AST 的完整类型形状，不能将数组或泛型名称误作标量。
+                    kaku i = 0;
+                    aida (i < node.operator) {
+                        kaku p = node_at(env, file_id, node.children[i]);
+                        moshi (len(p.children) != 1) { problem = "E_FFI_TYPE explicit scalar C parameter required"; }
+                        sore { kaku t = node_at(env, file_id, p.children[0]); moshi (parser.node_kind_code(t.kind) != 39 || len(t.children) != 0 || win64c.descriptor(t.text) <= 0) { problem = "E_FFI_TYPE unsupported C parameter type"; } }
+                        i = i + 1;
+                    }
+                    kaku t = node_at(env, file_id, node.children[node.operator]);
+                    moshi (parser.node_kind_code(t.kind) != 39 || len(t.children) != 0 || win64c.descriptor(t.text) < 0) { problem = "E_FFI_TYPE unsupported C return type"; }
+                    moshi (problem != "") { add_type_error(env, TypeErrorKind.InvalidCall(), "E_FFI_TYPE", file_id, node_id, 0, 0, problem); }
+                }
                 kaku type_params = type_parameters(env, file_id, node);
                 kaku parameter_types = array.with_capacity[int64](node.operator);
                 kaku child = node.integer;
@@ -179,6 +202,21 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
                 }
                 kaku return_type = builtin_type(env, "unit");
                 moshi (child < len(node.children) - 1) { return_type = resolve_type_node(env, file_id, node.children[child], type_params); }
+                moshi (node.extra != "" && !win64c.is_external(node.extra)) {
+                    kaku invalid = len(type_params) != 0 || node.operator > 256 || child >= len(node.children) - 1;
+                    kaku pi = 0;
+                    aida (pi < len(parameter_types)) {
+                        kaku code = c_parameter_code(env.result, parameter_types[pi]);
+                        moshi (code == "" || code == "v") { invalid = hai; }
+                        moshi (pi == 0 && node.extra == cabi.indirect_symbol && code != "k") { invalid = hai; }
+                        pi = pi + 1;
+                    }
+                    moshi (node.extra == cabi.indirect_symbol && len(parameter_types) == 0) { invalid = hai; }
+                    moshi (invalid || cabi.type_code(env.result.types[return_type].name) == "") {
+                        add_type_error(env, TypeErrorKind.InvalidCall(), "E_CABI", file_id, node_id, 0, 0,
+                            "C ABI requires a fixed prototype with explicit scalar parameters and a scalar or unit result");
+                    }
+                }
                 kaku symbol_id = binding_of(env, file_id, node_id);
                 add_signature(env, FunctionSignature { symbol_id: symbol_id, name: node.text, package_path: env.resolved.package_path, type_parameters: type_params, parameters: parameter_types, result: return_type });
                 moshi (len(type_params) == 0) { set_symbol_type(env, symbol_id, function_type(env.result, parameter_types, return_type)); }
@@ -187,6 +225,16 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
         }
         file_id = file_id + 1;
     }
+}
+
+// C 参数类型代码：[]uint8 传递数据首地址（"m"），其余按标量表。
+koukai waza c_parameter_code(result: TypeCheckResult, id: int64) -> string {
+    kaku info = result.types[id];
+    moshi (type_kind_code(info.kind) == 15) {
+        kaku element = result.types[info.element];
+        kaesu cabi.param_code("[]", element.name);
+    }
+    kaesu cabi.type_code(info.name);
 }
 
 waza copy_type_from(env: TypeEnvironment, source: TypeCheckResult, id: int64) -> int64 {
@@ -200,8 +248,9 @@ waza copy_type_memo(result: TypeCheckResult, source: TypeCheckResult, id: int64,
     moshi(id<0 || id>=len(source.types)){kaesu 0;}
     moshi (memo[id] >= 0) { kaesu memo[id]; }
     kaku info = source.types[id];
-    kaku code = type_kind_code(info.kind); kaku copied = 0;
-    moshi (code <= 14) { copied = copy_type_info(result, source, id); }
+    kaku code = type_kind_code(info.kind);
+    kaku copied = 0;
+    moshi ((code <= 14 || code == 20 || code == 21)) { copied = copy_type_info(result, source, id); }
     moshi (code == 15) { copied = array_type(result, copy_type_memo(result, source, info.element, memo)); }
     moshi (code == 16) { copied = nullable_type(result, copy_type_memo(result, source, info.element, memo)); }
     moshi (code == 17) {
@@ -214,7 +263,7 @@ waza copy_type_memo(result: TypeCheckResult, source: TypeCheckResult, id: int64,
         aida (index < len(info.parameters)) { array.push(parameters, copy_type_memo(result, source, info.parameters[index], memo)); index = index + 1; }
         copied = function_type(result, parameters, copy_type_memo(result, source, info.result, memo));
     }
-    moshi (code >= 19) { copied = parameter_type(result, info.name); }
+    moshi (code == 19) { copied = parameter_type(result, info.name); }
     memo[id] = copied;
     kaesu copied;
 }
@@ -223,8 +272,15 @@ koukai waza copy_type_info(result: TypeCheckResult, source: TypeCheckResult, id:
     moshi(id<0 || id>=len(source.types)){kaesu 0;}
     kaku info = source.types[id];
     kaku code = type_kind_code(info.kind);
-    moshi (code <= 14) {
-        kaku at=0;aida(at<len(result.types)){moshi(type_kind_code(result.types[at].kind)==code && result.types[at].name==info.name){kaesu at;}at=at+1;}kaesu 0;
+    moshi ((code <= 14 || code == 20 || code == 21)) {
+        kaku at = 0;
+        aida (at<len(result.types)) {
+            moshi (type_kind_code(result.types[at].kind) == code && result.types[at].name == info.name) {
+                kaesu at;
+            }
+            at = at + 1;
+        }
+        kaesu 0;
     }
     moshi (code == 15) { kaesu array_type(result, copy_type_info(result, source, info.element)); }
     moshi (code == 16) { kaesu nullable_type(result, copy_type_info(result, source, info.element)); }
