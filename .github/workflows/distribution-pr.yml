@@ -186,28 +186,40 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
+      id: compiler
       with:
-        name: distribution-compiler-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: distribution-compiler-${{ matrix.target }}
         path: build/compiler
-    - uses: actions/download-artifact@v4
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - uses: ./.github/actions/download-run-artifact
+      id: evidence
       with:
-        name: native-report-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: native-report-${{ matrix.target }}
         path: build/evidence
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       if: needs.scope.outputs.kind == 'stable'
       with:
-        name: ${{ needs.scope.outputs.seed_artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: ${{ needs.scope.outputs.seed_artifact }}
         path: build/trusted-seed
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Package verified native B as Core and Full
       shell: bash
-      run: >-
-        python scripts/distribution/package.py --source build/distribution-source
-        --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }}
-        --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates
-        ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
+      env:
+        COMPILER_ATTEMPT: ${{ steps.compiler.outputs.attempt }}
+        REPORT_ATTEMPT: ${{ steps.evidence.outputs.attempt }}
+      run: |
+        if [[ "$COMPILER_ATTEMPT" != "$REPORT_ATTEMPT" || -z "$REPORT_ATTEMPT" ]]; then
+          echo "Compiler and report artifacts must come from the same attempt" >&2
+          exit 1
+        fi
+        python scripts/distribution/package.py --source build/distribution-source \
+          --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }} \
+          --native-report-attempt "$REPORT_ATTEMPT" --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates \
+          ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
     - name: Install current official WinGet client
@@ -401,10 +413,11 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       with:
-        name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: native-stage-a
         path: build/stage-a
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Prepare source-free candidate build inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
     - name: Native B -> C -> D, mio test, Runtime ABI contract (no Go on this path)
@@ -458,10 +471,12 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       with:
-        pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: native-report-*
         path: build/native-reports
+        group: 'true'
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Combine the platform reports (fails unless every required check is PASS)
       run: python scripts/ci/native_platforms.py summary --reports build/native-reports --output build/native-summary ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
     - name: Verify Bunko public-function coverage on all three release targets
@@ -486,10 +501,11 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       with:
-        name: mio-candidates-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: mio-candidates-linux-amd64
         path: build/linux-candidates
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Build Full image, test offline, save/load, test offline again
       env:
         STABLE_VERSION: ${{ needs.scope.outputs.kind == 'stable' && needs.scope.outputs.version || '' }}
@@ -531,28 +547,40 @@ jobs:
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.12'
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
+      id: compiler
       with:
-        name: distribution-compiler-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: distribution-compiler-linux-amd64
         path: build/compiler
-    - uses: actions/download-artifact@v4
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - uses: ./.github/actions/download-run-artifact
+      id: evidence
       with:
-        name: native-report-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: native-report-linux-amd64
         path: build/evidence
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Prepare identical candidate inputs
       run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       if: needs.scope.outputs.kind == 'stable'
       with:
-        name: ${{ needs.scope.outputs.seed_artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: ${{ needs.scope.outputs.seed_artifact }}
         path: build/trusted-seed
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Package verified native B as Core and Full
       shell: bash
-      run: >-
-        python scripts/distribution/package.py --source build/distribution-source
-        --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B
-        --report build/evidence/report.json --target linux-amd64 --output build/candidates
-        ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
+      env:
+        COMPILER_ATTEMPT: ${{ steps.compiler.outputs.attempt }}
+        REPORT_ATTEMPT: ${{ steps.evidence.outputs.attempt }}
+      run: |
+        if [[ "$COMPILER_ATTEMPT" != "$REPORT_ATTEMPT" || -z "$REPORT_ATTEMPT" ]]; then
+          echo "Compiler and report artifacts must come from the same attempt" >&2
+          exit 1
+        fi
+        python scripts/distribution/package.py --source build/distribution-source \
+          --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B \
+          --native-report-attempt "$REPORT_ATTEMPT" --report build/evidence/report.json --target linux-amd64 --output build/candidates \
+          ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
     - name: Run relocated candidates outside the repository
       run: python scripts/distribution/verify.py --target linux-amd64 --output build/candidates
     - name: Install current official WinGet client
@@ -622,10 +650,11 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-    - uses: actions/download-artifact@v4
+    - uses: ./.github/actions/download-run-artifact
       with:
-        name: mio-candidates-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        artifact: mio-candidates-linux-amd64
         path: build/linux-candidates
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Signed APT lifecycle on clean Debian and Ubuntu containers
       env:
         IMAGE: ${{ matrix.image }}
