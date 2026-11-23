@@ -1,0 +1,251 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lower/types";
+yobu "kiso/aot/x86_64";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/encoding/mochi";
+yobu "kiso/string";
+
+// Linux x86-64 shared-library lowering (ET_DYN through a linker; this file produces the position-independent code).
+//
+// The program is lowered with the same typed lowering and runtime as a static executable, with three differences:
+//   * the label "pic" makes every data-area address a rip-relative `lea` plus a recorded DataRef (x86_64.mov_data),
+//     so the code contains no absolute address and no load-address dependence;
+//   * there is no process entry: every `koukai waza ... export "symbol"` function gets a System V AMD64 entry point
+//     (trampoline) that converts register/stack arguments to the Mio calling convention, runs the one-time runtime
+//     initialisation (heap reservation and the module's top-level code) on its first call, and converts the result back;
+//   * the runtime installs no signal handlers and never touches the host's libc.
+// Each shared object owns a private Mio heap and collector state (its zero-filled data area, which is not exported).
+
+koukai kata SharedExport {
+    symbol: string;
+    offset: int64;
+    size: int64;
+}
+
+koukai kata SharedLowerResult {
+    bytes: []uint8;
+    error: string;
+    exports: []SharedExport;
+    // Local (non-exported) function symbols for debuggers and profilers: they live in .symtab only, never in .dynsym.
+    locals: []SharedExport;
+    data_refs: []x86_64.DataRef;
+    externals: []x86_64.ExternalCall;
+    bss_size: int64;
+}
+
+waza shared_failed(message: string) -> SharedLowerResult {
+    kaesu SharedLowerResult { bytes: [], error: message, exports: [], locals: [], data_refs: [], externals: [], bss_size: 0 };
+}
+
+// Exported functions in function-id order, with their validated prototypes. Returns the first problem or "".
+waza shared_check_exports(file: mochi.File) -> string {
+    kaku seen: []string = [];
+    kaku count = 0;
+    kaku index = 0;
+    aida (index < len(file.functions)) {
+        kaku function = file.functions[index];
+        moshi (cabi.is_export(function.name)) {
+            kaku declaration = cabi.export_signature(function.name, function.parameter_count, function.returns_value);
+            moshi (!declaration.valid) { kaesu string.concat("E_SHARED_EXPORT invalid export prototype ", function.name); }
+            kaku layout = classify(declaration);
+            moshi (len(function.instructions) == 0) { kaesu string.concat("E_SHARED_EXPORT exported function has no body: ", declaration.symbol); }
+            kaku at = 0;
+            aida (at < len(seen)) {
+                moshi (seen[at] == declaration.symbol) { kaesu string.concat("E_SHARED_EXPORT duplicate exported symbol ", declaration.symbol); }
+                at = at + 1;
+            }
+            array.push(seen, declaration.symbol);
+            count = count + 1;
+            moshi (layout.stack_slots > 64) { kaesu string.concat("E_SHARED_EXPORT too many stack parameters in ", declaration.symbol); }
+        }
+        index = index + 1;
+    }
+    moshi (count == 0) { kaesu "E_SHARED_EXPORT no exported function: declare one with `koukai waza name(...) -> type export \"symbol\" { ... }`"; }
+    kaesu "";
+}
+
+waza export_label(index: int64) -> string { kaesu string.concat("shared.export.", convert.format_int(index)); }
+waza export_end_label(index: int64) -> string { kaesu string.concat("shared.export_end.", convert.format_int(index)); }
+
+// Bytes at the end of the data area: [0] = initialised flag, [8..32) = a fake initial stack (argc = 0, argv and envp
+// empty) that stands in for the kernel's process stack, which a library does not own.
+waza shared_state_address(file: mochi.File) -> int64 { kaesu globals_base() + 8 * file.global_count; }
+
+// One System V AMD64 entry point. Entry: arguments in RDI.. / XMM0.. / stack, return address at [rsp].
+waza emit_shared_export(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAnalysis, index: int64, declaration: cabi.Signature) -> unit {
+    kaku function = file.functions[index];
+    kaku layout = classify(declaration);
+    kaku registers = integer_registers();
+    x86_64.label(code, export_label(index));
+    // r11 = address of the first stack argument (the entry rsp + 8); no instruction below clobbers it before the spill.
+    x86_64.lea(code, x86_64.r11, x86_64.rsp, 8);
+    // Callee-saved registers of the C ABI. Mio code uses rbx and r12-r15 freely.
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.push_r(code, x86_64.rbx);
+    x86_64.push_r(code, x86_64.r12);
+    x86_64.push_r(code, x86_64.r13);
+    x86_64.push_r(code, x86_64.r14);
+    x86_64.push_r(code, x86_64.r15);
+    // A frame of its own whose saved rbp is 0: the collector's frame chain ends here, so it never walks the host's frames.
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    // Arguments, first parameter pushed first: the Mio calling convention. Narrow integers are extended to 64 bits
+    // (the caller only guarantees the low 32 bits), bool is normalised, float32 keeps its bit pattern in the low 32 bits.
+    kaku at = 0;
+    aida (at < len(declaration.parameters)) {
+        kaku place = layout.placements[at];
+        kaku kind = declaration.parameters[at];
+        moshi (place.class == class_memory) { x86_64.mov_load(code, x86_64.rax, x86_64.r11, place.index * 8); }
+        moshi (place.class == class_sse) {
+            moshi (kind == 105) { x86_64.movd_r_xmm(code, x86_64.rax, place.index); }
+            sore { x86_64.movq_r_xmm(code, x86_64.rax, place.index); }
+        }
+        moshi (place.class == class_integer) { x86_64.mov_rr(code, x86_64.rax, registers[place.index]); }
+        moshi (kind == 108) {
+            emit_extend(code, x86_64.rax, 15);
+            x86_64.cmp_ri(code, x86_64.rax, 0);
+            x86_64.setcc_rax(code, x86_64.cc_ne);
+        }
+        moshi (kind != 108 && !is_sse(kind)) { emit_extend(code, x86_64.rax, extension(kind)); }
+        x86_64.push_r(code, x86_64.rax);
+        at = at + 1;
+    }
+    x86_64.call(code, "shared.init");
+    // Type inference unifies a call argument with the callee's parameter, so a parameter that the module's own code
+    // treats as nullable (int64?) is a boxed scalar for every caller, this entry point included: box it here, after
+    // the runtime exists. Allocation does not collect, and the callee's frame descriptor roots the box.
+    kaku boxed = 0;
+    aida (boxed < function.parameter_count) {
+        moshi (nullable_scalar(analysis, analysis.locals[index][boxed])) {
+            kaku disp = 8 * (function.parameter_count - 1 - boxed);
+            x86_64.mov_load(code, x86_64.rax, x86_64.rsp, disp);
+            x86_64.call(code, "rt.box_scalar");
+            x86_64.mov_store(code, x86_64.rsp, disp, x86_64.rax);
+        }
+        boxed = boxed + 1;
+    }
+    x86_64.call(code, function_label(index));
+    // The collector reads a frame descriptor after every call: this frame holds no references.
+    kaku over = string.concat("shared.over.", convert.format_int(index));
+    x86_64.jmp(code, over);
+    emit_word(code, 0);
+    x86_64.label(code, over);
+    moshi (function.parameter_count > 0) { x86_64.add_ri(code, x86_64.rsp, 8 * function.parameter_count); }
+    // A result the module treats as nullable comes back boxed; the prototype says it is a plain scalar.
+    moshi (function.returns_value) { unbox_node(code, analysis, analysis.returns[index], x86_64.rax); }
+    moshi (declaration.result == 105) { x86_64.movd_xmm_r(code, 0, x86_64.rax); }
+    moshi (declaration.result == 106) { x86_64.movq_xmm_r(code, 0, x86_64.rax); }
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.add_ri(code, x86_64.rsp, 8);
+    x86_64.pop_r(code, x86_64.r15);
+    x86_64.pop_r(code, x86_64.r14);
+    x86_64.pop_r(code, x86_64.r13);
+    x86_64.pop_r(code, x86_64.r12);
+    x86_64.pop_r(code, x86_64.rbx);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+    x86_64.label(code, export_end_label(index));
+}
+
+// shared.init: the first call initialises the runtime and runs the top-level code of every module once; later calls
+// return at once. Single-threaded: concurrent first calls from several threads are not supported.
+waza emit_shared_init(code: x86_64.Assembler, file: mochi.File, analysis: types.TypeAnalysis, gc_threshold: int64) -> string {
+    x86_64.label(code, "shared.init");
+    x86_64.mov_data(code, x86_64.rax, shared_state_address(file));
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 0);
+    x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_e, "shared.init.first");
+    x86_64.ret(code);
+    x86_64.label(code, "shared.init.first");
+    x86_64.mov_ri(code, x86_64.rcx, 1);
+    x86_64.mov_store(code, x86_64.rax, 0, x86_64.rcx);
+    x86_64.lea(code, x86_64.rcx, x86_64.rax, 8);
+    x86_64.mov_data(code, x86_64.rdx, initial_sp_cell());
+    x86_64.mov_store(code, x86_64.rdx, 0, x86_64.rcx);
+    x86_64.call(code, "rt.init");
+    x86_64.mov_data(code, x86_64.rcx, gc_state());
+    x86_64.mov_ri(code, x86_64.rax, gc_threshold);
+    x86_64.mov_store(code, x86_64.rcx, 16, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rcx, 64, x86_64.rax);
+    // The module top-level code runs in a frame of its own (saved rbp 0), like the main program of an executable.
+    x86_64.push_r(code, x86_64.rbp);
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.mov_rr(code, x86_64.rbp, x86_64.rsp);
+    kaku problem = emit_block(code, file, analysis, file.instructions, "main", -1, 0);
+    moshi (problem != "") { kaesu problem; }
+    x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
+    x86_64.add_ri(code, x86_64.rsp, 8);
+    x86_64.pop_r(code, x86_64.rbp);
+    x86_64.ret(code);
+    kaesu "";
+}
+
+koukai waza compile_shared(file: mochi.File, gc_threshold: int64) -> SharedLowerResult {
+    moshi (mochi.has_win64_c(file)) { kaesu shared_failed("E_FFI_TARGET Windows AMD64 C ABI requires windows-amd64"); }
+    moshi (gc_threshold < 4096) { kaesu shared_failed("INVALID_GC_THRESHOLD"); }
+    moshi (uses_threads(file)) { kaesu shared_failed("E_SHARED_UNSUPPORTED OS threads cannot be used inside a shared library"); }
+    kaku checked = shared_check_exports(file);
+    moshi (checked != "") { kaesu shared_failed(checked); }
+    kaku analysis = types.analyze_types(file);
+    kaku code = x86_64.assembler();
+    // Compile-time switches, the same label mechanism as cabi_sysv/darwin_abi: "pic" selects rip-relative data
+    // addressing, "cabi_shared" enables the Mio -> C bridge for declared C dependencies.
+    x86_64.label(code, "pic");
+    kaku has_c = iie;
+    kaku index = 0;
+    aida (index < len(file.functions)) {
+        moshi (cabi.is_external(file.functions[index].name)) { has_c = hai; }
+        index = index + 1;
+    }
+    moshi (has_c) { x86_64.label(code, "cabi_shared"); }
+    index = 0;
+    aida (index < len(file.functions)) {
+        kaku function = file.functions[index];
+        moshi (cabi.is_export(function.name)) {
+            emit_shared_export(code, file, analysis, index, cabi.export_signature(function.name, function.parameter_count, function.returns_value));
+        }
+        index = index + 1;
+    }
+    kaku problem = emit_shared_init(code, file, analysis, gc_threshold);
+    moshi (problem != "") { kaesu shared_failed(problem); }
+    kaku reached = types.reachable_functions(file);
+    index = 0;
+    aida (index < len(file.functions)) {
+        kaku problem = emit_function(code, file, analysis, index, reached[index]);
+        moshi (problem != "") { kaesu shared_failed(problem); }
+        index = index + 1;
+    }
+    x86_64.label(code, "shared.functions_end");
+    emit_runtime(code);
+    emit_globals_map(code, file, analysis);
+    emit_string_constants(code, file);
+    kaku assembled = x86_64.assemble_linked(code);
+    moshi (assembled.error != "") { kaesu shared_failed(assembled.error); }
+    kaku exports: []SharedExport = [];
+    index = 0;
+    aida (index < len(file.functions)) {
+        kaku function = file.functions[index];
+        moshi (cabi.is_export(function.name)) {
+            kaku declaration = cabi.export_signature(function.name, function.parameter_count, function.returns_value);
+            kaku start = x86_64.label_offset(code, export_label(index));
+            kaku end = x86_64.label_offset(code, export_end_label(index));
+            array.push(exports, SharedExport { symbol: declaration.symbol, offset: start, size: end - start });
+        }
+        index = index + 1;
+    }
+    kaku locals: []SharedExport = [];
+    kaku ends = x86_64.label_offset(code, "shared.functions_end");
+    index = 0;
+    aida (index < len(file.functions)) {
+        kaku start = x86_64.label_offset(code, function_label(index));
+        kaku end = ends;
+        moshi (index + 1 < len(file.functions)) { end = x86_64.label_offset(code, function_label(index + 1)); }
+        array.push(locals, SharedExport { symbol: file.functions[index].name, offset: start, size: end - start });
+        index = index + 1;
+    }
+    kaesu SharedLowerResult { bytes: assembled.bytes, error: "", exports: exports, locals: locals, data_refs: assembled.data_refs,
+        externals: assembled.externals, bss_size: 8192 + 2097152 + 98304 + 8 * file.global_count + 32 };
+}

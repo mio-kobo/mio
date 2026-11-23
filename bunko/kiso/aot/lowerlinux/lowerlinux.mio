@@ -194,7 +194,7 @@ waza condition_for(opcode: int64) -> int64 {
 
 // Data segment: word 0 = heap_next, word 1 = heap_end, 16..1552 = NativeFS handle table, 1552..3600 = directory iteration state, then the Mochi globals.
 waza global_address(code: x86_64.Assembler, slot: int64) -> unit {
-    x86_64.mov_ri(code, x86_64.rcx, globals_base() + slot * 8);
+    x86_64.mov_data(code, x86_64.rcx, globals_base() + slot * 8);
 }
 
 // Object header word: kind in the low byte, total size in bytes above it.
@@ -1365,7 +1365,7 @@ waza emit_function(code: x86_64.Assembler, file: mochi.File, analysis: types.Typ
     }
     moshi (len(function.instructions) == 0 && cabi.is_external(function.name)) {
         // C 外部函数：只有 compile_with_c 会定义 cabi_sysv 标签；其他构建不会得到 C 调用，也不会回退到 Mio 约定。
-        moshi (!cabi_enabled(code)) { kaesu "UNSUPPORTED_C_ABI_TARGET"; }
+        moshi (!c_bridge_enabled(code)) { kaesu "UNSUPPORTED_C_ABI_TARGET"; }
         kaku declaration = cabi.signature(function.name, function.parameter_count, function.returns_value);
         kaku bridged = emit_c_bridge(code, declaration, function.parameter_count);
         moshi (bridged != "") { kaesu bridged; }
@@ -1449,6 +1449,8 @@ waza uses_threads(file: mochi.File) -> bool {
 
 // C ABI 模式由标签 cabi_sysv 开启（与 darwin_abi、mutators 相同的标签式开关），因此普通构建的指令序列完全不变。
 waza cabi_enabled(code: x86_64.Assembler) -> bool { kaesu x86_64.label_offset(code, "cabi_sysv") >= 0; }
+// The Mio -> C bridge is also available inside a shared library that declares its C dependencies (label cabi_shared).
+waza c_bridge_enabled(code: x86_64.Assembler) -> bool { kaesu cabi_enabled(code) || x86_64.label_offset(code, "cabi_shared") >= 0; }
 
 // 正常结束：C 模式下必须走 libc 的 exit，才能冲刷 C 的 stdio 缓冲并运行 atexit；普通构建仍直接 exit_group。
 // libc 的 exit 要求调用点 RSP 对齐 16 字节。
@@ -1521,11 +1523,11 @@ waza compile_parts(file: mochi.File, gc_threshold: int64, darwin: bool, c_abi: b
         x86_64.label(code, "darwin_abi");
         x86_64.lea(code, x86_64.rsp, x86_64.rsi, -8);
     }
-    x86_64.mov_ri(code, x86_64.rcx, initial_sp_cell());
+    x86_64.mov_data(code, x86_64.rcx, initial_sp_cell());
     x86_64.mov_store(code, x86_64.rcx, 0, x86_64.rsp);
     x86_64.call(code, "rt.init");
     moshi (threads) { x86_64.call(code, "rt.mut_init"); }
-    x86_64.mov_ri(code, x86_64.rcx, gc_state());
+    x86_64.mov_data(code, x86_64.rcx, gc_state());
     x86_64.mov_ri(code, x86_64.rax, gc_threshold);
     x86_64.mov_store(code, x86_64.rcx, 16, x86_64.rax);
     x86_64.mov_store(code, x86_64.rcx, 64, x86_64.rax);
