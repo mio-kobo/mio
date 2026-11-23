@@ -2422,7 +2422,10 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
         kaku function = file.functions[scan];
         moshi (cabi.is_external(function.name)) {
             kaku signature = cabi.signature(function.name, function.parameter_count, function.returns_value);
-            moshi (!allow_c || !signature.valid || len(function.instructions) != 0 ||
+            // 间接调用和 []uint8 数据指针参数只有 Linux x86-64 后端实现。
+            kaku linux_only = signature.indirect; kaku lp = 0;
+            aida (lp < len(signature.parameters)) { moshi (signature.parameters[lp] == 109) { linux_only = hai; } lp = lp + 1; }
+            moshi (!allow_c || !signature.valid || linux_only || len(function.instructions) != 0 ||
                 len(function.captures) != 0 || function.local_count != function.parameter_count) {
                 kaesu failed(LowerError.UnsupportedNative((scan + 1) * 1000000));
             }

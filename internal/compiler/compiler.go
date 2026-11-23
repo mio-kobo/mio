@@ -1116,7 +1116,11 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 			prototype.WriteByte(':')
 			prototype.WriteString(cabi.TypeCode(fn.ReturnType.Name))
 			for _, param := range fn.Parameters {
-				prototype.WriteString(cabi.TypeCode(param.DeclaredType.Name))
+				element := ""
+				if param.DeclaredType.Element != nil {
+					element = param.DeclaredType.Element.Name
+				}
+				prototype.WriteString(cabi.ParamCode(param.DeclaredType.Name, element))
 			}
 			name = prototype.String()
 		}

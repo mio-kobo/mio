@@ -3,6 +3,11 @@ package cabi
 
 const Prefix = "$cabi::"
 
+// IndirectSymbol is the reserved symbol of an indirect C call. The first
+// parameter of such a declaration is the cptr of the function to call (usually
+// from dlsym) and the remaining parameters are the C arguments.
+const IndirectSymbol = "mio_ffi_indirect"
+
 func ValidSymbol(name string) bool {
 	if name == "main" || len(name) == 0 || len(name) > 1024 {
 		return false
@@ -46,4 +51,20 @@ func TypeCode(name string) string {
 	default:
 		return ""
 	}
+}
+
+// ParamCode returns the prototype code of a C parameter type. A []uint8 passes
+// the address of its data ("m"); the array stays owned by Mio and the pointer is
+// only valid for the duration of the call.
+func ParamCode(name string, element string) string {
+	if name == "[]" {
+		if element == "uint8" {
+			return "m"
+		}
+		return ""
+	}
+	if element != "" {
+		return ""
+	}
+	return TypeCode(name)
 }

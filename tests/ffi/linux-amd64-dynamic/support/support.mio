@@ -1,0 +1,47 @@
+yobu "kiso/array";
+yobu "kiso/os";
+yobu "kiso/string";
+
+// Minimal assertion helper for the Linux FFI end-to-end cases: counts failures and exits non-zero.
+koukai kata Run { name: string; failures: []int64; checks: []int64; }
+
+koukai waza begin(name: string) -> Run { kaesu Run { name: name, failures: [0], checks: [0] }; }
+
+koukai waza expect(run: Run, label: string, ok: bool) -> unit {
+    run.checks[0] = run.checks[0] + 1;
+    moshi (!ok) {
+        run.failures[0] = run.failures[0] + 1;
+        chant(string.concat("FAIL ", string.concat(run.name, string.concat(": ", label))));
+    }
+}
+
+koukai waza finish(run: Run) -> unit {
+    moshi (run.failures[0] != 0) { chant(string.concat(run.name, " FAILED")); os.exit(1); }
+    chant(string.concat(run.name, " PASS"));
+}
+
+// Directory of the freshly built .so modules, from MIO_FFI_LIBDIR (absolute) set by the harness.
+koukai waza libdir() -> string { kaesu os.getenv("MIO_FFI_LIBDIR"); }
+koukai waza absolute(file: string) -> string { kaesu string.concat(libdir(), string.concat("/", file)); }
+
+koukai waza hex(data: []uint8) -> string {
+    kaku digits = string.to_bytes("0123456789abcdef");
+    kaku out: []uint8 = [];
+    kaku at = 0;
+    aida (at < len(data)) {
+        kaku b = int64(data[at]);
+        array.push(out, digits[b / 16]);
+        array.push(out, digits[b - (b / 16) * 16]);
+        at = at + 1;
+    }
+    kaesu text(out);
+}
+
+// Bytes to a string; "" when the bytes are not valid UTF-8.
+koukai waza text(data: []uint8) -> string {
+    kaku value = string.from_utf8(data);
+    moshi (value == mu) { kaesu ""; }
+    kaesu value;
+}
+
+koukai waza mod(a: int64, b: int64) -> int64 { kaesu a - (a / b) * b; }
