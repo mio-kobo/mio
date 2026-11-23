@@ -63,7 +63,7 @@ waza semantic_member(symbols: []SemanticSymbol, owner: string, name: string) -> 
 waza member_occurrence(occurrences: []Occurrence, source: SemanticSource, node: parser.Node, member: SemanticSymbol, last: bool) -> unit {
     kaku selection = semantic_selection(source, node.span, member.name, last);
     array.push(occurrences, Occurrence {
-            path: source.path, start: selection.start.offset, end: selection.end.offset, key: member.key, declaration: iie });
+            path: source.path, start: selection.start.offset, end: selection.end.offset, key: member.key, declaration: iie, write: parser.node_kind_code(node.kind) == 29 });
 }
 waza semantic_members(analysis: frontend.AnalysisResult, sources: []SemanticSource, symbols: []SemanticSymbol, occurrences: []Occurrence, work: progress.Context) -> unit {
     kaku pi = 0;
@@ -108,7 +108,7 @@ waza semantic_members(analysis: frontend.AnalysisResult, sources: []SemanticSour
                             array.push(symbols, SemanticSymbol {
                                     key: key, name: child.text, kind: 13, package_path: symbol.package_path, path: file.path, span: child.span, selection: selection, detail: detail, public: symbol.public, owner: owner });
                             array.push(occurrences, Occurrence {
-                                    path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: hai });
+                                    path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: hai, write: hai });
                         } sore {
                             kaku vi = 0;
                             aida (vi<len(symbols)) {
@@ -167,6 +167,18 @@ waza semantic_members(analysis: frontend.AnalysisResult, sources: []SemanticSour
                             member_occurrence(occurrences, sources[source], field, member, iie);
                         }
                         ci = ci + 1;
+                    }
+                }
+                moshi (kind == 38 && len(node.children) > 1) {
+                    kaku owner = semantic_named_owner(symbols, checked, semantic_node_type(checked, fi, node.children[0]));
+                    kaku ai = 1;
+                    aida (ai < len(node.children)) {
+                        kaku arm = file.ast.nodes[node.children[ai]];
+                        kaku variant = semantic_member(symbols, owner, arm.text);
+                        moshi (variant != mu) {
+                            moshi (variant.kind == 8) { member_occurrence(occurrences, sources[source], arm, variant, iie); }
+                        }
+                        ai = ai + 1;
                     }
                 }
                 ni = ni + 1;

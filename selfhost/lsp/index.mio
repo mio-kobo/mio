@@ -31,6 +31,7 @@ koukai kata Occurrence {
     end: int64;
     key: string;
     declaration: bool;
+    write: bool;
 }
 koukai kata SemanticIndex {
     analysis: frontend.AnalysisResult;
@@ -93,25 +94,43 @@ waza semantic_key(result: frontend.AnalysisResult, symbol: resolver.Symbol) -> s
     }
     kaesu string.concat(files[ref.file_id].path, string.concat("#", string.concat(convert.format_int(ref.node_id), string.concat(":", symbol.name))));
 }
-waza semantic_selection(source: SemanticSource, span: parser.SourceSpan, name: string, last: bool) -> parser.SourceSpan {
+koukai waza semantic_selection(source: SemanticSource, span: parser.SourceSpan, name: string, last: bool) -> parser.SourceSpan {
     kaku selected = span;
-    kaku found = iie;
-    kaku at = 0;
-    aida (at<len(source.tokens)) {
+    kaku at = token_starting_at(source.tokens, span.start.offset);
+    aida (at<len(source.tokens) && source.tokens[at].end.offset<=span.end.offset) {
         kaku token = source.tokens[at];
-        moshi (token.start.offset >= span.start.offset && token.end.offset <= span.end.offset && token.literal == name) {
-            selected = parser.SourceSpan {
-                start: token.start, end: token.end };
-            found = hai;
-            moshi (!last) {
-                nukeru;
-            }
-        } at = at + 1;
-    }
-    moshi (!found) {
-        kaesu span;
+        moshi (lexer.token_kind_code(token.kind) == 2 && token.literal == name) {
+            selected = parser.SourceSpan { start: token.start, end: token.end };
+            moshi (!last) { nukeru; }
+        }
+        at = at + 1;
     }
     kaesu selected;
+}
+waza token_starting_at(tokens: []lexer.Token, offset: int64) -> int64 {
+    kaku low = 0;
+    kaku high = len(tokens);
+    aida (low < high) {
+        kaku mid = low + (high - low) / 2;
+        moshi (tokens[mid].start.offset < offset) { low = mid + 1; }
+        sore { high = mid; }
+    }
+    kaesu low;
+}
+waza reference_selection(source: SemanticSource, node: parser.Node, name: string) -> parser.SourceSpan {
+    kaku kind = parser.node_kind_code(node.kind);
+    moshi ((kind == 39 || kind == 28) && string.index(node.text, ".") >= 0) {
+        // The parser represents a qualified type as one node. Its member
+        // token follows the qualifier and dot, before any type arguments.
+        kaku at = token_starting_at(source.tokens, node.span.start.offset);
+        aida (at + 2 < len(source.tokens) && source.tokens[at + 2].end.offset <= node.span.end.offset) {
+            moshi (lexer.token_kind_code(source.tokens[at + 1].kind) == 30 && source.tokens[at + 2].literal == name) {
+                kaesu parser.SourceSpan { start: source.tokens[at + 2].start, end: source.tokens[at + 2].end };
+            }
+            at = at + 1;
+        }
+    }
+    kaesu semantic_selection(source, node.span, name, kind == 27);
 }
 waza semantic_signature(checked: typecheck.TypeCheckResult, source: resolver.SourceFile, node: parser.Node, symbol: resolver.Symbol) -> string {
     kaku at = 0; aida (at<len(checked.signatures)) {
@@ -210,7 +229,7 @@ koukai waza semantic_index_with_progress(analysis: frontend.AnalysisResult, work
                     array.push(symbols, SemanticSymbol {
                             key: key, name: symbol.name, kind: resolver.symbol_kind_code(symbol.kind), package_path: symbol.package_path, path: file.path, span: symbol.span, selection: selection, detail: semantic_detail(checked, file, symbol), public: symbol.public, owner: owner });
                     array.push(occurrences, Occurrence {
-                            path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: hai });
+                            path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: hai, write: hai });
                 }
             } si = si + 1;
         } pi = pi + 1;
@@ -229,11 +248,11 @@ koukai waza semantic_index_with_progress(analysis: frontend.AnalysisResult, work
                     kaku key = semantic_key(analysis, symbol);
                     moshi (key != "") {
                         kaku node = file.ast.nodes[ref.node_id];
-                        kaku selection = semantic_selection(sources[source], node.span, symbol.name, parser.node_kind_code(node.kind) == 27);
+                        kaku selection = reference_selection(sources[source], node, symbol.name);
                         kaku declaration = symbol.package_path == package.package_path && symbol.declaration.file_id == ref.file_id && symbol.declaration.node_id == ref.node_id;
                         moshi (!declaration) {
                             array.push(occurrences, Occurrence {
-                                    path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: iie });
+                                    path: file.path, start: selection.start.offset, end: selection.end.offset, key: key, declaration: iie, write: parser.node_kind_code(node.kind) == 15 });
                         }
                     }
                 }
