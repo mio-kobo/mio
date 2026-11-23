@@ -24,7 +24,7 @@ On an actual Mac with Xcode Command Line Tools:
 python native-tests/darwin.py --output build/native-ffi-darwin
 ```
 
-This builds `libmio_ffi_{math,string,buffer,state,version}.dylib` with clang and invokes their exports with a C ABI host. It explicitly records **Darwin Mio dynamic FFI: NOT_RUN**; the current backend does not lower these signatures. On Windows it returns nonzero/NOT_RUN, without substituting a PE file.
+This builds `libmio_ffi_{math,string,buffer,state,version}.dylib` with clang and invokes their exports with a C ABI host. On Apple Silicon, add `--mio <current-native-cli>` to link all five dylibs through the upstream Darwin C ABI and execute `darwin.mio` in normal and GC-stress modes. The Darwin ARM64 native-platform CI invokes this path. The checked runtime open/symbol/token-call loader remains Windows-only and is explicitly recorded NOT_RUN on Darwin. On Windows the Darwin driver returns nonzero/NOT_RUN, without substituting a PE file.
 
 ## Optional real-library integration
 

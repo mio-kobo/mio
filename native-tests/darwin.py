@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""Validate shared fixture Mach-O exports. This is NOT a Mio FFI execution test."""
+"""Validate shared Mach-O fixtures with a C host and optional native Mio CLI."""
 import argparse
 import ctypes as c
 import json
 from pathlib import Path
 import platform
-from build import build
+import subprocess
+from build import build, ROOT, MODULES
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mio", type=Path, help="also invoke all five dylibs through the Darwin ARM64 Mio C ABI")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    report = {"host": platform.platform(), "engine": "C ABI fixture host (ctypes)", "checks": []}
+    report = {"host": platform.platform(), "engine": "C fixture host with optional Mio native checks", "checks": []}
 
     def record(name, status, **details):
         report["checks"].append(dict(name=name, status=status, **details))
         (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(status, name, flush=True)
 
-    record("Darwin Mio dynamic FFI", "NOT_RUN", reason="Darwin backend rejects Windows C prototype metadata; no System V/AAPCS64 native FFI bridge")
+    record("Darwin runtime token loader", "NOT_RUN", reason="Darwin supports linked C prototypes; the Windows checked open/symbol/token-call API is not implemented there")
     if platform.system() != "Darwin":
         record("Mach-O fixture execution", "NOT_RUN", reason="requires a real macOS host")
         return 2
@@ -69,6 +71,34 @@ def main():
         record("state dylib calls", "PASS")
         assert bind("version", "mio_ffi_abi_version", c.c_uint32, [])() == 1
         record("version dylib call", "PASS")
+        if args.mio:
+            if platform.machine().lower() != "arm64":
+                record("Mio dylib calls", "NOT_RUN", reason="the linked C ABI backend currently requires Darwin ARM64")
+                return 2
+            for mode in ("normal", "gc-stress"):
+                image = output / ("mio-fixtures-" + mode)
+                command = [str(args.mio.resolve()), "build", str(ROOT / "native-tests/darwin.mio"),
+                           "--bunko-root", str(ROOT / "bunko"), "--target=darwin-arm64", "-o", str(image)]
+                for module in MODULES:
+                    command += ["--link", str(output / ("libmio_ffi_" + module + ".dylib"))]
+                if mode == "gc-stress":
+                    command += ["--gc-stress"]
+                proc = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=300)
+                (output / (mode + ".build.log")).write_bytes(proc.stdout + proc.stderr)
+                (output / (mode + ".command.json")).write_text(json.dumps(command), encoding="utf-8")
+                record("Mio dylib build " + mode, "PASS" if proc.returncode == 0 else "FAIL")
+                if proc.returncode:
+                    return 1
+                image.chmod(0o755)
+                proc = subprocess.run([str(image)], capture_output=True, timeout=120)
+                (output / (mode + ".stdout.log")).write_bytes(proc.stdout)
+                (output / (mode + ".stderr.log")).write_bytes(proc.stderr)
+                ok = proc.returncode == 0 and proc.stdout == b"PASS\n" and not proc.stderr
+                record("Mio dylib calls " + mode, "PASS" if ok else "FAIL", engine="Mio native")
+                if not ok:
+                    return 1
+        else:
+            record("Mio dylib calls", "NOT_RUN", reason="supply --mio with a current native Darwin ARM64 CLI")
         return 0
     except Exception as error:
         record("Mach-O fixture execution", "FAIL", reason=str(error))

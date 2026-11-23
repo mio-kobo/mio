@@ -1,6 +1,6 @@
 # Mio Native FFI ABI v1
 
-Native FFI v1 adds checked Windows AMD64 dynamic calls to the existing fixed-prototype C declarations. It is independent of **Runtime ABI Revision RA-1**. It does not revise Object ABI v1, either GC profile, root tracking, Mio's own calling convention, or Linux's static ELF implementation.
+Native FFI v1 adds checked Windows AMD64 dynamic calls to the existing fixed-prototype C declarations. It is independent of **Runtime ABI Revision RA-1**. It does not revise Object ABI v1, either GC profile, root tracking, Mio's own calling convention, or the current Linux ELF implementation.
 
 ## Source audit and implementation boundary
 
@@ -13,7 +13,7 @@ Native FFI v1 adds checked Windows AMD64 dynamic calls to the existing fixed-pro
 | C external declarations | `$win64c` Mochi metadata carries complete scalar prototypes | Reserve `mio.dynamic.dll` as a compiler marker |
 | Indirect calls | `x86_64.call_r` already exists for machine code; language closures use the Mio convention | Add a checked **native** indirect-call lowering; a Mio closure is not a C function pointer |
 | Scalar ABI | Existing bridge handles positional GPR/XMM, stack args and scalar normalization | Same marshal code, skipping the leading function token |
-| Darwin | Mach-O writer and OS adapter bind selected libSystem imports; ARM64/AMD64 use their own conventions | No dynamic C FFI lowering; Windows metadata remains rejected |
+| Darwin | Mach-O writer/OS adapter and upstream Darwin ARM64 fixed-prototype C ABI use their own conventions | Reuse linked dylib calls for the shared fixtures; checked runtime token loader remains Windows-only |
 | Resource ownership | Existing `cptr` is an opaque non-GC pointer without dereference or arithmetic | Generation-checked library/symbol/buffer registries in the support DLL |
 | Frontend | `copy_type_memo` mistakenly overwrote imported CPtr/Uint64 with TypeParameter | Restrict that fallback to TypeParameter; imported `Result.handle` now retains uint64 |
 
@@ -120,9 +120,9 @@ Mio String, Array, Map, Struct and Closure internals never cross the ABI. Helper
 
 ## Platform status and tests
 
-Windows AMD64 has Mio native dynamic calls. Darwin builds **the same C fixture sources** as actual Mach-O `.dylib` files, but Mio dynamic calls are unsupported until a Darwin C ABI bridge and metadata lowering exist. `native-tests/darwin.py` records Mio FFI as NOT_RUN and tests C fixture exports through ctypes on macOS; that is not a Mio compatibility claim. Linux remains static ELF; Windows ARM64 and the reference VM reject these declarations at execution/lowering.
+Windows AMD64 has the checked runtime loader and token-call API. The latest Mio-2.2.0 base also has Darwin ARM64 fixed-prototype C imports: `native-tests/darwin.py --mio <native-cli>` links **the same five C fixture dylibs** into real Mio programs using that existing ABI, and executes normal/GC-stress images. Without --mio it runs only the explicitly labeled ctypes fixture-host checks. The Darwin runtime open/symbol/token-call API remains NOT_RUN/unsupported; Darwin AMD64 has no equivalent fixed C bridge. Existing upstream Linux ELF C ABI/linking is retained without adding a Linux runtime loader in this change. Windows ARM64 and the reference VM reject Windows declarations at execution/lowering.
 
-See `native-tests/README.md` for builds, optional third-party dependency paths, C signatures and commands. Windows native-platform CI runs the new driver as a required check after creating the native CLI, on a real windows-2022 AMD64 runner. The separate macOS job validates only shared C fixtures. CI uploads JSON/logs, not DLLs. Dependencies are never downloaded by a test; optional third-party tests report NOT_RUN unless locally provisioned paths are supplied.
+See `native-tests/README.md` for builds, optional third-party dependency paths, C signatures and commands. Windows native-platform CI runs the new driver as a required check after creating the native CLI, on a real windows-2022 AMD64 runner. The standalone macOS job validates the C fixture host; the Darwin ARM64 native-platform job also invokes all five dylibs through Mio. CI uploads JSON/logs, not DLLs. Dependencies are never downloaded by a test; optional third-party tests report NOT_RUN unless locally provisioned paths are supplied.
 
 Local evidence on 2026-11-23, Windows 10 AMD64, MSVC 14.51, native Mio candidate built from this source:
 

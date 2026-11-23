@@ -1010,6 +1010,19 @@ def darwin_c_abi(report, cli, work):
     named in the reason and never counted as a pass. The raw log of every command lands under logs/c-abi."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
+    shared = report.logs / "shared-c-fixtures"
+    code, out, err, _ = run(report, "darwin-shared-native-fixtures", [sys.executable, ROOT / "native-tests/darwin.py", "--mio", cli, "--output", shared], timeout=1800)
+    status, detail = "FAIL", brief(err or out)
+    try:
+        checks = json.loads((shared / "report.json").read_text(encoding="utf-8"))["checks"]
+        needed = {"Mio dylib calls normal", "Mio dylib calls gc-stress"}
+        passed = {c["name"] for c in checks if c["status"] == "PASS"}
+        failures = [c for c in checks if c["status"] != "PASS" and c["name"] != "Darwin runtime token loader"]
+        status = "PASS" if code == 0 and needed <= passed and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("darwin-shared-native-fixtures", status, "native", detail)
     output = report.logs / "c-abi"
     code, out, err, seconds = run(report, "darwin-c-abi-run", [sys.executable, ROOT / "tests/ffi/darwin-arm64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
     try:
