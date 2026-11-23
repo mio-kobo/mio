@@ -1,0 +1,84 @@
+yobu "kiso/ffi";
+yobu "kiso/os";
+
+waza require(condition: bool, message: string) -> unit {
+    moshi (!condition) { chant(message); os.exit(1); }
+}
+
+waza open(path: string) -> ffi.Library {
+    kaku opened = ffi.open(path);
+    kaku library = opened.library;
+    moshi (library != mu) { kaesu library; }
+    chant(opened.error);
+    os.exit(1);
+    // The native exit is terminal.
+    kaesu open(path);
+}
+
+waza bind(library: ffi.Library, name: string, signature: ffi.Prototype) -> ffi.Function {
+    kaku binding = ffi.symbol(library, name, signature);
+    kaku function = binding.function;
+    moshi (function != mu) { kaesu function; }
+    chant(binding.error);
+    os.exit(1);
+    kaesu bind(library, name, signature);
+}
+
+kaku args = os.arguments();
+require(len(args) == 5, "expected math, convert, JSON, and data fixture paths");
+kaku missing = ffi.open("/mio-dylib-test/nonexistent/libmissing.dylib");
+require(missing.library == mu && missing.error != "", "missing library");
+kaku math = open(args[1]);
+kaku convert = open(args[2]);
+kaku json = open(args[3]);
+kaku same = open(args[1]);
+kaku data = open(args[4]);
+
+kaku version = bind(math, "mio_module_abi_version", ffi.Prototype.Int64());
+require(ffi.invoke_int64(version).value == 1, "ABI version");
+kaku add = bind(math, "mio_math_add", ffi.Prototype.Int64FromTwoInt64());
+kaku inc = bind(math, "mio_math_inc", ffi.Prototype.Int64FromInt64());
+kaku root = bind(math, "mio_math_sqrt", ffi.Prototype.Float64FromFloat64());
+kaku scale = bind(convert, "mio_convert_scale_float64", ffi.Prototype.Float64FromTwoInt64());
+kaku digit = bind(json, "mio_json_digit", ffi.Prototype.BoolFromInt64());
+kaku same_add = bind(same, "mio_math_add", ffi.Prototype.Int64FromTwoInt64());
+require(ffi.symbol(math, "mio_missing", ffi.Prototype.Int64()).error != "", "missing symbol");
+require(ffi.symbol(math, "mio_math_add", ffi.Prototype.Int64()).error == "Mio FFI function signature mismatch", "wrong signature");
+require(ffi.symbol(data, "mio_test_data", ffi.Prototype.Int64()).error == "symbol does not identify an ARM64 text entry", "data symbol rejected");
+require(ffi.invoke_bool(add, 0).error != "", "wrong invocation API");
+require(ffi.invoke_int64_2(add, 20, 22).value == 42, "math add");
+require(ffi.invoke_int64_1(inc, 41).value == 42, "math increment");
+require(ffi.invoke_float64(root, 81.0).value == 9.0, "math sqrt");
+require(ffi.invoke_float64_from_ints(scale, 21, 1).value == 42.0, "binary scaling");
+require(ffi.invoke_bool(digit, 57).value && !ffi.invoke_bool(digit, 58).value, "JSON digit");
+
+require(ffi.close(math) == "", "close first math handle");
+require(ffi.invoke_int64_2(add, 20, 22).error != "", "stale function");
+require(ffi.symbol(math, "mio_math_add", ffi.Prototype.Int64FromTwoInt64()).error != "", "stale library");
+require(ffi.close(math) != "", "duplicate close");
+require(ffi.invoke_int64_2(same_add, 21, 21).value == 42, "independent dlopen reference");
+require(ffi.close(same) == "", "close second math handle");
+kaku reopened = open(args[1]);
+kaku reopened_add = bind(reopened, "mio_math_add", ffi.Prototype.Int64FromTwoInt64());
+require(ffi.invoke_int64_2(reopened_add, -1, 43).value == 42, "reopen");
+require(ffi.invoke_int64_2(add, 20, 22).error != "", "stale handle after reopening");
+
+waza direct(a: int64, b: int64) -> int64 { kaesu a + b; }
+
+kaku iterations = 100000;
+kaku at = 0;
+kaku direct_sum = 0;
+kaku start = os.monotonic_ms();
+aida (at < iterations) { direct_sum = direct_sum + direct(at, 1); at = at + 1; }
+kaku direct_ms = os.monotonic_ms() - start;
+kaku ffi_sum = 0;
+at = 0;
+start = os.monotonic_ms();
+aida (at < iterations) { ffi_sum = ffi_sum + ffi.invoke_int64_2(reopened_add, at, 1).value; at = at + 1; }
+kaku ffi_ms = os.monotonic_ms() - start;
+require(direct_sum == ffi_sum, "benchmark result");
+require(ffi.close(reopened) == "" && ffi.close(convert) == "" && ffi.close(json) == "" && ffi.close(data) == "", "close all");
+chant("dylib loader: ok");
+chant(iterations);
+chant(direct_ms);
+chant(ffi_ms);
