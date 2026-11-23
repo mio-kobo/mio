@@ -1,6 +1,6 @@
 # kiso/aot/pe
 
-纯 Mio Windows AMD64 PE32+ executable writer。接收机器码与数据，不包含指令编码器、语言 lowering、宿主 I/O、外部链接器或 OS Adapter；不依赖未合并的 #4/#5。
+纯 Mio Windows AMD64 PE32+ executable / DLL writer。接收机器码与数据，不包含指令编码器、语言 lowering、宿主 I/O、外部链接器或 OS Adapter；不依赖未合并的 #4/#5。`dynamic_library` 接受显式 `.text` 偏移导出列表，生成排序的 `.edata`、DLL 标志及零入口点；语言入口与 ABI 限制见 `docs/windows-dll.md`。
 
 ## 接口
 
@@ -33,7 +33,7 @@ source section 只能是 `text_section`、`rdata_section`、`data_section`；off
 
 ### 导入和展开的限制
 
-`.idata` 包含 descriptors、独立 ILT/IAT、DLL names、2-byte 对齐的 hint/name records，所有列表有终止项。接受 1..255 字节 printable ASCII 名称，拒绝空 DLL/符号列表、重复的完全同名 DLL/符号、NUL、非 ASCII。DLL 名按字节比较，不作大小写/路径归一化。不支持 ordinal/delay imports、exports、resources、TLS、COFF objects 或通用链接。
+`.idata` 包含 descriptors、独立 ILT/IAT、DLL names、2-byte 对齐的 hint/name records，所有列表有终止项。接受 1..255 字节 printable ASCII 名称，拒绝空 DLL/符号列表、重复的完全同名 DLL/符号、NUL、非 ASCII。DLL 名按字节比较，不作大小写/路径归一化。不支持 ordinal/delay imports、resources、TLS、COFF objects 或通用链接；显式函数导出由 `dynamic_library` 支持。
 
 `UnwindFunction {begin,end,prolog_size,stack_size,stack_offset}` 的 begin/end 是 text 偏移，end 不包含在内；stack_offset 是单条栈分配指令结束时相对函数入口的偏移。仅支持无 frame pointer、无 nonvolatile saves 的单次分配：
 
