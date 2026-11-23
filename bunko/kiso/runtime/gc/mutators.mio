@@ -1,54 +1,182 @@
-// Compiler-facing managed mutator protocol, expressed only in neutral IR.
-// A heap operation owns its stopped epoch through initialization/publication;
-// the next solved opcode boundary releases it before ordinary execution polls.
+// 面向编译器的托管 Mutator 协议（完全以中立 Runtime IR 表达）。
+// 堆操作在初始化/发布期间持有其 stopped epoch，直到下一个已求解的字节码边界才释放，避免普通执行过早轮询。
+
 waza gc_heap_enter_program() -> ir.Function {
-    kaku f=ir.function("gc_heap_enter");tprepare(f);ir.put(f,ir.release_store,0,0,1,thread_shadow);
-    tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.nonzero,12,"owned");
-    ir.invoke_function(f,"gc_begin",2,[0,1]);ir.put(f,ir.result,0,2,0,0);
-    ir.branch(f,ir.label,0,"owned");treturn(f,0);kaesu f;
+    kaku f = ir.function("gc_heap_enter");
+    tprepare(f);
+    ir.put(f, ir.release_store, 0, 0, 1, thread_shadow);
+
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.nonzero, 12, "owned");
+
+    ir.invoke_function(f, "gc_begin", 2, [0, 1]);
+    ir.put(f, ir.result, 0, 2, 0, 0);
+
+    ir.branch(f, ir.label, 0, "owned");
+    treturn(f, 0);
+    kaesu f;
 }
+
 waza gc_mutator_poll_program() -> ir.Function {
-    kaku f=ir.function("gc_mutator_poll");tprepare(f);ir.put(f,ir.release_store,0,0,1,thread_shadow);
-    tload(f,10,thread_registry);ir.put(f,ir.acquire_load,11,10,0,gc_registry_owner);ir.put(f,ir.equal,12,11,0,0);ir.branch(f,ir.zero,12,"poll");
-    ir.invoke_function(f,"gc_end",2,[0]);ir.branch(f,ir.nonzero,2,"failed");
-    ir.branch(f,ir.label,0,"poll");ir.invoke_function(f,"gc_poll",2,[0,1]);
-    ir.branch(f,ir.label,0,"failed");ir.put(f,ir.result,0,2,0,0);kaesu f;
+    kaku f = ir.function("gc_mutator_poll");
+    tprepare(f);
+    ir.put(f, ir.release_store, 0, 0, 1, thread_shadow);
+
+    tload(f, 10, thread_registry);
+    ir.put(f, ir.acquire_load, 11, 10, 0, gc_registry_owner);
+    ir.put(f, ir.equal, 12, 11, 0, 0);
+    ir.branch(f, ir.zero, 12, "poll");
+
+    ir.invoke_function(f, "gc_end", 2, [0]);
+    ir.branch(f, ir.nonzero, 2, "failed");
+
+    ir.branch(f, ir.label, 0, "poll");
+    ir.invoke_function(f, "gc_poll", 2, [0, 1]);
+
+    ir.branch(f, ir.label, 0, "failed");
+    ir.put(f, ir.result, 0, 2, 0, 0);
+    kaesu f;
 }
+
+// 进入原生阻塞区（如 ulock_wait、I/O 系统调用）：先发布 Shadow Frame 并响应可能已发起的 STW，
+// 再在上下文互斥锁下将状态发布为 thread_parked，使 GC 协调器无需等待该线程即可开始扫描。
 waza gc_block_enter_program() -> ir.Function {
-    kaku f=ir.function("gc_block_enter");tprepare(f);ir.invoke_function(f,"gc_mutator_poll",2,[0,1]);ir.branch(f,ir.nonzero,2,"fatal");
-    tload(f,3,thread_mutex);ir.call(f,ir.mutex_lock,2,[3]);ir.branch(f,ir.nonzero,2,"fatal");
-    ir.invoke_function(f,"gc_park_locked",2,[0]);tpublish(f,thread_progress,thread_parked);ir.call(f,ir.mutex_unlock,2,[3]);ir.branch(f,ir.nonzero,2,"fatal");treturn(f,0);
-    ir.branch(f,ir.label,0,"fatal");tconstant(f,2,83);ir.call(f,abort_runtime,3,[2]);treturn(f,3);kaesu f;
+    kaku f = ir.function("gc_block_enter");
+    tprepare(f);
+    ir.invoke_function(f, "gc_mutator_poll", 2, [0, 1]);
+    ir.branch(f, ir.nonzero, 2, "fatal");
+
+    tload(f, 3, thread_mutex);
+    ir.call(f, ir.mutex_lock, 2, [3]);
+    ir.branch(f, ir.nonzero, 2, "fatal");
+
+    ir.invoke_function(f, "gc_park_locked", 2, [0]);
+    tpublish(f, thread_progress, thread_parked);
+    ir.call(f, ir.mutex_unlock, 2, [3]);
+    ir.branch(f, ir.nonzero, 2, "fatal");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "fatal");
+    tconstant(f, 2, 83);
+    ir.call(f, abort_runtime, 3, [2]);
+    treturn(f, 3);
+    kaesu f;
 }
+
+// 离开原生阻塞区：持锁检查是否有 GC 正在进行（若有则先在 gc_park_locked 内等待其结束），再恢复为 thread_at_work。
 waza gc_block_leave_program() -> ir.Function {
-    kaku f=ir.function("gc_block_leave");tprepare(f);tload(f,3,thread_mutex);ir.call(f,ir.mutex_lock,2,[3]);ir.branch(f,ir.nonzero,2,"fatal");
-    ir.invoke_function(f,"gc_park_locked",2,[0]);tpublish(f,thread_progress,thread_at_work);ir.call(f,ir.mutex_unlock,2,[3]);ir.branch(f,ir.nonzero,2,"fatal");treturn(f,0);
-    ir.branch(f,ir.label,0,"fatal");tconstant(f,2,84);ir.call(f,abort_runtime,3,[2]);treturn(f,3);kaesu f;
+    kaku f = ir.function("gc_block_leave");
+    tprepare(f);
+    tload(f, 3, thread_mutex);
+    ir.call(f, ir.mutex_lock, 2, [3]);
+    ir.branch(f, ir.nonzero, 2, "fatal");
+
+    ir.invoke_function(f, "gc_park_locked", 2, [0]);
+    tpublish(f, thread_progress, thread_at_work);
+    ir.call(f, ir.mutex_unlock, 2, [3]);
+    ir.branch(f, ir.nonzero, 2, "fatal");
+    treturn(f, 0);
+
+    ir.branch(f, ir.label, 0, "fatal");
+    tconstant(f, 2, 84);
+    ir.call(f, abort_runtime, 3, [2]);
+    treturn(f, 3);
+    kaesu f;
 }
+
 waza thread_wait_started_program() -> ir.Function {
-    kaku f=ir.function("thread_wait_started");tprepare(f);tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");
-    ir.invoke_function(f,"platform_now",5,[]);tconstant(f,6,1000000000);ir.put(f,ir.add,5,5,6,0);
-    ir.branch(f,ir.label,0,"retry");ir.put(f,ir.acquire_load,3,0,0,thread_state);tcheck(f,3,thread_running,"ready");tcheck(f,3,thread_exited,"ready");tcheck(f,3,thread_failed,"failed");
-    ir.invoke_function(f,"platform_now",6,[]);ir.put(f,ir.less_unsigned,7,6,5,0);ir.branch(f,ir.zero,7,"failed");
-    tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",6,[3,2,4]);ir.branch(f,ir.zero,6,"retry");tcheck(f,6,1,"retry");
-    ir.branch(f,ir.label,0,"failed");tconstant(f,8,2);ir.branch(f,ir.jump,0,"unlock");
-    ir.branch(f,ir.label,0,"ready");tload(f,8,thread_error);
-    ir.branch(f,ir.label,0,"unlock");ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");ir.put(f,ir.result,0,8,0,0);
-    ir.branch(f,ir.label,0,"failed_lock");treturn(f,2);kaesu f;
+    kaku f = ir.function("thread_wait_started");
+    tprepare(f);
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_lock");
+
+    // 60 秒上限：即使在过载机器上，已启动的线程也应能在此期间完成注册
+    ir.invoke_function(f, "platform_now", 5, []);
+    tconstant(f, 6, 60000000000);
+    ir.put(f, ir.add, 5, 5, 6, 0);
+
+    ir.branch(f, ir.label, 0, "retry");
+    ir.put(f, ir.acquire_load, 3, 0, 0, thread_state);
+    tcheck(f, 3, thread_running, "ready");
+    tcheck(f, 3, thread_exited, "ready");
+    tcheck(f, 3, thread_failed, "failed");
+
+    ir.invoke_function(f, "platform_now", 6, []);
+    ir.put(f, ir.less_unsigned, 7, 6, 5, 0);
+    ir.branch(f, ir.zero, 7, "failed");
+
+    tload(f, 3, thread_condition);
+    tconstant(f, 4, 10000000);
+    ir.invoke_function(f, "platform_wait", 6, [3, 2, 4]);
+    ir.branch(f, ir.zero, 6, "retry");
+    tcheck(f, 6, 1, "retry");
+
+    ir.branch(f, ir.label, 0, "failed");
+    tconstant(f, 8, 2);
+    ir.branch(f, ir.jump, 0, "unlock");
+
+    ir.branch(f, ir.label, 0, "ready");
+    tload(f, 8, thread_error);
+
+    ir.branch(f, ir.label, 0, "unlock");
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_lock");
+    ir.put(f, ir.result, 0, 8, 0, 0);
+
+    ir.branch(f, ir.label, 0, "failed_lock");
+    treturn(f, 2);
+    kaesu f;
 }
-// High-level join waits for natural user completion before thread_close's
-// bounded stop/cleanup protocol. Joining must not cancel ordinary user waits.
+
+// 高层 join 必须等待用户线程自然执行完毕，然后再进入 thread_close 的有界清理协议。
+// join 绝不能主动取消用户的正常等待。
 waza thread_wait_completion_program() -> ir.Function {
-    kaku f=ir.function("thread_wait_completion");tprepare(f);tload(f,2,thread_mutex);ir.call(f,ir.mutex_lock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");
-    ir.invoke_function(f,"platform_now",5,[]);tconstant(f,6,30000000000);ir.put(f,ir.add,5,5,6,0);
-    ir.branch(f,ir.label,0,"retry");ir.put(f,ir.acquire_load,3,0,0,thread_progress);tcheck(f,3,thread_finished,"ready");
-    ir.invoke_function(f,"platform_now",6,[]);ir.put(f,ir.less_unsigned,7,6,5,0);ir.branch(f,ir.zero,7,"failed");
-    tload(f,3,thread_condition);tconstant(f,4,10000000);ir.invoke_function(f,"platform_wait",6,[3,2,4]);ir.branch(f,ir.zero,6,"retry");tcheck(f,6,1,"retry");
-    ir.branch(f,ir.label,0,"failed");tconstant(f,8,2);ir.branch(f,ir.jump,0,"unlock");
-    ir.branch(f,ir.label,0,"ready");tload(f,8,thread_error);
-    ir.branch(f,ir.label,0,"unlock");ir.call(f,ir.mutex_unlock,1,[2]);ir.branch(f,ir.nonzero,1,"failed_lock");ir.put(f,ir.result,0,8,0,0);
-    ir.branch(f,ir.label,0,"failed_lock");treturn(f,2);kaesu f;
+    kaku f = ir.function("thread_wait_completion");
+    tprepare(f);
+    tload(f, 2, thread_mutex);
+    ir.call(f, ir.mutex_lock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_lock");
+
+    // 不设超时上限：join 需要一直等待目标线程自然结束（此前 30 秒上限会导致长耗时或高竞争线程触发整个进程中止）。
+    // 若底层 wait 返回错误码则仍按失败处理。
+    ir.branch(f, ir.label, 0, "retry");
+    ir.put(f, ir.acquire_load, 3, 0, 0, thread_progress);
+    tcheck(f, 3, thread_finished, "ready");
+
+    tload(f, 3, thread_condition);
+    tconstant(f, 4, 10000000);
+    ir.invoke_function(f, "platform_wait", 6, [3, 2, 4]);
+    ir.branch(f, ir.zero, 6, "retry");
+    tcheck(f, 6, 1, "retry");
+
+    ir.branch(f, ir.label, 0, "failed");
+    tconstant(f, 8, 2);
+    ir.branch(f, ir.jump, 0, "unlock");
+
+    ir.branch(f, ir.label, 0, "ready");
+    tload(f, 8, thread_error);
+
+    ir.branch(f, ir.label, 0, "unlock");
+    ir.call(f, ir.mutex_unlock, 1, [2]);
+    ir.branch(f, ir.nonzero, 1, "failed_lock");
+    ir.put(f, ir.result, 0, 8, 0, 0);
+
+    ir.branch(f, ir.label, 0, "failed_lock");
+    treturn(f, 2);
+    kaesu f;
 }
+
 koukai waza mutator_program() -> []ir.Function {
-    kaesu [gc_heap_enter_program(),gc_mutator_poll_program(),gc_block_enter_program(),gc_block_leave_program(),thread_wait_started_program(),thread_wait_completion_program(),memory_snapshot_program()];
+    kaesu [
+        gc_heap_enter_program(),
+        gc_mutator_poll_program(),
+        gc_block_enter_program(),
+        gc_block_leave_program(),
+        thread_wait_started_program(),
+        thread_wait_completion_program(),
+        memory_snapshot_program()
+    ];
 }

@@ -9,13 +9,22 @@ yobu "kiso/convert";
 //   one syscall stub per slot, then the lowered runtime-IR functions.
 // The import table lives at the start of the fixed RW segment (elf.data_base).
 // No loader, no external linker, no libc.
-koukai kata LinkedImage { bytes: []uint8; error: string; }
+koukai kata LinkedImage {
+    bytes: []uint8;
+    error: string;
+}
 
 koukai waza executable(functions: []ir.Function, bindings: []ir.Binding, entry: string, extra_data: int64) -> LinkedImage {
     kaku numbers = syscall_numbers();
     moshi (extra_data < 0 || extra_data > 134217728) { kaesu LinkedImage { bytes: [], error: "INVALID_RUNTIME_DATA" }; }
-    kaku found = iie; kaku fi = 0;
-    aida (fi < len(functions)) { moshi (functions[fi].name == entry) { found = hai; } fi = fi + 1; }
+    kaku found = iie;
+    kaku fi = 0;
+    aida (fi < len(functions)) {
+        moshi (functions[fi].name == entry) {
+            found = hai;
+        }
+        fi = fi + 1;
+    }
     moshi (!found) { kaesu LinkedImage { bytes: [], error: "UNDEFINED_RUNTIME_ENTRY" }; }
     kaku c = x86_64.assembler();
     // _start
@@ -29,18 +38,27 @@ koukai waza executable(functions: []ir.Function, bindings: []ir.Binding, entry: 
     x86_64.mov_rr(c, x86_64.r11, x86_64.rcx);
     x86_64.call(c, string_function("rt", entry));
     x86_64.mov_rr(c, x86_64.rdi, x86_64.rax);
-    x86_64.mov_eax_imm(c, 231); x86_64.syscall(c);
+    x86_64.mov_eax_imm(c, 231);
+    x86_64.syscall(c);
     slot = 0;
     aida (slot < len(numbers)) {
         x86_64.label(c, string_stub(slot));
-        x86_64.mov_eax_imm(c, numbers[slot]); x86_64.mov_rr(c, x86_64.r10, x86_64.rcx); x86_64.syscall(c);
+        x86_64.mov_eax_imm(c, numbers[slot]);
+        x86_64.mov_rr(c, x86_64.r10, x86_64.rcx);
+        x86_64.syscall(c);
         moshi (slot == slot_clone) {
             // clone: the parent returns the child id (or -errno). The child starts here with rax = 0 on the stack the caller built
             // ([entry][argument] at its top): install the import table, call entry(argument), then end only this thread (exit, 60).
-            x86_64.test_rr(c, x86_64.rax, x86_64.rax); x86_64.jcc(c, x86_64.cc_ne, string_clone_parent());
-            x86_64.xor_rr(c, x86_64.rbp, x86_64.rbp); x86_64.mov_ri(c, x86_64.r11, elf.data_base);
-            x86_64.pop_r(c, x86_64.rax); x86_64.pop_r(c, x86_64.rdi); x86_64.call_r(c, x86_64.rax);
-            x86_64.mov_rr(c, x86_64.rdi, x86_64.rax); x86_64.mov_eax_imm(c, 60); x86_64.syscall(c);
+            x86_64.test_rr(c, x86_64.rax, x86_64.rax);
+            x86_64.jcc(c, x86_64.cc_ne, string_clone_parent());
+            x86_64.xor_rr(c, x86_64.rbp, x86_64.rbp);
+            x86_64.mov_ri(c, x86_64.r11, elf.data_base);
+            x86_64.pop_r(c, x86_64.rax);
+            x86_64.pop_r(c, x86_64.rdi);
+            x86_64.call_r(c, x86_64.rax);
+            x86_64.mov_rr(c, x86_64.rdi, x86_64.rax);
+            x86_64.mov_eax_imm(c, 60);
+            x86_64.syscall(c);
             x86_64.label(c, string_clone_parent());
         }
         x86_64.ret(c);

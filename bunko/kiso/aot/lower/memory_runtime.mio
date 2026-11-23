@@ -28,47 +28,121 @@ teisu memory_SystemNextQuery = 2880;
 teisu memory_CounterFrequency = 2888;
 teisu memory_SystemState = 2752;
 waza emit_memory_adapters(code: arm64.Assembler) -> unit {
- emit_memory_policy(code);
- arm64.assembler_label(code,"memory_sample");
- emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8));
- emit(code,arm64.ldr_x(9,23,0)); emit(code,arm64.add_imm_x(10,23,3072,iie)); emit(code,arm64.sub_x(9,9,10));
- emit(code,arm64.ldr_x(11,23,memory_HighWater)); emit(code,arm64.cmp_x(9,11)); arm64.assembler_b_cond(code,2,"memory_highwater_store"); move_x(code,9,11);
- arm64.assembler_label(code,"memory_highwater_store"); emit(code,arm64.str_x(9,23,memory_HighWater));
- emit(code,arm64.movz_x(10,16383,0)); emit(code,arm64.add_x(9,9,10)); emit(code,arm64.movn_x(10,16383,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.add_x(9,9,9)); move_bits(code,10,uint32(0),uint32(65536)); emit(code,arm64.add_x(9,9,10));
- emit(code,arm64.ldr_x(11,23,memory_LOSCommitted)); emit(code,arm64.add_x(9,9,11)); emit(code,arm64.str_x(9,23,memory_Committed));
- emit(code,arm64.ldr_x(3,23,8)); emit(code,arm64.add_imm_x(9,23,3072,iie)); emit(code,arm64.sub_x(3,3,9));
- emit(code,arm64.add_x(9,3,3)); emit(code,arm64.add_imm_x(9,9,3072,iie)); emit(code,arm64.add_x(9,9,11)); emit(code,arm64.str_x(9,23,memory_Reserved));
- emit(code,arm64.ldr_x(9,23,memory_Reserved)); emit(code,arm64.movz_x(10,16383,0)); emit(code,arm64.add_x(9,9,10)); emit(code,arm64.movn_x(10,16383,0)); emit(code,arm64.and_x(9,9,10)); emit(code,arm64.str_x(9,23,memory_Reserved)); emit(code,arm64.ldr_x(10,23,memory_Committed)); emit(code,arm64.cmp_x(10,9)); arm64.assembler_b_cond(code,9,"memory_charge_bounded"); emit(code,arm64.str_x(9,23,memory_Committed));
- arm64.assembler_label(code,"memory_charge_bounded");
- move_x(code,0,23); emit(code,arm64.ldr_x(1,23,304)); emit(code,arm64.ldr_x(2,23,296));
- // x4 = CNTFRQ_EL0, read once: the register is constant, but on virtualized macOS hosts the read traps (a sampled
- // macos-15 self-build spent 10% of its time on this instruction, executed twice per allocation).
- emit(code,arm64.ldr_x(4,23,memory_CounterFrequency)); arm64.assembler_cbnz_x(code,4,"memory_frequency_ready");
- observation_word(code,3577470980); emit(code,arm64.str_x(4,23,memory_CounterFrequency)); // MRS x4, CNTFRQ_EL0
- arm64.assembler_label(code,"memory_frequency_ready"); emit(code,arm64.ldr_x(5,23,872)); emit(code,arm64.ldr_x(6,23,2800));
- emit(code,arm64.ldr_x(9,23,memory_SystemState)); emit(code,arm64.cmp_imm_x(9,1,iie)); arm64.assembler_b_cond(code,1,"memory_sample_update");
- observation_word(code,3577471050); // MRS x10, CNTVCT_EL0
- emit(code,arm64.ldr_x(11,23,memory_SystemNextQuery)); emit(code,arm64.cmp_x(10,11)); arm64.assembler_b_cond(code,2,"memory_sample_refresh");
- emit(code,arm64.movz_x(9,2,0)); emit(code,arm64.str_x(9,23,memory_SystemState)); arm64.assembler_b(code,"memory_sample_update");
- arm64.assembler_label(code,"memory_sample_refresh");
- emit(code,arm64.ldr_x(11,23,memory_CounterFrequency)); // cached CNTFRQ_EL0 (set above)
- emit(code,arm64.lsr_x(11,11,4)); emit(code,arm64.add_x(11,10,11)); emit(code,arm64.str_x(11,23,memory_SystemNextQuery));
- arm64.assembler_label(code,"memory_sample_update");
- arm64.assembler_bl(code,"memory.update");
- emit(code,arm64.ldr_x(9,23,memory_SystemState)); emit(code,arm64.cmp_imm_x(9,2,iie)); arm64.assembler_b_cond(code,1,"memory_sample_state");
- emit(code,arm64.movz_x(9,1,0)); emit(code,arm64.str_x(9,23,memory_SystemState));
- arm64.assembler_label(code,"memory_sample_state");
- emit(code,arm64.ldr_x(9,23,memory_Goal)); arm64.assembler_cbnz_x(code,9,"memory_sample_done");
- move_x(code,0,23); emit(code,arm64.movz_x(1,0,0)); emit(code,arm64.movz_x(2,0,0)); arm64.assembler_bl(code,"memory.goal");
- arm64.assembler_label(code,"memory_sample_done"); emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
- arm64.assembler_label(code,"memory_grow"); // payload request in x0
- emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8));
- emit(code,arm64.add_imm_x(2,0,31,iie)); emit(code,arm64.movn_x(9,15,0)); emit(code,arm64.and_x(2,2,9)); emit(code,arm64.ldr_x(1,23,304)); move_x(code,0,23); arm64.assembler_bl(code,"memory.goal");
- emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
- arm64.assembler_label(code,"memory_aftergc");
- emit(code,arm64.sub_imm_x(31,31,32,iie)); emit(code,arm64.str_x(30,31,0)); emit(code,arm64.str_x(0,31,8)); emit(code,arm64.str_x(31,23,memory_GCActive));
- emit(code,arm64.str_x(31,23,memory_SystemNextQuery)); // a collection always refreshes the OS pressure level
- arm64.assembler_bl(code,"memory_sample");
- move_x(code,0,23); emit(code,arm64.ldr_x(1,23,304)); emit(code,arm64.movz_x(2,0,0)); arm64.assembler_bl(code,"memory.goal");
- emit(code,arm64.ldr_x(0,31,8)); emit(code,arm64.ldr_x(30,31,0)); emit(code,arm64.add_imm_x(31,31,32,iie)); emit(code,arm64.ret());
+    emit_memory_policy(code);
+    arm64.assembler_label(code, "memory_sample");
+    emit(code, arm64.sub_imm_x(31, 31, 32, iie));
+    emit(code, arm64.str_x(30, 31, 0));
+    emit(code, arm64.str_x(0, 31, 8));
+    emit(code, arm64.ldr_x(9, 23, 0));
+    emit(code, arm64.add_imm_x(10, 23, 3072, iie));
+    emit(code, arm64.sub_x(9, 9, 10));
+    emit(code, arm64.ldr_x(11, 23, memory_HighWater));
+    emit(code, arm64.cmp_x(9, 11));
+    arm64.assembler_b_cond(code, 2, "memory_highwater_store");
+    move_x(code, 9, 11);
+    arm64.assembler_label(code, "memory_highwater_store");
+    emit(code, arm64.str_x(9, 23, memory_HighWater));
+    emit(code, arm64.movz_x(10, 16383, 0));
+    emit(code, arm64.add_x(9, 9, 10));
+    emit(code, arm64.movn_x(10, 16383, 0));
+    emit(code, arm64.and_x(9, 9, 10));
+    emit(code, arm64.add_x(9, 9, 9));
+    move_bits(code, 10, uint32(0), uint32(65536));
+    emit(code, arm64.add_x(9, 9, 10));
+    emit(code, arm64.ldr_x(11, 23, memory_LOSCommitted));
+    emit(code, arm64.add_x(9, 9, 11));
+    emit(code, arm64.str_x(9, 23, memory_Committed));
+    emit(code, arm64.ldr_x(3, 23, 8));
+    emit(code, arm64.add_imm_x(9, 23, 3072, iie));
+    emit(code, arm64.sub_x(3, 3, 9));
+    emit(code, arm64.add_x(9, 3, 3));
+    emit(code, arm64.add_imm_x(9, 9, 3072, iie));
+    emit(code, arm64.add_x(9, 9, 11));
+    emit(code, arm64.str_x(9, 23, memory_Reserved));
+    emit(code, arm64.ldr_x(9, 23, memory_Reserved));
+    emit(code, arm64.movz_x(10, 16383, 0));
+    emit(code, arm64.add_x(9, 9, 10));
+    emit(code, arm64.movn_x(10, 16383, 0));
+    emit(code, arm64.and_x(9, 9, 10));
+    emit(code, arm64.str_x(9, 23, memory_Reserved));
+    emit(code, arm64.ldr_x(10, 23, memory_Committed));
+    emit(code, arm64.cmp_x(10, 9));
+    arm64.assembler_b_cond(code, 9, "memory_charge_bounded");
+    emit(code, arm64.str_x(9, 23, memory_Committed));
+    arm64.assembler_label(code, "memory_charge_bounded");
+    move_x(code, 0, 23);
+    emit(code, arm64.ldr_x(1, 23, 304));
+    emit(code, arm64.ldr_x(2, 23, 296));
+    // x4 = CNTFRQ_EL0, read once: the register is constant, but on virtualized macOS hosts the read traps (a sampled
+    // macos-15 self-build spent 10% of its time on this instruction, executed twice per allocation).
+    emit(code, arm64.ldr_x(4, 23, memory_CounterFrequency));
+    arm64.assembler_cbnz_x(code, 4, "memory_frequency_ready");
+    observation_word(code, 3577470980);
+    emit(code, arm64.str_x(4, 23, memory_CounterFrequency)); // MRS x4, CNTFRQ_EL0
+    arm64.assembler_label(code, "memory_frequency_ready");
+    emit(code, arm64.ldr_x(5, 23, 872));
+    emit(code, arm64.ldr_x(6, 23, 2800));
+    emit(code, arm64.ldr_x(9, 23, memory_SystemState));
+    emit(code, arm64.cmp_imm_x(9, 1, iie));
+    arm64.assembler_b_cond(code, 1, "memory_sample_update");
+    observation_word(code, 3577471050); // MRS x10, CNTVCT_EL0
+    emit(code, arm64.ldr_x(11, 23, memory_SystemNextQuery));
+    emit(code, arm64.cmp_x(10, 11));
+    arm64.assembler_b_cond(code, 2, "memory_sample_refresh");
+    emit(code, arm64.movz_x(9, 2, 0));
+    emit(code, arm64.str_x(9, 23, memory_SystemState));
+    arm64.assembler_b(code, "memory_sample_update");
+    arm64.assembler_label(code, "memory_sample_refresh");
+    emit(code, arm64.ldr_x(11, 23, memory_CounterFrequency)); // cached CNTFRQ_EL0 (set above)
+    emit(code, arm64.lsr_x(11, 11, 4));
+    emit(code, arm64.add_x(11, 10, 11));
+    emit(code, arm64.str_x(11, 23, memory_SystemNextQuery));
+    arm64.assembler_label(code, "memory_sample_update");
+    arm64.assembler_bl(code, "memory.update");
+    emit(code, arm64.ldr_x(9, 23, memory_SystemState));
+    emit(code, arm64.cmp_imm_x(9, 2, iie));
+    arm64.assembler_b_cond(code, 1, "memory_sample_state");
+    emit(code, arm64.movz_x(9, 1, 0));
+    emit(code, arm64.str_x(9, 23, memory_SystemState));
+    arm64.assembler_label(code, "memory_sample_state");
+    emit(code, arm64.ldr_x(9, 23, memory_Goal));
+    arm64.assembler_cbnz_x(code, 9, "memory_sample_done");
+    move_x(code, 0, 23);
+    emit(code, arm64.movz_x(1, 0, 0));
+    emit(code, arm64.movz_x(2, 0, 0));
+    arm64.assembler_bl(code, "memory.goal");
+    arm64.assembler_label(code, "memory_sample_done");
+    emit(code, arm64.ldr_x(0, 31, 8));
+    emit(code, arm64.ldr_x(30, 31, 0));
+    emit(code, arm64.add_imm_x(31, 31, 32, iie));
+    emit(code, arm64.ret());
+    arm64.assembler_label(code, "memory_grow"); // payload request in x0
+    emit(code, arm64.sub_imm_x(31, 31, 32, iie));
+    emit(code, arm64.str_x(30, 31, 0));
+    emit(code, arm64.str_x(0, 31, 8));
+    emit(code, arm64.add_imm_x(2, 0, 31, iie));
+    emit(code, arm64.movn_x(9, 15, 0));
+    emit(code, arm64.and_x(2, 2, 9));
+    emit(code, arm64.ldr_x(1, 23, 304));
+    move_x(code, 0, 23);
+    arm64.assembler_bl(code, "memory.goal");
+    emit(code, arm64.ldr_x(0, 31, 8));
+    emit(code, arm64.ldr_x(30, 31, 0));
+    emit(code, arm64.add_imm_x(31, 31, 32, iie));
+    emit(code, arm64.ret());
+    arm64.assembler_label(code, "memory_aftergc");
+    emit(code, arm64.sub_imm_x(31, 31, 32, iie));
+    emit(code, arm64.str_x(30, 31, 0));
+    emit(code, arm64.str_x(0, 31, 8));
+    emit(code, arm64.str_x(31, 23, memory_GCActive));
+    emit(code, arm64.str_x(31, 23, memory_SystemNextQuery)); // a collection always refreshes the OS pressure level
+    arm64.assembler_bl(code, "memory_sample");
+    move_x(code, 0, 23);
+    emit(code, arm64.ldr_x(1, 23, 304));
+    emit(code, arm64.movz_x(2, 0, 0));
+    arm64.assembler_bl(code, "memory.goal");
+    emit(code, arm64.ldr_x(0, 31, 8));
+    emit(code, arm64.ldr_x(30, 31, 0));
+    emit(code, arm64.add_imm_x(31, 31, 32, iie));
+    emit(code, arm64.ret());
 }

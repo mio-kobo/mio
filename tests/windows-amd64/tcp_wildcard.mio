@@ -27,12 +27,22 @@ waza check() -> int64 {
         bound = tcp.listen(tcp.ipv4(uint8(0), uint8(0), uint8(0), uint8(0), port));
     }
     kaku wildcard = bound.listener;
-    moshi (wildcard == mu) { chant("wildcard listen failed"); kaesu 1; }
+    moshi (wildcard == mu) {
+        chant("wildcard listen failed");
+        kaesu 1;
+    }
     kaku clash = tcp.listen(tcp.ipv4(uint8(127), uint8(0), uint8(0), uint8(1), port));
     tcp.close_listener(wildcard);
     kaku overlap = clash.listener;
-    moshi (overlap != mu) { tcp.close_listener(overlap); chant("overlap was allowed"); kaesu 1; }
-    moshi (!address_in_use(clash.error)) { chant("expected AddressInUse"); kaesu 1; }
+    moshi (overlap != mu) {
+        tcp.close_listener(overlap);
+        chant("overlap was allowed");
+        kaesu 1;
+    }
+    moshi (!address_in_use(clash.error)) {
+        chant("expected AddressInUse");
+        kaesu 1;
+    }
     chant("tcp wildcard: ok");
     kaesu 0;
 }

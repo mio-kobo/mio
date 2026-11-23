@@ -1,18 +1,36 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;}
-kaku release=0;kaku result_a=0;kaku result_b=0;
-waza make_worker(id:int64) -> () -> unit {
-    kaku keep=Node {value:10};kaku large=array.make[uint8](131072,uint8(90));
-    kaesu waza() -> unit {
-        aida(release==0){kaku waited=rt_wait(1000000);}
-        kaku value=id+keep.value+int64(large[131071]);
-        moshi(id==1){result_a=value;}sore{result_b=value;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kata Node { value: int64; }
+kaku release = 0;
+kaku result_a = 0;
+kaku result_b = 0;
+waza make_worker(id: int64) -> () -> unit {
+    kaku keep = Node {
+        value: 10 };
+    kaku large = array.make[uint8](131072, uint8(90));
+    kaesu waza () -> unit {
+        aida (release == 0) { kaku waited = rt_wait(1000000); }
+        kaku value = id + keep.value + int64(large[131071]);
+        moshi (id == 1) {
+            result_a = value;
+        } sore {
+            result_b = value;
+        }
     };
 }
-kaku a=rt_start(make_worker(1));kaku b=rt_start(make_worker(2));
-kaku i=0;aida(i<100){kaku occupied=rt_collect(1);i=i+1;}
-release=1;kaku ja=rt_join(a);kaku jb=rt_join(b);chant(result_a);chant(result_b);chant(rt_collect(1));
+kaku a = rt_start(make_worker(1));
+kaku b = rt_start(make_worker(2));
+kaku i = 0;
+aida (i<100) {
+    kaku occupied = rt_collect(1);
+    i = i + 1;
+}
+release = 1;
+kaku ja = rt_join(a);
+kaku jb = rt_join(b);
+chant(result_a);
+chant(result_b);
+chant(rt_collect(1));

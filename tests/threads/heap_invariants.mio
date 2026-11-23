@@ -1,0 +1,124 @@
+// Targeted regressions for the heap accesses that a heap lock would have to protect separately from collection (docs/darwin-thread-heap-exclusion-design.md,
+// section 9). Four workers and the main thread run the same four sections while the others allocate; every worker's result must equal the sequential
+// result. Today every mutation is a stopped epoch, so these must pass; a heap-lock protocol that tears one of these accesses breaks a total.
+//   A  array growth and reads: push to 4000 elements (many reallocations of payload storage) while reading earlier elements and len; the grown array
+//      is then handed over by channel (growth before the transfer) and the receiver reads and grows it again (growth after the transfer)
+//   B  captured cell holding references: a closure replaces the array held by a captured variable (reference store into a cell, write barrier) between allocations
+//   C  nullable boxing: nullable scalar and nullable reference locals assigned in a loop (the scalar assignment allocates a box)
+//   D  initialization: objects built from nested allocating expressions, so that an allocation (and under --gc-stress a collection) happens while the outer
+//      object is not yet complete
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata Inner { c: []int64; d: []int64; }
+kata Outer { a: []int64; b: Inner; n: int64; }
+kata Box { v: []int64; }
+
+waza grow(seed: int64) -> []int64 {
+    kaku a: []int64 = [];
+    kaku i = 0;
+    kaku check = 0;
+    aida (i < 4000) {
+        array.push(a, i * 3 + seed);
+        moshi (i > 0) { check = check + a[i - 1] + len(a); }
+        i = i + 1;
+    }
+    array.push(a, check);
+    kaesu a;
+}
+
+waza section_a(seed: int64) -> int64 {
+    kaku channel = thread.channel_new[[]int64](1, []);
+    kaku producer = waza () -> int64 {
+        kaku grown = grow(seed);
+        thread.send[[]int64](channel, yuzuru grown);
+        thread.close[[]int64](channel);
+        kaesu 0;
+    };
+    kaku handle = thread.start(producer);
+    kaku got = thread.receive[[]int64](channel);
+    kaku arr = got.item;
+    kaku sum = 0;
+    kaku i = 0;
+    aida (i < len(arr)) { sum = sum + arr[i]; i = i + 1; }
+    kaku j = 0;
+    aida (j < 2000) { array.push(arr, j + seed); j = j + 1; }
+    kaku tail = 0;
+    j = 0;
+    aida (j < len(arr)) { tail = tail + arr[j] - (arr[j] / 7) * 7; j = j + 1; }
+    thread.join(handle);
+    kaesu sum + tail + len(arr);
+}
+
+waza section_b(seed: int64) -> int64 {
+    kaku held: []int64 = [seed];
+    kaku replace = waza (v: int64) -> int64 {
+        kaku fresh = [v, v + 1, v + 2];
+        held = fresh;
+        kaesu len(held);
+    };
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < 3000) {
+        kaku noise = [i, i + 1, i + 2, i + 3];
+        total = total + replace(i + seed) + held[0] + held[2] + noise[3];
+        i = i + 1;
+    }
+    kaesu total + len(held);
+}
+
+waza section_c(seed: int64) -> int64 {
+    kaku maybe: int64? = mu;
+    kaku maybe_box: Box? = mu;
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < 3000) {
+        moshi (i - (i / 3) * 3 == 0) { maybe = i + seed; }
+        moshi (i - (i / 5) * 5 == 0) { maybe_box = Box { v: [i, seed] }; }
+        moshi (maybe != mu) { total = total + 1; }
+        moshi (maybe_box != mu) { total = total + len(maybe_box.v); }
+        kaku burst = [i, i];
+        total = total + burst[1] - i;
+        i = i + 1;
+    }
+    kaesu total;
+}
+
+waza section_d(seed: int64) -> int64 {
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < 2000) {
+        kaku built = Outer { a: [i, i + 1], b: Inner { c: [i + seed], d: [i + 2, i + 3, i + 4] }, n: i };
+        total = total + built.a[1] + built.b.c[0] + built.b.d[2] + built.n;
+        i = i + 1;
+    }
+    kaesu total;
+}
+
+waza all(seed: int64) -> int64 { kaesu section_a(seed) + section_b(seed) + section_c(seed) + section_d(seed); }
+waza w0() -> int64 { kaesu all(0); }
+waza w1() -> int64 { kaesu all(1); }
+waza w2() -> int64 { kaesu all(2); }
+waza w3() -> int64 { kaesu all(3); }
+
+waza run() -> int64 {
+    kaku h0 = thread.start(w0);
+    kaku h1 = thread.start(w1);
+    kaku h2 = thread.start(w2);
+    kaku h3 = thread.start(w3);
+    kaku s0 = all(0);
+    kaku s1 = all(1);
+    kaku s2 = all(2);
+    kaku s3 = all(3);
+    kaku r0 = thread.join(h0);
+    kaku r1 = thread.join(h1);
+    kaku r2 = thread.join(h2);
+    kaku r3 = thread.join(h3);
+    chant(r0 == s0);
+    chant(r1 == s1);
+    chant(r2 == s2);
+    chant(r3 == s3);
+    chant(r0 + r1 + r2 + r3);
+    kaesu 0;
+}
+run();

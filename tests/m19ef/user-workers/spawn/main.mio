@@ -1,10 +1,21 @@
 yobu "kiso/os";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kaku stop=0;
-waza collect() -> unit {aida(stop==0){kaku occupied=rt_collect(1);}}
-kaku child=rt_start(collect);kaku failures=0;kaku i=0;
-aida(i<32){kaku result=os.spawn("/usr/bin/true",["/usr/bin/true"]);moshi(result!=0){failures=failures+1;}i=i+1;}
-stop=1;kaku joined=rt_join(child);chant(failures);chant(rt_collect(1));
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kaku stop = 0;
+waza collect() -> unit { aida (stop == 0) { kaku occupied = rt_collect(1); } }
+kaku child = rt_start(collect);
+kaku failures = 0;
+kaku i = 0;
+aida (i<32) {
+    kaku result = os.spawn("/usr/bin/true", ["/usr/bin/true"]);
+    moshi (result != 0) {
+        failures = failures + 1;
+    }
+    i = i + 1;
+}
+stop = 1;
+kaku joined = rt_join(child);
+chant(failures);
+chant(rt_collect(1));

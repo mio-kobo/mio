@@ -1,6 +1,5 @@
-// Playground controller. Each request runs in a fresh Worker that owns one Go/Wasm runtime:
-// state never carries over between runs, Stop and timeouts terminate the Worker (which works
-// even while the VM is in a synchronous loop), and a replacement is created immediately.
+// Playground 控制器：每次执行均在全新 Worker 中运行独立的 Go/Wasm 运行时。
+// 状态绝不跨请求复用；Stop 或超时直接终止 Worker（即使 VM 处于同步死循环也能立即中断），并随即重建新实例。
 export const LIMITS = Object.freeze({
   sourceBytes: 256 * 1024,      // mirrors playground.MaxSourceBytes
   mochiBytes: 4 * 1024 * 1024,  // mirrors playground.MaxMochiBytes

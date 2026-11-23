@@ -4,70 +4,152 @@
 
 <p align="center">
   <a href="../assets/mascot/mio-and-mochi.png">
-    <img src="../assets/mascot/mio-and-mochi.webp" alt="Mio 与 Mochi" width="260" />
+    <img src="../assets/mascot/mio-and-mochi.webp" alt="Mio and Mochi" width="260" />
   </a>
 </p>
 
 <h1 align="center">Mio</h1>
 
-<p align="center"><strong>小巧的核心，广阔的数学与程序世界。</strong></p>
-<p align="center"><em>Minimal Core · Modular Bunko · Pay for What You Use</em></p>
+<p align="center"><strong>A small core, a wide world of mathematics and programs.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/mio-kobo/mio/releases">下载 / Releases</a>
-  · <a href="https://github.com/mio-kobo/mio/actions">构建状态 / Actions</a>
+  <a href="https://github.com/mio-kobo/mio/releases">Releases</a>
+  · <a href="https://github.com/mio-kobo/mio/actions">构建状态</a>
   · <a href="https://marketplace.visualstudio.com/items?itemName=exmikupro.mio-language-support">VS Code</a>
   · <a href="https://plugins.jetbrains.com/plugin/35197-mio-language-support">JetBrains</a>
-  · <a href="https://mio.kaelexvp.cc">官方文档 / Docs</a>
+  · <a href="https://mio.kaelexvp.cc">官方文档</a>
 </p>
 
-**Mio** 是一门采用日语罗马字关键字的**静态强类型编程语言**。它强调明确的数值语义、精简的语言核心，以及按需导入的 **Bunko** 标准库。
+**Mio** 是一门以日语罗马音为关键字的静态强类型编程语言。语言核心保持精简，强调显式的数值语义，标准库 **Bunko** 按需导入。
 
-Mio 2.1 的原生 AOT 编译目标为 macOS ARM64、Linux AMD64 和 Windows AMD64。
+> **`v2.2.0`（开发中）：** 作为 `v2.1.*` 的后续稳定版，Mio 2.2 将原生 AOT 编译扩展到六个平台，并加入原生并发与事件循环原语。
 
-> 最新稳定版为 [v2.0.0](https://github.com/mio-kobo/mio/releases/tag/v2.0.0)，已在 macOS ARM64 上通过验证。最新公开发布的候选版为 [v2.1.0-rc.1](https://github.com/mio-kobo/mio/releases/tag/v2.1.0-rc.1)。[`Mio-2.1.2` 开发分支](https://github.com/mio-kobo/mio/tree/Mio-2.1.2) 正在筹备 v2.1.2，正式版尚未发布。
+```mio
+yobu "kiso/math";
 
-改动与发布验证进度见 [v2.1.0 发布说明草案](releases/v2.1.0.md)。
+waza square(value: float64) -> float64 {
+    kaesu value * value;
+}
+
+kaku area = square(12.0);
+chant(area);
+chant(math.sqrt(area));
+```
 
 ## 语言与工具链
 
-- **静态类型系统**：固定宽度整数、浮点数、泛型、Nullable、结构体、枚举与闭包。
-- **Mochi** 字节码可在参考虚拟机中运行。
-- **Native AOT**：macOS ARM64 Mach-O、Linux AMD64 静态 ELF 和 Windows AMD64 PE32+。
-- **精确 GC**：Shadow Frame 根追踪、独立托管 arena 和跨页对象分配。
-- **Bunko 标准库**：使用 `yobu` 按需导入 `kiso/` 模块。
-
-Mio 与 Mochi 也是项目中的两位角色：Mio 是上方的少女，Mochi 是她怀里的小团子。Mochi 的名字同时用于字节码执行系统。
+- **类型系统：** 支持定宽整数、浮点数、泛型、可空类型、结构体、枚举和闭包。
+- **六平台原生 AOT：** 支持 Mach-O（`darwin-arm64`、`darwin-amd64`）、静态 ELF（`linux-amd64`、`linux-arm64`）以及 PE32+（`windows-amd64`、`windows-arm64`）。
+- **Mochi 虚拟机与 WebAssembly：** 紧凑的字节码可在参考虚拟机和浏览器演练场中运行。
+- **精确垃圾回收：** 采用 Shadow Frame 根追踪、专用托管内存区域和跨页对象分配（`darwin-arm64` 为分代 GC，其余平台为精确标记-清除），遵循 [Runtime ABI 规范 RA-1](runtime-abi.md)。
+- **模块化 Bunko 标准库：** 通过 `yobu` 按需引入 `kiso/` 模块，不引入多余的运行时开销。
+- **多语言 CLI：** 支持 39 种语言环境（BCP 47 回退）、自适应帮助主题（`--lang`、`--theme`、`NO_COLOR`）和稳定的机器可读输出。详见 [docs/i18n.md](i18n.md)。
 
 ## 快速开始
 
-### 获取 Mio
+### Full 与 Core 发行版
 
-可从 [GitHub Releases](https://github.com/mio-kobo/mio/releases) 下载已发布的版本。Mio 2.1.1 的 **Full** 是内嵌完整 Bunko 标准库的单个自包含 `mio` 可执行文件（Windows 为 `mio.exe`）。**Core** 是不内嵌 Bunko 的精简编译器。两者均提供 `test` 和 `lsp` 等内置开发命令。Full 无需外部 Bunko 目录；Core 可通过 `--bunko-root` 或 `MIO_BUNKO` 使用单独安装的 Bunko。
+两个版本均包含 `run`、`build`、`test`、`lsp` 命令：
 
-预编译发行包无需 Go、Python 或外部开发工具链。macOS 候选版使用 ad-hoc 签名，未经过 Apple 公证，可能受到 Gatekeeper 限制。源码自举与原生验证详见[测试指南](testing.md)。
+- **Full 版（`mio`）：** 单个自包含可执行文件（Windows 下为 `mio.exe`），已内嵌完整 Bunko 标准库。
+- **Core 版（`mio-core`）：** 不内嵌 Bunko 的精简编译器，需通过 `--bunko-root` 或环境变量 `MIO_BUNKO` 指定外部 Bunko 目录。
 
-## 平台与规划
+### 安装
 
-下表说明开发分支的支持情况，已通过的检查见[三平台原生 CI 结果](https://github.com/mio-kobo/mio/actions/runs/42372415752)。
+#### macOS / Linux（Homebrew）
 
-| 平台或能力 | 当前状态 |
-| --- | --- |
-| macOS ARM64 原生 AOT | 主要目标，已通过 M18 和候选版验证。`Mio-2.1` 的原生 CI 在 `macos-15` 上运行：CLI 原生固定点、`mio run` 与进程协议、全部包的 `mio test`、Runtime ABI 契约与差分语料。 |
-| Linux x86-64 原生（纯 Mio，静态 ELF） | 实验性：CI 中编译器/CLI 原生固定点、`mio run` 与进程协议、全部包的 `mio test`、Runtime ABI 契约与差分通过；`chant` 浮点值尚不支持（编译期报错，`convert.format_float64/32` 给出与各平台一致的文本） |
-| Windows x86-64 原生（纯 Mio，PE32+） | 实验性。CLI 原生固定点、`mio run` 与进程协议（CreateProcessW）、全部包的 `mio test`、Runtime ABI 契约与差分语料均已通过 CI 验证。阻塞式 IPv4 `kiso/net/tcp` 由 Winsock 提供支持，CI 要求通过原生包测试及双进程回显测试。公开发布的 RC1 尚不支持 Windows TCP。浮点值仍不能直接用 `chant` 输出。 |
-| Web / 浏览器 Playground | 在 WebAssembly 版参考虚拟机中运行 Mochi 字节码。[Web CI](https://github.com/mio-kobo/mio/actions/runs/42372415737) 验证原生 CLI 生成的字节码能否在该虚拟机中运行，并在 Chromium 中测试 Playground。 |
-| Bunko 标准库 | 全部库公开函数都有原生测试（PR CI 的 bunko-coverage 检查）；逐函数、逐平台结果见 [Bunko 测试矩阵](../tests/bunko-matrix/bunko-test-matrix.md) |
-| Linux ARM64 | 规划中 |
-| 分代 GC | darwin-arm64 已实现（Object ABI v1）；x86-64 为非分代精确标记清除。两者满足同一 [Runtime ABI 契约 RA-1](runtime-abi.md) |
-| High / Balanced / Low GC 策略、并发 GC | 规划中 |
+```bash
+# Full 版
+brew install mio-kobo/mio/mio
 
-[冻结的 Darwin ARM64 GF4 种子](https://github.com/mio-kobo/mio/releases/tag/gf4-seed-v1-immutable)已作为不可变的 GitHub Release 发布。GitHub Actions 仍未确认 v2.1.0 的生产级 Trusted GF4 自举通过。
+# Core 版
+brew install mio-kobo/mio/mio-core
+```
 
-完整语言教程、Bunko API、CLI 参考和运行时文档见 [Mio 官方文档网站](https://mio.kaelexvp.cc)。
+#### Debian / Ubuntu（APT）
 
-## 贡献、社区与许可证
+1. 下载签名公钥并核对指纹：
 
-贡献流程见 [贡献指南](CONTRIBUTING.zh-CN.md)，原生测试优先与统一入口见 [测试架构](testing.md)。安全漏洞请按照 [安全政策](SECURITY.zh-CN.md) 私密报告；社区交流请参阅 [行为准则](CODE_OF_CONDUCT.zh-CN.md)。
+```bash
+curl -fsSLo mio-archive-keyring.gpg \
+  [https://mio-kobo.github.io/mio-apt/mio-archive-keyring.gpg](https://mio-kobo.github.io/mio-apt/mio-archive-keyring.gpg)
 
-Mio 程序代码采用 [MIT License](../LICENSE)。[`assets/mascot/`](../assets/mascot/) 中的 Mio 与 Mochi 角色插画**不属于 MIT License 授权范围**，其版权及使用许可另行适用。
+gpg --show-keys --with-fingerprint mio-archive-keyring.gpg
+```
+
+2. 添加软件源并安装：
+
+```bash
+sudo install -m 644 -D mio-archive-keyring.gpg /etc/apt/keyrings/mio.gpg
+
+printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/mio.gpg] [https://mio-kobo.github.io/mio-apt](https://mio-kobo.github.io/mio-apt) stable main' \
+  | sudo tee /etc/apt/sources.list.d/mio.list
+
+sudo apt update
+sudo apt install mio       # 如需精简版，可安装 `mio-core`
+mio version
+```
+
+后续更新：
+
+```bash
+sudo apt update && sudo apt install --only-upgrade mio
+```
+
+#### Windows（Chocolatey）
+
+```powershell
+# Full 版
+choco install mio
+
+# Core 版
+choco install mio-core
+```
+
+#### 预编译包与源码构建
+
+也可以直接从 [GitHub Releases](https://github.com/mio-kobo/mio/releases) 下载六个平台的预编译压缩包，无需安装 Go、Python 或其他工具链。
+
+> **macOS 说明：** GitHub Releases 上的预发布版本仅做临时签名（ad-hoc signing），未经过 Apple 公证；如被 Gatekeeper 拦截，可在「系统设置」中手动允许运行。从源码构建请参考 [测试文档](testing.md)。
+
+### 运行
+
+```bash
+mio run hello.mio
+mio test
+```
+
+## 平台支持与路线图
+
+Mio 2.2 在 CI 中对六个原生目标平台验证了编译器构建、自举不动点、Runtime ABI、GC、阻塞/非阻塞 TCP 以及 Bunko 标准库。
+
+| 目标平台 | 核心 AOT、GC 与 Bunko | 阻塞与非阻塞 TCP | Reactor / 事件循环 | 原生线程与 Channel |
+| :--- | :---: | :---: | :---: | :---: |
+| `linux-amd64` | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 |
+| `darwin-arm64` | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 |
+| `linux-arm64` | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 | 🚧 计划中 |
+| `darwin-amd64` | ✅ 已验证 | ✅ 已验证 | ✅ 已验证 | 🚧 计划中 |
+| `windows-amd64` | ✅ 已验证 | ✅ 已验证 | 🚧 计划中 | 🚧 计划中 |
+| `windows-arm64` | ✅ 已验证 | ✅ 已验证 | 🚧 计划中 | 🚧 计划中 |
+
+*尚未支持的并发或 Reactor 特性会在编译期或运行期直接报错（Fail-closed），不会静默退回单线程模拟。完整的 15 项特性对齐矩阵与待办见 [六平台特性对齐矩阵](parity/README.md) 与 [Bunko 测试矩阵](../tests/bunko-matrix/bunko-test-matrix.md)。*
+
+### 后续规划
+
+- **Web 演练场：** 在 WebAssembly 参考虚拟机中运行 Mochi 字节码，并在 CI 中与原生 CLI 校验字节码兼容性。
+- **并发与 Reactor 补齐：** 将原生多线程、同步原语和 Channel 扩展到 `linux-arm64`、`darwin-amd64` 及 Windows，并补全 Windows 的 Reactor 后端。
+- **GC 改进：** 增加 High / Balanced / Low 三档 GC 模式及并发 GC。
+
+## 文档与看板娘
+
+语言教程、Bunko API 参考、CLI 手册和运行时规范见 [Mio 官方文档站](https://mio.kaelexvp.cc)。
+
+**Mio**（顶部插画中的少女）和 **Mochi**（她怀里的小家伙，与字节码虚拟机同名）是本项目的吉祥物。
+
+## 贡献、安全与许可证
+
+- 贡献流程与原生优先测试规范：[贡献指南](../CONTRIBUTING.md)、[测试文档](testing.md)
+- 漏洞私密报告：[安全政策](../SECURITY.md)
+- 社区行为准则：[行为准则](../CODE_OF_CONDUCT.md)
+
+Mio 源代码基于 [MIT 许可证](../LICENSE) 开源。[`assets/mascot/`](../assets/mascot/) 下的 Mio 与 Mochi 插画**不在代码 MIT 许可证范围内**，其版权与使用条款另行规定。

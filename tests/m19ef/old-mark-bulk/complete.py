@@ -27,7 +27,7 @@ run('continued-default-builder-signature',['codesign','--verify','--strict',defa
 for case,expected in [('ordinary',b'12000\n24000\n0\n'),('handoff',b'0\nhai\n0\n0\n'),('deep',b'91\n0\n'),('capture',b'101\n102\n0\n')]:
  image=out/('default-'+case+'-native');run('default-'+case+'-build',[default,snap,'tests/m19ef/user-workers/'+case+'/main.mio',snap/'bunko',image]);assert image.read_bytes()==(root/'build/m19ef-evidence/E3-workers-20261030-17'/(case+'-native')).read_bytes();assert run('default-'+case,[image],30)==expected
  duplicate=out/('default-'+case+'-repro-native');run('default-'+case+'-repro',[default,snap,'tests/m19ef/user-workers/'+case+'/main.mio',snap/'bunko',duplicate]);assert image.read_bytes()==duplicate.read_bytes()
-seed=pathlib.Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');assert sha(seed)=='4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da'
+seed=pathlib.Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');assert sha(seed)=='be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79'
 for package in ['bunko/kiso/runtime/gc','bunko/kiso/aot/lower']:
  data=json.loads(run('unit-'+package.replace('/','-'),[seed,'test',package,'--bunko-root',snap/'bunko','--format=json'],1200));assert data['summary']['failed']==0
 assert all(sha(root/p)==h and sha(snap/p)==h for p,h in manifest.items());(out/'source-unchanged.json').write_text(json.dumps(dict(unchanged=True,source_manifest_sha256=digest))+'\n')

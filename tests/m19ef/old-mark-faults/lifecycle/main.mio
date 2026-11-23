@@ -1,35 +1,109 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;next:Node?;}
-kaku shared:Node?=mu;kaku control=0;kaku ready=0;kaku done_b=0;kaku failures=0;kaku steps_a=0;
-waza first() -> unit {
- ready=1;aida(control==0){kaku waited=rt_wait(100000);}
- kaku held=shared;moshi(held==mu){failures=1;kaesu;}
- aida(control<2){kaku fresh=Node {value:123,next:held};kaku occupied=rt_collect(0);moshi(fresh.value!=123 || held.value!=3999){failures=2;kaesu;}kaku observed=rt_collect(5);steps_a=steps_a+1;}
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    next: Node?;
 }
-waza dead_witness() -> unit {kaku dead=Node {value:99999,next:mu};kaku i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}moshi(dead.value!=99999){failures=3;}}
-waza later(node:Node) -> () -> unit {
- kaesu waza() -> unit {
-  kaku held=node;kaku large=array.make[uint8](131072,uint8(61));kaku i=0;
-  aida(i<100){kaku occupied=rt_collect(0);moshi(held.value!=3999 || large[131071]!=uint8(61)){failures=5;kaesu;}i=i+1;}
-  done_b=1;
- };
+kaku shared: Node?= mu;
+kaku control = 0;
+kaku ready = 0;
+kaku done_b = 0;
+kaku failures = 0;
+kaku steps_a = 0;
+waza first() -> unit {
+    ready = 1;
+    aida (control == 0) {
+        kaku waited = rt_wait(100000);
+    }
+    kaku held = shared;
+    moshi (held == mu) {
+        failures = 1;
+        kaesu;
+    }
+    aida (control<2) {
+        kaku fresh = Node {
+            value: 123, next: held };
+        kaku occupied = rt_collect(0);
+        moshi (fresh.value != 123 || held.value != 3999) {
+            failures = 2;
+            kaesu;
+        }
+        kaku observed = rt_collect(5);
+        steps_a = steps_a + 1;
+    }
+}
+waza dead_witness() -> unit {
+    kaku dead = Node {
+        value: 99999, next: mu };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) {
+        failures = 3;
+    }
+}
+waza later(node: Node) -> () -> unit {
+    kaesu waza () -> unit {
+        kaku held = node;
+        kaku large = array.make[uint8](131072, uint8(61));
+        kaku i = 0;
+        aida (i<100) {
+            kaku occupied = rt_collect(0);
+            moshi (held.value != 3999 || large[131071] != uint8(61)) {
+                failures = 5;
+                kaesu;
+            }
+            i = i + 1;
+        }
+        done_b = 1;
+    };
 }
 waza run() -> unit {
- kaku head:Node?=mu;kaku i=0;aida(i<4000){head=Node {value:i,next:head};i=i+1;}shared=head;
- kaku a=rt_start(first);aida(ready==0){kaku waited=rt_wait(100000);}dead_witness();kaku started=rt_collect(2);control=1;
- kaku old=shared;moshi(old==mu){failures=4;kaesu;}
- // This ordinary closure, its captured Cell/Environment and the real second
- // TLS registration are born AFTER Init while another user allocates/Minors.
- kaku callback=later(old);
- kaku before=rt_collect(4);kaku b=rt_start(callback);kaku jb=rt_join(b);
- moshi(before!=2 || rt_collect(4)!=2 || done_b!=1 || steps_a==0){failures=6;}
- // A remains live during Remark. B has genuinely detached; stale frames must
- // not participate in the new stopped snapshot, but all initial Old survives.
- kaku marked=rt_collect(3);moshi(marked<4001 || rt_collect(6)<1 || rt_collect(4)!=4){failures=7;}
- control=2;kaku ja=rt_join(a);chant(failures+started+ja+jb);chant(done_b);chant(steps_a>0);chant(rt_collect(4));shared=mu;
+    kaku head: Node?= mu;
+    kaku i = 0;
+    aida (i<4000) {
+        head = Node {
+            value: i, next: head };
+        i = i + 1;
+    }
+    shared = head;
+    kaku a = rt_start(first);
+    aida (ready == 0) {
+        kaku waited = rt_wait(100000);
+    }
+    dead_witness();
+    kaku started = rt_collect(2);
+    control = 1;
+    kaku old = shared;
+    moshi (old == mu) {
+        failures = 4;
+        kaesu;
+    }
+    // This ordinary closure, its captured Cell/Environment and the real second
+    // TLS registration are born AFTER Init while another user allocates/Minors.
+    kaku callback = later(old);
+    kaku before = rt_collect(4);
+    kaku b = rt_start(callback);
+    kaku jb = rt_join(b);
+    moshi (before != 2 || rt_collect(4) != 2 || done_b != 1 || steps_a == 0) { failures = 6; }
+    // A remains live during Remark. B has genuinely detached; stale frames must
+    // not participate in the new stopped snapshot, but all initial Old survives.
+    kaku marked = rt_collect(3);
+    moshi (marked<4001 || rt_collect(6)<1 || rt_collect(4) != 4) {
+        failures = 7;
+    }
+    control = 2;
+    kaku ja = rt_join(a);
+    chant(failures + started + ja + jb);
+    chant(done_b);
+    chant(steps_a>0);
+    chant(rt_collect(4));
+    shared = mu;
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

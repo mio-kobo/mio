@@ -19,7 +19,7 @@ for folder in ('bunko','selfhost','tests/m19ef','specs/002-m19ef-portable-pure-m
 save(out/'canonical-manifest.json',manifest);install(snap)
 overlay={str(p.relative_to(snap)):sha(p) for p in sorted(snap.rglob('*')) if p.is_file()};save(out/'source-manifest.json',overlay);digest=sha(out/'source-manifest.json')
 save(out/'plan.json',dict(contract='E5-lifecycle-v2.1.1',repetitions=repetitions,source_manifest_sha256=digest,canonical_manifest_sha256=sha(out/'canonical-manifest.json'),test_overlay_changes=[k for k in overlay if overlay[k]!=manifest[k]],full30='FAIL_PERMANENTLY_PRESERVED',E5='IN_PROGRESS',E6='NOT_RUN'))
-seed=Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');assert sha(seed)=='4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da';rows=[]
+seed=Path('/Volumes/Sector0/AppData/Mio/mio/build/gofree-native/mio');assert sha(seed)=='be555a5e51380a0151c3e4b17d57dd79120123ab170dae3103146d32ab5a0c79';rows=[]
 def run(label,args,timeout=600,expected=0):
  start=time.monotonic()
  with (out/(label+'.stdout')).open('xb') as so,(out/(label+'.stderr')).open('xb') as se:

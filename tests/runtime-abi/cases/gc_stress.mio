@@ -2,10 +2,23 @@
 // is rebuilt while garbage is produced continuously; checksums computed from the live graph are fixed.
 yobu "kiso/array";
 yobu "kiso/string";
-kata Link { v: int64; next: Link?; text: string; }
-kata Tree { v: int64; left: Tree?; right: Tree?; }
+kata Link {
+    v: int64;
+    next: Link?;
+    text: string;
+}
+kata Tree {
+    v: int64;
+    left: Tree?;
+    right: Tree?;
+}
 kaku failures = 0;
-waza check(ok: bool, label: string) -> unit { moshi (!ok) { failures = failures + 1; chant(label); } }
+waza check(ok: bool, label: string) -> unit {
+    moshi (!ok) {
+        failures = failures + 1;
+        chant(label);
+    }
+}
 waza mod(a: int64, b: int64) -> int64 { kaesu a - (a / b) * b; }
 // persistent insert: copies the path, the old tree becomes garbage
 waza insert(t: Tree?, v: int64) -> Tree {
@@ -17,32 +30,99 @@ waza replace_head(l: Link?, v: int64) -> Link {
     moshi (l == mu) { kaesu Link { v: v, next: mu, text: string.concat("n", "") }; }
     kaesu Link { v: v, next: l.next, text: string.concat("n", "") };
 }
-waza value_of(l: Link?) -> int64 { moshi (l == mu) { kaesu 0; } check(l.text == "n", "link text"); kaesu l.v; }
-waza next_of(l: Link?) -> Link? { moshi (l == mu) { kaesu mu; } kaesu l.next; }
-waza tree_sum(t: Tree?) -> int64 { moshi (t == mu) { kaesu 0; } kaesu t.v + tree_sum(t.left) + tree_sum(t.right); }
-waza tree_size(t: Tree?) -> int64 { moshi (t == mu) { kaesu 0; } kaesu 1 + tree_size(t.left) + tree_size(t.right); }
-kaku list: Link? = mu; kaku tree: Tree? = mu; kaku index = Map[int64, Link]();
+waza value_of(l: Link?) -> int64 {
+    moshi (l == mu) {
+        kaesu 0;
+    }
+    check(l.text == "n", "link text");
+    kaesu l.v;
+}
+waza next_of(l: Link?) -> Link? {
+    moshi (l == mu) {
+        kaesu mu;
+    }
+    kaesu l.next;
+}
+waza tree_sum(t: Tree?) -> int64 {
+    moshi (t == mu) {
+        kaesu 0;
+    }
+    kaesu t.v + tree_sum(t.left) + tree_sum(t.right);
+}
+waza tree_size(t: Tree?) -> int64 {
+    moshi (t == mu) {
+        kaesu 0;
+    }
+    kaesu 1 + tree_size(t.left) + tree_size(t.right);
+}
+kaku list: Link? = mu;
+kaku tree: Tree? = mu;
+kaku index = Map[int64, Link]();
 kaku adders: [](() -> int64) = [];
 kaku i = 0;
 aida (i < 3000) {
     kaku v = mod(i * 7919, 10007);
     // every third element replaces the head instead of extending the list
-    moshi (mod(i, 3) == 0) { list = replace_head(list, v); } sore { list = Link { v: v, next: list, text: string.concat("n", "") }; }
+    moshi (mod(i, 3) == 0) {
+        list = replace_head(list, v);
+    } sore {
+        list = Link {
+            v: v, next: list, text: string.concat("n", "") };
+    }
     tree = insert(tree, v);
     moshi (mod(i, 10) == 0) { index[i] = Link { v: i, next: mu, text: "idx" }; }
-    moshi (mod(i, 100) == 0) { kaku captured = Link { v: v, next: mu, text: "c" }; array.push(adders, waza () -> int64 { kaesu captured.v; }); }
-    kaku g1 = array.make[int64](mod(i, 64) + 1, i); kaku g2 = Link { v: g1[0], next: mu, text: "g" };
+    moshi (mod(i, 100) == 0) {
+        kaku captured = Link {
+            v: v, next: mu, text: "c" };
+        array.push(adders, waza () -> int64 {
+                kaesu captured.v;
+            });
+    }
+    kaku g1 = array.make[int64](mod(i, 64) + 1, i);
+    kaku g2 = Link {
+        v: g1[0], next: mu, text: "g" };
     kaku g3 = array.make[uint8](mod(i, 3000) + 1, uint8(1));
-    moshi (mod(i, 50) == 0) { kaku g4 = array.make[int64](40000, i); check(g4[39999] == i, "garbage"); }
+    moshi (mod(i, 50) == 0) {
+        kaku g4 = array.make[int64](40000, i);
+        check(g4[39999] == i, "garbage");
+    }
     check(g2.v == i && len(g3) == mod(i, 3000) + 1, "temporaries");
     i = i + 1;
 }
-kaku list_sum = 0; kaku nodes = 0; kaku c = list;
-aida (c != mu) { list_sum = list_sum + value_of(c); nodes = nodes + 1; c = next_of(c); }
-kaku idx_sum = 0; i = 0;
-aida (i < 3000) { kaku l = index[i]; moshi (l != mu) { idx_sum = idx_sum + l.v; } i = i + 10; }
-kaku cl_sum = 0; i = 0;
-aida (i < len(adders)) { kaku f = adders[i]; cl_sum = cl_sum + f(); i = i + 1; }
-chant(nodes); chant(list_sum); chant(tree_size(tree)); chant(tree_sum(tree)); chant(idx_sum); chant(cl_sum);
+kaku list_sum = 0;
+kaku nodes = 0;
+kaku c = list;
+aida (c != mu) {
+    list_sum = list_sum + value_of(c);
+    nodes = nodes + 1;
+    c = next_of(c);
+}
+kaku idx_sum = 0;
+i = 0;
+aida (i < 3000) {
+    kaku l = index[i];
+    moshi (l != mu) {
+        idx_sum = idx_sum + l.v;
+    }
+    i = i + 10;
+}
+kaku cl_sum = 0;
+i = 0;
+aida (i < len(adders)) {
+    kaku f = adders[i];
+    cl_sum = cl_sum + f();
+    i = i + 1;
+}
+chant(nodes);
+chant(list_sum);
+chant(tree_size(tree));
+chant(tree_sum(tree));
+chant(idx_sum);
+chant(cl_sum);
 check(nodes == 2001 && tree_size(tree) == 3000 && idx_sum == 448500, "graph shape");
-moshi (failures == 0) { chant("gc_stress: ok"); } sore { chant("gc_stress: FAIL"); chant(failures); }
+moshi (failures == 0) {
+    chant("gc_stress: ok");
+} sore {
+    chant("gc_stress: FAIL");
+    chant(failures);
+}

@@ -5,51 +5,81 @@ yobu "kiso/string";
 yobu "selfhost/parser";
 
 // A string -> int64 hash index over parallel arrays (chained buckets); no Map values flow through it.
-kata KeySet { buckets: []int64; next: []int64; keys: []string; values: []int64; }
+kata KeySet {
+    buckets: []int64;
+    next: []int64;
+    keys: []string;
+    values: []int64;
+}
 teisu key_set_buckets = 65521;
 
 waza new_key_set() -> KeySet {
-    kaesu KeySet { buckets: array.make[int64](key_set_buckets, -1), next: array.with_capacity[int64](64), keys: array.with_capacity[string](64), values: array.with_capacity[int64](64) };
+    kaesu KeySet {
+        buckets: array.make[int64](key_set_buckets, -1), next: array.with_capacity[int64](64), keys: array.with_capacity[string](64), values: array.with_capacity[int64](64) };
 }
 
 waza key_hash(key: string) -> int64 {
-    kaku bytes = string.to_bytes(key); kaku hash = 0; kaku at = 0;
-    aida (at < len(bytes)) { hash = hash * 31 + int64(bytes[at]); hash = hash - (hash / key_set_buckets) * key_set_buckets; at = at + 1; }
+    kaku bytes = string.to_bytes(key);
+    kaku hash = 0;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        hash = hash * 31 + int64(bytes[at]);
+        hash = hash - (hash / key_set_buckets) * key_set_buckets;
+        at = at + 1;
+    }
     kaesu hash;
 }
 
 // The value stored for key, or -1 after storing value for it (the first value stored for a key is kept).
 waza key_set_add(set: KeySet, key: string, value: int64) -> int64 {
-    kaku bucket = key_hash(key); kaku entry = set.buckets[bucket];
+    kaku bucket = key_hash(key);
+    kaku entry = set.buckets[bucket];
     aida (entry >= 0) {
         moshi (set.keys[entry] == key) { kaesu set.values[entry]; }
         entry = set.next[entry];
     }
-    array.push(set.next, set.buckets[bucket]); set.buckets[bucket] = len(set.keys);
-    array.push(set.keys, key); array.push(set.values, value);
+    array.push(set.next, set.buckets[bucket]);
+    set.buckets[bucket] = len(set.keys);
+    array.push(set.keys, key);
+    array.push(set.values, value);
     kaesu -1;
 }
 
-waza flag_text(value: bool) -> string { moshi (value) { kaesu "\n1"; } kaesu "\n0"; }
+waza flag_text(value: bool) -> string {
+    moshi (value) {
+        kaesu "\n1";
+    }
+    kaesu "\n0";
+}
 
 // Hash over every field of a symbol except its id; same_symbol confirms a match field by field.
 waza symbol_hash(symbol: Symbol) -> int64 {
-    kaku hash = symbol_kind_code(symbol.kind); kaku bytes = string.to_bytes(symbol.name); kaku at = 0;
-    aida (at < len(bytes)) { hash = hash * 31 + int64(bytes[at]); hash = hash - (hash / key_set_buckets) * key_set_buckets; at = at + 1; }
-    hash = hash * 31 + symbol.declaration.node_id + 7; hash = hash - (hash / key_set_buckets) * key_set_buckets;
-    hash = hash * 31 + symbol.declaration.file_id + 7; hash = hash - (hash / key_set_buckets) * key_set_buckets;
-    hash = hash * 31 + symbol.span.start.offset + 7; hash = hash - (hash / key_set_buckets) * key_set_buckets;
-    hash = hash * 31 + symbol.scope_id + 7; hash = hash - (hash / key_set_buckets) * key_set_buckets;
+    kaku hash = symbol_kind_code(symbol.kind);
+    kaku bytes = string.to_bytes(symbol.name);
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        hash = hash * 31 + int64(bytes[at]);
+        hash = hash - (hash / key_set_buckets) * key_set_buckets;
+        at = at + 1;
+    }
+    hash = hash * 31 + symbol.declaration.node_id + 7;
+    hash = hash - (hash / key_set_buckets) * key_set_buckets;
+    hash = hash * 31 + symbol.declaration.file_id + 7;
+    hash = hash - (hash / key_set_buckets) * key_set_buckets;
+    hash = hash * 31 + symbol.span.start.offset + 7;
+    hash = hash - (hash / key_set_buckets) * key_set_buckets;
+    hash = hash * 31 + symbol.scope_id + 7;
+    hash = hash - (hash / key_set_buckets) * key_set_buckets;
     moshi (hash < 0) { hash = hash + key_set_buckets; }
     kaesu hash;
 }
 
 waza same_symbol(a: Symbol, b: Symbol) -> bool {
     kaesu symbol_kind_code(a.kind) == symbol_kind_code(b.kind) && a.scope_id == b.scope_id && a.public == b.public &&
-        a.owner_function == b.owner_function && a.declaration.file_id == b.declaration.file_id && a.declaration.node_id == b.declaration.node_id &&
-        a.span.start.offset == b.span.start.offset && a.span.start.line == b.span.start.line && a.span.start.column == b.span.start.column &&
-        a.span.end.offset == b.span.end.offset && a.span.end.line == b.span.end.line && a.span.end.column == b.span.end.column &&
-        a.name == b.name && a.package_path == b.package_path;
+    a.owner_function == b.owner_function && a.declaration.file_id == b.declaration.file_id && a.declaration.node_id == b.declaration.node_id &&
+    a.span.start.offset == b.span.start.offset && a.span.start.line == b.span.start.line && a.span.start.column == b.span.start.column &&
+    a.span.end.offset == b.span.end.offset && a.span.end.line == b.span.end.line && a.span.end.column == b.span.end.column &&
+    a.name == b.name && a.package_path == b.package_path;
 }
 
 waza path_less(left: string, right: string) -> bool {
@@ -122,7 +152,10 @@ waza sorted_files(files: []SourceFile) -> []SourceFile {
     kaku result = array.with_capacity[SourceFile](len(files));
     kaku used = array.with_capacity[bool](len(files));
     kaku index = 0;
-    aida (index < len(files)) { array.push(used, iie); index = index + 1; }
+    aida (index < len(files)) {
+        array.push(used, iie);
+        index = index + 1;
+    }
     kaku next_id = 0;
     aida (next_id < len(files)) {
         kaku best = -1;
@@ -139,11 +172,14 @@ waza sorted_files(files: []SourceFile) -> []SourceFile {
     kaesu result;
 }
 
-koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []ResolvedPackage) -> ResolvedPackage {kaesu resolve_package_with_progress(path,files,dependencies,progress.context());}
+koukai waza resolve_package(path: string, files: []SourceFile, dependencies: []ResolvedPackage) -> ResolvedPackage {
+    kaesu resolve_package_with_progress(path, files, dependencies, progress.context());
+}
 koukai waza resolve_package_with_progress(path: string, files: []SourceFile, dependencies: []ResolvedPackage, work: progress.Context) -> ResolvedPackage {
     kaku ordered = sorted_files(files);
     kaku result = empty_resolved_package(path, ordered);
-    kaku state = ResolverState { work:work, result: result, current_scope: [-1], current_function: [-1], function_depth: [0], loop_depth: [0] };
+    kaku state = ResolverState {
+        work: work, result: result, current_scope: [-1], current_function: [-1], function_depth: [0], loop_depth: [0] };
     state.current_scope[0] = add_scope(state, ScopeKind.Builtin(), -1, -1);
     install_builtins(state);
     kaku builtin_scope = state.current_scope[0];
@@ -154,42 +190,54 @@ koukai waza resolve_package_with_progress(path: string, files: []SourceFile, dep
     // once per import path (selfhost/cli held 900 k symbol records for 12 k distinct symbols). The first occurrence
     // keeps its position, so first-match lookups and every field a reader sees are unchanged; dependency member
     // references are remapped to it. Duplicate members and dependency edges are dropped the same way.
-    kaku symbol_buckets = array.make[int64](key_set_buckets, -1); kaku symbol_next: []int64 = []; kaku symbol_entries: []int64 = [];
-    kaku member_set = new_key_set(); kaku edge_set = new_key_set();
+    kaku symbol_buckets = array.make[int64](key_set_buckets, -1);
+    kaku symbol_next: []int64 = [];
+    kaku symbol_entries: []int64 = [];
+    kaku member_set = new_key_set();
+    kaku edge_set = new_key_set();
     kaku index = 0;
     aida (index < len(dependencies)) {
         kaku dependency = dependencies[index];
-        kaku remap = array.make[int64](len(dependency.symbols), -1); kaku si = 0;
+        kaku remap = array.make[int64](len(dependency.symbols), -1);
+        kaku si = 0;
         aida (si < len(dependency.symbols)) {
             kaku source = dependency.symbols[si];
-            kaku bucket = symbol_hash(source); kaku entry = symbol_buckets[bucket]; kaku found = -1;
+            kaku bucket = symbol_hash(source);
+            kaku entry = symbol_buckets[bucket];
+            kaku found = -1;
             aida (entry >= 0 && found < 0) {
                 moshi (same_symbol(result.symbols[symbol_entries[entry]], source)) { found = symbol_entries[entry]; }
                 entry = symbol_next[entry];
             }
             moshi (found >= 0) { remap[si] = found; }
             sore {
-                array.push(symbol_next, symbol_buckets[bucket]); symbol_buckets[bucket] = len(symbol_entries); array.push(symbol_entries, len(result.symbols));
+                array.push(symbol_next, symbol_buckets[bucket]);
+                symbol_buckets[bucket] = len(symbol_entries);
+                array.push(symbol_entries, len(result.symbols));
                 remap[si] = len(result.symbols);
                 array.push(result.symbols, Symbol { id: len(result.symbols), kind: source.kind, name: source.name, package_path: source.package_path,
-                    scope_id: source.scope_id, declaration: source.declaration, span: source.span, public: source.public,
-                    owner_function: source.owner_function });
+                        scope_id: source.scope_id, declaration: source.declaration, span: source.span, public: source.public,
+                        owner_function: source.owner_function });
             }
             si = si + 1;
         }
         kaku mi = 0;
         aida (mi < len(dependency.members)) {
-            kaku member = dependency.members[mi]; kaku target = remap[member.symbol_id];
+            kaku member = dependency.members[mi];
+            kaku target = remap[member.symbol_id];
             kaku member_key = string.concat(member.package_path, string.concat("\n", string.concat(member.name, string.concat("\n", string.concat(convert.format_int(target), flag_text(member.public))))));
             moshi (key_set_add(member_set, member_key, len(result.members)) < 0) {
-                array.push(result.members, PackageMember { package_path: member.package_path, name: member.name, symbol_id: target, public: member.public });
+                array.push(result.members, PackageMember {
+                        package_path: member.package_path, name: member.name, symbol_id: target, public: member.public });
             }
             mi = mi + 1;
         }
         kaku di = 0;
         aida (di < len(dependency.dependencies)) {
             kaku edge = dependency.dependencies[di];
-            moshi (key_set_add(edge_set, string.concat(edge.source, string.concat("\n", edge.target)), len(result.dependencies)) < 0) { array.push(result.dependencies, edge); }
+            moshi (key_set_add(edge_set, string.concat(edge.source, string.concat("\n", edge.target)), len(result.dependencies)) < 0) {
+                array.push(result.dependencies, edge);
+            }
             di = di + 1;
         }
         index = index + 1;
@@ -198,7 +246,8 @@ koukai waza resolve_package_with_progress(path: string, files: []SourceFile, dep
     // resolving any body, including files that sort before the import itself.
     index = 0;
     aida (index < len(ordered)) {
-        kaku root = ordered[index].ast.nodes[ordered[index].root]; kaku child = 0;
+        kaku root = ordered[index].ast.nodes[ordered[index].root];
+        kaku child = 0;
         aida (child < len(root.children)) {
             kaku node_id = root.children[child];
             moshi (parser.node_kind_code(ordered[index].ast.nodes[node_id].kind) == 1) { resolve_statement(state, index, node_id); }
@@ -210,7 +259,10 @@ koukai waza resolve_package_with_progress(path: string, files: []SourceFile, dep
     aida (index < len(ordered)) {
         kaku root = ordered[index].ast.nodes[ordered[index].root];
         kaku child = 0;
-        aida (child < len(root.children)) { predeclare_node(state, index, root.children[child]); child = child + 1; }
+        aida (child < len(root.children)) {
+            predeclare_node(state, index, root.children[child]);
+            child = child + 1;
+        }
         index = index + 1;
     }
     index = 0;

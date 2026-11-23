@@ -1,39 +1,120 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(major:int64) -> int64 {kaesu 0;}
-kata Node {value:int64; items:[]int64;}
-kata Graph {nodes:[]Node; mapping:Map<int64,Node>; large:[]uint8; scalar:int64?; getter:() -> int64;}
-kaku channel:Graph?=mu;kaku phase=0;kaku checks=0;kaku failed=0;
-waza pause() -> unit {kaku status=rt_wait(1000000);moshi(status<0){failed=1;}}
-waza producer() -> unit {
-    kaku node=Node {value:333,items:[12,34]};kaku mapping=Map[int64,Node]();mapping[1]=node;
-    kaku getter=waza() -> int64 {kaesu node.value;};
-    channel=Graph {nodes:[node],mapping:mapping,large:array.make[uint8](131072,uint8(90)),scalar:41,getter:getter};
-    phase=1;aida(phase<2){pause();}
-    channel=mu;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(major: int64) -> int64 { kaesu 0; }
+kata Node {
+    value: int64;
+    items: []int64;
 }
-waza consume(keep:Graph) -> unit {
-    phase=2;kaku i=0;
-    aida(phase<3){
-        kaku fresh=Node {value:i,items:[i,i+1]};keep.nodes[0]=fresh;keep.mapping[2]=fresh;
-        kaku found=keep.mapping[2];moshi(found==mu){failed=3;kaesu;}
-        kaku scalar=keep.scalar;moshi(scalar==mu){failed=4;kaesu;}
-        moshi(found.value!=keep.nodes[0].value || keep.large[131071]!=uint8(90) || scalar!=41 || keep.getter()!=333){failed=4;kaesu;}
-        checks=checks+1;i=i+1;pause();
+kata Graph {
+    nodes: []Node;
+    mapping: Map<int64, Node>;
+    large: []uint8;
+    scalar: int64?;
+    getter: () -> int64;
+}
+kaku channel: Graph?= mu;
+kaku phase = 0;
+kaku checks = 0;
+kaku failed = 0;
+waza pause() -> unit {
+    kaku status = rt_wait(1000000);
+    moshi (status<0) {
+        failed = 1;
     }
-    moshi(keep.getter()!=333 || keep.large[131071]!=uint8(90)){failed=5;}
+}
+waza producer() -> unit {
+    kaku node = Node {
+        value: 333, items: [12, 34] };
+    kaku mapping = Map[int64, Node]();
+    mapping[1] = node;
+    kaku getter = waza () -> int64 {
+        kaesu node.value;
+    };
+    channel = Graph { nodes: [node], mapping: mapping, large: array.make[uint8](131072, uint8(90)), scalar: 41, getter: getter };
+    phase = 1;
+    aida (phase<2) {
+        pause();
+    }
+    channel = mu;
+}
+waza consume(keep: Graph) -> unit {
+    phase = 2;
+    kaku i = 0;
+    aida (phase<3) {
+        kaku fresh = Node {
+            value: i, items: [i, i + 1] };
+        keep.nodes[0] = fresh;
+        keep.mapping[2] = fresh;
+        kaku found = keep.mapping[2];
+        moshi (found == mu) {
+            failed = 3;
+            kaesu;
+        }
+        kaku scalar = keep.scalar;
+        moshi (scalar == mu) {
+            failed = 4;
+            kaesu;
+        }
+        moshi (found.value != keep.nodes[0].value || keep.large[131071] != uint8(90) || scalar != 41 || keep.getter() != 333) {
+            failed = 4;
+            kaesu;
+        }
+        checks = checks + 1;
+        i = i + 1;
+        pause();
+    }
+    moshi (keep.getter() != 333 || keep.large[131071] != uint8(90)) { failed = 5; }
 }
 waza consumer() -> unit {
-    aida(phase<1){pause();}kaku keep=channel;moshi(keep==mu){failed=2;kaesu;}
+    aida (phase<1) {
+        pause();
+    }
+    kaku keep = channel;
+    moshi (keep == mu) {
+        failed = 2;
+        kaesu;
+    }
     consume(keep);
 }
-waza churn() -> unit {kaku i=0;aida(i<40){kaku tmp=Node {value:i,items:[i,i+1]};moshi(tmp.items[1]!=i+1){failed=6;}i=i+1;}}
-kaku one=rt_start(producer);kaku two=rt_start(consumer);
-aida(phase<2){pause();}kaku joined=rt_join(one);
-kaku i=0;kaku last=0;
-aida(i<100){last=rt_collect(0);moshi(last==0){failed=7;}moshi(i-(i/10)*10==0){last=rt_collect(1);moshi(last==0){failed=8;}}i=i+1;}
-kaku again=rt_start(churn);kaku rejoined=rt_join(again);
-phase=3;kaku final_join=rt_join(two);
-chant(failed);chant(checks>0);chant(joined+rejoined+final_join);chant(rt_collect(1));
+waza churn() -> unit {
+    kaku i = 0;
+    aida (i<40) {
+        kaku tmp = Node {
+            value: i, items: [i, i + 1] };
+        moshi (tmp.items[1] != i + 1) {
+            failed = 6;
+        }
+        i = i + 1;
+    }
+}
+kaku one = rt_start(producer);
+kaku two = rt_start(consumer);
+aida (phase<2) {
+    pause();
+}
+kaku joined = rt_join(one);
+kaku i = 0;
+kaku last = 0;
+aida (i<100) {
+    last = rt_collect(0);
+    moshi (last == 0) {
+        failed = 7;
+    }
+    moshi (i - (i / 10) * 10 == 0) {
+        last = rt_collect(1);
+        moshi (last == 0) {
+            failed = 8;
+        }
+    }
+    i = i + 1;
+}
+kaku again = rt_start(churn);
+kaku rejoined = rt_join(again);
+phase = 3;
+kaku final_join = rt_join(two);
+chant(failed);
+chant(checks>0);
+chant(joined + rejoined + final_join);
+chant(rt_collect(1));

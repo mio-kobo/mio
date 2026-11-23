@@ -9,42 +9,153 @@ yobu "kiso/fs";
 yobu "kiso/os";
 yobu "kiso/string";
 yobu "kiso/convert";
-waza emit(c:arm64.Assembler,i:arm64.Instruction)->unit {moshi(arm64.assembler_emit(c,i)!=mu){os.exit(70);}}
-waza number(c:arm64.Assembler,r:int64,n:int64)->unit {
- emit(c,arm64.movz_x(r,n-(n/65536)*65536,0));emit(c,arm64.movk_x(r,(n/65536)-((n/65536)/65536)*65536,1));
+waza emit(c: arm64.Assembler, i: arm64.Instruction) -> unit { moshi (arm64.assembler_emit(c, i) != mu) { os.exit(70); } }
+waza number(c: arm64.Assembler, r: int64, n: int64) -> unit {
+    emit(c, arm64.movz_x(r, n - (n / 65536) * 65536, 0));
+    emit(c, arm64.movk_x(r, (n / 65536) - ((n / 65536) / 65536) * 65536, 1));
 }
-waza data(c:arm64.Assembler,p:[]macho.AddressPatch,r:int64)->unit {
- kaku at=len(c.words);emit(c,arm64.movz_x(r,0,0));emit(c,arm64.movz_x(r,0,0));array.push(p,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:0,register:r});
+waza data(c: arm64.Assembler, p: []macho.AddressPatch, r: int64) -> unit {
+    kaku at = len(c.words);
+    emit(c, arm64.movz_x(r, 0, 0));
+    emit(c, arm64.movz_x(r, 0, 0));
+    array.push(p, macho.AddressPatch {
+            at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: 0, register: r });
 }
-waza image(mode:int64,output:string)->unit {
- kaku all=gc.cooperative_thread_program(hai);kaku functions:[]ir.Function=[];kaku i=0;
- aida(i<len(all)){moshi(all[i].name=="registry_lock"){array.push(functions,all[i]);}i=i+1;}
- moshi(len(functions)!=1){os.exit(71);kaesu;}
- // Protocol component inputs only: a completed park advances seen_epoch and
- // controlled clock. This is not a collector or concurrent-GC acceptance.
- kaku clock=ir.function("platform_now");ir.call(clock,9000,1,[]);ir.put(clock,ir.result,0,1,0,0);array.push(functions,clock);
- kaku poll=ir.function("gc_poll");ir.call(poll,9001,1,[0]);ir.put(poll,ir.result,0,1,0,0);array.push(functions,poll);
- kaku bindings:[]ir.Binding=[ir.Binding {operation:9000,slot:0,arguments:[],result_bits:64},ir.Binding {operation:9001,slot:1,arguments:[0],result_bits:64}];
- kaku c=arm64.assembler();kaku patches:[]macho.AddressPatch=[];data(c,patches,7);
- kaku clock_at=len(c.words);emit(c,arm64.movz_x(9,0,0));emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,7,0));
- kaku poll_at=len(c.words);emit(c,arm64.movz_x(9,0,0));emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,7,8));
- number(c,9,1000000000);emit(c,arm64.str_x(9,7,16));emit(c,arm64.add_imm_x(0,7,64,iie));emit(c,arm64.str_x(7,0,gc.thread_imports));number(c,9,1);emit(c,arm64.str_x(9,0,gc.thread_registered));emit(c,arm64.str_x(9,0,gc.thread_seen_epoch));
- emit(c,arm64.add_imm_x(10,7,512,iie));emit(c,arm64.str_x(10,0,gc.thread_registry));emit(c,arm64.str_x(9,10,40));number(c,9,9);emit(c,arm64.str_x(9,10,gc.gc_registry_heartbeat));
- arm64.assembler_bl(c,"probe_registry_lock");data(c,patches,7);emit(c,arm64.str_x(0,7,640));
- emit(c,arm64.ldr_x(9,7,16));emit(c,arm64.str_x(9,7,648));emit(c,arm64.ldr_x(9,7,64+gc.thread_seen_epoch));emit(c,arm64.str_x(9,7,656));emit(c,arm64.ldr_x(9,7,512+40));emit(c,arm64.str_x(9,7,664));emit(c,arm64.ldr_x(9,7,512+gc.gc_registry_heartbeat));emit(c,arm64.str_x(9,7,672));emit(c,arm64.ldr_x(9,7,32));emit(c,arm64.str_x(9,7,680));
- number(c,0,1);emit(c,arm64.add_imm_x(1,7,640,iie));number(c,2,48);number(c,16,4);emit(c,arm64.svc(128));number(c,0,0);number(c,16,1);emit(c,arm64.svc(128));
- kaku error=aarch64.emit_program(c,functions,bindings,2,"probe");moshi(error!=""){chant(error);os.exit(72);kaesu;}
- kaku clock_word=len(c.words);emit(c,arm64.ldr_x(0,19,16));emit(c,arm64.ret());
- kaku poll_word=len(c.words);emit(c,arm64.ldr_x(9,19,16));number(c,10,2000000000);emit(c,arm64.add_x(9,9,10));emit(c,arm64.str_x(9,19,16));emit(c,arm64.ldr_x(9,19,32));emit(c,arm64.add_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,19,32));emit(c,arm64.ldr_x(10,0,gc.thread_registry));
- moshi(mode==0 || mode==2){emit(c,arm64.ldr_x(9,0,gc.thread_seen_epoch));emit(c,arm64.add_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,0,gc.thread_seen_epoch));}
- moshi(mode==0 || mode==3){emit(c,arm64.str_x(31,10,40));}
- moshi(mode==3){emit(c,arm64.ldr_x(9,10,gc.gc_registry_heartbeat));emit(c,arm64.add_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,10,gc.gc_registry_heartbeat));}
- number(c,0,0);emit(c,arm64.ret());
- array.push(patches,macho.AddressPatch {at_word:clock_at,add_at_word:clock_at+1,target:macho.text_target(),target_offset:clock_word*4,register:9});array.push(patches,macho.AddressPatch {at_word:poll_at,add_at_word:poll_at+1,target:macho.text_target(),target_offset:poll_word*4,register:9});
- kaku result=arm64.assembler_assemble(c);moshi(result.error!=mu){os.exit(73);kaesu;}
- kaku executable=macho.executable(macho.ImageSpec {words:result.words,constants:[],globals:96,patches:patches});moshi(executable.error!=mu){os.exit(74);kaesu;}
- kaku signed=sign.adhoc(executable.bytes);moshi(signed.error!=""){os.exit(75);kaesu;}
- moshi(fs.write_all(output,signed.bytes).error!=mu || os.chmod(output,448)!=0){os.exit(76);}
+waza image(mode: int64, output: string) -> unit {
+    kaku all = gc.cooperative_thread_program(hai);
+    kaku functions: []ir.Function = [];
+    kaku i = 0;
+    aida (i<len(all)) {
+        moshi (all[i].name == "registry_lock") {
+            array.push(functions, all[i]);
+        }
+        i = i + 1;
+    }
+    moshi (len(functions) != 1) {
+        os.exit(71);
+        kaesu;
+    }
+    // Protocol component inputs only: a completed park advances seen_epoch and
+    // controlled clock. This is not a collector or concurrent-GC acceptance.
+    kaku clock = ir.function("platform_now");
+    ir.call(clock, 9000, 1, []);
+    ir.put(clock, ir.result, 0, 1, 0, 0);
+    array.push(functions, clock);
+    kaku poll = ir.function("gc_poll");
+    ir.call(poll, 9001, 1, [0]);
+    ir.put(poll, ir.result, 0, 1, 0, 0);
+    array.push(functions, poll);
+    kaku bindings: []ir.Binding = [ir.Binding {
+            operation: 9000, slot: 0, arguments: [], result_bits: 64 }, ir.Binding {
+            operation: 9001, slot: 1, arguments: [0], result_bits: 64 }
+    ];
+    kaku c = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    data(c, patches, 7);
+    kaku clock_at = len(c.words);
+    emit(c, arm64.movz_x(9, 0, 0));
+    emit(c, arm64.movz_x(9, 0, 0));
+    emit(c, arm64.str_x(9, 7, 0));
+    kaku poll_at = len(c.words);
+    emit(c, arm64.movz_x(9, 0, 0));
+    emit(c, arm64.movz_x(9, 0, 0));
+    emit(c, arm64.str_x(9, 7, 8));
+    number(c, 9, 1000000000);
+    emit(c, arm64.str_x(9, 7, 16));
+    emit(c, arm64.add_imm_x(0, 7, 64, iie));
+    emit(c, arm64.str_x(7, 0, gc.thread_imports));
+    number(c, 9, 1);
+    emit(c, arm64.str_x(9, 0, gc.thread_registered));
+    emit(c, arm64.str_x(9, 0, gc.thread_seen_epoch));
+    emit(c, arm64.add_imm_x(10, 7, 512, iie));
+    emit(c, arm64.str_x(10, 0, gc.thread_registry));
+    emit(c, arm64.str_x(9, 10, 40));
+    number(c, 9, 9);
+    emit(c, arm64.str_x(9, 10, gc.gc_registry_heartbeat));
+    arm64.assembler_bl(c, "probe_registry_lock");
+    data(c, patches, 7);
+    emit(c, arm64.str_x(0, 7, 640));
+    emit(c, arm64.ldr_x(9, 7, 16));
+    emit(c, arm64.str_x(9, 7, 648));
+    emit(c, arm64.ldr_x(9, 7, 64 + gc.thread_seen_epoch));
+    emit(c, arm64.str_x(9, 7, 656));
+    emit(c, arm64.ldr_x(9, 7, 512 + 40));
+    emit(c, arm64.str_x(9, 7, 664));
+    emit(c, arm64.ldr_x(9, 7, 512 + gc.gc_registry_heartbeat));
+    emit(c, arm64.str_x(9, 7, 672));
+    emit(c, arm64.ldr_x(9, 7, 32));
+    emit(c, arm64.str_x(9, 7, 680));
+    number(c, 0, 1);
+    emit(c, arm64.add_imm_x(1, 7, 640, iie));
+    number(c, 2, 48);
+    number(c, 16, 4);
+    emit(c, arm64.svc(128));
+    number(c, 0, 0);
+    number(c, 16, 1);
+    emit(c, arm64.svc(128));
+    kaku error = aarch64.emit_program(c, functions, bindings, 2, "probe");
+    moshi (error != "") {
+        chant(error);
+        os.exit(72);
+        kaesu;
+    }
+    kaku clock_word = len(c.words);
+    emit(c, arm64.ldr_x(0, 19, 16));
+    emit(c, arm64.ret());
+    kaku poll_word = len(c.words);
+    emit(c, arm64.ldr_x(9, 19, 16));
+    number(c, 10, 2000000000);
+    emit(c, arm64.add_x(9, 9, 10));
+    emit(c, arm64.str_x(9, 19, 16));
+    emit(c, arm64.ldr_x(9, 19, 32));
+    emit(c, arm64.add_imm_x(9, 9, 1, iie));
+    emit(c, arm64.str_x(9, 19, 32));
+    emit(c, arm64.ldr_x(10, 0, gc.thread_registry));
+    moshi (mode == 0 || mode == 2) {
+        emit(c, arm64.ldr_x(9, 0, gc.thread_seen_epoch));
+        emit(c, arm64.add_imm_x(9, 9, 1, iie));
+        emit(c, arm64.str_x(9, 0, gc.thread_seen_epoch));
+    }
+    moshi (mode == 0 || mode == 3) { emit(c, arm64.str_x(31, 10, 40)); }
+    moshi (mode == 3) {
+        emit(c, arm64.ldr_x(9, 10, gc.gc_registry_heartbeat));
+        emit(c, arm64.add_imm_x(9, 9, 1, iie));
+        emit(c, arm64.str_x(9, 10, gc.gc_registry_heartbeat));
+    }
+    number(c, 0, 0);
+    emit(c, arm64.ret());
+    array.push(patches, macho.AddressPatch {
+            at_word: clock_at, add_at_word: clock_at + 1, target: macho.text_target(), target_offset: clock_word * 4, register: 9 });
+    array.push(patches, macho.AddressPatch {
+            at_word: poll_at, add_at_word: poll_at + 1, target: macho.text_target(), target_offset: poll_word * 4, register: 9 });
+    kaku result = arm64.assembler_assemble(c);
+    moshi (result.error != mu) {
+        os.exit(73);
+        kaesu;
+    }
+    kaku executable = macho.executable(macho.ImageSpec {
+            words: result.words, constants: [], globals: 96, patches: patches });
+    moshi (executable.error != mu) {
+        os.exit(74);
+        kaesu;
+    }
+    kaku signed = sign.adhoc(executable.bytes);
+    moshi (signed.error != "") {
+        os.exit(75);
+        kaesu;
+    }
+    moshi (fs.write_all(output, signed.bytes).error != mu || os.chmod(output, 448) != 0) { os.exit(76); }
 }
-waza main()->unit {kaku args=os.arguments();moshi(len(args)!=2){os.exit(64);kaesu;}kaku i=0;aida(i<4){image(i,string.concat(args[1],string.concat("-",convert.format_int(i))));i=i+1;}}
+waza main() -> unit {
+    kaku args = os.arguments();
+    moshi (len(args) != 2) {
+        os.exit(64);
+        kaesu;
+    }
+    kaku i = 0;
+    aida (i<4) {
+        image(i, string.concat(args[1], string.concat("-", convert.format_int(i))));
+        i = i + 1;
+    }
+}
 main();

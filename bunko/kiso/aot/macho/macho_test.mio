@@ -18,7 +18,8 @@ waza test_mach_o_header_layout_and_limits() -> unit {
     testing.expect(full.error == mu && full.layout.linkedit_offset - full.layout.data_offset == 32768, "full user globals and private ABI state have two data pages");
     testing.expect(binary.read_u32_le(full.bytes, 288).value == uint32(32768), "data segment VM size covers private ABI state");
     testing.expect(binary.read_u32_le(full.bytes, 304).value == uint32(32768), "data segment file size covers private ABI state");
-    testing.expect(executable(ImageSpec { words: words, constants: [], globals: 2053, patches: patches }).error != mu, "physical global limit rejected");
+    testing.expect(executable(ImageSpec {
+                words: words, constants: [], globals: 2053, patches: patches }).error != mu, "physical global limit rejected");
 }
 
 waza test_image_address_patch_bounds() -> unit {
@@ -28,14 +29,16 @@ waza test_image_address_patch_bounds() -> unit {
     kaku image = executable(ImageSpec { words: words, constants: constants, globals: 0, patches: good });
     testing.expect(image.error == mu && binary.read_u32_le(image.bytes, 768).value != uint32(0), "layout-time ADRP patched");
     kaku bad: []AddressPatch = [AddressPatch { at_word: 9, add_at_word: -1, target: data_target(), target_offset: 0, register: 8 }];
-    testing.expect(executable(ImageSpec { words: words, constants: [], globals: 0, patches: bad }).error != mu, "out-of-bounds patch rejected");
+    testing.expect(executable(ImageSpec {
+                words: words, constants: [], globals: 0, patches: bad }).error != mu, "out-of-bounds patch rejected");
 }
 
 waza test_appended_runtime_data_preserves_global_envelope() -> unit {
-    kaku spec=ImageSpec {words:[arm64.ret().word],constants:[],globals:2052,patches:[]};
-    kaku image=executable_with_runtime_data(spec,8192);
-    testing.expect(image.error==mu && image.layout.linkedit_offset-image.layout.data_offset==98304, "runtime storage follows full source/private globals");
-    testing.expect(executable(spec).error==mu, "legacy maximum still valid");
-    testing.expect(executable_with_runtime_data(spec,1048577).error!=mu, "runtime allocation bound is checked independently");
-    testing.expect(executable_with_runtime_data(ImageSpec {words:spec.words,constants:[],globals:2053,patches:[]},1).error!=mu, "runtime extension cannot bypass source/private bound");
+    kaku spec = ImageSpec { words: [arm64.ret().word], constants: [], globals: 2052, patches: [] };
+    kaku image = executable_with_runtime_data(spec, 8192);
+    testing.expect(image.error == mu && image.layout.linkedit_offset - image.layout.data_offset == 98304, "runtime storage follows full source/private globals");
+    testing.expect(executable(spec).error == mu, "legacy maximum still valid");
+    testing.expect(executable_with_runtime_data(spec, 1048577).error != mu, "runtime allocation bound is checked independently");
+    testing.expect(executable_with_runtime_data(ImageSpec {
+                words: spec.words, constants: [], globals: 2053, patches: [] }, 1).error != mu, "runtime extension cannot bypass source/private bound");
 }

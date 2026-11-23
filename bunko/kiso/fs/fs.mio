@@ -13,12 +13,30 @@ koukai sentaku FsError {
 }
 
 koukai kata File { handle: resource; }
-koukai kata FileResult { file: File?; error: FsError?; }
-koukai kata ReadAllResult { data: []uint8; error: FsError?; }
+koukai kata FileResult {
+    file: File?;
+    error: FsError?;
+}
+koukai kata ReadAllResult {
+    data: []uint8;
+    error: FsError?;
+}
 koukai kata UnitResult { error: FsError?; }
-koukai kata StatResult { exists: bool; is_file: bool; is_dir: bool; error: FsError?; }
-koukai kata DirEntry { name: string; is_file: bool; is_dir: bool; }
-koukai kata DirResult { entries: []DirEntry; error: FsError?; }
+koukai kata StatResult {
+    exists: bool;
+    is_file: bool;
+    is_dir: bool;
+    error: FsError?;
+}
+koukai kata DirEntry {
+    name: string;
+    is_file: bool;
+    is_dir: bool;
+}
+koukai kata DirResult {
+    entries: []DirEntry;
+    error: FsError?;
+}
 
 waza error_from(code: uint8, message: string) -> FsError? {
     moshi (code == uint8(0)) { kaesu mu; }
@@ -110,14 +128,14 @@ koukai waza close(file: File) -> UnitResult {
 
 koukai waza reader(file: File) -> io.Reader {
     kaesu io.Reader { read: waza (destination: []uint8, offset: int64, length: int64) -> io.ReadResult {
-        kaesu read(file, destination, offset, length);
-    } };
+            kaesu read(file, destination, offset, length);
+        } };
 }
 
 koukai waza writer(file: File) -> io.Writer {
     kaesu io.Writer { write: waza (source: []uint8, offset: int64, length: int64) -> io.WriteResult {
-        kaesu write(file, source, offset, length);
-    } };
+            kaesu write(file, source, offset, length);
+        } };
 }
 
 koukai waza read_all(path: string) -> ReadAllResult {
@@ -221,6 +239,7 @@ koukai waza read_dir(path: string) -> DirResult {
 // Optional third status byte extends the existing NativeFS stat protocol.
 // The original existence/file/directory and error bytes remain unchanged.
 koukai waza is_character_device(path: string) -> bool {
-    kaku status: []uint8=[0,0,0];runtime.stat(path,status);
-    kaesu status[1]==uint8(0) && status[2]==uint8(1);
+    kaku status: []uint8 = [0, 0, 0];
+    runtime.stat(path, status);
+    kaesu status[1] == uint8(0) && status[2] == uint8(1);
 }

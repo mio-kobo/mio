@@ -23,6 +23,75 @@ teisu wr_join_status=8824;
 teisu wr_snapshot=9000;
 // 4000 roots: with 128 live threads the stopped-world snapshot needs several dozen per thread (1000 overflowed: gc_scan_roots failed).
 teisu wr_snapshot_capacity=4000;
+// Diagnostic counters of an observed build (label worker_observe, mio build --observe), kept in the TAIL of each thread context. Layout audit: the
+// snapshot header and entries end at wr_snapshot+16+8*wr_snapshot_capacity = 41016 (gc_snapshot_root refuses an entry past the capacity) and the stride
+// is 41600, so bytes 41016..41599 of every context are referenced by no routine; contexts are zero-initialized global data that nothing clears or
+// reuses as a whole, so a slot's counters accumulate over the threads that used it. 3 kinds x 11 words + 1 word = 272 bytes from wr_obs. A normal
+// build never reads or writes these bytes and its image is byte-identical to one built before this code existed.
+//   kind 0 = gc_heap_enter (epoch acquisition), 1 = gc_mutator_poll (release / park), 2 = gc_block_leave (return from a blocking native)
+//   per kind: 9 buckets of elapsed nanoseconds [<1us, <4us, <16us, <64us, <256us, <1ms, <4ms, <16ms, >=16ms], then the sum and the maximum in ns.
+teisu wr_obs=41032;
+teisu wr_obs_kind=88;
+teisu wr_obs_retained=264;
+// Allocation lock (docs/darwin-thread-heap-exclusion-design.md section 11). The lock word lives in the zero-initialized tail of the main thread's
+// context (context 0, nothing else uses bytes 41304..41599). Observed builds also count, per thread context: allocations served by the lock fast path,
+// allocations that took the Epoch path, and attempts that exhausted the contention budget.
+// The last two counters track blocked wait rounds and requests that entered the wait path at least once.
+teisu wr_alloc_lock=41440;
+teisu wr_obs_alloc=41304;
+teisu wr_alloc_spin=256;
+teisu wr_alloc_wait_rounds=64;
+teisu wr_alloc_wait_us=1000;
+teisu wr_alloc_locked=1;
+teisu wr_alloc_waiting=2;
+// Darwin raw UNIX syscall errno values (carry set on error).
+teisu wr_ulock_enoent=2;
+teisu wr_ulock_eintr=4;
+teisu wr_ulock_etimedout=60;
+teisu wr_obs_wait_guard=41488; // first word after the allocation-lock stress fields
+teisu wr_obs_wait_preflight=41496;
+teisu wr_alloc_wait_disabled=41504; // main context, monotonic after a hard syscall error
+teisu wr_wait_test_arm=41512;       // per-thread test command
+teisu wr_wait_test_phase=41520;    // main context, test only
+teisu wr_wait_test_ctx=41528;      // main context, test only
+teisu wr_wait_test_gc_count=41536;
+waza wr_wait_test(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_wait_test")>=0;}
+waza wr_wait_owner_test(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_wait_owner_test")>=0;}
+waza wr_wait_error_test(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_wait_error_test")>=0;}
+waza wr_wait_park_test(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_wait_park_test")>=0;}
+waza wr_main_word(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,dst:int64,offset:int64) -> unit {
+    wr_ctx(c,p,first,dst,0);wr_addr(c,dst,dst,offset);
+}
+// Lock-stress words, all in context 0's tail and touched only while holding the lock: +8 epoch seen at entry, +16 attempt counter.
+teisu wr_stress_period=4;
+// Largest request served by the lock fast path (the legacy allocator maps a large object at 128 KiB or more and the fast path never maps).
+teisu wr_alloc_small=4095;
+// Test-only lock-stress image (design doc section 12): label worker_alloc_lock_stress. Never present in a default image.
+waza wr_lock_stress(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_lock_stress")>=0;}
+// Detector-sensitivity control (MIO_ALLOC_LOCK_STRESS=violate): the image deliberately polls inside the locked region, which the real protocol forbids.
+waza wr_lock_violate(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_alloc_lock_violate")>=0;}
+waza wr_observed(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_observe")>=0;}
+// Start of a timed runtime call: push the current time (attached_platform_now returns nanoseconds in x0).
+waza wr_obs_begin(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
+    moshi(!wr_observed(c)){kaesu;}
+    wr_imports(c,p,first);arm64.assembler_bl(c,"attached_platform_now");emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(0,31,0));
+}
+// End of a timed runtime call: elapsed time into the bucket, sum and maximum of this thread's context for `kind` (only this thread writes its context).
+waza wr_obs_end(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,kind:int64) -> unit {
+    moshi(!wr_observed(c)){kaesu;}
+    wr_imports(c,p,first);arm64.assembler_bl(c,"attached_platform_now");emit(c,arm64.ldr_x(1,31,0));emit(c,arm64.sub_x(0,0,1));emit(c,arm64.str_x(0,31,0));
+    wr_current(c,p,first);emit(c,arm64.ldr_x(2,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));
+    // x0 = context, x2 = elapsed ns. Bucket index in x3: the number of times 1000 * 4^k is <= elapsed (at most 8).
+    emit(c,arm64.movz_x(3,0,0));wr_num(c,4,1000);
+    kaku loop=block_label("wr_obs_bucket_",len(c.words));kaku done=string.concat(loop,"_done");
+    arm64.assembler_label(c,loop);emit(c,arm64.cmp_x(2,4));arm64.assembler_b_cond(c,3,done);emit(c,arm64.add_imm_x(3,3,1,iie));emit(c,arm64.cmp_imm_x(3,8,iie));arm64.assembler_b_cond(c,0,done);emit(c,arm64.lsl_x(4,4,2));arm64.assembler_b(c,loop);
+    arm64.assembler_label(c,done);
+    wr_num(c,5,wr_obs+kind*wr_obs_kind);emit(c,arm64.add_x(5,0,5));
+    emit(c,arm64.lsl_x(6,3,3));emit(c,arm64.add_x(6,5,6));emit(c,arm64.ldr_x(7,6,0));emit(c,arm64.add_imm_x(7,7,1,iie));emit(c,arm64.str_x(7,6,0));
+    emit(c,arm64.ldr_x(7,5,72));emit(c,arm64.add_x(7,7,2));emit(c,arm64.str_x(7,5,72));
+    kaku skip=block_label("wr_obs_max_",len(c.words));
+    emit(c,arm64.ldr_x(7,5,80));emit(c,arm64.cmp_x(2,7));arm64.assembler_b_cond(c,9,skip);emit(c,arm64.str_x(2,5,80));arm64.assembler_label(c,skip);
+}
 waza worker_roots_enabled(c:arm64.Assembler) -> bool {kaesu arm64.assembler_label_word(c,"worker_roots_enabled")>=0;}
 waza emit_print_boundary(c:arm64.Assembler) -> unit {
     moshi(worker_roots_enabled(c)){
@@ -51,7 +120,9 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     // words_free(h, n): blocks stay mapped for the life of the process
     arm64.assembler_label(c,"native_join_status");emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(30,31,0));arm64.assembler_bl(c,"attached_join_status");emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));emit(c,arm64.ret());
     arm64.assembler_label(c,"native_words_free");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
-    arm64.assembler_label(c,"native_word_get");word_address(c,p,first,"native_word_bad");emit(c,arm64.ldar_x(0,13));emit(c,arm64.ret());
+    arm64.assembler_label(c,"native_word_get");
+    moshi(wr_wait_park_test(c)){arm64.assembler_cbz_x(c,0,"runtime_alloc_test_command");}
+    word_address(c,p,first,"native_word_bad");emit(c,arm64.ldar_x(0,13));emit(c,arm64.ret());
     arm64.assembler_label(c,"native_word_set");word_address(c,p,first,"native_word_bad");emit(c,arm64.stlr_x(2,13));emit(c,arm64.dmb_ish());emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
     // word_cas(h, i, expected, new) -> the value found
     arm64.assembler_label(c,"native_word_cas");word_address(c,p,first,"native_word_bad");
@@ -63,20 +134,27 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     arm64.assembler_label(c,"native_word_add_retry");emit(c,arm64.ldxr_x(14,13,hai));emit(c,arm64.add_x(10,14,2));emit(c,arm64.stxr_x(15,10,13,hai));arm64.assembler_cbnz_x(c,15,"native_word_add_retry");
     move_x(c,0,14);emit(c,arm64.dmb_ish());emit(c,arm64.ret());
     // word_wake(h, i, n): waiters poll with a short timed sleep, so there is nothing to signal
-    arm64.assembler_label(c,"native_word_wake");word_address(c,p,first,"native_word_bad");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
-    // word_wait(h, i, expected): returns once the word differs from expected (or after a short timeout: callers re-check). A safepoint every round.
+    arm64.assembler_label(c,"native_word_wake");word_address(c,p,first,"native_word_bad");
+    // ulock wake: one waiter for a count of 1 (a mutex hand-off), every waiter otherwise (flag 0x100, wake all). A wake with nobody waiting is a no-op.
+    emit(c,arm64.cmp_imm_x(2,1,iie));arm64.assembler_b_cond(c,0,"native_word_wake_one");wr_num(c,0,261);arm64.assembler_b(c,"native_word_wake_go");
+    arm64.assembler_label(c,"native_word_wake_one");wr_num(c,0,5);
+    arm64.assembler_label(c,"native_word_wake_go");move_x(c,1,13);emit(c,arm64.movz_x(2,0,0));wr_num(c,16,516);emit(c,arm64.svc(128));emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ret());
+    // word_wait(h, i, expected): returns once the word differs from expected, on a wake, or after at most 100 ms (callers re-check).
     arm64.assembler_label(c,"native_word_wait");word_address(c,p,first,"native_word_bad");
     emit(c,arm64.sub_imm_x(31,31,48,iie));emit(c,arm64.str_x(30,31,0));emit(c,arm64.str_x(0,31,8));emit(c,arm64.str_x(1,31,16));emit(c,arm64.str_x(2,31,24));
-    // Short holds are the common case: spin a bounded number of reads (no safepoint needed, it ends in microseconds) before sleeping.
-    wr_num(c,15,4000);arm64.assembler_label(c,"native_word_wait_spin");emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
+    // Short holds are the common case: spin a bounded number of reads (no safepoint, so a collector waiting for this thread's acknowledgement waits
+    // for the whole spin) before sleeping. The budget is for this one call only; it never spans an epoch change and it is not the collector-park spin
+    // that #113 removed. Measured on macOS 15 with 3 cores and 9 channel threads (run 43818508856, mpmc_long): 4000 reads put 43 % of all samples into
+    // this loop, because with more runnable threads than cores the holder that must change the word is usually not running. 128 reads (about a
+    // microsecond at most) still cover a hold by a running thread.
+    wr_num(c,15,128);arm64.assembler_label(c,"native_word_wait_spin");emit(c,arm64.ldar_x(14,13));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
     emit(c,arm64.sub_imm_x(15,15,1,iie));arm64.assembler_cbnz_x(c,15,"native_word_wait_spin");
-    // Then sleep with exponential backoff (50us doubling to 20ms, 64 rounds at most) taking a safepoint every round: a long waiter costs almost
-    // no CPU and does not hammer the registry lock, so a hundred blocked threads cannot starve the ones that make progress or the collector's handshake.
-    wr_num(c,9,50000);emit(c,arm64.str_x(9,31,32));wr_num(c,9,64);emit(c,arm64.str_x(9,31,40));
-    arm64.assembler_label(c,"native_word_wait_sleep");emit(c,arm64.ldr_x(0,31,32));arm64.assembler_bl(c,"attached_worker_wait");
-    emit(c,arm64.ldr_x(0,31,8));emit(c,arm64.ldr_x(1,31,16));word_address(c,p,first,"native_word_wait_done");emit(c,arm64.ldar_x(14,13));emit(c,arm64.ldr_x(2,31,24));emit(c,arm64.cmp_x(14,2));arm64.assembler_b_cond(c,1,"native_word_wait_done");
-    emit(c,arm64.ldr_x(9,31,32));emit(c,arm64.lsl_x(9,9,1));wr_num(c,10,20000000);emit(c,arm64.cmp_x(9,10));arm64.assembler_b_cond(c,9,"native_word_wait_cap");move_x(c,9,10);
-    arm64.assembler_label(c,"native_word_wait_cap");emit(c,arm64.str_x(9,31,32));emit(c,arm64.ldr_x(9,31,40));emit(c,arm64.sub_imm_x(9,9,1,iie));emit(c,arm64.str_x(9,31,40));arm64.assembler_cbnz_x(c,9,"native_word_wait_sleep");
+    // Then block in the kernel on the word (ulock wait, 64-bit compare-and-wait) until a wake or 100 ms (a safety net: callers re-check the word).
+    // The thread is in the blocked region for the whole wait, exactly like a blocking write: a stop-the-world collection does not wait for it and its
+    // roots are already published; leaving the region parks it if a collection is running. This replaces the sleep-polling loop, whose shortest sleep
+    // cost about 0.65 ms on macOS (a ping-pong round trip took 1.3 ms) and which needed a periodic wake-up per waiting thread.
+    wr_num(c,0,5);move_x(c,1,13);emit(c,arm64.ldr_x(2,31,24));wr_num(c,3,100000);wr_num(c,16,515);
+    arm64.assembler_bl(c,"attached_native_enter");emit(c,arm64.svc(128));arm64.assembler_bl(c,"attached_native_leave");
     arm64.assembler_label(c,"native_word_wait_done");emit(c,arm64.movz_x(0,0,0));emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,48,iie));emit(c,arm64.ret());
 }
 waza wr_imports(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {attached_data_address(c,p,first,7);}
@@ -86,6 +164,23 @@ waza wr_current(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
     wr_ctx(c,p,first,9,0);emit(c,arm64.add_imm_x(9,9,400,iie));emit(c,arm64.ldr_x(10,0,gc.thread_registry));emit(c,arm64.cmp_x(9,10));arm64.assembler_b_cond(c,1,"runtime_error");
     emit(c,arm64.ldr_x(10,0,gc.thread_registered));arm64.assembler_cbz_x(c,10,"runtime_error");
     emit(c,arm64.add_imm_x(9,0,gc.thread_shadow,iie));emit(c,arm64.stlr_x(24,9));wr_imports(c,p,first);
+}
+// x9 = allocation lock. SWPL xzr,x10,[x9] is available on Darwin ARM64
+// (FEAT_LSE). Clear the word and take its old value in one release operation.
+// A waiter can change held -> waiting even while its mutator is parked.
+waza wr_alloc_unlock(c:arm64.Assembler) -> unit {
+    emit(c,arm64.swpl_x(31,10,9));
+    emit(c,arm64.cmp_imm_x(10,wr_alloc_waiting,iie));
+    kaku done=block_label("runtime_alloc_unlock_",len(c.words));
+    arm64.assembler_b_cond(c,1,done);
+    arm64.assembler_bl(c,"runtime_alloc_wake");
+    arm64.assembler_label(c,done);
+}
+waza wr_alloc_observe(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,offset:int64) -> unit {
+    moshi(!wr_observed(c)){kaesu;}
+    wr_current(c,p,first);
+    wr_addr(c,11,0,wr_obs_alloc+offset);
+    wr_increment(c,11,0);
 }
 // A failed runtime call ends the process. In the public thread build the exit status says which call failed and how (30 + 4 * call + min(result, 3));
 // test builds keep the plain runtime error (status 1).
@@ -107,6 +202,97 @@ waza wr_snapshot_trace(c:arm64.Assembler,ctx:int64) -> unit {
     kaku done=block_label("worker_snapshot_max_",len(c.words));emit(c,arm64.ldr_x(10,ctx,wr_snapshot+8));emit(c,arm64.ldr_x(11,ctx,8672));emit(c,arm64.cmp_x(10,11));arm64.assembler_b_cond(c,9,done);emit(c,arm64.str_x(10,ctx,8672));arm64.assembler_label(c,done);
     emit(c,arm64.ldr_x(11,ctx,gc.thread_registry));emit(c,arm64.add_imm_x(11,11,gc.gc_registry_epoch,iie));emit(c,arm64.ldar_x(10,11));emit(c,arm64.str_x(10,ctx,8680));
 }
+// Observed builds: the main thread prints the epoch-protocol counters once, after every thread it started has been joined (stderr, text, same format
+// family as the heap observation record: `mio-thread name=value`). Sums over every context slot; maxima over every slot. The registry epoch word is
+// the number of epochs entered by anyone (gc_begin increments it), the buckets are timed calls described at wr_obs.
+waza wr_obs_print(c:arm64.Assembler,name:string) -> unit {
+    kaku prefix=string.to_bytes(string.concat(string.concat("mio-thread ",name),"="));kaku bytes=((len(prefix)+15)/16)*16;
+    emit(c,arm64.sub_imm_x(31,31,bytes,iie));kaku i=0;
+    aida(i<len(prefix)){emit(c,arm64.movz_w(9,int64(prefix[i])));emit(c,arm64.strb_w(9,31,i));i=i+1;}
+    emit(c,arm64.movz_x(0,2,0));emit(c,arm64.add_imm_x(1,31,0,iie));emit(c,arm64.movz_x(2,len(prefix),0));emit(c,arm64.movz_x(16,4,0));emit(c,arm64.svc(128));
+    emit(c,arm64.add_imm_x(31,31,bytes,iie));move_x(c,0,15);arm64.assembler_bl(c,"observation_print_uint");
+}
+// x15 = sum (or maximum when `maximum`) of the word at `offset` of every thread context.
+waza wr_obs_total(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,offset:int64,maximum:bool) -> unit {
+    wr_ctx(c,p,first,10,0);wr_num(c,11,worker_slots+1);wr_num(c,14,wr_stride);wr_num(c,12,offset);emit(c,arm64.movz_x(15,0,0));
+    kaku loop=block_label("wr_obs_total_",len(c.words));kaku skip=string.concat(loop,"_skip");
+    arm64.assembler_label(c,loop);emit(c,arm64.add_x(13,10,12));emit(c,arm64.ldr_x(13,13,0));
+    moshi(maximum){emit(c,arm64.cmp_x(13,15));arm64.assembler_b_cond(c,9,skip);move_x(c,15,13);arm64.assembler_label(c,skip);}
+    sore{emit(c,arm64.add_x(15,15,13));}
+    emit(c,arm64.add_x(10,10,14));emit(c,arm64.sub_imm_x(11,11,1,iie));arm64.assembler_cbnz_x(c,11,loop);
+}
+waza emit_worker_observation_dump(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
+    attached_save(c,"worker_observation_dump");
+    wr_ctx(c,p,first,10,0);emit(c,arm64.ldr_x(13,10,gc.thread_registry));emit(c,arm64.ldr_x(15,13,gc.gc_registry_epoch));wr_obs_print(c,"epochs_entered");
+    wr_obs_total(c,p,first,480,iie);wr_obs_print(c,"safepoint_polls");
+    wr_obs_total(c,p,first,488,iie);wr_obs_print(c,"runtime_protocol_calls");
+    wr_obs_total(c,p,first,8648,iie);wr_obs_print(c,"blocking_native_entries");
+    wr_obs_total(c,p,first,wr_obs+wr_obs_retained,iie);wr_obs_print(c,"retained_polls_taken");
+    wr_obs_total(c,p,first,wr_obs_alloc,iie);wr_obs_print(c,"alloc_lock_fast");
+    wr_obs_total(c,p,first,wr_obs_alloc+8,iie);wr_obs_print(c,"alloc_epoch_path");
+    wr_obs_total(c,p,first,wr_obs_alloc+16,iie);wr_obs_print(c,"alloc_lock_gave_up");
+    moshi(alloc_lock_enabled(c)){
+        wr_obs_total(c,p,first,wr_obs_alloc+40,iie);wr_obs_print(c,"alloc_lock_wait_rounds");
+        wr_obs_total(c,p,first,wr_obs_alloc+48,iie);wr_obs_print(c,"alloc_lock_contended");
+        kaku syscall_counters=["alloc_wait_returned","alloc_wait_timeout","alloc_wait_interrupted","alloc_wait_error","alloc_wake_returned","alloc_wake_empty","alloc_wake_error"];
+        kaku at=0;
+        aida(at<len(syscall_counters)){
+            wr_obs_total(c,p,first,wr_obs_alloc+64+8*at,iie);wr_obs_print(c,syscall_counters[at]);at=at+1;
+        }
+        wr_obs_total(c,p,first,wr_obs_alloc+56,iie);wr_obs_print(c,"alloc_lock_exclusive_fail");
+        wr_obs_total(c,p,first,wr_obs_wait_guard,iie);wr_obs_print(c,"alloc_wait_epoch_refused");
+        wr_obs_total(c,p,first,wr_obs_wait_preflight,iie);wr_obs_print(c,"alloc_wait_preflight_free");
+        moshi(wr_wait_park_test(c)){wr_obs_total(c,p,first,wr_wait_test_phase,iie);wr_obs_print(c,"alloc_wait_test_phase");}
+    }
+    moshi(wr_lock_stress(c)){wr_obs_total(c,p,first,wr_obs_alloc+24,iie);wr_obs_print(c,"alloc_lock_forced_fail");wr_obs_total(c,p,first,wr_obs_alloc+32,iie);wr_obs_print(c,"alloc_lock_invariant_checked");}
+    kaku names=["heap_enter","poll","block_leave"];kaku k=0;
+    aida(k<3){
+        kaku b=0;aida(b<9){wr_obs_total(c,p,first,wr_obs+k*wr_obs_kind+b*8,iie);wr_obs_print(c,string.concat(string.concat(names[k],"_bucket_"),convert.format_int(b)));b=b+1;}
+        wr_obs_total(c,p,first,wr_obs+k*wr_obs_kind+72,iie);wr_obs_print(c,string.concat(names[k],"_total_ns"));
+        wr_obs_total(c,p,first,wr_obs+k*wr_obs_kind+80,hai);wr_obs_print(c,string.concat(names[k],"_max_ns"));
+        k=k+1;
+    }
+    attached_restore(c);
+}
+// Test-only rendezvous. The worker stays parked while the coordinator
+// enters a real stopped Epoch. The coordinator observes the waiter reach
+// THREAD_GC_PARKED inside native_leave before allowing collection to proceed.
+waza emit_wait_gc_test(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> unit {
+    attached_save(c,"runtime_alloc_test_command");
+    emit(c,arm64.ldr_x(9,31,152));
+    arm64.assembler_cbnz_x(c,9,"runtime_alloc_test_read");
+    wr_current(c,p,first);wr_addr(c,9,0,wr_wait_test_arm);
+    emit(c,arm64.movz_x(10,1,0));emit(c,arm64.str_x(10,9,0));
+    arm64.assembler_b(c,"runtime_alloc_test_read");
+    arm64.assembler_label(c,"runtime_alloc_test_read");
+    wr_main_word(c,p,first,9,wr_wait_test_phase);emit(c,arm64.ldar_x(10,9));
+    emit(c,arm64.str_x(10,31,144));attached_restore(c);
+
+    arm64.assembler_label(c,"runtime_alloc_test_parked");
+    wr_main_word(c,p,first,9,wr_wait_test_phase);
+    emit(c,arm64.movz_x(10,1,0));emit(c,arm64.stlr_x(10,9));
+    arm64.assembler_label(c,"runtime_alloc_test_wait_stop");
+    emit(c,arm64.ldar_x(10,9));emit(c,arm64.cmp_imm_x(10,2,iie));arm64.assembler_b_cond(c,1,"runtime_alloc_test_wait_stop");
+    arm64.assembler_bl(c,"attached_native_leave");
+    wr_main_word(c,p,first,9,wr_wait_test_gc_count);emit(c,arm64.ldr_x(10,9,0));
+    emit(c,arm64.ldr_x(11,23,16));emit(c,arm64.cmp_x(11,10));arm64.assembler_b_cond(c,9,"runtime_error");
+    wr_main_word(c,p,first,9,wr_wait_test_phase);
+    emit(c,arm64.movz_x(10,3,0));emit(c,arm64.stlr_x(10,9));
+    wr_main_word(c,p,first,9,wr_wait_test_ctx);emit(c,arm64.stlr_x(31,9));
+    arm64.assembler_b(c,"runtime_alloc_retry_reload");
+
+    attached_save(c,"runtime_alloc_test_stopped");
+    wr_main_word(c,p,first,9,wr_wait_test_phase);
+    emit(c,arm64.ldar_x(10,9));emit(c,arm64.cmp_imm_x(10,1,iie));arm64.assembler_b_cond(c,1,"runtime_alloc_test_stopped_done");
+    wr_main_word(c,p,first,11,wr_wait_test_gc_count);emit(c,arm64.ldr_x(10,23,16));emit(c,arm64.str_x(10,11,0));
+    emit(c,arm64.movz_x(10,2,0));emit(c,arm64.stlr_x(10,9));
+    wr_main_word(c,p,first,9,wr_wait_test_ctx);emit(c,arm64.ldar_x(10,9));
+    emit(c,arm64.add_imm_x(10,10,gc.thread_progress,iie));
+    arm64.assembler_label(c,"runtime_alloc_test_wait_leave");
+    emit(c,arm64.ldar_x(11,10));emit(c,arm64.cmp_imm_x(11,gc.thread_gc_parked,iie));arm64.assembler_b_cond(c,1,"runtime_alloc_test_wait_leave");
+    arm64.assembler_label(c,"runtime_alloc_test_stopped_done");
+    attached_restore(c);
+}
 waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64,queue_slots:int64) -> string {
     attached_save(c,"attached_roots_init");wr_ctx(c,p,first,0,0);wr_imports(c,p,first);
     emit(c,arm64.str_x(7,0,gc.thread_imports));wr_num(c,9,3);emit(c,arm64.str_x(9,0,gc.thread_version));
@@ -117,20 +303,260 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     moshi(old_mark_proto_enabled(c)){wr_ctx(c,p,first,9,0);wr_addr(c,9,9,8696);kaku link_slot=0;aida(link_slot<3){wr_ctx(c,p,first,10,link_slot);emit(c,arm64.str_x(9,10,8704));link_slot=link_slot+1;}}
     wr_call(c,"thread_attach");attached_restore(c);
     kaku names=["attached_roots_publish","attached_roots_poll","attached_heap_enter"];
-    i=0;aida(i<3){attached_save(c,names[i]);wr_current(c,p,first);wr_increment(c,0,488);
-        moshi(i==1){wr_increment(c,0,480);move_x(c,1,24);wr_call(c,"gc_mutator_poll");}
-        moshi(i==2){move_x(c,1,24);wr_call(c,"gc_heap_enter");}
+    i=0;aida(i<3){attached_save(c,names[i]);moshi(i>0){wr_obs_begin(c,p,first);}wr_current(c,p,first);wr_increment(c,0,488);
+        moshi(i==1){wr_increment(c,0,480);move_x(c,1,24);wr_call(c,"gc_mutator_poll");wr_obs_end(c,p,first,1);}
+        moshi(i==2){move_x(c,1,24);wr_call(c,"gc_heap_enter");wr_obs_end(c,p,first,0);}
         attached_restore(c);i=i+1;
     }
+    // Bounded epoch retention (docs/darwin-thread-heap-exclusion-design.md, section 8): the poll in front of an opcode that the compiler has proven
+    // to continue a straight-line run of this thread's own epoch. The thread that owns the epoch is the only one that can clear the owner word, so
+    // when the owner is this thread nothing is released and only the shadow-root head is republished (release store, as gc_mutator_poll does);
+    // when the epoch is not owned any more (a blocking native in the previous opcode ended it) this is exactly gc_mutator_poll.
+    attached_save(c,"attached_roots_retain");wr_current(c,p,first);wr_increment(c,0,488);
+    emit(c,arm64.ldr_x(9,0,gc.thread_registry));emit(c,arm64.add_imm_x(9,9,gc.gc_registry_owner,iie));emit(c,arm64.ldar_x(10,9));emit(c,arm64.cmp_x(10,0));arm64.assembler_b_cond(c,1,"attached_retain_not_owner");
+    emit(c,arm64.add_imm_x(9,0,gc.thread_shadow,iie));emit(c,arm64.stlr_x(24,9));
+    moshi(wr_observed(c)){wr_num(c,11,wr_obs+wr_obs_retained);emit(c,arm64.add_x(11,0,11));emit(c,arm64.ldr_x(12,11,0));emit(c,arm64.add_imm_x(12,12,1,iie));emit(c,arm64.str_x(12,11,0));}
+    arm64.assembler_b(c,"attached_retain_done");
+    arm64.assembler_label(c,"attached_retain_not_owner");moshi(wr_observed(c)){wr_obs_begin(c,p,first);wr_current(c,p,first);}wr_increment(c,0,480);move_x(c,1,24);wr_call(c,"gc_mutator_poll");wr_obs_end(c,p,first,1);
+    arm64.assembler_label(c,"attached_retain_done");attached_restore(c);
+    moshi(wr_observed(c)){emit_worker_observation_dump(c,p,first);}
     // The legacy allocator may collect, so it sees a coordinator-owned complete
     // snapshot. Keep the epoch stopped until the next solved opcode poll.
-    attached_save(c,"runtime_alloc");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(24,31,0));
-    wr_current(c,p,first);emit(c,arm64.str_x(0,31,16));move_x(c,1,24);wr_call(c,"gc_heap_enter");
+    attached_save(c,"runtime_alloc");
+    // Lock fast path. Correct because an Epoch owner starts only after every other non-blocked thread has acknowledged at a poll, and nothing between
+    // the lock and its release polls, blocks or collects. A holder may itself own a stopped Epoch.
+    // When it does, the other mutators cannot acquire the lock or enter the heap.
+    // On contention, publish the same shadow roots as the Epoch path, then
+    // wait as a blocked native mutator. Reenter through the existing GC
+    // handshake before attempting to own the allocation lock again.
+    moshi(alloc_lock_enabled(c)){
+        emit(c,arm64.cmp_imm_x(0,wr_alloc_small,iie));
+        arm64.assembler_b_cond(c,8,"runtime_alloc_slow");
+        emit(c,arm64.str_x(31,31,8)); // wait rounds already attempted (saved frame padding)
+        moshi(wr_wait_park_test(c)){
+            wr_current(c,p,first);
+            wr_addr(c,9,0,wr_wait_test_arm);
+            emit(c,arm64.ldr_x(10,9,0));arm64.assembler_cbz_x(c,10,"runtime_alloc_test_unarmed");
+            emit(c,arm64.str_x(31,9,0));
+            wr_main_word(c,p,first,9,wr_wait_test_ctx);emit(c,arm64.stlr_x(0,9));
+            arm64.assembler_b(c,"runtime_alloc_wait_entry");
+            arm64.assembler_label(c,"runtime_alloc_test_unarmed");
+            emit(c,arm64.ldr_x(0,31,144));emit(c,arm64.ldr_x(1,31,152));
+        }
+        moshi(wr_wait_test(c) && !wr_wait_park_test(c)){
+            // Force one visit to the cold path per allocation. The guard
+            // sees the real owner, even if the lock never looked busy.
+            arm64.assembler_b(c,"runtime_alloc_wait_entry");
+        }
+        arm64.assembler_label(c,"runtime_alloc_retry_lock");
+        wr_ctx(c,p,first,9,0);wr_num(c,10,wr_alloc_lock);emit(c,arm64.add_x(9,9,10));
+        wr_num(c,11,wr_alloc_spin);emit(c,arm64.movz_x(13,wr_alloc_locked,0));
+        arm64.assembler_label(c,"runtime_alloc_spin");
+        emit(c,arm64.ldar_x(12,9));arm64.assembler_cbnz_x(c,12,"runtime_alloc_busy");
+        emit(c,arm64.ldxr_x(12,9,hai));arm64.assembler_cbnz_x(c,12,"runtime_alloc_clear_exclusive");
+        emit(c,arm64.stxr_x(14,13,9,hai));arm64.assembler_cbz_x(c,14,"runtime_alloc_locked");
+        moshi(wr_observed(c)){arm64.assembler_bl(c,"runtime_alloc_obs_exclusive");}
+        arm64.assembler_b(c,"runtime_alloc_busy");
+        arm64.assembler_label(c,"runtime_alloc_clear_exclusive");
+        emit(c,arm64.clrex());
+        arm64.assembler_label(c,"runtime_alloc_busy");
+        emit(c,arm64.sub_imm_x(11,11,1,iie));arm64.assembler_cbnz_x(c,11,"runtime_alloc_spin");
+        arm64.assembler_label(c,"runtime_alloc_wait_entry");
+        emit(c,arm64.ldr_x(11,31,8));
+        moshi(wr_observed(c)){
+            arm64.assembler_cbnz_x(c,11,"runtime_alloc_wait_budget");
+            wr_alloc_observe(c,p,first,48);
+            emit(c,arm64.ldr_x(11,31,8));
+        }
+        arm64.assembler_label(c,"runtime_alloc_wait_budget");
+        emit(c,arm64.cmp_imm_x(11,wr_alloc_wait_rounds,iie));arm64.assembler_b_cond(c,2,"runtime_alloc_give_up");
+        emit(c,arm64.add_imm_x(11,11,1,iie));emit(c,arm64.str_x(11,31,8));
+        wr_alloc_observe(c,p,first,40);
+        arm64.assembler_bl(c,"attached_alloc_enter");
+        arm64.assembler_cbz_x(c,0,"runtime_alloc_slow");
+        emit(c,arm64.cmp_imm_x(0,2,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_retry_reload");
+        moshi(wr_wait_park_test(c)){
+            wr_current(c,p,first);
+            wr_main_word(c,p,first,9,wr_wait_test_ctx);emit(c,arm64.ldar_x(10,9));emit(c,arm64.cmp_x(0,10));
+            arm64.assembler_b_cond(c,0,"runtime_alloc_test_parked");
+        }
+        // The parked waiter may advertise interest but never acquires here.
+        // A release between the transition and the syscall is caught by the
+        // kernel's compare, or by the wake of a newer holder advertising 2.
+        wr_ctx(c,p,first,9,0);wr_num(c,10,wr_alloc_lock);emit(c,arm64.add_x(9,9,10));
+        emit(c,arm64.ldxr_x(12,9,hai));arm64.assembler_cbz_x(c,12,"runtime_alloc_wait_clear");
+        emit(c,arm64.movz_x(13,wr_alloc_waiting,0));
+        emit(c,arm64.cmp_x(12,13));arm64.assembler_b_cond(c,0,"runtime_alloc_wait_already_marked");
+        emit(c,arm64.stxr_x(14,13,9,hai));arm64.assembler_cbnz_x(c,14,"runtime_alloc_wait_leave");
+        arm64.assembler_b(c,"runtime_alloc_wait_syscall");
+        arm64.assembler_label(c,"runtime_alloc_wait_already_marked");emit(c,arm64.clrex());
+        arm64.assembler_label(c,"runtime_alloc_wait_syscall");
+        wr_num(c,0,5);move_x(c,1,9);move_x(c,2,13);wr_num(c,3,wr_alloc_wait_us);wr_num(c,16,515);
+        moshi(wr_wait_error_test(c)){
+            // Supply a rejected operation to force real kernel EINVAL.
+            wr_num(c,0,255);
+        }
+        emit(c,arm64.svc(128));
+        arm64.assembler_b_cond(c,2,"runtime_alloc_wait_errno");
+        wr_alloc_observe(c,p,first,64);
+        arm64.assembler_b(c,"runtime_alloc_wait_leave");
+        arm64.assembler_label(c,"runtime_alloc_wait_errno");
+        emit(c,arm64.cmp_imm_x(0,wr_ulock_etimedout,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_wait_timeout");
+        emit(c,arm64.cmp_imm_x(0,wr_ulock_eintr,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_wait_interrupted");
+        wr_alloc_observe(c,p,first,88);
+        arm64.assembler_bl(c,"runtime_alloc_disable_wait");
+        arm64.assembler_bl(c,"attached_native_leave");
+        arm64.assembler_b(c,"runtime_alloc_slow");
+        arm64.assembler_label(c,"runtime_alloc_wait_timeout");
+        wr_alloc_observe(c,p,first,72);arm64.assembler_b(c,"runtime_alloc_wait_leave");
+        arm64.assembler_label(c,"runtime_alloc_wait_interrupted");
+        wr_alloc_observe(c,p,first,80);arm64.assembler_b(c,"runtime_alloc_wait_leave");
+        arm64.assembler_label(c,"runtime_alloc_wait_clear");
+        emit(c,arm64.clrex());
+        moshi(wr_wait_error_test(c)){
+            // Cold-path error control also exercises the actual syscall on
+            // a free word. EINVAL precedes the kernel value comparison.
+            emit(c,arm64.movz_x(13,wr_alloc_waiting,0));arm64.assembler_b(c,"runtime_alloc_wait_syscall");
+        }
+        arm64.assembler_label(c,"runtime_alloc_wait_leave");
+        arm64.assembler_bl(c,"attached_native_leave");
+        arm64.assembler_label(c,"runtime_alloc_retry_reload");
+        emit(c,arm64.ldr_x(0,31,144));emit(c,arm64.ldr_x(1,31,152));
+        arm64.assembler_b(c,"runtime_alloc_retry_lock");
+        arm64.assembler_label(c,"runtime_alloc_give_up");
+        wr_alloc_observe(c,p,first,16);
+        arm64.assembler_b(c,"runtime_alloc_slow");
+        arm64.assembler_label(c,"runtime_alloc_locked");
+        moshi(wr_lock_stress(c)){
+            // Lock held. x0/x1 (size, kind) are clobbered by wr_current and reloaded from the saved frame (sp+144/152) before the allocator runs.
+            // Invariant 1: no stopped world while the lock is held, UNLESS this thread owns that epoch itself (an epoch-owning opcode may allocate
+            // through the fast path; everyone else is parked then). Invariant 2: the epoch counter does not move while the lock is held.
+            wr_current(c,p,first);emit(c,arm64.ldr_x(9,0,gc.thread_registry));
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_owner,iie));emit(c,arm64.ldar_x(10,12));emit(c,arm64.movz_x(13,0,0));emit(c,arm64.cmp_x(10,0));arm64.assembler_b_cond(c,1,"runtime_alloc_stress_notself");emit(c,arm64.movz_x(13,1,0));
+            arm64.assembler_label(c,"runtime_alloc_stress_notself");
+            wr_ctx(c,p,first,11,0);wr_num(c,12,wr_alloc_lock);emit(c,arm64.add_x(11,11,12));emit(c,arm64.str_x(13,11,24));
+            // test-only: remember whether the holder is context 0 (the main thread) for the epoch-trip status
+            wr_ctx(c,p,first,15,0);emit(c,arm64.movz_x(14,0,0));emit(c,arm64.cmp_x(0,15));arm64.assembler_b_cond(c,1,"runtime_alloc_stress_notmain");emit(c,arm64.movz_x(14,1,0));arm64.assembler_label(c,"runtime_alloc_stress_notmain");emit(c,arm64.str_x(14,11,32));
+            arm64.assembler_cbnz_x(c,13,"runtime_alloc_stress_phase_ok");
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_phase,iie));emit(c,arm64.ldar_x(10,12));emit(c,arm64.cmp_imm_x(10,gc.gc_stopped,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_stress_trip_pre");
+            arm64.assembler_label(c,"runtime_alloc_stress_phase_ok");
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_epoch,iie));emit(c,arm64.ldar_x(10,12));emit(c,arm64.str_x(10,11,8));
+            emit(c,arm64.ldr_x(10,23,16));emit(c,arm64.str_x(10,11,40));
+            // forced try-failure: every wr_stress_period-th locked attempt gives up without touching the heap, so the Epoch fallback (a real collection here) runs
+            emit(c,arm64.ldr_x(10,11,16));emit(c,arm64.add_imm_x(10,10,1,iie));emit(c,arm64.str_x(10,11,16));
+            wr_num(c,12,wr_stress_period-1);emit(c,arm64.and_x(12,10,12));arm64.assembler_cbnz_x(c,12,"runtime_alloc_stress_go");
+            move_x(c,9,11);wr_alloc_unlock(c);
+            moshi(wr_observed(c)){wr_current(c,p,first);wr_num(c,11,wr_obs_alloc+24);emit(c,arm64.add_x(11,0,11));emit(c,arm64.ldr_x(12,11,0));emit(c,arm64.add_imm_x(12,12,1,iie));emit(c,arm64.str_x(12,11,0));}
+            arm64.assembler_b(c,"runtime_alloc_slow");
+            arm64.assembler_label(c,"runtime_alloc_stress_go");
+            moshi(wr_lock_violate(c)){
+                // control only: poll while holding the lock (the real protocol forbids it)
+                wr_poll(c,p,first,"gc_mutator_poll");
+            }
+            emit(c,arm64.ldr_x(0,31,144));emit(c,arm64.ldr_x(1,31,152));
+        }
+        arm64.assembler_bl(c,"runtime_alloc_try");
+        moshi(wr_lock_stress(c)){
+            // Invariants 1 and 2 again before the release; x0 (the result) is untouched (x9-x13 only).
+            wr_ctx(c,p,first,11,0);wr_num(c,12,wr_alloc_lock);emit(c,arm64.add_x(11,11,12));
+            wr_ctx(c,p,first,9,0);emit(c,arm64.add_imm_x(9,9,400,iie));
+            emit(c,arm64.ldr_x(13,11,24));arm64.assembler_cbnz_x(c,13,"runtime_alloc_stress_post_ok");
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_phase,iie));emit(c,arm64.ldar_x(10,12));emit(c,arm64.cmp_imm_x(10,gc.gc_stopped,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_stress_trip_post");
+            arm64.assembler_label(c,"runtime_alloc_stress_post_ok");
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_epoch,iie));emit(c,arm64.ldar_x(10,12));emit(c,arm64.ldr_x(12,11,8));// Invariant 2 (exact form). (a) No collection ran while the lock was held: the heap's collection counter (heap base + 16) is unchanged.
+            // (b) The epoch may have advanced only by the publication of an owner's gc_begin, which stores epoch, then phase, then owner, and then waits for
+            // this holder to acknowledge at a poll: allowed is an advance of at most one, by another thread. A held-lock stopped world is rejected by (c) above.
+            emit(c,arm64.ldr_x(14,23,16));emit(c,arm64.ldr_x(15,11,40));emit(c,arm64.cmp_x(14,15));arm64.assembler_b_cond(c,1,"runtime_alloc_stress_trip_gc");
+            emit(c,arm64.cmp_x(10,12));arm64.assembler_b_cond(c,0,"runtime_alloc_stress_epoch_ok");
+            emit(c,arm64.sub_x(14,10,12));emit(c,arm64.cmp_imm_x(14,1,iie));arm64.assembler_b_cond(c,1,"runtime_alloc_stress_trip_epoch");
+            arm64.assembler_cbnz_x(c,13,"runtime_alloc_stress_trip_epoch");
+            arm64.assembler_label(c,"runtime_alloc_stress_epoch_ok");
+            // test-only exits: a distinct status says which in-lock check tripped (plain runtime_error is 1)
+            arm64.assembler_b(c,"runtime_alloc_stress_checks_ok");
+            arm64.assembler_label(c,"runtime_alloc_stress_trip_pre");emit(c,arm64.movz_x(0,61,0));arm64.assembler_b(c,"runtime_alloc_stress_exit");
+            arm64.assembler_label(c,"runtime_alloc_stress_trip_post");emit(c,arm64.movz_x(0,62,0));arm64.assembler_b(c,"runtime_alloc_stress_exit");
+            arm64.assembler_label(c,"runtime_alloc_stress_trip_gc");emit(c,arm64.movz_x(0,60,0));arm64.assembler_b(c,"runtime_alloc_stress_exit");
+            arm64.assembler_label(c,"runtime_alloc_stress_trip_epoch");
+            // status = 64 + (current-saved epoch & 3) + 4 * (registry owner nonzero) + 8 * (registry phase & 7) + 128 * (holder is context 0)
+            wr_num(c,14,3);emit(c,arm64.sub_x(10,10,12));emit(c,arm64.and_x(10,10,14));
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_phase,iie));emit(c,arm64.ldar_x(12,12));wr_num(c,14,7);emit(c,arm64.and_x(12,12,14));emit(c,arm64.lsl_x(12,12,3));
+            emit(c,arm64.add_x(0,10,12));emit(c,arm64.add_imm_x(0,0,64,iie));
+            emit(c,arm64.add_imm_x(12,9,gc.gc_registry_owner,iie));emit(c,arm64.ldar_x(12,12));emit(c,arm64.movz_x(15,0,0));arm64.assembler_cbz_x(c,12,"runtime_alloc_stress_trip_noowner");emit(c,arm64.movz_x(15,4,0));
+            arm64.assembler_label(c,"runtime_alloc_stress_trip_noowner");emit(c,arm64.add_x(0,0,15));
+            emit(c,arm64.ldr_x(14,11,32));emit(c,arm64.lsl_x(14,14,7));emit(c,arm64.add_x(0,0,14));
+            arm64.assembler_label(c,"runtime_alloc_stress_exit");emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));
+            arm64.assembler_label(c,"runtime_alloc_stress_checks_ok");
+        }
+        // Release publishes allocator metadata to the next holder's LDAXR.
+        wr_ctx(c,p,first,9,0);wr_num(c,10,wr_alloc_lock);emit(c,arm64.add_x(9,9,10));wr_alloc_unlock(c);
+        arm64.assembler_cbz_x(c,0,"runtime_alloc_slow");
+        emit(c,arm64.str_x(0,31,144));
+        moshi(wr_observed(c)){wr_current(c,p,first);wr_num(c,11,wr_obs_alloc);emit(c,arm64.add_x(11,0,11));emit(c,arm64.ldr_x(12,11,0));emit(c,arm64.add_imm_x(12,12,1,iie));emit(c,arm64.str_x(12,11,0));moshi(wr_lock_stress(c)){emit(c,arm64.ldr_x(12,11,32));emit(c,arm64.add_imm_x(12,12,1,iie));emit(c,arm64.str_x(12,11,32));}}
+        attached_restore(c);
+    }
+    arm64.assembler_label(c,"runtime_alloc_slow");
+    emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(24,31,0));
+    wr_current(c,p,first);emit(c,arm64.str_x(0,31,16));
+    moshi(wr_observed(c)){wr_num(c,11,wr_obs_alloc+8);emit(c,arm64.add_x(11,0,11));emit(c,arm64.ldr_x(12,11,0));emit(c,arm64.add_imm_x(12,12,1,iie));emit(c,arm64.str_x(12,11,0));}
+    move_x(c,1,24);wr_call(c,"gc_heap_enter");
+    moshi(wr_wait_park_test(c)){arm64.assembler_bl(c,"runtime_alloc_test_stopped");}
     moshi(old_mark_proto_enabled(c)){arm64.assembler_bl(c,"old_pause_epoch");}
     emit(c,arm64.ldr_x(0,31,16));wr_addr(c,1,0,wr_snapshot);emit(c,arm64.str_x(31,1,0));emit(c,arm64.str_x(31,1,8));wr_imports(c,p,first);wr_call(c,"gc_scan_roots");
     emit(c,arm64.ldr_x(9,31,16));wr_snapshot_trace(c,9);
     emit(c,arm64.ldr_x(9,31,16));wr_addr(c,24,9,wr_snapshot);emit(c,arm64.ldr_x(0,31,176));emit(c,arm64.ldr_x(1,31,184));arm64.assembler_bl(c,"runtime_alloc_legacy");
     emit(c,arm64.str_x(0,31,176));emit(c,arm64.ldr_x(24,31,0));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
+    moshi(alloc_lock_enabled(c)){
+        arm64.assembler_label(c,"runtime_alloc_wake");
+        emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(0,31,0));emit(c,arm64.str_x(30,31,8));
+        // Wake all: clearing the waiter state removes the obligation from
+        // later unlocks, so every waiter on the old state needs a wake.
+        wr_num(c,0,261);move_x(c,1,9);emit(c,arm64.movz_x(2,0,0));wr_num(c,16,516);emit(c,arm64.svc(128));
+        arm64.assembler_b_cond(c,2,"runtime_alloc_wake_errno");
+        wr_alloc_observe(c,p,first,96);arm64.assembler_b(c,"runtime_alloc_wake_done");
+        arm64.assembler_label(c,"runtime_alloc_wake_errno");
+        emit(c,arm64.cmp_imm_x(0,wr_ulock_enoent,iie));arm64.assembler_b_cond(c,0,"runtime_alloc_wake_empty");
+        wr_alloc_observe(c,p,first,112);
+        arm64.assembler_bl(c,"runtime_alloc_disable_wait");
+        arm64.assembler_b(c,"runtime_alloc_wake_done");
+        arm64.assembler_label(c,"runtime_alloc_wake_empty");wr_alloc_observe(c,p,first,104);
+        arm64.assembler_label(c,"runtime_alloc_wake_done");
+        emit(c,arm64.ldr_x(30,31,8));emit(c,arm64.ldr_x(0,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));emit(c,arm64.ret());
+        moshi(wr_observed(c)){
+            attached_save(c,"runtime_alloc_obs_exclusive");wr_alloc_observe(c,p,first,56);attached_restore(c);
+        }
+        arm64.assembler_label(c,"runtime_alloc_disable_wait");
+        wr_main_word(c,p,first,9,wr_alloc_wait_disabled);
+        emit(c,arm64.movz_x(10,1,0));emit(c,arm64.stlr_x(10,9));emit(c,arm64.ret());
+        attached_save(c,"attached_alloc_enter");
+        wr_current(c,p,first);
+        emit(c,arm64.ldr_x(9,0,gc.thread_registry));
+        emit(c,arm64.add_imm_x(9,9,gc.gc_registry_owner,iie));emit(c,arm64.ldar_x(10,9));
+        emit(c,arm64.cmp_x(0,10));arm64.assembler_b_cond(c,0,"attached_alloc_enter_owner");
+        wr_main_word(c,p,first,9,wr_alloc_wait_disabled);
+        emit(c,arm64.ldar_x(10,9));arm64.assembler_cbnz_x(c,10,"attached_alloc_enter_fallback");
+        moshi(!wr_wait_test(c)){
+            // The lock can become free during TLS lookup and the Epoch
+            // check. Avoid entering the blocked protocol when retry can
+            // already make progress. This still consumes a retry round.
+            wr_main_word(c,p,first,9,wr_alloc_lock);
+            emit(c,arm64.ldar_x(10,9));arm64.assembler_cbz_x(c,10,"attached_alloc_enter_retry");
+        }
+        wr_increment(c,0,8648);move_x(c,1,24);wr_call(c,"gc_block_enter");
+        emit(c,arm64.movz_x(0,1,0));emit(c,arm64.str_x(0,31,144));attached_restore(c);
+        arm64.assembler_label(c,"attached_alloc_enter_owner");
+        moshi(wr_wait_owner_test(c)){
+            emit(c,arm64.movz_x(0,90,0));emit(c,arm64.movz_x(16,1,0));emit(c,arm64.svc(128));
+        }
+        moshi(wr_observed(c)){wr_addr(c,11,0,wr_obs_wait_guard);wr_increment(c,11,0);}
+        arm64.assembler_label(c,"attached_alloc_enter_fallback");
+        emit(c,arm64.str_x(31,31,144));attached_restore(c);
+        moshi(!wr_wait_test(c)){
+            arm64.assembler_label(c,"attached_alloc_enter_retry");
+            moshi(wr_observed(c)){wr_addr(c,11,0,wr_obs_wait_preflight);wr_increment(c,11,0);}
+            emit(c,arm64.movz_x(0,2,0));emit(c,arm64.str_x(0,31,144));attached_restore(c);
+        }
+        moshi(wr_wait_park_test(c)){emit_wait_gc_test(c,p,first);}
+    }
     // A real pthread entry invokes the ordinary compiled closure. Its bootstrap
     // root is generated automatically before registration and lives until exit.
     stw_bridge_enter(c,"worker_user_entry");move_x(c,26,0);emit(c,arm64.ldr_x(7,26,gc.thread_imports));wr_call(c,"thread_enter");
@@ -186,7 +612,7 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     kaku native_names=["attached_native_enter","attached_native_leave"];i=0;
     aida(i<2){
         attached_save(c,native_names[i]);emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.read_nzcv(9));emit(c,arm64.str_x(9,31,0));
-        moshi(i==0){wr_current(c,p,first);wr_increment(c,0,8648);move_x(c,1,24);wr_call(c,"gc_block_enter");}sore{wr_current(c,p,first);wr_call(c,"gc_block_leave");}
+        moshi(i==0){wr_current(c,p,first);wr_increment(c,0,8648);move_x(c,1,24);wr_call(c,"gc_block_enter");}sore{wr_obs_begin(c,p,first);wr_current(c,p,first);wr_call(c,"gc_block_leave");wr_obs_end(c,p,first,2);}
         emit(c,arm64.ldr_x(9,31,0));emit(c,arm64.write_nzcv(9));emit(c,arm64.add_imm_x(31,31,16,iie));attached_restore(c);i=i+1;
     }
     // Main shutdown joins every outstanding child before deleting the key.

@@ -11,10 +11,17 @@ koukai waza argument(index: int64) -> string? {
     kaesu string.from_utf8(bytes);
 }
 koukai waza arguments() -> []string {
-    kaku result: []string = []; kaku count = runtime.argc(); kaku index = 0;
+    kaku result: []string = [];
+    kaku count = runtime.argc();
+    kaku index = 0;
     aida (index < count) {
-        kaku value = argument(index); moshi (value == mu) { math.fail("invalid OS argument encoding"); kaesu []; }
-        array.push(result, value); index = index + 1;
+        kaku value = argument(index);
+        moshi (value == mu) {
+            math.fail("invalid OS argument encoding");
+            kaesu [];
+        }
+        array.push(result, value);
+        index = index + 1;
     }
     kaesu result;
 }
@@ -42,10 +49,23 @@ koukai waza monotonic_ms() -> int64 { kaesu runtime.monotonic_ms(); }
 // Missing, malformed or non-UTF8 environment values return mu; an existing
 // empty value remains an empty string. No ambient compiler/Bunko path fallback.
 koukai waza environment(name: string) -> string? {
-    kaku size=runtime.env_size(name);moshi(size<0){kaesu mu;}
-    kaku bytes=array.make[uint8](size,uint8(0));moshi(runtime.env_copy(name,bytes)!=size){kaesu mu;}kaesu string.from_utf8(bytes);
+    kaku size = runtime.env_size(name);
+    moshi (size<0) {
+        kaesu mu;
+    }
+    kaku bytes = array.make[uint8](size, uint8(0));
+    moshi (runtime.env_copy(name, bytes) != size) {
+        kaesu mu;
+    }
+    kaesu string.from_utf8(bytes);
 }
-koukai waza getenv(name: string) -> string { kaku value=environment(name);moshi(value==mu){kaesu "";}kaesu value; }
+koukai waza getenv(name: string) -> string {
+    kaku value = environment(name);
+    moshi (value == mu) {
+        kaesu "";
+    }
+    kaesu value;
+}
 
 // Nonblocking stdin readiness: positive for data/EOF, zero while idle, negative errno.
 koukai waza stdin_ready() -> int64 { kaesu runtime.stdin_ready(); }
@@ -57,14 +77,27 @@ koukai waza stdin_wait(timeout_ms: int64) -> int64 { kaesu runtime.stdin_wait(ti
 // Physical absolute identity for existing paths. Unresolvable/non-UTF8 paths
 // return mu; callers retain memory-only source identities separately.
 koukai waza canonical_path(path: string) -> string? {
-    moshi(path==""){kaesu mu;}
-    kaku bytes=array.make[uint8](1024,uint8(0));kaku size=runtime.real_path(path,bytes);
-    moshi(size<0 || size>=len(bytes)){kaesu mu;}array.truncate(bytes,size);kaesu string.from_utf8(bytes);
+    moshi (path == "") { kaesu mu; }
+    kaku bytes = array.make[uint8](1024, uint8(0));
+    kaku size = runtime.real_path(path, bytes);
+    moshi (size<0 || size >= len(bytes)) {
+        kaesu mu;
+    }
+    array.truncate(bytes, size);
+    kaesu string.from_utf8(bytes);
 }
 
 // The empty real_path request is reserved for the OS image identity. This keeps
 // the RA-1 calling convention and existing native binding signature unchanged.
 koukai waza executable_path() -> string? {
-    kaku bytes=array.make[uint8](4096,uint8(0));kaku size=runtime.real_path("",bytes);
-    moshi(size<=0 || size>=len(bytes)){kaesu mu;}moshi(bytes[size-1]==uint8(0)){size=size-1;}array.truncate(bytes,size);kaesu string.from_utf8(bytes);
+    kaku bytes = array.make[uint8](4096, uint8(0));
+    kaku size = runtime.real_path("", bytes);
+    moshi (size <= 0 || size >= len(bytes)) {
+        kaesu mu;
+    }
+    moshi (bytes[size - 1] == uint8(0)) {
+        size = size - 1;
+    }
+    array.truncate(bytes, size);
+    kaesu string.from_utf8(bytes);
 }

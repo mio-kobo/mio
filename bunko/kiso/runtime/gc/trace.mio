@@ -2,52 +2,199 @@
 // The caller owns the mapped object and its lifetime. args: visitor context,
 // payload pointer, maximum owned payload bytes. No Root or integer guessing.
 // Visitor failure or malformed layout returns4 before further payload reads.
-koukai teisu gc_trace_edge_operation=205;
-waza trace_minimum(f:ir.Function,bytes:int64) -> unit {
-    tconstant(f,30,bytes);ir.put(f,ir.less_unsigned,29,4,30,0);ir.branch(f,ir.nonzero,29,"invalid");
+koukai teisu gc_trace_edge_operation = 205;
+waza trace_minimum(f: ir.Function, bytes: int64) -> unit {
+    tconstant(f, 30, bytes);
+    ir.put(f, ir.less_unsigned, 29, 4, 30, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
 }
-waza trace_kind(f:ir.Function,expected:int64) -> unit {
-    ir.put(f,ir.load,29,1,0,0);tconstant(f,30,expected);ir.put(f,ir.equal,29,29,30,0);ir.branch(f,ir.zero,29,"invalid");
+waza trace_kind(f: ir.Function, expected: int64) -> unit {
+    ir.put(f, ir.load, 29, 1, 0, 0);
+    tconstant(f, 30, expected);
+    ir.put(f, ir.equal, 29, 29, 30, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
 }
-waza trace_edge(f:ir.Function,value:int64,visitor:string) -> unit {
-    moshi(visitor==""){ir.call(f,gc_trace_edge_operation,15,[0,value]);}
-    sore{ir.invoke_function(f,visitor,15,[0,value]);}ir.branch(f,ir.nonzero,15,"visitor_failed");
+waza trace_edge(f: ir.Function, value: int64, visitor: string) -> unit {
+    moshi (visitor == "") { ir.call(f, gc_trace_edge_operation, 15, [0, value]); }
+    sore {
+        ir.invoke_function(f, visitor, 15, [0, value]);
+    }
+    ir.branch(f, ir.nonzero, 15, "visitor_failed");
 }
-waza trace_object_program(visitor:string) -> ir.Function {
-    kaku f=ir.function("gc_trace_object");
-    tconstant(f,6,16);ir.put(f,ir.less_unsigned,29,1,6,0);ir.branch(f,ir.nonzero,29,"invalid");
-    ir.put(f,ir.divide_unsigned,29,1,6,0);ir.put(f,ir.multiply,29,29,6,0);ir.put(f,ir.equal,29,29,1,0);ir.branch(f,ir.zero,29,"invalid");
-    ir.put(f,ir.subtract,3,1,6,0);ir.put(f,ir.load,4,3,0,8);
-    ir.put(f,ir.less_unsigned,29,2,4,0);ir.branch(f,ir.nonzero,29,"invalid");
-    ir.put(f,ir.acquire_load,5,3,0,0);tconstant(f,6,4294967296);ir.put(f,ir.divide_unsigned,29,5,6,0);ir.put(f,ir.multiply,29,29,6,0);ir.put(f,ir.subtract,5,5,29,0);
-    tcheck(f,5,100,"structure");tcheck(f,5,101,"array");tcheck(f,5,102,"storage");tcheck(f,5,103,"closure");tcheck(f,5,104,"environment");tcheck(f,5,105,"cell");tcheck(f,5,106,"done");tcheck(f,5,107,"enumeration");ir.branch(f,ir.jump,0,"invalid");
-    ir.branch(f,ir.label,0,"array");trace_minimum(f,48);
+waza trace_object_program(visitor: string) -> ir.Function {
+    kaku f = ir.function("gc_trace_object");
+    tconstant(f, 6, 16);
+    ir.put(f, ir.less_unsigned, 29, 1, 6, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
+    ir.put(f, ir.divide_unsigned, 29, 1, 6, 0);
+    ir.put(f, ir.multiply, 29, 29, 6, 0);
+    ir.put(f, ir.equal, 29, 29, 1, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
+    ir.put(f, ir.subtract, 3, 1, 6, 0);
+    ir.put(f, ir.load, 4, 3, 0, 8);
+    ir.put(f, ir.less_unsigned, 29, 2, 4, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
+    ir.put(f, ir.acquire_load, 5, 3, 0, 0);
+    tconstant(f, 6, 4294967296);
+    ir.put(f, ir.divide_unsigned, 29, 5, 6, 0);
+    ir.put(f, ir.multiply, 29, 29, 6, 0);
+    ir.put(f, ir.subtract, 5, 5, 29, 0);
+    tcheck(f, 5, 100, "structure");
+    tcheck(f, 5, 101, "array");
+    tcheck(f, 5, 102, "storage");
+    tcheck(f, 5, 103, "closure");
+    tcheck(f, 5, 104, "environment");
+    tcheck(f, 5, 105, "cell");
+    tcheck(f, 5, 106, "done");
+    tcheck(f, 5, 107, "enumeration");
+    ir.branch(f, ir.jump, 0, "invalid");
+    ir.branch(f, ir.label, 0, "array");
+    trace_minimum(f, 48);
     // Array payload kind occupies only low8; width/reference flags live above.
-    ir.put(f,ir.load,29,1,0,0);tconstant(f,30,256);ir.put(f,ir.divide_unsigned,7,29,30,0);ir.put(f,ir.multiply,7,7,30,0);ir.put(f,ir.subtract,29,29,7,0);tconstant(f,30,2);ir.put(f,ir.equal,29,29,30,0);ir.branch(f,ir.zero,29,"invalid");ir.put(f,ir.acquire_load,14,1,0,40);trace_edge(f,14,visitor);ir.branch(f,ir.jump,0,"done");
-    ir.branch(f,ir.label,0,"closure");trace_minimum(f,48);trace_kind(f,4);ir.put(f,ir.acquire_load,14,1,0,40);trace_edge(f,14,visitor);ir.branch(f,ir.jump,0,"done");
-    ir.branch(f,ir.label,0,"cell");trace_minimum(f,16);ir.put(f,ir.load,7,1,0,0);tconstant(f,6,256);ir.put(f,ir.divide_unsigned,7,7,6,0);ir.branch(f,ir.zero,7,"done");ir.put(f,ir.acquire_load,14,1,0,8);trace_edge(f,14,visitor);ir.branch(f,ir.jump,0,"done");
-    ir.branch(f,ir.label,0,"environment");trace_minimum(f,16);trace_kind(f,5);ir.put(f,ir.load,8,1,0,8);tconstant(f,6,16);ir.put(f,ir.subtract,17,4,6,0);tconstant(f,6,8);ir.put(f,ir.divide_unsigned,17,17,6,0);ir.put(f,ir.less_unsigned,29,17,8,0);ir.branch(f,ir.nonzero,29,"invalid");ir.put(f,ir.address,11,1,0,16);ir.branch(f,ir.jump,0,"linear");
-    ir.branch(f,ir.label,0,"storage");trace_minimum(f,32);ir.put(f,ir.load,7,1,0,24);ir.branch(f,ir.zero,7,"done");
-    ir.put(f,ir.load,8,1,0,8);tconstant(f,6,32);ir.put(f,ir.subtract,17,4,6,0);tconstant(f,6,8);ir.put(f,ir.divide_unsigned,17,17,6,0);ir.put(f,ir.less_unsigned,29,17,8,0);ir.branch(f,ir.nonzero,29,"invalid");ir.put(f,ir.address,11,1,0,32);
-    ir.branch(f,ir.label,0,"linear");tconstant(f,12,0);tconstant(f,6,8);
-    ir.branch(f,ir.label,0,"linear_item");ir.put(f,ir.equal,29,12,8,0);ir.branch(f,ir.nonzero,29,"done");ir.put(f,ir.multiply,13,12,6,0);ir.put(f,ir.add,13,11,13,0);ir.put(f,ir.acquire_load,14,13,0,0);trace_edge(f,14,visitor);tconstant(f,29,1);ir.put(f,ir.add,12,12,29,0);ir.branch(f,ir.jump,0,"linear_item");
-    ir.branch(f,ir.label,0,"structure");trace_minimum(f,32);trace_kind(f,1);ir.put(f,ir.load,8,1,0,8);ir.put(f,ir.load,29,1,0,16);ir.put(f,ir.equal,29,8,29,0);ir.branch(f,ir.zero,29,"invalid");ir.branch(f,ir.jump,0,"bitmap");
-    ir.branch(f,ir.label,0,"enumeration");trace_minimum(f,32);trace_kind(f,8);ir.put(f,ir.load,8,1,0,16);
-    ir.branch(f,ir.label,0,"bitmap");ir.put(f,ir.load,9,1,0,24);tconstant(f,6,32);ir.put(f,ir.subtract,17,4,6,0);tconstant(f,6,8);ir.put(f,ir.divide_unsigned,17,17,6,0);
+    ir.put(f, ir.load, 29, 1, 0, 0);
+    tconstant(f, 30, 256);
+    ir.put(f, ir.divide_unsigned, 7, 29, 30, 0);
+    ir.put(f, ir.multiply, 7, 7, 30, 0);
+    ir.put(f, ir.subtract, 29, 29, 7, 0);
+    tconstant(f, 30, 2);
+    ir.put(f, ir.equal, 29, 29, 30, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
+    ir.put(f, ir.acquire_load, 14, 1, 0, 40);
+    trace_edge(f, 14, visitor);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "closure");
+    trace_minimum(f, 48);
+    trace_kind(f, 4);
+    ir.put(f, ir.acquire_load, 14, 1, 0, 40);
+    trace_edge(f, 14, visitor);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "cell");
+    trace_minimum(f, 16);
+    ir.put(f, ir.load, 7, 1, 0, 0);
+    tconstant(f, 6, 256);
+    ir.put(f, ir.divide_unsigned, 7, 7, 6, 0);
+    ir.branch(f, ir.zero, 7, "done");
+    ir.put(f, ir.acquire_load, 14, 1, 0, 8);
+    trace_edge(f, 14, visitor);
+    ir.branch(f, ir.jump, 0, "done");
+    ir.branch(f, ir.label, 0, "environment");
+    trace_minimum(f, 16);
+    trace_kind(f, 5);
+    ir.put(f, ir.load, 8, 1, 0, 8);
+    tconstant(f, 6, 16);
+    ir.put(f, ir.subtract, 17, 4, 6, 0);
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 17, 17, 6, 0);
+    ir.put(f, ir.less_unsigned, 29, 17, 8, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
+    ir.put(f, ir.address, 11, 1, 0, 16);
+    ir.branch(f, ir.jump, 0, "linear");
+    ir.branch(f, ir.label, 0, "storage");
+    trace_minimum(f, 32);
+    ir.put(f, ir.load, 7, 1, 0, 24);
+    ir.branch(f, ir.zero, 7, "done");
+    ir.put(f, ir.load, 8, 1, 0, 8);
+    tconstant(f, 6, 32);
+    ir.put(f, ir.subtract, 17, 4, 6, 0);
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 17, 17, 6, 0);
+    ir.put(f, ir.less_unsigned, 29, 17, 8, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
+    ir.put(f, ir.address, 11, 1, 0, 32);
+    ir.branch(f, ir.label, 0, "linear");
+    tconstant(f, 12, 0);
+    tconstant(f, 6, 8);
+    ir.branch(f, ir.label, 0, "linear_item");
+    ir.put(f, ir.equal, 29, 12, 8, 0);
+    ir.branch(f, ir.nonzero, 29, "done");
+    ir.put(f, ir.multiply, 13, 12, 6, 0);
+    ir.put(f, ir.add, 13, 11, 13, 0);
+    ir.put(f, ir.acquire_load, 14, 13, 0, 0);
+    trace_edge(f, 14, visitor);
+    tconstant(f, 29, 1);
+    ir.put(f, ir.add, 12, 12, 29, 0);
+    ir.branch(f, ir.jump, 0, "linear_item");
+    ir.branch(f, ir.label, 0, "structure");
+    trace_minimum(f, 32);
+    trace_kind(f, 1);
+    ir.put(f, ir.load, 8, 1, 0, 8);
+    ir.put(f, ir.load, 29, 1, 0, 16);
+    ir.put(f, ir.equal, 29, 8, 29, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
+    ir.branch(f, ir.jump, 0, "bitmap");
+    ir.branch(f, ir.label, 0, "enumeration");
+    trace_minimum(f, 32);
+    trace_kind(f, 8);
+    ir.put(f, ir.load, 8, 1, 0, 16);
+    ir.branch(f, ir.label, 0, "bitmap");
+    ir.put(f, ir.load, 9, 1, 0, 24);
+    tconstant(f, 6, 32);
+    ir.put(f, ir.subtract, 17, 4, 6, 0);
+    tconstant(f, 6, 8);
+    ir.put(f, ir.divide_unsigned, 17, 17, 6, 0);
     // Subtract first, avoiding overflow of bitmapWords+fieldCount.
-    ir.put(f,ir.less_unsigned,29,17,9,0);ir.branch(f,ir.nonzero,29,"invalid");ir.put(f,ir.subtract,17,17,9,0);ir.put(f,ir.less_unsigned,29,17,8,0);ir.branch(f,ir.nonzero,29,"invalid");
+    ir.put(f, ir.less_unsigned, 29, 17, 9, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
+    ir.put(f, ir.subtract, 17, 17, 9, 0);
+    ir.put(f, ir.less_unsigned, 29, 17, 8, 0);
+    ir.branch(f, ir.nonzero, 29, "invalid");
     // ceil(count/64), with no count+63 overflow.
-    tconstant(f,6,64);ir.put(f,ir.divide_unsigned,16,8,6,0);ir.put(f,ir.multiply,29,16,6,0);ir.put(f,ir.subtract,29,8,29,0);ir.branch(f,ir.zero,29,"bitmap_words");tconstant(f,29,1);ir.put(f,ir.add,16,16,29,0);
-    ir.branch(f,ir.label,0,"bitmap_words");ir.put(f,ir.equal,29,16,9,0);ir.branch(f,ir.zero,29,"invalid");ir.put(f,ir.address,10,1,0,32);tconstant(f,6,8);ir.put(f,ir.multiply,11,9,6,0);ir.put(f,ir.add,11,10,11,0);tconstant(f,12,0);
-    ir.branch(f,ir.label,0,"bitmap_item");ir.put(f,ir.equal,29,12,8,0);ir.branch(f,ir.nonzero,29,"done");tconstant(f,6,64);ir.put(f,ir.divide_unsigned,13,12,6,0);ir.put(f,ir.multiply,20,13,6,0);ir.put(f,ir.subtract,20,12,20,0);tconstant(f,6,8);ir.put(f,ir.multiply,13,13,6,0);ir.put(f,ir.add,13,10,13,0);ir.put(f,ir.load,18,13,0,0);tconstant(f,6,2);
-    ir.branch(f,ir.label,0,"shift");ir.branch(f,ir.zero,20,"bit");ir.put(f,ir.divide_unsigned,18,18,6,0);tconstant(f,29,1);ir.put(f,ir.subtract,20,20,29,0);ir.branch(f,ir.jump,0,"shift");
-    ir.branch(f,ir.label,0,"bit");ir.put(f,ir.divide_unsigned,29,18,6,0);ir.put(f,ir.multiply,29,29,6,0);ir.put(f,ir.subtract,29,18,29,0);ir.branch(f,ir.zero,29,"bitmap_next");tconstant(f,6,8);ir.put(f,ir.multiply,13,12,6,0);ir.put(f,ir.add,13,11,13,0);ir.put(f,ir.acquire_load,14,13,0,0);trace_edge(f,14,visitor);
-    ir.branch(f,ir.label,0,"bitmap_next");tconstant(f,29,1);ir.put(f,ir.add,12,12,29,0);ir.branch(f,ir.jump,0,"bitmap_item");
-    ir.branch(f,ir.label,0,"done");treturn(f,0);
-    ir.branch(f,ir.label,0,"invalid");treturn(f,4);
-    ir.branch(f,ir.label,0,"visitor_failed");ir.put(f,ir.result,0,15,0,0);kaesu f;
+    tconstant(f, 6, 64);
+    ir.put(f, ir.divide_unsigned, 16, 8, 6, 0);
+    ir.put(f, ir.multiply, 29, 16, 6, 0);
+    ir.put(f, ir.subtract, 29, 8, 29, 0);
+    ir.branch(f, ir.zero, 29, "bitmap_words");
+    tconstant(f, 29, 1);
+    ir.put(f, ir.add, 16, 16, 29, 0);
+    ir.branch(f, ir.label, 0, "bitmap_words");
+    ir.put(f, ir.equal, 29, 16, 9, 0);
+    ir.branch(f, ir.zero, 29, "invalid");
+    ir.put(f, ir.address, 10, 1, 0, 32);
+    tconstant(f, 6, 8);
+    ir.put(f, ir.multiply, 11, 9, 6, 0);
+    ir.put(f, ir.add, 11, 10, 11, 0);
+    tconstant(f, 12, 0);
+    ir.branch(f, ir.label, 0, "bitmap_item");
+    ir.put(f, ir.equal, 29, 12, 8, 0);
+    ir.branch(f, ir.nonzero, 29, "done");
+    tconstant(f, 6, 64);
+    ir.put(f, ir.divide_unsigned, 13, 12, 6, 0);
+    ir.put(f, ir.multiply, 20, 13, 6, 0);
+    ir.put(f, ir.subtract, 20, 12, 20, 0);
+    tconstant(f, 6, 8);
+    ir.put(f, ir.multiply, 13, 13, 6, 0);
+    ir.put(f, ir.add, 13, 10, 13, 0);
+    ir.put(f, ir.load, 18, 13, 0, 0);
+    tconstant(f, 6, 2);
+    ir.branch(f, ir.label, 0, "shift");
+    ir.branch(f, ir.zero, 20, "bit");
+    ir.put(f, ir.divide_unsigned, 18, 18, 6, 0);
+    tconstant(f, 29, 1);
+    ir.put(f, ir.subtract, 20, 20, 29, 0);
+    ir.branch(f, ir.jump, 0, "shift");
+    ir.branch(f, ir.label, 0, "bit");
+    ir.put(f, ir.divide_unsigned, 29, 18, 6, 0);
+    ir.put(f, ir.multiply, 29, 29, 6, 0);
+    ir.put(f, ir.subtract, 29, 18, 29, 0);
+    ir.branch(f, ir.zero, 29, "bitmap_next");
+    tconstant(f, 6, 8);
+    ir.put(f, ir.multiply, 13, 12, 6, 0);
+    ir.put(f, ir.add, 13, 11, 13, 0);
+    ir.put(f, ir.acquire_load, 14, 13, 0, 0);
+    trace_edge(f, 14, visitor);
+    ir.branch(f, ir.label, 0, "bitmap_next");
+    tconstant(f, 29, 1);
+    ir.put(f, ir.add, 12, 12, 29, 0);
+    ir.branch(f, ir.jump, 0, "bitmap_item");
+    ir.branch(f, ir.label, 0, "done");
+    treturn(f, 0);
+    ir.branch(f, ir.label, 0, "invalid");
+    treturn(f, 4);
+    ir.branch(f, ir.label, 0, "visitor_failed");
+    ir.put(f, ir.result, 0, 15, 0, 0);
+    kaesu f;
 }
-koukai waza trace_program() -> []ir.Function {kaesu trace_program_with_visitor("");}
+koukai waza trace_program() -> []ir.Function { kaesu trace_program_with_visitor(""); }
 // Internal neutral visitor calls preserve the Runtime IR imports ABI, without
 // requiring a foreign native callback to carry a hidden import-table register.
-koukai waza trace_program_with_visitor(visitor:string) -> []ir.Function {kaesu [trace_object_program(visitor)];}
+koukai waza trace_program_with_visitor(visitor: string) -> []ir.Function { kaesu [trace_object_program(visitor)]; }

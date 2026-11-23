@@ -1,60 +1,193 @@
 yobu "kiso/array";
-waza rt_start(callback:() -> unit) -> int64 {kaesu 0;}
-waza rt_join(handle:int64) -> int64 {kaesu 0;}
-waza rt_wait(ns:int64) -> int64 {kaesu 0;}
-waza rt_collect(operation:int64) -> int64 {kaesu 0;}
-kata Node {value:int64;}
-kata Graph {a:[]Node?;b:[]Node?;fillers:[]Node?;mapping:Map<int64,Node>;numbers:[]int64;dense:[][]Node?;}
-kaku shared:Graph?=mu;kaku control=0;kaku ready_a=0;kaku ready_b=0;kaku done_a=0;kaku done_b=0;kaku failures=0;
+waza rt_start(callback: () -> unit) -> int64 { kaesu 0; }
+waza rt_join(handle: int64) -> int64 { kaesu 0; }
+waza rt_wait(ns: int64) -> int64 { kaesu 0; }
+waza rt_collect(operation: int64) -> int64 { kaesu 0; }
+kata Node { value: int64; }
+kata Graph {
+    a: []Node?;
+    b: []Node?;
+    fillers: []Node?;
+    mapping: Map<int64, Node>;
+    numbers: []int64;
+    dense: [][]Node?;
+}
+kaku shared: Graph?= mu;
+kaku control = 0;
+kaku ready_a = 0;
+kaku ready_b = 0;
+kaku done_a = 0;
+kaku done_b = 0;
+kaku failures = 0;
 waza first() -> unit {
- ready_a=1;aida(control==0){kaku observed=rt_collect(5);}
- kaku g=shared;moshi(g==mu){failures=1;kaesu;}
- array.truncate(g.a,0);array.push(g.a,Node {value:4242});
- array.append_all(g.a,g.a);array.reserve(g.a,5000);
- array.append_all(g.b,g.fillers);array.append_all(g.b,g.b);
- moshi(len(g.b)!=6000){failures=2;}sore{
-  kaku last=g.b[5999];moshi(last==mu){failures=3;}sore{moshi(last.value!=12999){failures=4;}}
- }
- array.truncate(g.b,0);done_a=1;
+    ready_a = 1;
+    aida (control == 0) {
+        kaku observed = rt_collect(5);
+    }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 1;
+        kaesu;
+    }
+    array.truncate(g.a, 0);
+    array.push(g.a, Node {
+            value: 4242 });
+    array.append_all(g.a, g.a);
+    array.reserve(g.a, 5000);
+    array.append_all(g.b, g.fillers);
+    array.append_all(g.b, g.b);
+    moshi (len(g.b) != 6000) { failures = 2; } sore {
+        kaku last = g.b[5999];
+        moshi (last == mu) {
+            failures = 3;
+        } sore {
+            moshi (last.value != 12999) {
+                failures = 4;
+            }
+        }
+    }
+    array.truncate(g.b, 0);
+    done_a = 1;
 }
 waza second() -> unit {
- ready_b=1;aida(control==0){kaku observed=rt_collect(5);}
- kaku g=shared;moshi(g==mu){failures=5;kaesu;}
- kaku i=0;aida(i<1000){
-  g.mapping[i]=Node {value:20000+i};kaku found=g.mapping[i];
-  moshi(found==mu){failures=6;kaesu;}sore{moshi(found.value!=20000+i){failures=7;kaesu;}}
-  kaku observed=rt_collect(5);i=i+1;
- }
- // New entries exercise the descriptor head publication as well as fresh
- // entries with independently typed next/key/value bitmap fields.
- aida(i<1100){g.mapping[i]=Node {value:20000+i};i=i+1;}
- i=0;aida(i<3000){g.numbers[i]=i*16;kaku observed=rt_collect(5);i=i+1;}
- done_b=1;
+    ready_b = 1;
+    aida (control == 0) {
+        kaku observed = rt_collect(5);
+    }
+    kaku g = shared;
+    moshi (g == mu) {
+        failures = 5;
+        kaesu;
+    }
+    kaku i = 0; aida (i<1000) {
+        g.mapping[i] = Node {
+            value: 20000 + i };
+        kaku found = g.mapping[i];
+        moshi (found == mu) {
+            failures = 6;
+            kaesu;
+        } sore {
+            moshi (found.value != 20000 + i) {
+                failures = 7;
+                kaesu;
+            }
+        }
+        kaku observed = rt_collect(5);
+        i = i + 1;
+    }
+    // New entries exercise the descriptor head publication as well as fresh
+    // entries with independently typed next/key/value bitmap fields.
+    aida (i<1100) {
+        g.mapping[i] = Node {
+            value: 20000 + i };
+        i = i + 1;
+    }
+    i = 0;
+    aida (i<3000) {
+        g.numbers[i] = i * 16;
+        kaku observed = rt_collect(5);
+        i = i + 1;
+    }
+    done_b = 1;
 }
 waza prepare() -> unit {
- kaku g=Graph {a:array.with_capacity[Node?](3000),b:array.with_capacity[Node?](6000),fillers:array.with_capacity[Node?](3000),mapping:Map[int64,Node](),numbers:array.make[int64](3000,0),dense:array.with_capacity[[]Node?](4)};
- kaku i=0;aida(i<3000){array.push(g.a,Node {value:i});array.push(g.fillers,Node {value:10000+i});i=i+1;}
- i=0;aida(i<1000){g.mapping[i]=Node {value:i};i=i+1;}i=0;aida(i<4){array.push(g.dense,array.make[Node?](200000,g.fillers[0]));i=i+1;}shared=g;
+    kaku g = Graph {
+        a: array.with_capacity[Node?](3000), b: array.with_capacity[Node?](6000), fillers: array.with_capacity[Node?](3000), mapping: Map[int64, Node](), numbers: array.make[int64](3000, 0), dense: array.with_capacity[[]Node?](4) };
+    kaku i = 0;
+    aida (i<3000) {
+        array.push(g.a, Node {
+                value: i });
+        array.push(g.fillers, Node {
+                value: 10000 + i });
+        i = i + 1;
+    }
+    i = 0;
+    aida (i<1000) {
+        g.mapping[i] = Node {
+            value: i };
+        i = i + 1;
+    }
+    i = 0;
+    aida (i<4) {
+        array.push(g.dense, array.make[Node?](200000, g.fillers[0]));
+        i = i + 1;
+    }
+    shared = g;
 }
 waza dead_witness() -> unit {
- kaku dead=Node {value:99999};kaku i=0;aida(i<8){kaku occupied=rt_collect(0);i=i+1;}moshi(dead.value!=99999){failures=8;}
+    kaku dead = Node {
+        value: 99999 };
+    kaku i = 0;
+    aida (i<8) {
+        kaku occupied = rt_collect(0);
+        i = i + 1;
+    }
+    moshi (dead.value != 99999) {
+        failures = 8;
+    }
 }
 waza young_frontier() -> [][]Node? {
- kaku g=shared;moshi(g==mu){kaesu [];}
- kaku roots=array.with_capacity[[]Node?](4);array.append_all(roots,g.dense);kaesu roots;
+    kaku g = shared;
+    moshi (g == mu) {
+        kaesu [];
+    }
+    kaku roots = array.with_capacity[[]Node?](4);
+    array.append_all(roots, g.dense);
+    kaesu roots;
 }
 waza run() -> unit {
- prepare();kaku a=rt_start(first);kaku b=rt_start(second);
- aida(ready_a+ready_b<2){kaku waited=rt_wait(1000000);}
- dead_witness();kaku frontier=young_frontier();kaku started=rt_collect(2);control=1;
- aida(done_a+done_b<2 && failures==0){kaku waited=rt_wait(1000000);}
- kaku ja=rt_join(a);kaku jb=rt_join(b);kaku g=shared;
- moshi(g==mu){failures=9;}sore{
-  moshi(len(g.a)!=2 || len(g.b)!=0 || g.numbers[2999]!=47984){failures=10;}
-  kaku first=g.a[0];kaku last=g.a[1];moshi(first==mu){failures=11;}sore{moshi(first.value!=4242){failures=12;}}moshi(last==mu){failures=11;}sore{moshi(last.value!=4242){failures=12;}}
-  kaku found=g.mapping[1099];moshi(found==mu){failures=13;}sore{moshi(found.value!=21099){failures=14;}}
- }
- shared=mu;chant(failures+started+ja+jb);chant(rt_collect(4));chant(rt_collect(8));chant(rt_collect(9));chant(rt_collect(10));
- kaku marked=rt_collect(3);chant(marked>=8000);chant(rt_collect(6)>=1);chant(rt_collect(4));moshi(len(frontier)!=4){chant(15);}
+    prepare();
+    kaku a = rt_start(first);
+    kaku b = rt_start(second);
+    aida (ready_a + ready_b<2) { kaku waited = rt_wait(1000000); }
+    dead_witness();
+    kaku frontier = young_frontier();
+    kaku started = rt_collect(2);
+    control = 1;
+    aida (done_a + done_b<2 && failures == 0) { kaku waited = rt_wait(1000000); }
+    kaku ja = rt_join(a);
+    kaku jb = rt_join(b);
+    kaku g = shared;
+    moshi (g == mu) { failures = 9; } sore {
+        moshi (len(g.a) != 2 || len(g.b) != 0 || g.numbers[2999] != 47984) { failures = 10; }
+        kaku first = g.a[0];
+        kaku last = g.a[1];
+        moshi (first == mu) {
+            failures = 11;
+        } sore {
+            moshi (first.value != 4242) {
+                failures = 12;
+            }
+        }
+        moshi (last == mu) {
+            failures = 11;
+        } sore {
+            moshi (last.value != 4242) {
+                failures = 12;
+            }
+        }
+        kaku found = g.mapping[1099];
+        moshi (found == mu) {
+            failures = 13;
+        } sore {
+            moshi (found.value != 21099) {
+                failures = 14;
+            }
+        }
+    }
+    shared = mu;
+    chant(failures + started + ja + jb);
+    chant(rt_collect(4));
+    chant(rt_collect(8));
+    chant(rt_collect(9));
+    chant(rt_collect(10));
+    kaku marked = rt_collect(3);
+    chant(marked >= 8000);
+    chant(rt_collect(6) >= 1);
+    chant(rt_collect(4));
+    moshi (len(frontier) != 4) {
+        chant(15);
+    }
 }
-run();chant(rt_collect(1));
+run();
+chant(rt_collect(1));

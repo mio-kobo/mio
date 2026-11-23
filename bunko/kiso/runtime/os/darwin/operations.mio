@@ -5,45 +5,80 @@ yobu "kiso/array";
 // platform_wait/platform_now functions whose units/results are target-neutral.
 koukai waza thread_bindings() -> []ir.Binding {
     kaesu [
-        ir.Binding {operation:6,slot:0,arguments:[0,-1,1,2],result_bits:32},
-        ir.Binding {operation:7,slot:1,arguments:[0,1],result_bits:32},
-        ir.Binding {operation:8,slot:2,arguments:[],result_bits:64},
-        ir.Binding {operation:9,slot:5,arguments:[0],result_bits:64},
-        ir.Binding {operation:10,slot:4,arguments:[0,1],result_bits:32},
-        ir.Binding {operation:12,slot:14,arguments:[0],result_bits:32},
-        ir.Binding {operation:23,slot:3,arguments:[0,-1],result_bits:32},
-        ir.Binding {operation:24,slot:6,arguments:[0],result_bits:32},
-        ir.Binding {operation:25,slot:9,arguments:[0,-1],result_bits:32},
-        ir.Binding {operation:26,slot:16,arguments:[0],result_bits:32},
-        ir.Binding {operation:27,slot:10,arguments:[0],result_bits:32},
-        ir.Binding {operation:28,slot:11,arguments:[0],result_bits:32},
-        ir.Binding {operation:29,slot:12,arguments:[0,-1],result_bits:32},
-        ir.Binding {operation:30,slot:15,arguments:[0],result_bits:32},
-        ir.Binding {operation:31,slot:7,arguments:[0],result_bits:64},
-        ir.Binding {operation:100,slot:13,arguments:[0,1,2],result_bits:32},
-        ir.Binding {operation:101,slot:17,arguments:[-7,0],result_bits:32},
-        ir.Binding {operation:102,slot:7,arguments:[0],result_bits:64},
-        ir.Binding {operation:103,slot:8,arguments:[-2,0,1],result_bits:64},
-        ir.Binding {operation:104,slot:19,arguments:[0],result_bits:32},
-        ir.Binding {operation:105,slot:20,arguments:[0],result_bits:32}
+        ir.Binding { operation: 6, slot: 0, arguments: [0, -1, 1, 2], result_bits: 32 },
+        ir.Binding { operation: 7, slot: 1, arguments: [0, 1], result_bits: 32 },
+        ir.Binding { operation: 8, slot: 2, arguments: [], result_bits: 64 },
+        ir.Binding { operation: 9, slot: 5, arguments: [0], result_bits: 64 },
+        ir.Binding { operation: 10, slot: 4, arguments: [0, 1], result_bits: 32 },
+        ir.Binding { operation: 12, slot: 14, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 23, slot: 3, arguments: [0, -1], result_bits: 32 },
+        ir.Binding { operation: 24, slot: 6, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 25, slot: 9, arguments: [0, -1], result_bits: 32 },
+        ir.Binding { operation: 26, slot: 16, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 27, slot: 10, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 28, slot: 11, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 29, slot: 12, arguments: [0, -1], result_bits: 32 },
+        ir.Binding { operation: 30, slot: 15, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 31, slot: 7, arguments: [0], result_bits: 64 },
+        ir.Binding { operation: 100, slot: 13, arguments: [0, 1, 2], result_bits: 32 },
+        ir.Binding { operation: 101, slot: 17, arguments: [-7, 0], result_bits: 32 },
+        ir.Binding { operation: 102, slot: 7, arguments: [0], result_bits: 64 },
+        ir.Binding { operation: 103, slot: 8, arguments: [-2, 0, 1], result_bits: 64 },
+        ir.Binding { operation: 104, slot: 19, arguments: [0], result_bits: 32 },
+        ir.Binding { operation: 105, slot: 20, arguments: [0], result_bits: 32 }
     ];
 }
 koukai waza thread_platform_program() -> []ir.Function {
-    kaku wait=ir.function("platform_wait");
-    ir.put(wait,ir.scratch_address,3,0,0,0);ir.put(wait,ir.constant,4,0,0,1000000000);
-    ir.put(wait,ir.divide_unsigned,5,2,4,0);ir.put(wait,ir.multiply,6,5,4,0);ir.put(wait,ir.subtract,6,2,6,0);
-    ir.put(wait,ir.store,0,3,5,0);ir.put(wait,ir.store,0,3,6,8);
-    ir.call(wait,100,4,[0,1,3]);ir.branch(wait,ir.zero,4,"return");
+    kaku wait = ir.function("platform_wait");
+    ir.put(wait, ir.scratch_address, 3, 0, 0, 0);
+    ir.put(wait, ir.constant, 4, 0, 0, 1000000000);
+    ir.put(wait, ir.divide_unsigned, 5, 2, 4, 0);
+    ir.put(wait, ir.multiply, 6, 5, 4, 0);
+    ir.put(wait, ir.subtract, 6, 2, 6, 0);
+    ir.put(wait, ir.store, 0, 3, 5, 0);
+    ir.put(wait, ir.store, 0, 3, 6, 8);
+    ir.call(wait, 100, 4, [0, 1, 3]);
+    ir.branch(wait, ir.zero, 4, "return");
     // Darwin ETIMEDOUT=60 is confined to this adapter. Generic wait result is
     // zero for wake, one for timeout, negative native errno for other errors.
-    ir.put(wait,ir.constant,5,0,0,60);ir.put(wait,ir.equal,5,4,5,0);ir.branch(wait,ir.zero,5,"error");ir.put(wait,ir.constant,4,0,0,1);ir.branch(wait,ir.jump,0,"return");
-    ir.branch(wait,ir.label,0,"error");ir.put(wait,ir.constant,5,0,0,0);ir.put(wait,ir.subtract,4,5,4,0);
-    ir.branch(wait,ir.label,0,"return");ir.put(wait,ir.result,0,4,0,0);
-    kaku clock=ir.function("platform_now");ir.put(clock,ir.scratch_address,1,0,0,0);ir.call(clock,101,2,[1]);ir.branch(clock,ir.nonzero,2,"error");
-    ir.put(clock,ir.load,2,1,0,0);ir.put(clock,ir.load,3,1,0,8);ir.put(clock,ir.constant,4,0,0,1000000000);ir.put(clock,ir.multiply,2,2,4,0);ir.put(clock,ir.add,2,2,3,0);ir.put(clock,ir.result,0,2,0,0);
-    ir.branch(clock,ir.label,0,"error");ir.put(clock,ir.constant,2,0,0,0);ir.put(clock,ir.result,0,2,0,0);
-    kaku trylock=ir.function("platform_trylock");ir.call(trylock,104,1,[0]);ir.branch(trylock,ir.zero,1,"done");ir.put(trylock,ir.constant,2,0,0,16);ir.put(trylock,ir.equal,2,1,2,0);ir.branch(trylock,ir.zero,2,"error");ir.put(trylock,ir.constant,1,0,0,1);ir.branch(trylock,ir.jump,0,"done");
-    ir.branch(trylock,ir.label,0,"error");ir.put(trylock,ir.constant,2,0,0,0);ir.put(trylock,ir.subtract,1,2,1,0);ir.branch(trylock,ir.label,0,"done");ir.put(trylock,ir.result,0,1,0,0);
-    kaku broadcast=ir.function("platform_wake_all");ir.call(broadcast,105,1,[0]);ir.put(broadcast,ir.result,0,1,0,0);
-    kaesu [wait,clock,trylock,broadcast];
+    ir.put(wait, ir.constant, 5, 0, 0, 60);
+    ir.put(wait, ir.equal, 5, 4, 5, 0);
+    ir.branch(wait, ir.zero, 5, "error");
+    ir.put(wait, ir.constant, 4, 0, 0, 1);
+    ir.branch(wait, ir.jump, 0, "return");
+    ir.branch(wait, ir.label, 0, "error");
+    ir.put(wait, ir.constant, 5, 0, 0, 0);
+    ir.put(wait, ir.subtract, 4, 5, 4, 0);
+    ir.branch(wait, ir.label, 0, "return");
+    ir.put(wait, ir.result, 0, 4, 0, 0);
+    kaku clock = ir.function("platform_now");
+    ir.put(clock, ir.scratch_address, 1, 0, 0, 0);
+    ir.call(clock, 101, 2, [1]);
+    ir.branch(clock, ir.nonzero, 2, "error");
+    ir.put(clock, ir.load, 2, 1, 0, 0);
+    ir.put(clock, ir.load, 3, 1, 0, 8);
+    ir.put(clock, ir.constant, 4, 0, 0, 1000000000);
+    ir.put(clock, ir.multiply, 2, 2, 4, 0);
+    ir.put(clock, ir.add, 2, 2, 3, 0);
+    ir.put(clock, ir.result, 0, 2, 0, 0);
+    ir.branch(clock, ir.label, 0, "error");
+    ir.put(clock, ir.constant, 2, 0, 0, 0);
+    ir.put(clock, ir.result, 0, 2, 0, 0);
+    kaku trylock = ir.function("platform_trylock");
+    ir.call(trylock, 104, 1, [0]);
+    ir.branch(trylock, ir.zero, 1, "done");
+    ir.put(trylock, ir.constant, 2, 0, 0, 16);
+    ir.put(trylock, ir.equal, 2, 1, 2, 0);
+    ir.branch(trylock, ir.zero, 2, "error");
+    ir.put(trylock, ir.constant, 1, 0, 0, 1);
+    ir.branch(trylock, ir.jump, 0, "done");
+    ir.branch(trylock, ir.label, 0, "error");
+    ir.put(trylock, ir.constant, 2, 0, 0, 0);
+    ir.put(trylock, ir.subtract, 1, 2, 1, 0);
+    ir.branch(trylock, ir.label, 0, "done");
+    ir.put(trylock, ir.result, 0, 1, 0, 0);
+    kaku broadcast = ir.function("platform_wake_all");
+    ir.call(broadcast, 105, 1, [0]);
+    ir.put(broadcast, ir.result, 0, 1, 0, 0);
+    kaesu [wait, clock, trylock, broadcast];
 }

@@ -5,80 +5,153 @@ yobu "kiso/runtime/os/darwin";
 // Darwin/AArch64 compiler adapter. This internal opt-in path attaches main to
 // the real cooperative registry. Worker mode dispatches to worker_roots.mio;
 // public target precise_roots/concurrent flags stay false until full acceptance.
-koukai teisu attached_root_words=68;
-waza attached_roots_enabled(code:arm64.Assembler) -> bool {
-    kaesu arm64.assembler_label_word(code,"attached_roots_enabled")>=0;
+koukai teisu attached_root_words = 68;
+waza attached_roots_enabled(code: arm64.Assembler) -> bool {
+    kaesu arm64.assembler_label_word(code, "attached_roots_enabled") >= 0;
 }
-waza attached_data_address(code:arm64.Assembler,patches:[]macho.AddressPatch,word:int64,r:int64) -> unit {
-    kaku at=len(code.words);emit(code,arm64.Instruction {word:uint32(0),error:mu});emit(code,arm64.Instruction {word:uint32(0),error:mu});
-    array.push(patches,macho.AddressPatch {at_word:at,add_at_word:at+1,target:macho.data_target(),target_offset:word*8,register:r});
+waza attached_data_address(code: arm64.Assembler, patches: []macho.AddressPatch, word: int64, r: int64) -> unit {
+    kaku at = len(code.words);
+    emit(code, arm64.Instruction {
+            word: uint32(0), error: mu });
+    emit(code, arm64.Instruction {
+            word: uint32(0), error: mu });
+    array.push(patches, macho.AddressPatch { at_word: at, add_at_word: at + 1, target: macho.data_target(), target_offset: word * 8, register: r });
 }
-waza attached_save(code:arm64.Assembler,name:string) -> unit {
-    arm64.assembler_label(code,name);
+waza attached_save(code: arm64.Assembler, name: string) -> unit {
+    arm64.assembler_label(code, name);
     // Poll/publication is transparent even to an allocation result in x0.
-    kaku r=0;aida(r<18){emit(code,arm64.stp_pre_x(r,r+1,31,-16));r=r+2;}
+    kaku r = 0;
+    aida (r<18) {
+        emit(code, arm64.stp_pre_x(r, r + 1, 31, -16));
+        r = r + 2;
+    }
     // x18 is reserved by Darwin and is never used or restored by this bridge.
-    emit(code,arm64.sub_imm_x(31,31,16,iie));emit(code,arm64.str_x(30,31,0));
+    emit(code, arm64.sub_imm_x(31, 31, 16, iie));
+    emit(code, arm64.str_x(30, 31, 0));
 }
-waza attached_restore(code:arm64.Assembler) -> unit {
-    emit(code,arm64.ldr_x(30,31,0));emit(code,arm64.add_imm_x(31,31,16,iie));kaku r=16;
-    aida(r>=0){emit(code,arm64.ldp_post_x(r,r+1,31,16));r=r-2;}emit(code,arm64.ret());
+waza attached_restore(code: arm64.Assembler) -> unit {
+    emit(code, arm64.ldr_x(30, 31, 0));
+    emit(code, arm64.add_imm_x(31, 31, 16, iie));
+    kaku r = 16;
+    aida (r >= 0) {
+        emit(code, arm64.ldp_post_x(r, r + 1, 31, 16));
+        r = r - 2;
+    }
+    emit(code, arm64.ret());
 }
-waza emit_attached_root_runtime(code:arm64.Assembler,patches:[]macho.AddressPatch,first:int64,queue_slots:int64) -> string {
-    moshi(worker_roots_enabled(code)){kaesu emit_worker_root_runtime(code,patches,first,queue_slots);}
-    kaku context=first+darwin.thread_symbol_count;
-    attached_save(code,"attached_roots_init");
-    attached_data_address(code,patches,context,0);attached_data_address(code,patches,first,7);
-    emit(code,arm64.str_x(7,0,gc.thread_imports));emit(code,arm64.movz_x(9,3,0));emit(code,arm64.str_x(9,0,gc.thread_version));
-    emit(code,arm64.add_imm_x(10,0,288,iie));emit(code,arm64.str_x(10,0,gc.thread_mutex));
-    emit(code,arm64.add_imm_x(10,0,352,iie));emit(code,arm64.str_x(10,0,gc.thread_condition));
-    emit(code,arm64.add_imm_x(10,0,400,iie));emit(code,arm64.str_x(10,0,gc.thread_registry));emit(code,arm64.str_x(9,10,0));
-    arm64.assembler_bl(code,"attached_thread_attach");arm64.assembler_cbnz_x(code,0,"runtime_error");attached_restore(code);
-    kaku names=["attached_roots_publish","attached_roots_poll","attached_roots_close"];kaku i=0;
-    aida(i<len(names)){
-        attached_save(code,names[i]);attached_data_address(code,patches,context,0);attached_data_address(code,patches,first,7);
+waza emit_attached_root_runtime(code: arm64.Assembler, patches: []macho.AddressPatch, first: int64, queue_slots: int64) -> string {
+    moshi (worker_roots_enabled(code)) { kaesu emit_worker_root_runtime(code, patches, first, queue_slots); }
+    kaku context = first + darwin.thread_symbol_count;
+    attached_save(code, "attached_roots_init");
+    attached_data_address(code, patches, context, 0);
+    attached_data_address(code, patches, first, 7);
+    emit(code, arm64.str_x(7, 0, gc.thread_imports));
+    emit(code, arm64.movz_x(9, 3, 0));
+    emit(code, arm64.str_x(9, 0, gc.thread_version));
+    emit(code, arm64.add_imm_x(10, 0, 288, iie));
+    emit(code, arm64.str_x(10, 0, gc.thread_mutex));
+    emit(code, arm64.add_imm_x(10, 0, 352, iie));
+    emit(code, arm64.str_x(10, 0, gc.thread_condition));
+    emit(code, arm64.add_imm_x(10, 0, 400, iie));
+    emit(code, arm64.str_x(10, 0, gc.thread_registry));
+    emit(code, arm64.str_x(9, 10, 0));
+    arm64.assembler_bl(code, "attached_thread_attach");
+    arm64.assembler_cbnz_x(code, 0, "runtime_error");
+    attached_restore(code);
+    kaku names = ["attached_roots_publish", "attached_roots_poll", "attached_roots_close"];
+    kaku i = 0;
+    aida (i<len(names)) {
+        attached_save(code, names[i]);
+        attached_data_address(code, patches, context, 0);
+        attached_data_address(code, patches, first, 7);
         // The actual executing thread must own the TLS attachment. Never
         // silently use main's context from a foreign/unregistered thread.
-        emit(code,arm64.ldr_x(0,0,gc.thread_key));aarch64.emit_import_call(code,7,5,darwin.thread_symbol_count);
-        arm64.assembler_cbz_x(code,0,"runtime_error");
-        attached_data_address(code,patches,context,9);emit(code,arm64.cmp_x(0,9));arm64.assembler_b_cond(code,1,"runtime_error");
-        emit(code,arm64.add_imm_x(9,0,gc.thread_shadow,iie));emit(code,arm64.stlr_x(24,9));
+        emit(code, arm64.ldr_x(0, 0, gc.thread_key));
+        aarch64.emit_import_call(code, 7, 5, darwin.thread_symbol_count);
+        arm64.assembler_cbz_x(code, 0, "runtime_error");
+        attached_data_address(code, patches, context, 9);
+        emit(code, arm64.cmp_x(0, 9));
+        arm64.assembler_b_cond(code, 1, "runtime_error");
+        emit(code, arm64.add_imm_x(9, 0, gc.thread_shadow, iie));
+        emit(code, arm64.stlr_x(24, 9));
         // Internal integration trace, outside heap/object ABI: polls,
         // publications and maximum simultaneously linked precise frames.
-        attached_data_address(code,patches,context,10);
-        emit(code,arm64.ldr_x(11,10,488));emit(code,arm64.add_imm_x(11,11,1,iie));emit(code,arm64.str_x(11,10,488));
-        moshi(i==1){
-            emit(code,arm64.ldr_x(11,10,480));emit(code,arm64.add_imm_x(11,11,1,iie));emit(code,arm64.str_x(11,10,480));
-            move_x(code,11,24);emit(code,arm64.movz_x(12,0,0));
-            arm64.assembler_label(code,"attached_count_frames");arm64.assembler_cbz_x(code,11,"attached_count_done");
-            emit(code,arm64.add_imm_x(12,12,1,iie));emit(code,arm64.movz_x(13,8192,0));emit(code,arm64.cmp_x(12,13));arm64.assembler_b_cond(code,2,"runtime_error");
-            emit(code,arm64.ldr_x(11,11,0));arm64.assembler_b(code,"attached_count_frames");
-            arm64.assembler_label(code,"attached_count_done");emit(code,arm64.ldr_x(13,10,496));emit(code,arm64.cmp_x(12,13));arm64.assembler_b_cond(code,9,"attached_max_done");emit(code,arm64.str_x(12,10,496));
-            arm64.assembler_label(code,"attached_max_done");
-            move_x(code,1,24);attached_data_address(code,patches,first,7);arm64.assembler_bl(code,"attached_gc_poll");arm64.assembler_cbnz_x(code,0,"runtime_error");
+        attached_data_address(code, patches, context, 10);
+        emit(code, arm64.ldr_x(11, 10, 488));
+        emit(code, arm64.add_imm_x(11, 11, 1, iie));
+        emit(code, arm64.str_x(11, 10, 488));
+        moshi (i == 1) {
+            emit(code, arm64.ldr_x(11, 10, 480));
+            emit(code, arm64.add_imm_x(11, 11, 1, iie));
+            emit(code, arm64.str_x(11, 10, 480));
+            move_x(code, 11, 24);
+            emit(code, arm64.movz_x(12, 0, 0));
+            arm64.assembler_label(code, "attached_count_frames");
+            arm64.assembler_cbz_x(code, 11, "attached_count_done");
+            emit(code, arm64.add_imm_x(12, 12, 1, iie));
+            emit(code, arm64.movz_x(13, 8192, 0));
+            emit(code, arm64.cmp_x(12, 13));
+            arm64.assembler_b_cond(code, 2, "runtime_error");
+            emit(code, arm64.ldr_x(11, 11, 0));
+            arm64.assembler_b(code, "attached_count_frames");
+            arm64.assembler_label(code, "attached_count_done");
+            emit(code, arm64.ldr_x(13, 10, 496));
+            emit(code, arm64.cmp_x(12, 13));
+            arm64.assembler_b_cond(code, 9, "attached_max_done");
+            emit(code, arm64.str_x(12, 10, 496));
+            arm64.assembler_label(code, "attached_max_done");
+            move_x(code, 1, 24);
+            attached_data_address(code, patches, first, 7);
+            arm64.assembler_bl(code, "attached_gc_poll");
+            arm64.assembler_cbnz_x(code, 0, "runtime_error");
         }
-        moshi(i==2){
-            attached_data_address(code,patches,first,7);arm64.assembler_bl(code,"attached_thread_leave");arm64.assembler_cbnz_x(code,0,"runtime_error");
-            attached_data_address(code,patches,context,0);attached_data_address(code,patches,first,7);arm64.assembler_bl(code,"attached_thread_close");arm64.assembler_cbnz_x(code,0,"runtime_error");
-            attached_data_address(code,patches,context,10);
-            emit(code,arm64.ldr_x(11,10,gc.thread_registrations));emit(code,arm64.str_x(11,10,504));
-            emit(code,arm64.ldr_x(11,10,gc.thread_exits));emit(code,arm64.str_x(11,10,512));
-            emit(code,arm64.ldr_x(11,10,gc.thread_acquisitions));emit(code,arm64.str_x(11,10,520));
-            emit(code,arm64.ldr_x(12,10,gc.thread_releases));emit(code,arm64.str_x(12,10,528));emit(code,arm64.cmp_x(11,12));arm64.assembler_b_cond(code,1,"runtime_error");
-            emit(code,arm64.ldr_x(11,10,gc.thread_member));arm64.assembler_cbnz_x(code,11,"runtime_error");
-            emit(code,arm64.ldr_x(11,10,gc.thread_shadow));arm64.assembler_cbnz_x(code,11,"runtime_error");
-            arm64.assembler_cbz_x(code,23,"attached_no_heap");emit(code,arm64.ldr_x(11,23,gc.minor_count));emit(code,arm64.str_x(11,10,536));
-            arm64.assembler_label(code,"attached_no_heap");
+        moshi (i == 2) {
+            attached_data_address(code, patches, first, 7);
+            arm64.assembler_bl(code, "attached_thread_leave");
+            arm64.assembler_cbnz_x(code, 0, "runtime_error");
+            attached_data_address(code, patches, context, 0);
+            attached_data_address(code, patches, first, 7);
+            arm64.assembler_bl(code, "attached_thread_close");
+            arm64.assembler_cbnz_x(code, 0, "runtime_error");
+            attached_data_address(code, patches, context, 10);
+            emit(code, arm64.ldr_x(11, 10, gc.thread_registrations));
+            emit(code, arm64.str_x(11, 10, 504));
+            emit(code, arm64.ldr_x(11, 10, gc.thread_exits));
+            emit(code, arm64.str_x(11, 10, 512));
+            emit(code, arm64.ldr_x(11, 10, gc.thread_acquisitions));
+            emit(code, arm64.str_x(11, 10, 520));
+            emit(code, arm64.ldr_x(12, 10, gc.thread_releases));
+            emit(code, arm64.str_x(12, 10, 528));
+            emit(code, arm64.cmp_x(11, 12));
+            arm64.assembler_b_cond(code, 1, "runtime_error");
+            emit(code, arm64.ldr_x(11, 10, gc.thread_member));
+            arm64.assembler_cbnz_x(code, 11, "runtime_error");
+            emit(code, arm64.ldr_x(11, 10, gc.thread_shadow));
+            arm64.assembler_cbnz_x(code, 11, "runtime_error");
+            arm64.assembler_cbz_x(code, 23, "attached_no_heap");
+            emit(code, arm64.ldr_x(11, 23, gc.minor_count));
+            emit(code, arm64.str_x(11, 10, 536));
+            arm64.assembler_label(code, "attached_no_heap");
             // Diagnostic ABI for this explicitly selected integration builder:
             // exactly eight little-endian counters to stderr after detach.
-            emit(code,arm64.movz_x(0,2,0));emit(code,arm64.add_imm_x(1,10,480,iie));emit(code,arm64.movz_x(2,64,0));emit(code,arm64.movz_x(16,4,0));emit(code,arm64.svc(128));
-            emit(code,arm64.cmp_imm_x(0,64,iie));arm64.assembler_b_cond(code,1,"runtime_error");
+            emit(code, arm64.movz_x(0, 2, 0));
+            emit(code, arm64.add_imm_x(1, 10, 480, iie));
+            emit(code, arm64.movz_x(2, 64, 0));
+            emit(code, arm64.movz_x(16, 4, 0));
+            emit(code, arm64.svc(128));
+            emit(code, arm64.cmp_imm_x(0, 64, iie));
+            arm64.assembler_b_cond(code, 1, "runtime_error");
         }
-        attached_restore(code);i=i+1;
+        attached_restore(code);
+        i = i + 1;
     }
-    kaku functions=gc.cooperative_thread_program(iie);array.append_all(functions,gc.safepoint_program(8192));array.append_all(functions,darwin.thread_platform_program());
+    kaku functions = gc.cooperative_thread_program(iie);
+    array.append_all(functions, gc.safepoint_program(8192));
+    array.append_all(functions, darwin.thread_platform_program());
     // Scan is not invoked by this single-mutator integration path. A stray
     // invocation fails closed via public process exit, never a fake scan PASS.
-    kaku bindings=darwin.thread_bindings();array.push(bindings,ir.Binding {operation:gc.gc_visit_root_operation,slot:7,arguments:[-2],result_bits:64});
-    kaesu aarch64.emit_program(code,functions,bindings,darwin.thread_symbol_count,"attached");
+    kaku bindings = darwin.thread_bindings();
+    array.push(bindings, ir.Binding {
+            operation: gc.gc_visit_root_operation, slot: 7, arguments: [-2], result_bits: 64 });
+    kaesu aarch64.emit_program(code, functions, bindings, darwin.thread_symbol_count, "attached");
 }

@@ -1,25 +1,29 @@
 yobu "mio/thread/runtime";
 yobu "kiso/array";
 
-// OS threads and zero-copy channels (Linux x86-64 only; every other target rejects programs that use this package).
-// Names are PROVISIONAL (decision D-2 of docs/concurrency.md is open).
+// 原生操作系统线程与零拷贝通道（Channel）。
+// 目前相关名称仍为临时接口（见 docs/concurrency.md 中的决策 D-2）。
 //
-// A channel moves a reference between threads: sending stores the reference in a ring slot and receiving takes it out, nothing is ever
-// copied. Together with `yuzuru` at the send site the compiler guarantees that the sender can no longer reach the graph it handed over, so
-// the receiver becomes its only owner. A failed send (closed channel) hands the graph back inside the result: the sender never loses a
-// graph merely because a transfer was attempted.
+// 通道在线程间直接转移对象图的所有权：发送方将引用写入环形缓冲区槽位，接收方取出该引用，
+// 全程不发生深拷贝。配合发送点处的 `yuzuru` 运算符，编译器静态保证发送方无法再访问已移交的对象图，
+// 从而由接收方成为唯一拥有者。若发送因通道已关闭而失败，原对象图会通过 SendResult.back 归还给发送方，
+// 确保任何尝试转移的路径都不会丢失所有权。
 
-// Starts a thread running entry. Returns a positive handle, or a negative errno when the thread could not be created or registered: -11 when
-// 4096 threads are already live (unjoined), -12 when the runtime has no memory for it, otherwise the system error. Nothing is left behind on failure.
+// 启动一个新线程执行 entry。成功时返回正整数句柄；若创建或注册失败则返回负 errno：
+// -11 表示存活（未 join）的线程数已达上限，-12 表示运行时内存不足，其余为底层系统错误码。
+// 失败时不会残留任何已注册上下文或映射内存。
 koukai waza start(entry: () -> int64) -> int64 { kaesu runtime.start(entry); }
 
-// Waits for the thread and returns entry's result. A handle that is not a live thread handle (never issued, already joined, stale, or made up)
-// is detected and yields -22 instead of touching memory; an entry that itself returns a negative number cannot be told apart from that error
-// by this function, so use join_checked when that matters.
+// 等待目标线程结束并返回 entry 的返回值。
+// 若传入无效句柄（从未分配、已 join、代际过期或伪造），运行时会检测到并返回 -22，不会解引用无效内存。
+// 注意：若 entry 本身可能返回负数，无法仅凭返回值区分 -22 与正常业务返回值，此时请使用 join_checked。
 koukai waza join(handle: int64) -> int64 { kaesu runtime.join(handle); }
 
-// ok == iie: the handle was not a live thread handle (value is 0). Otherwise value is entry's result.
-koukai kata JoinResult { ok: bool; value: int64; }
+// ok == iie 表示句柄不是有效的存活线程句柄（此时 value 固定为 0）；否则 value 为 entry 的返回值。
+koukai kata JoinResult {
+    ok: bool;
+    value: int64;
+}
 
 koukai waza join_checked(handle: int64) -> JoinResult {
     kaku value = runtime.join(handle);
@@ -27,16 +31,45 @@ koukai waza join_checked(handle: int64) -> JoinResult {
     kaesu JoinResult { ok: hai, value: value };
 }
 
-// A bounded multi-producer multi-consumer queue of T. `words` is an off-heap block of control words (lock, head, tail, count, closed,
-// receive sequence, send sequence); `ring` holds the payload references, so in-flight graphs are ordinary heap references that the
-// collector traces. `filler` is a value of T used to clear drained slots (so a drained graph can be collected).
-koukai kata Channel<T> { words: int64; ring: []T; filler: T; capacity: int64; }
+// 有界多生产者多消费者（MPMC）通道。
+// - words：离堆（off-heap）控制块句柄，包含 8 个 64 位原子控制字（GC 不扫描该区域）。
+// - ring：普通 Mio 数组，存放载荷引用，使在途对象图成为 GC 可追踪的常规堆引用。
+// - filler：T 类型的占位值，用于在取出元素或销毁通道时清空槽位，避免已消费对象被环形数组滞留导致无法回收。
+koukai kata Channel<T> {
+    words: int64;
+    ring: []T;
+    filler: T;
+    capacity: int64;
+}
 
-// sent == hai: the value was stored. Otherwise the channel was closed and `back` is the very value that was passed in.
-koukai kata SendResult<T> { sent: bool; back: T; }
+// sent == hai 表示写入成功；否则表示通道已关闭，back 为原封不动退回的传入对象。
+koukai kata SendResult<T> {
+    sent: bool;
+    back: T;
+}
 
-// closed == hai: the channel is closed and drained (item is the filler). Otherwise item is the received value.
-koukai kata Received<T> { item: T; closed: bool; }
+// closed == hai 表示通道已关闭且队列已排空（此时 item 为 filler）；否则 item 为接收到的值。
+koukai kata Received<T> {
+    item: T;
+    closed: bool;
+}
+
+// 离堆控制块（8 个 64 位字）的字下标布局：
+teisu word_lock = 0;      // 互斥锁状态：0 空闲，1 已加锁（无等待者），2 已加锁（可能有等待者）
+teisu word_head = 1;      // 环形缓冲区读指针（下一个待接收槽位）
+teisu word_tail = 2;      // 环形缓冲区写指针（下一个待发送槽位）
+teisu word_count = 3;     // 当前队列中的元素数量
+teisu word_closed = 4;    // 关闭标志：0 开放，非 0 已关闭
+teisu word_recv_seq = 5;  // 接收端唤醒序列号（每次入队或关闭时递增）
+teisu word_send_seq = 6;  // 发送端唤醒序列号（每次出队或关闭时递增）
+teisu word_waiters = 7;   // 睡眠等待者计数：低 32 位为接收者，高 32 位为发送者
+
+// 等待者计数打包常量：低 32 位步长为 1，高 32 位步长为 2^32。
+teisu receiver_unit = 1;
+teisu sender_unit = 4294967296;
+
+// 唤醒全部等待者时使用的唤醒上限（覆盖所有可能并发阻塞的线程数）。
+teisu wake_all_count = 1000000;
 
 koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
     kaku slots = capacity;
@@ -44,104 +77,145 @@ koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
     kaesu Channel[T] { words: runtime.words_new(8), ring: array.make[T](slots, filler), filler: filler, capacity: slots };
 }
 
-// Mutex on word 0: 0 free, 1 locked, 2 locked with waiters. A waiter sleeps in word_wait (a safepoint) instead of spinning.
+// 基于三态互斥字的通道锁：0 空闲，1 已加锁，2 已加锁且存在等待者。
+// 竞争失败的线程通过 word_wait 进入内核休眠（该调用为 GC Safepoint），避免在锁上长时间自旋阻碍 STW 回收。
 waza lock<T>(channel: Channel<T>) -> int64 {
-    kaku c = runtime.word_cas(channel.words, 0, 0, 1);
+    kaku c = runtime.word_cas(channel.words, word_lock, 0, 1);
     moshi (c == 0) { kaesu 0; }
     aida (hai) {
-        moshi (c != 2) { c = runtime.word_cas(channel.words, 0, 1, 2); }
-        moshi (c != 0) { runtime.word_wait(channel.words, 0, 2); }
-        c = runtime.word_cas(channel.words, 0, 0, 2);
+        moshi (c != 2) { c = runtime.word_cas(channel.words, word_lock, 1, 2); }
+        moshi (c != 0) { runtime.word_wait(channel.words, word_lock, 2); }
+        c = runtime.word_cas(channel.words, word_lock, 0, 2);
         moshi (c == 0) { kaesu 0; }
     }
     kaesu 0;
 }
+
 waza unlock<T>(channel: Channel<T>) -> int64 {
-    kaku before = runtime.word_add(channel.words, 0, -1);
+    kaku before = runtime.word_add(channel.words, word_lock, -1);
     moshi (before != 1) {
-        runtime.word_set(channel.words, 0, 0);
-        runtime.word_wake(channel.words, 0, 1);
+        runtime.word_set(channel.words, word_lock, 0);
+        runtime.word_wake(channel.words, word_lock, 1);
     }
     kaesu 0;
 }
+
+// 防止丢失唤醒（Lost Wakeup）的等待/唤醒协议：
+// 1. 准备休眠的线程在调用内核 word_wait 比较序列号之前，先通过原子加法（全屏障）在 word_waiters 中登记自身；
+// 2. 修改队列并递增序列号的线程在序列号更新（全屏障）之后，再读取 word_waiters。
+// 由此保证：要么休眠线程看到新序列号而直接返回不休眠，要么唤醒线程看到等待者计数并执行唤醒。
+// 当没有线程等待时，普通发送/接收可完全跳过唤醒系统调用。
+waza sleep_on<T>(channel: Channel<T>, sequence: int64, seen: int64, unit: int64) -> int64 {
+    runtime.word_add(channel.words, word_waiters, unit);
+    runtime.word_wait(channel.words, sequence, seen);
+    runtime.word_add(channel.words, word_waiters, 0 - unit);
+    kaesu 0;
+}
+
+// 若存在正在休眠的接收者，则唤醒其中之一（被唤醒者在持锁后会重新检查队列，因此每次入队唤醒一个即可）。
+waza wake_receiver<T>(channel: Channel<T>) -> int64 {
+    kaku counts = runtime.word_get(channel.words, word_waiters);
+    kaku receivers = counts - (counts / sender_unit) * sender_unit;
+    moshi (receivers != 0) { runtime.word_wake(channel.words, word_recv_seq, 1); }
+    kaesu 0;
+}
+
+// 若存在正在休眠的发送者，则唤醒其中之一。
+waza wake_sender<T>(channel: Channel<T>) -> int64 {
+    kaku counts = runtime.word_get(channel.words, word_waiters);
+    moshi (counts / sender_unit != 0) { runtime.word_wake(channel.words, word_send_seq, 1); }
+    kaesu 0;
+}
+
+// 递增序列号并唤醒所有阻塞在接收/发送队列上的线程（用于 close 与 destroy）。
+waza wake_all_waiters<T>(channel: Channel<T>) -> unit {
+    runtime.word_add(channel.words, word_recv_seq, 1);
+    runtime.word_add(channel.words, word_send_seq, 1);
+    runtime.word_wake(channel.words, word_recv_seq, wake_all_count);
+    runtime.word_wake(channel.words, word_send_seq, wake_all_count);
+}
+
 waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((index + 1) / capacity) * capacity; }
 
-// Blocks while the channel is full. Pass the graph with yuzuru: `thread.send[Graph](channel, yuzuru graph)`.
+// 向通道发送元素；若通道已满则阻塞等待。调用时应配合 yuzuru 移交所有权：`thread.send[Graph](channel, yuzuru graph)`。
 koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
     aida (hai) {
         lock[T](channel);
-        moshi (runtime.word_get(channel.words, 4) != 0) { unlock[T](channel); kaesu SendResult[T] { sent: iie, back: value }; }
-        kaku count = runtime.word_get(channel.words, 3);
-        moshi (count < channel.capacity) {
-            kaku tail = runtime.word_get(channel.words, 2);
-            channel.ring[tail] = value;
-            runtime.word_set(channel.words, 2, next_slot(tail, channel.capacity));
-            runtime.word_set(channel.words, 3, count + 1);
-            runtime.word_add(channel.words, 5, 1);
+        moshi (runtime.word_get(channel.words, word_closed) != 0) {
             unlock[T](channel);
-            runtime.word_wake(channel.words, 5, 1000000);
+            kaesu SendResult[T] {
+                sent: iie, back: value };
+        }
+        kaku count = runtime.word_get(channel.words, word_count);
+        moshi (count < channel.capacity) {
+            kaku tail = runtime.word_get(channel.words, word_tail);
+            channel.ring[tail] = value;
+            runtime.word_set(channel.words, word_tail, next_slot(tail, channel.capacity));
+            runtime.word_set(channel.words, word_count, count + 1);
+            runtime.word_add(channel.words, word_recv_seq, 1);
+            unlock[T](channel);
+            wake_receiver[T](channel);
             kaesu SendResult[T] { sent: hai, back: channel.filler };
         }
-        kaku seen = runtime.word_get(channel.words, 6);
+        kaku seen = runtime.word_get(channel.words, word_send_seq);
         unlock[T](channel);
-        runtime.word_wait(channel.words, 6, seen);
+        sleep_on[T](channel, word_send_seq, seen, sender_unit);
     }
     kaesu SendResult[T] { sent: iie, back: value };
 }
 
-// Blocks while the channel is empty and open.
+// 从通道接收元素；若通道为空且尚未关闭则阻塞等待。
 koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
     aida (hai) {
         lock[T](channel);
-        kaku count = runtime.word_get(channel.words, 3);
+        kaku count = runtime.word_get(channel.words, word_count);
         moshi (count > 0) {
-            kaku head = runtime.word_get(channel.words, 1);
+            kaku head = runtime.word_get(channel.words, word_head);
             kaku item = channel.ring[head];
             channel.ring[head] = channel.filler;
-            runtime.word_set(channel.words, 1, next_slot(head, channel.capacity));
-            runtime.word_set(channel.words, 3, count - 1);
-            runtime.word_add(channel.words, 6, 1);
+            runtime.word_set(channel.words, word_head, next_slot(head, channel.capacity));
+            runtime.word_set(channel.words, word_count, count - 1);
+            runtime.word_add(channel.words, word_send_seq, 1);
             unlock[T](channel);
-            runtime.word_wake(channel.words, 6, 1000000);
+            wake_sender[T](channel);
             kaesu Received[T] { item: item, closed: iie };
         }
-        moshi (runtime.word_get(channel.words, 4) != 0) { unlock[T](channel); kaesu Received[T] { item: channel.filler, closed: hai }; }
-        kaku seen = runtime.word_get(channel.words, 5);
+        moshi (runtime.word_get(channel.words, word_closed) != 0) {
+            unlock[T](channel);
+            kaesu Received[T] {
+                item: channel.filler, closed: hai };
+        }
+        kaku seen = runtime.word_get(channel.words, word_recv_seq);
         unlock[T](channel);
-        runtime.word_wait(channel.words, 5, seen);
+        sleep_on[T](channel, word_recv_seq, seen, receiver_unit);
     }
     kaesu Received[T] { item: channel.filler, closed: hai };
 }
 
-// Closes the channel: further sends are rejected (and return their value), receivers drain what is queued and then see closed.
+// 关闭通道：拒绝后续发送（并将传入值退回给发送方），已入队的元素仍可由接收方继续排空，排空后返回 closed == hai。
 koukai waza close<T>(channel: Channel<T>) -> int64 {
     lock[T](channel);
-    runtime.word_set(channel.words, 4, 1);
+    runtime.word_set(channel.words, word_closed, 1);
     unlock[T](channel);
-    runtime.word_add(channel.words, 5, 1);
-    runtime.word_add(channel.words, 6, 1);
-    runtime.word_wake(channel.words, 5, 1000000);
-    runtime.word_wake(channel.words, 6, 1000000);
+    wake_all_waiters[T](channel);
     kaesu 0;
 }
 
-// Closes the channel for good and drops whatever is still queued (use close and drain with receive to keep it). Safe to call more than once
-// and from any thread; operations on a destroyed channel behave exactly like operations on a closed one (a send is rejected and returns its
-// value, a receive reports closed). The 64-byte control block stays mapped for the life of the process on purpose, so a thread still inside
-// send/receive can never see freed memory.
+// 彻底关闭通道并立即丢弃所有尚未消费的排队元素（若需保留排队元素请使用 close 并通过 receive 排空）。
+// 支持从任意线程多次调用；对已销毁通道执行 send/receive 的行为与已关闭通道完全一致。
+// 注意：64 字节离堆控制块会在进程生命周期内刻意保持映射而不释放，以确保正处于 send/receive 路径中的线程永远不会访问到已释放内存。
 koukai waza destroy<T>(channel: Channel<T>) -> int64 {
     lock[T](channel);
-    runtime.word_set(channel.words, 4, 1);
-    runtime.word_set(channel.words, 7, 1);
-    runtime.word_set(channel.words, 3, 0);
-    runtime.word_set(channel.words, 1, 0);
-    runtime.word_set(channel.words, 2, 0);
+    runtime.word_set(channel.words, word_closed, 1);
+    runtime.word_set(channel.words, word_count, 0);
+    runtime.word_set(channel.words, word_head, 0);
+    runtime.word_set(channel.words, word_tail, 0);
     kaku i = 0;
-    aida (i < channel.capacity) { channel.ring[i] = channel.filler; i = i + 1; }
+    aida (i < channel.capacity) {
+        channel.ring[i] = channel.filler;
+        i = i + 1;
+    }
     unlock[T](channel);
-    runtime.word_add(channel.words, 5, 1);
-    runtime.word_add(channel.words, 6, 1);
-    runtime.word_wake(channel.words, 5, 1000000);
-    runtime.word_wake(channel.words, 6, 1000000);
+    wake_all_waiters[T](channel);
     kaesu 0;
 }

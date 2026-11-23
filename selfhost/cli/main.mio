@@ -1,6 +1,9 @@
+yobu "selfhost/fmtcmd";
 yobu "kiso/os";
 yobu "selfhost/bunkopath";
 yobu "kiso/array";
+yobu "kiso/aot/cabi";
+yobu "kiso/encoding/mochi";
 yobu "kiso/convert";
 yobu "kiso/fs";
 yobu "kiso/string";
@@ -45,7 +48,61 @@ waza slice(data: []uint8, first: int64, end: int64) -> string {
 }
 waza value_of(option: string, prefix: string) -> string { kaesu slice(string.to_bytes(option), string.byte_len(prefix), string.byte_len(option)); }
 waza takes_value(option: string) -> bool {
-    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols";
+    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--stdin-filepath" || link_option(option);
+}
+
+waza link_option(option: string) -> bool {
+    kaesu option == "--link" || option == "-L" || option == "-l" || option == "-F" || option == "-framework" || option == "--rpath";
+}
+
+waza add_link_option(options: []string, option: string, value: string, target: string) -> string {
+    moshi (option == "--rpath") {
+        array.append_all(options, ["-Xlinker", "-rpath", "-Xlinker", value]);
+        kaesu "";
+    }
+    // -F 和 -framework 是 Darwin 的 Framework 机制，Linux ELF 没有对应物，直接拒绝而不是传给链接器。
+    moshi (target == "linux-amd64" && (option == "-F" || option == "-framework")) {
+        kaesu "E_CABI -F and -framework apply to darwin-arm64 only";
+    }
+    moshi (option == "--link" || option == "-L" || option == "-F") {
+        kaku resolved = os.canonical_path(value);
+        moshi (resolved == mu) { kaesu error_message("E_CABI", i18n.key_err_link_input, value); }
+        moshi (option == "--link") {
+            moshi (target == "linux-amd64") {
+                // ELF 目标：目标文件、静态库、共享库（含 libfoo.so.1 这类带版本号的名字）。
+                moshi (!fs.is_file(resolved) || !(string.has_suffix(value, ".o") || string.has_suffix(value, ".a") || string.has_suffix(value, ".so") || string.contains(value, ".so."))) {
+                    kaesu "E_CABI --link requires an existing .o, .a or .so on linux-amd64";
+                }
+                array.push(options, resolved);
+                kaesu "";
+            }
+            moshi (!fs.is_file(resolved) || !(string.has_suffix(value, ".o") || string.has_suffix(value, ".a") || string.has_suffix(value, ".dylib"))) {
+                kaesu "E_CABI --link requires an existing .o, .a or .dylib";
+            }
+            array.push(options, resolved);
+        } sore {
+            moshi (!fs.is_dir(resolved)) { kaesu error_message("E_CABI", i18n.key_err_link_search, value); }
+            array.push(options, string.concat(option, resolved));
+        }
+        kaesu "";
+    }
+    kaku bytes = string.to_bytes(value); kaku at = 0;
+    moshi (len(bytes) == 0 || bytes[0] == uint8(45)) { kaesu "E_CABI invalid library or Framework name"; }
+    aida (at < len(bytes)) {
+        kaku b = int64(bytes[at]);
+        moshi (!((b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) ||
+            b == 95 || b == 43 || b == 45 || b == 46)) { kaesu "E_CABI invalid library or Framework name"; }
+        at = at + 1;
+    }
+    moshi (option == "-l") { array.push(options, string.concat("-l", value)); }
+    sore { array.push(options, "-framework"); array.push(options, value); }
+    kaesu "";
+}
+
+// --link/-L/-l/-F/-framework/--rpath 的校验依赖 --target，而 --target 可以出现在它们之后，所以先排队、解析完再统一校验。
+waza queue_link(queue: []string, option: string, value: string) -> unit {
+    array.push(queue, option);
+    array.push(queue, value);
 }
 
 // Global options may appear before or after the command, so they are removed
@@ -141,6 +198,15 @@ waza run() -> unit {
     moshi (len(args) < 2) { show_help(language, ""); kaesu; }
     kaku command = args[1];
     moshi (command == "test") { os.exit(testrunner.command(args, language, color, selected_theme)); kaesu; }
+    moshi (command == "fmt") {
+        kaku at = 2;
+        aida (at < len(args) && args[at] != "--") {
+            moshi (args[at] == "--help" || args[at] == "-h") { show_help(language, "fmt"); kaesu; }
+            moshi (args[at] == "--stdin-filepath") { at = at + 1; }
+            at = at + 1;
+        }
+        os.exit(fmtcmd.run(args, language)); kaesu;
+    }
     moshi (command == "lsp") { os.exit(rpc.run_command(args, language)); kaesu; }
     moshi (command == "version" || command == "--version") {
         moshi (len(args) != 2) { fail(error_message("E_OPTIONS", i18n.key_err_version_args, ""), 2); kaesu; }
@@ -155,7 +221,7 @@ waza run() -> unit {
         fail(error_message("E_COMMAND", i18n.key_err_unknown_command, command), 2); kaesu;
     }
     kaku opts=diagnostic.Options {format:"human",color:color,verbose:iie,lang:language,theme:selected_theme};
-    kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku at = 2;
+    kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku link_options: []string = []; kaku link_raw: []string = []; kaku at = 2;
     aida (at < len(args)) {
         kaku option = args[at];
         moshi (option == "--") {
@@ -186,6 +252,23 @@ waza run() -> unit {
             moshi (value != "darwin-arm64" && value != "linux-amd64" && value != "windows-amd64" && value != "linux-arm64" && value != "darwin-amd64" && value != "windows-arm64") { fail(error_message("E_TARGET", i18n.key_err_target, value), 2); kaesu; }
             target = value; at = at + 1; tsuzuku;
         }
+        moshi (string.has_prefix(option, "-L") && option != "-L") {
+            queue_link(link_raw, "-L", value_of(option, "-L"));
+            at = at + 1; tsuzuku;
+        }
+        moshi (string.has_prefix(option, "-F") && option != "-F") {
+            queue_link(link_raw, "-F", value_of(option, "-F"));
+            at = at + 1; tsuzuku;
+        }
+        moshi (string.has_prefix(option, "-l") && option != "-l") {
+            queue_link(link_raw, "-l", value_of(option, "-l"));
+            at = at + 1; tsuzuku;
+        }
+        moshi (link_option(option)) {
+            moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, option), 2); kaesu; }
+            queue_link(link_raw, option, args[at + 1]);
+            at = at + 2; tsuzuku;
+        }
         moshi (option == "--emit-symbols") {
             moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--emit-symbols"), 2); kaesu; }
             symbols = args[at + 1]; at = at + 2; tsuzuku;
@@ -203,6 +286,15 @@ waza run() -> unit {
     }
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
+    moshi (len(link_raw) != 0 && !(cabi.supports_target(target) && target == host && !emit_mochi && command == "build")) {
+        fail(error_message("E_CABI", i18n.key_err_link_options, ""), 2); kaesu;
+    }
+    kaku link_at = 0;
+    aida (link_at < len(link_raw)) {
+        kaku problem = add_link_option(link_options, link_raw[link_at], link_raw[link_at + 1], target);
+        moshi (problem != "") { fail(problem, 2); kaesu; }
+        link_at = link_at + 2;
+    }
     moshi (symbols != "" && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_symbols, ""), 2); kaesu; }
     moshi (observe && (target != "darwin-arm64" || emit_mochi || command != "build")) { fail(error_message("E_OPTIONS", i18n.key_err_observe, ""), 2); kaesu; }
     moshi (gc_stress && (emit_mochi || command == "exec" || command == "disasm" || command == "check")) { fail(error_message("E_OPTIONS", i18n.key_err_gc_stress, ""), 2); kaesu; }
@@ -211,10 +303,15 @@ waza run() -> unit {
     moshi (entry == "" || output == "") { fail(error_message("E_OPTIONS", i18n.key_err_empty_paths, ""), 2); kaesu; }
     moshi(command=="check"){
         kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
-        moshi(analysis_failed(analyzed,entry,opts,i18n.text(language, i18n.key_err_analysis))){os.exit(1);}kaesu;
+        moshi (analysis_failed(analyzed, entry, opts, i18n.text(language, i18n.key_err_analysis))) { os.exit(1); kaesu; }
+        moshi (!cabi.supports_target(target)) {
+            kaku problem = frontend.c_declaration_error(analyzed.resolved);
+            moshi (problem != "") { fail(problem, 1); }
+        }
+        kaesu;
     }
     moshi (emit_mochi) {
-        kaku checked = frontend.compile_source(".", entry, bunko);
+        kaku checked = frontend.compile_source_target(".", entry, bunko, cabi.supports_target(target));
         moshi (checked.error != "") { source_failure(entry,bunko,opts,checked.error,i18n.text(language, i18n.key_err_analysis)); kaesu; }
         kaku written = fs.write_all(output, checked.bytes);
         moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_mochi, ""), 1); }
@@ -231,9 +328,15 @@ waza run() -> unit {
             moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_disasm, ""), 1); }
             kaesu;
         }
-        moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi(input.data); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } } }
+        moshi (!cabi.supports_target(target)) {
+            kaku decoded = mochi.decode(input.data); kaku file = decoded.value;
+            moshi (file != mu) {
+                moshi (pipeline.has_c_declarations(file)) { fail(cabi.target_error, 1); kaesu; }
+            }
+        }
+        moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi_linked(input.data, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } } }
     }
-    sore { moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_with_options(".", entry, bunko, gc_stress); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_diagnostic(".", entry, bunko, gc_stress, observe, symbols); } } } } } }
+    sore { moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_linked(".", entry, bunko, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_linked(".", entry, bunko, gc_stress, observe, symbols, link_options); } } } } } }
     moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";
     moshi (command == "run" || command == "exec") {

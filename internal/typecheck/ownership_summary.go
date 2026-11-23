@@ -5,23 +5,22 @@ import (
 	"Mio/internal/resolver"
 )
 
-// Interprocedural effect summaries for the ownership pass (docs/concurrency.md section 3.4).
+// 所有权检查阶段的过程间效应摘要（Interprocedural Effect Summary，见 docs/concurrency.md §3.4）。
 //
-// Without a summary a call is a black box: every argument and the result are put in one alias group. A summary replaces that for a
-// function whose whole behaviour is visible and simple:
+// 在没有摘要时，函数调用被视为黑盒：所有实参与返回值都会被合并进同一个别名组。
+// 对于行为完全可见且简单的用户函数，摘要可精确刻画其别名效应，需同时满足：
+//   - 不引用任何顶层全局变量（因此不可能把实参发布到全局作用域）；
+//   - 不创建闭包也不进行间接调用（因此不可能把实参交给分析器不可见的代码）；
+//   - 内部所有直接调用的目标同样可摘要，或是未传入函数值参数的包函数/内置函数；
+//   - 非递归函数。
 //
-//   - it mentions no top-level variable (so it cannot publish an argument to a global),
-//   - it creates no closure and makes no indirect call (so it cannot hand an argument to code it cannot see),
-//   - every call it makes is to such a function, or to a package/builtin function that is given no function-typed argument,
-//   - it is not recursive.
-//
-// The summary records (a) which parameters the result may alias (empty: the result is a fresh graph) and (b) which parameters the call may
-// link to each other (the callee stored one inside another). At a call site only those relations are applied, so
-// `kaku copy = deep_copy(source)` no longer makes `copy` an alias of `source`. Anything the analysis cannot prove falls back to the
-// conservative black-box rule, so a summary can only reduce rejections, never accept an unsound transfer.
+// 摘要记录两类信息：(a) 返回值可能别名哪些形参（为空表示返回全新对象图）；
+// (b) 本次调用可能将哪些形参相互关联（例如在函数内把一个参数存入另一个参数）。
+// 在调用点仅应用这些已知关系，从而使 `kaku copy = deep_copy(source)` 不会再把 `copy` 误判为 `source` 的别名。
+// 任何无法证明安全的情况一律回退到保守黑盒规则，因此摘要只会减少误报，绝不会放过不安全的所有权转移。
 type ownSummary struct {
 	resultParams map[int]struct{}
-	linked       [][]int // groups of parameter indices (size >= 2) that may alias each other after the call
+	linked       [][]int // 调用后可能相互别名的形参下标分组（每组至少 2 个元素）
 }
 
 type summaryRecorder struct {
@@ -35,7 +34,7 @@ func (p *ownershipPass) summaryOf(sym resolver.Symbol) *ownSummary {
 		return summary
 	}
 	fn, ok := p.functions[sym]
-	if !ok || fn.Native || fn.Body == nil {
+	if !ok || fn.Native || fn.CSymbol != "" || fn.Body == nil {
 		p.summaries[sym] = nil
 		return nil
 	}

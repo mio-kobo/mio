@@ -15,8 +15,16 @@ import math
 from contextlib import contextmanager
 
 ROOT = Path(__file__).resolve().parents[2]
+for extra_dir in (ROOT / "scripts/ci", ROOT / "scripts/distribution"):
+    if str(extra_dir) not in sys.path:
+        sys.path.insert(0, str(extra_dir))
+
+from seed_evidence import NATIVE_V21, seed_identity
+import seed_source
+
 TARGETS = {"linux-amd64": ("Linux", "x86_64"), "macos-arm64": ("Darwin", "arm64")}
-SEED_SHA256 = "4c3f7dcbea536d756c3c4a93c18a999412625184bd5c90123f1c16a0cd9e36da"
+ACTIVE_SEED = seed_identity(NATIVE_V21)
+SEED_SHA256 = ACTIVE_SEED.sha256
 
 
 @contextmanager
@@ -317,7 +325,8 @@ def run(args):
         reference_build = {}
         native_build = None
         native_compiler = Path(env["MIO_CI_TOOLS"]) / "mio-native"
-        seed = Path(os.environ.get("MIO_NATIVE_SEED", ""))
+        seed_env = os.environ.get("MIO_NATIVE_SEED")
+        seed = Path(seed_env) if seed_env is not None else (ROOT / "bootstrap/seeds/native-v21" / ACTIVE_SEED.asset_name)
         seed_valid = None
         exit_code = 0
         for module, item in zip(chosen, report["checks"]):
@@ -347,8 +356,17 @@ def run(args):
             if engine == "native":
                 if seed_valid is None:
                     seed_valid = seed.is_file() and sha256(seed) == SEED_SHA256
+                    if seed_valid and SEED_SHA256 == ACTIVE_SEED.sha256:
+                        try:
+                            seed_source.verify_seed_file(
+                                seed, ACTIVE_SEED,
+                                check_arch=(platform.system() == "Darwin" and platform.machine().lower() in ("arm64", "aarch64")),
+                                check_signature=(platform.system() == "Darwin"),
+                            )
+                        except (seed_source.SeedUnavailable, ValueError, OSError):
+                            seed_valid = False
                 if not seed_valid:
-                    item.update(status="NOT_RUN", reason="verified MIO_NATIVE_SEED missing or GF4 SHA256 mismatch",
+                    item.update(status="NOT_RUN", reason="verified MIO_NATIVE_SEED missing or Native V21 SHA256 mismatch",
                                 checks=[dict(name=name, status="NOT_RUN", reason="native compiler unavailable") for name in required])
                     exit_code = 2
                     continue
@@ -360,7 +378,8 @@ def run(args):
                     if status == "PASS" and (not native_compiler.is_file() or native_compiler.stat().st_size == 0):
                         status, reason = "FAIL", "compiler build produced no binary"
                     native_build = dict(name="current-source-native-compiler", command=argv, status=status,
-                                        reason=reason, duration_ms=duration, artifacts=[str(log)], seed_sha256=SEED_SHA256)
+                                        reason=reason, duration_ms=duration, artifacts=[str(log)],
+                                        seed_kind=NATIVE_V21, seed_sha256=SEED_SHA256)
                     if status == "PASS":
                         native_build["compiler_sha256"] = sha256(native_compiler)
                     report["builds"].append(native_build)
@@ -371,7 +390,8 @@ def run(args):
                     continue
                 module_env["MIO_CI_MIO"] = str(native_compiler)
                 module_env["MIO_CI_SEED"] = str(seed.resolve())
-                item["compiler"] = dict(path=str(native_compiler), sha256=native_build["compiler_sha256"], seed_sha256=SEED_SHA256)
+                item["compiler"] = dict(path=str(native_compiler), sha256=native_build["compiler_sha256"],
+                                        seed_kind=NATIVE_V21, seed_sha256=SEED_SHA256)
             elif engine == "reference":
                 tools = module.get("reference_tools", ["mio"])
                 for tool in tools:

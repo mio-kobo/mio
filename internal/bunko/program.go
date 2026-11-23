@@ -108,10 +108,6 @@ func LoadTestProgramWithRegistry(inputPath, bunkoRoot string, registry *mma.Modu
 	return loadRootProgramWithOverlay(root, rootFiles, tests, rootPath, bunkoRoot, registry, Overlay{})
 }
 
-func loadRootProgram(root *ast.Program, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry) (*Program, error) {
-	return loadRootProgramWithOverlay(root, nil, tests, rootPath, bunkoRoot, registry, Overlay{})
-}
-
 func loadRootProgramWithOverlay(root *ast.Program, rootFiles []string, tests []TestFunction, rootPath, bunkoRoot string, registry *mma.ModuleRegistry, overlay Overlay) (*Program, error) {
 	return loadRootWithLoader(root, rootFiles, tests, rootPath, registry, NewWithOverlay(bunkoRoot, overlay))
 }
@@ -551,11 +547,12 @@ func (s *programLoader) rewrite(unit *packageUnit, library bool) error {
 }
 
 type rewriter struct {
-	top             map[string]string
-	aliases         map[string]map[string]string
-	internals       bool
-	arrayInternals  bool
-	stringInternals bool
+	observeQualifier func(alias, member string)
+	top              map[string]string
+	aliases          map[string]map[string]string
+	internals        bool
+	arrayInternals   bool
+	stringInternals  bool
 }
 
 var mathInternals = map[string]string{
@@ -593,15 +590,19 @@ func (r *rewriter) typeRef(ref *ast.TypeRef) error {
 	}
 	if dot := strings.IndexByte(ref.Name, '.'); dot >= 0 {
 		alias, member := ref.Name[:dot], ref.Name[dot+1:]
-		exports, ok := r.aliases[alias]
-		if !ok {
-			return fmt.Errorf("unknown package alias %q", alias)
+		if r.observeQualifier != nil {
+			r.observeQualifier(alias, member)
+		} else {
+			exports, ok := r.aliases[alias]
+			if !ok {
+				return fmt.Errorf("unknown package alias %q", alias)
+			}
+			resolved, ok := exports[member]
+			if !ok {
+				return fmt.Errorf("package %q does not export %q", alias, member)
+			}
+			ref.Name = resolved
 		}
-		resolved, ok := exports[member]
-		if !ok {
-			return fmt.Errorf("package %q does not export %q", alias, member)
-		}
-		ref.Name = resolved
 	} else if resolved, ok := r.top[ref.Name]; ok {
 		ref.Name = resolved
 	}
@@ -770,7 +771,13 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 		}
 	case *ast.FieldExpression:
 		if identifier, ok := n.Left.(*ast.Identifier); ok {
-			if exports, imported := r.aliases[identifier.Name]; imported {
+			if r.observeQualifier != nil {
+				if !scope[identifier.Name] && r.top[identifier.Name] == "" {
+					r.observeQualifier(identifier.Name, n.Name)
+				}
+				return nil
+			}
+			if exports, imported := r.aliases[identifier.Name]; imported && !scope[identifier.Name] {
 				resolved, exported := exports[n.Name]
 				if !exported {
 					return fmt.Errorf("package %q does not export %q", identifier.Name, n.Name)
@@ -839,12 +846,16 @@ func (r *rewriter) expression(expr *ast.Expression, scope map[string]bool) error
 		return r.expression(&n.Index, scope)
 	case *ast.StructLiteral:
 		if dot := strings.IndexByte(n.TypeName, '.'); dot >= 0 {
-			exports := r.aliases[n.TypeName[:dot]]
-			resolved, ok := exports[n.TypeName[dot+1:]]
-			if !ok {
-				return fmt.Errorf("package %q does not export %q", n.TypeName[:dot], n.TypeName[dot+1:])
+			if r.observeQualifier != nil {
+				r.observeQualifier(n.TypeName[:dot], n.TypeName[dot+1:])
+			} else {
+				exports := r.aliases[n.TypeName[:dot]]
+				resolved, ok := exports[n.TypeName[dot+1:]]
+				if !ok {
+					return fmt.Errorf("package %q does not export %q", n.TypeName[:dot], n.TypeName[dot+1:])
+				}
+				n.TypeName = resolved
 			}
-			n.TypeName = resolved
 		} else if resolved, ok := r.top[n.TypeName]; ok {
 			n.TypeName = resolved
 		}

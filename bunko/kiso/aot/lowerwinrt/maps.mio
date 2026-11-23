@@ -113,14 +113,17 @@ waza emit_map_op(code: x86_64.Assembler, analysis: types.TypeAnalysis, function_
     kaku key_node = stack_node(analysis, function_id, offset, key_depth);
     moshi (key_node < 0) { kaesu "MISSING_TYPE_INFO"; }
     kaku key_kind = types.type_kind(analysis, key_node);
-    moshi (key_kind != types.type_integer && key_kind != types.type_bool && key_kind != types.type_string_id) { kaesu "UNSUPPORTED_MAP_KEY"; }
+    moshi (key_kind != types.type_integer && key_kind != types.type_bool && key_kind != types.type_string_id) {
+        kaesu "UNSUPPORTED_MAP_KEY";
+    }
     kaku string_key = 0;
     moshi (key_kind == types.type_string_id) { string_key = 1; }
     moshi (opcode == 42) {
         kaku result_node = stack_node(analysis, function_id, offset + step, 0);
         kaku missing = block_label("map_missing", len(code.bytes));
         kaku finished = block_label("map_done", len(code.bytes));
-        pop(code, x86_64.rsi); unbox_node(code, analysis, key_node, x86_64.rsi);
+        pop(code, x86_64.rsi);
+        unbox_node(code, analysis, key_node, x86_64.rsi);
         pop(code, x86_64.rdi);
         x86_64.mov_ri(code, x86_64.rdx, string_key);
         x86_64.call(code, "rt.map_find");
@@ -139,8 +142,10 @@ waza emit_map_op(code: x86_64.Assembler, analysis: types.TypeAnalysis, function_
     moshi (value_node < 0) { kaesu "MISSING_TYPE_INFO"; }
     kaku flags = string_key;
     moshi (is_reference_node(analysis, value_node) && !nullable_scalar(analysis, value_node)) { flags = flags + 2; }
-    pop(code, x86_64.rdx); unbox_node(code, analysis, value_node, x86_64.rdx);
-    pop(code, x86_64.rsi); unbox_node(code, analysis, key_node, x86_64.rsi);
+    pop(code, x86_64.rdx);
+    unbox_node(code, analysis, value_node, x86_64.rdx);
+    pop(code, x86_64.rsi);
+    unbox_node(code, analysis, key_node, x86_64.rsi);
     pop(code, x86_64.rdi);
     x86_64.mov_ri(code, x86_64.rcx, flags);
     x86_64.call(code, "rt.map_set");

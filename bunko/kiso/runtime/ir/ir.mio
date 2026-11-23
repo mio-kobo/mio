@@ -2,61 +2,99 @@ yobu "kiso/array";
 // Target-neutral scalar runtime IR. Virtual registers hold native words, not
 // managed Mio values. Building a program happens in the compiler; executing it
 // requires no managed allocation. Labels/functions are symbolic, never PCs.
-koukai teisu constant=1;
-koukai teisu copy=2;
-koukai teisu address=3;
-koukai teisu load=4;
-koukai teisu store=5;
-koukai teisu add=6;
-koukai teisu subtract=7;
-koukai teisu multiply=8;
-koukai teisu divide_unsigned=9;
-koukai teisu equal=10;
-koukai teisu less_unsigned=11;
-koukai teisu label=12;
-koukai teisu jump=13;
-koukai teisu zero=14;
-koukai teisu nonzero=15;
-koukai teisu system=16;
-koukai teisu invoke=17;
-koukai teisu function_address=18;
-koukai teisu result=19;
-koukai teisu acquire_load=20;
-koukai teisu release_store=21;
-koukai teisu fetch_add=22;
-koukai teisu compare_exchange=23;
-koukai teisu imports=24;
-koukai teisu scratch_address=25;
+koukai teisu constant = 1;
+koukai teisu copy = 2;
+koukai teisu address = 3;
+koukai teisu load = 4;
+koukai teisu store = 5;
+koukai teisu add = 6;
+koukai teisu subtract = 7;
+koukai teisu multiply = 8;
+koukai teisu divide_unsigned = 9;
+koukai teisu equal = 10;
+koukai teisu less_unsigned = 11;
+koukai teisu label = 12;
+koukai teisu jump = 13;
+koukai teisu zero = 14;
+koukai teisu nonzero = 15;
+koukai teisu system = 16;
+koukai teisu invoke = 17;
+koukai teisu function_address = 18;
+koukai teisu result = 19;
+koukai teisu acquire_load = 20;
+koukai teisu release_store = 21;
+koukai teisu fetch_add = 22;
+koukai teisu compare_exchange = 23;
+koukai teisu imports = 24;
+koukai teisu scratch_address = 25;
 // Extra portable OS services; 1..22 retain RuntimeOp's original identities.
-koukai teisu tls_create=23;
-koukai teisu tls_destroy=24;
-koukai teisu mutex_create=25;
-koukai teisu mutex_destroy=26;
-koukai teisu mutex_lock=27;
-koukai teisu mutex_unlock=28;
-koukai teisu condition_create=29;
-koukai teisu condition_destroy=30;
-koukai teisu abort_runtime=31;
+koukai teisu tls_create = 23;
+koukai teisu tls_destroy = 24;
+koukai teisu mutex_create = 25;
+koukai teisu mutex_destroy = 26;
+koukai teisu mutex_lock = 27;
+koukai teisu mutex_unlock = 28;
+koukai teisu condition_create = 29;
+koukai teisu condition_destroy = 30;
+koukai teisu abort_runtime = 31;
 // A binding maps abstract operands to a public native ABI. Negative selectors
 // denote literal (-selector-1), e.g. -1 is NULL. Core code never names symbols.
-koukai kata Binding {operation:int64; slot:int64; arguments:[]int64; result_bits:int64;}
-koukai kata Step {kind:int64; destination:int64; left:int64; right:int64; immediate:int64;
-    name:string; arguments:[]int64; order:int64; failure_order:int64;}
-koukai kata Function {name:string; steps:[]Step;}
-koukai waza function(name:string) -> Function {kaesu Function {name:name,steps:[]};}
-koukai waza step(kind:int64,destination:int64,left:int64,right:int64,immediate:int64,name:string,arguments:[]int64) -> Step {
-    kaesu Step {kind:kind,destination:destination,left:left,right:right,immediate:immediate,name:name,arguments:arguments,order:0,failure_order:0};
+koukai kata Binding {
+    operation: int64;
+    slot: int64;
+    arguments: []int64;
+    result_bits: int64;
 }
-koukai waza put(f:Function,kind:int64,destination:int64,left:int64,right:int64,immediate:int64) -> unit {array.push(f.steps,step(kind,destination,left,right,immediate,"",[]));}
-koukai waza branch(f:Function,kind:int64,value:int64,name:string) -> unit {array.push(f.steps,step(kind,0,value,0,0,name,[]));}
-koukai waza call(f:Function,operation:int64,destination:int64,arguments:[]int64) -> unit {array.push(f.steps,step(system,destination,0,0,operation,"",arguments));}
-koukai waza invoke_function(f:Function,name:string,destination:int64,arguments:[]int64) -> unit {array.push(f.steps,step(invoke,destination,0,0,0,name,arguments));}
-koukai waza function_pointer(f:Function,name:string,destination:int64) -> unit {array.push(f.steps,step(function_address,destination,0,0,0,name,[]));}
-koukai waza valid_step(s:Step) -> bool {
-    moshi(s.kind<constant || s.kind>scratch_address || s.destination<0 || s.destination>=32 || s.left<0 || s.left>=32 || s.right<0 || s.right>=32 || len(s.arguments)>7){kaesu iie;}
-    moshi((s.kind==load || s.kind==store || s.kind==acquire_load || s.kind==release_store || s.kind==address) && (s.immediate<0 || s.immediate>32760 || s.immediate-(s.immediate/8)*8!=0)){kaesu iie;}
-    moshi(s.kind==scratch_address && (s.immediate<0 || s.immediate>56 || s.immediate-(s.immediate/8)*8!=0)){kaesu iie;}
-    moshi((s.kind==label || s.kind==jump || s.kind==zero || s.kind==nonzero || s.kind==invoke || s.kind==function_address) && s.name==""){kaesu iie;}
-    kaku i=0;aida(i<len(s.arguments)){moshi(s.arguments[i]<0 || s.arguments[i]>=32){kaesu iie;}i=i+1;}
+koukai kata Step {
+    kind: int64;
+    destination: int64;
+    left: int64;
+    right: int64;
+    immediate: int64;
+    name: string;
+    arguments: []int64;
+    order: int64;
+    failure_order: int64;
+}
+koukai kata Function {
+    name: string;
+    steps: []Step;
+}
+koukai waza function(name: string) -> Function { kaesu Function { name: name, steps: [] }; }
+koukai waza step(kind: int64, destination: int64, left: int64, right: int64, immediate: int64, name: string, arguments: []int64) -> Step {
+    kaesu Step {
+        kind: kind, destination: destination, left: left, right: right, immediate: immediate, name: name, arguments: arguments, order: 0, failure_order: 0 };
+}
+koukai waza put(f: Function, kind: int64, destination: int64, left: int64, right: int64, immediate: int64) -> unit {
+    array.push(f.steps, step(kind, destination, left, right, immediate, "", []));
+}
+koukai waza branch(f: Function, kind: int64, value: int64, name: string) -> unit { array.push(f.steps, step(kind, 0, value, 0, 0, name, [])); }
+koukai waza call(f: Function, operation: int64, destination: int64, arguments: []int64) -> unit {
+    array.push(f.steps, step(system, destination, 0, 0, operation, "", arguments));
+}
+koukai waza invoke_function(f: Function, name: string, destination: int64, arguments: []int64) -> unit {
+    array.push(f.steps, step(invoke, destination, 0, 0, 0, name, arguments));
+}
+koukai waza function_pointer(f: Function, name: string, destination: int64) -> unit {
+    array.push(f.steps, step(function_address, destination, 0, 0, 0, name, []));
+}
+koukai waza valid_step(s: Step) -> bool {
+    moshi (s.kind<constant || s.kind>scratch_address || s.destination<0 || s.destination >= 32 || s.left<0 || s.left >= 32 || s.right<0 || s.right >= 32 || len(s.arguments)>7) {
+        kaesu iie;
+    }
+    moshi ((s.kind == load || s.kind == store || s.kind == acquire_load || s.kind == release_store || s.kind == address) && (s.immediate<0 || s.immediate>32760 || s.immediate - (s.immediate / 8) * 8 != 0)) {
+        kaesu iie;
+    }
+    moshi (s.kind == scratch_address && (s.immediate<0 || s.immediate>56 || s.immediate - (s.immediate / 8) * 8 != 0)) { kaesu iie; }
+    moshi ((s.kind == label || s.kind == jump || s.kind == zero || s.kind == nonzero || s.kind == invoke || s.kind == function_address) && s.name == "") {
+        kaesu iie;
+    }
+    kaku i = 0;
+    aida (i<len(s.arguments)) {
+        moshi (s.arguments[i]<0 || s.arguments[i] >= 32) {
+            kaesu iie;
+        }
+        i = i + 1;
+    }
     kaesu hai;
 }
