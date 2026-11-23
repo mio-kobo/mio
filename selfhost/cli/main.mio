@@ -108,19 +108,18 @@ waza shared_facade(entries: []string) -> string {
     kaku at = 0;
     aida (at < len(entries)) {
         kaku found = os.canonical_path(entries[at]);
-        moshi (found == mu) { kaesu string.concat("E_OPTIONS several inputs must be module directories: ", entries[at]); }
+        moshi (found == mu) { kaesu error_message("E_OPTIONS", i18n.key_err_shared_input, entries[at]); }
         kaku resolved = found;
-        moshi (!fs.is_dir(resolved)) { kaesu string.concat("E_OPTIONS several inputs must be module directories: ", entries[at]); }
-        moshi (string.contains(resolved, "\"") || string.contains(resolved, "\\")) { kaesu "E_OPTIONS unsupported character in a module path"; }
+        moshi (!fs.is_dir(resolved) || string.contains(resolved, "\"") || string.contains(resolved, "\\")) { kaesu error_message("E_OPTIONS", i18n.key_err_shared_input, entries[at]); }
         text = string.concat(text, string.concat("yobu \"", string.concat(resolved, "\";\n")));
         at = at + 1;
     }
     kaku directory = string.concat(pipeline.temporary_root(), string.concat("/mio-facade-", convert.format_int(os.pid())));
     kaku created = fs.create_dir(directory);
-    moshi (created.error != mu) { kaesu "E_OPTIONS cannot create the module facade directory"; }
-    moshi (os.chmod(directory, 448) != 0) { os.remove_dir(directory); kaesu "E_OPTIONS cannot protect the module facade directory"; }
+    moshi (created.error != mu) { kaesu error_message("E_IO", i18n.key_err_create_run_dir, ""); }
+    moshi (os.chmod(directory, 448) != 0) { os.remove_dir(directory); kaesu error_message("E_IO", i18n.key_err_protect_run_dir, ""); }
     kaku written = fs.write_all(string.concat(directory, "/facade.mio"), string.to_bytes(text));
-    moshi (written.error != mu) { os.remove_dir(directory); kaesu "E_OPTIONS cannot write the module facade"; }
+    moshi (written.error != mu) { os.remove_dir(directory); kaesu error_message("E_IO", i18n.key_err_write_native, ""); }
     kaesu directory;
 }
 
@@ -326,9 +325,9 @@ waza run() -> unit {
     }
     moshi (len(entries) > 1 && !shared) { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; }
     moshi (len(entries) >= 1) { entry = entries[0]; }
-    moshi (!shared && (soname != "" || linker != "" || emit_object)) { fail("E_OPTIONS --soname, --linker and --emit=object require --shared", 2); kaesu; }
+    moshi (!shared && (soname != "" || linker != "" || emit_object)) { fail(error_message("E_OPTIONS", i18n.key_err_shared_options, ""), 2); kaesu; }
     moshi (shared && (command != "build" || emit_mochi || (target != "linux-amd64") || (emit_object && (soname != "" || linker != "" || len(link_raw) != 0)))) {
-        fail("E_OPTIONS --shared applies only to `mio build --target linux-amd64` (not --emit=mochi); --emit=object takes no link options", 2); kaesu;
+        fail(error_message("E_OPTIONS", i18n.key_err_shared_options, ""), 2); kaesu;
     }
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
