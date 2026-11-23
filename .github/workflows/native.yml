@@ -145,6 +145,45 @@ jobs:
             build/native/${{ matrix.target }}/examples/
           if-no-files-found: error
           retention-days: 7
+  windows-dll:
+    name: Native / Windows AMD64 DLL exports
+    needs: linux
+    if: ${{ !cancelled() && needs.linux.outputs.stage_a_ready == 'true' }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/stage-a
+      - name: Verify Stage A and compile the native CLI from this checkout
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ needs.linux.outputs.windows_amd64 }}
+        run: |
+          $actual = (Get-FileHash build/stage-a/mio-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256.ToLowerInvariant()) { throw 'Stage A hash mismatch' }
+          New-Item -ItemType Directory -Force build/windows-dll | Out-Null
+          & build/stage-a/mio-windows-amd64.exe build selfhost/cli --target windows-amd64 --bunko-root bunko -o build/windows-dll/mio.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native PE writer unit tests
+        run: build/windows-dll/mio.exe test bunko/kiso/aot/pe --bunko-root bunko
+      - name: Generate five DLLs, inspect PE, compile C host and execute Windows loader tests
+        run: python tests/windows-dll/run.py --mio build/windows-dll/mio.exe --output build/windows-dll/results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-amd64-dll-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/windows-dll/results/report.json
+            build/windows-dll/results/*.log
+          if-no-files-found: error
   # The three additional targets live in their own reusable workflows (one native runner each) and are required here.
   linux-arm64:
     name: linux-arm64
@@ -165,10 +204,13 @@ jobs:
   summary:
     name: Native / required
     if: always()
-    needs: [linux, follower, linux-arm64, darwin-amd64, windows-arm64]
+    needs: [linux, follower, windows-dll, linux-arm64, darwin-amd64, windows-arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Require Windows DLL acceptance
+        if: ${{ needs.windows-dll.result != 'success' }}
+        run: exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false

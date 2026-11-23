@@ -4,6 +4,25 @@ yobu "kiso/string";
 yobu "kiso/testing";
 
 waza sample() -> ImageSpec { kaesu ImageSpec { text: [195], rdata: [], data: [], zero_fill: 0, entry: 0, imports: [], patches: [], unwind: [] }; }
+
+waza test_dynamic_library_exports() -> unit {
+    kaku exports = [Export { name: "z_last", offset: 0 }, Export { name: "a_first", offset: 0 }];
+    kaku dll = dynamic_library(sample(), [], "sample.dll", exports);
+    testing.expect(dll.error == mu, "DLL accepted");
+    testing.expect(u16(dll.bytes, 150) == 8226 && u32(dll.bytes, 168) == 0, "DLL flag and no process entry");
+    kaku edata = dll.layout.sections[len(dll.layout.sections)-1];
+    testing.expect(edata.name == ".edata" && edata.flags == 1073741888, "read-only exports");
+    testing.expect(u32(dll.bytes, 264) == edata.rva && u32(dll.bytes, 268) == edata.virtual_size, "export directory mapping");
+    testing.expect(u32(dll.bytes, edata.offset+20) == 2 && u32(dll.bytes, edata.offset+24) == 2, "EAT and name counts");
+    kaku first_name = u32(dll.bytes, edata.offset+48)-edata.rva+edata.offset;
+    testing.expect(dll.bytes[first_name] == uint8(97), "names sorted independently of input");
+    testing.expect(dynamic_library(sample(), [], "sample.dll", []).error != mu, "empty exports rejected");
+    testing.expect(dynamic_library(sample(), [], "", exports).error != mu, "empty image name rejected");
+    testing.expect(dynamic_library(sample(), [], "sample.dll", [Export { name: "x", offset: 1 }]).error != mu, "out of text rejected");
+    testing.expect(dynamic_library(sample(), [], "sample.dll", [Export { name: "x", offset: -1 }]).error != mu, "negative offset rejected");
+    testing.expect(dynamic_library(sample(), [], "sample.dll", [Export { name: "x", offset: 0 }, Export { name: "x", offset: 0 }]).error != mu, "duplicate exports rejected");
+    testing.expect(dynamic_library(sample(), [], "sample.dll", [Export { name: "", offset: 0 }]).error != mu, "empty symbol rejected");
+}
 waza u16(bytes: []uint8, at: int64) -> int64 { kaesu int64(binary.read_u16_le(bytes, at).value); }
 waza u32(bytes: []uint8, at: int64) -> int64 { kaesu int64(binary.read_u32_le(bytes, at).value); }
 waza u64(bytes: []uint8, at: int64) -> int64 { kaesu binary.read_i64_le(bytes, at).value; }
