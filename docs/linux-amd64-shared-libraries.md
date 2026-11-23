@@ -27,7 +27,7 @@ untouched: for programs without `export` declarations the compiler produces byte
 | GOT-relative (`GOTPCREL*`) addressing and `R_X86_64_64`/`RELATIVE` data pointers | **not generated** (the code needs none); the object writer rejects them |
 | A Mio native linker | **reserved**: `--linker native` reports that it is not implemented |
 | Shared libraries for linux-arm64, darwin, windows | **not supported** |
-| Go reference compiler (`cmd/mio`) accepting `export` | **not supported** (the Linux native pipeline is Mio-hosted only) |
+| Go reference compiler (`cmd/mio`) | parses `export` with the same rules and ignores it; it cannot produce shared libraries (the Linux native pipeline is Mio-hosted) |
 
 ## Build guide
 
@@ -151,7 +151,7 @@ guessing. A self-contained library has no `.rela.dyn` at all.
 * Each library reserves 8.5 GiB of address space; hosts with strict `RLIMIT_AS` need a larger limit.
 * Compiler diagnostics for a malformed `export` reuse the C-declaration message ("expected a C declaration suffix").
 * No `-fvisibility`-style control beyond exporting exactly the declared names; no version scripts; no `DT_INIT`.
-* Linux x86-64 hosts only; the Go reference compiler does not understand `export`.
+* Linux x86-64 hosts only; the Go reference compiler parses `export` but never emits a library.
 
 ## Tests
 
