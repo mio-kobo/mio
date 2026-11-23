@@ -33,9 +33,20 @@ isolation = load("release_isolation", HERE / "release_isolation.py")
 plan = load("ci_plan", HERE / "plan.py")
 native = load("ci_native_platforms", HERE / "native_platforms.py")
 thread_bench = load("ci_thread_bench", HERE / "thread_bench.py")
+bunko_matrix = load("ci_bunko_matrix", HERE / "bunko_matrix.py")
 
 
 class ContractTests(unittest.TestCase):
+    def test_dynamic_ffi_protocol_preserves_native_report_status(self):
+        row = dict(tests=["protocol windows-dynamic-ffi"], unsupported={}, not_testable="")
+        for status, expected in (("PASS", "PASS"), ("FAIL", "FAIL"), ("NOT_RUN", "UNVERIFIED"), (None, "UNVERIFIED")):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                checks = [] if status is None else [dict(name="windows-dynamic-ffi", status=status, engine="native")]
+                (Path(directory) / "report.json").write_text(json.dumps(dict(target="windows-amd64", checks=checks)))
+                loaded = bunko_matrix.load_reports(directory)
+                actual, _ = bunko_matrix.verdict(row, "windows-amd64", loaded["windows-amd64"])
+                self.assertEqual(actual, expected)
+
     def test_discovery_rejects_malformed_contract(self):
         for extra in (dict(module="../escape"), dict(engine="unknown"), dict(required_checks="native"),
                       dict(suite_checks={"quick": "native"}), dict(targets=["typo"]),
