@@ -46,6 +46,8 @@ waza run() -> int64 {
     chant(negative.capacity == 1);
     chant(wrap(1) && wrap(2) && wrap(3) && wrap(7));
 
+    // Darwin has a fixed pool and rejects counts above 8, while Linux can allocate another slab.
+    kaku fixed_pool = runtime.words_new(9) == -22;
     kaku usable = 0; kaku failed = 0; kaku bad_error = 0; kaku bad_dead = 0; kaku bad_live = 0;
     kaku i = 0;
     aida (i < 20000) {
@@ -62,12 +64,13 @@ waza run() -> int64 {
             moshi (made.error != -12) { bad_error = bad_error + 1; }
             kaku s = thread.send[int64](made.channel, 5);
             kaku r = thread.receive[int64](made.channel);
-            moshi (s.sent || s.back != 5 || !r.closed) { bad_dead = bad_dead + 1; }
+            moshi (s.sent || s.back != 5 || !r.closed || len(made.channel.ring) != 0) { bad_dead = bad_dead + 1; }
         }
         i = i + 1;
     }
     chant(usable + failed == 20000);
     chant(usable > 1000);
+    chant(!fixed_pool || failed > 0);
     chant(bad_error == 0 && bad_dead == 0 && bad_live == 0);
     kaesu 0;
 }
