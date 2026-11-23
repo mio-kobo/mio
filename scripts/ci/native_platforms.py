@@ -456,6 +456,19 @@ def windows_ffi_checks(report, cli):
     except (OSError, ValueError, KeyError):
         pass
     report.check("windows-c-ffi", status, "native", detail)
+    dynamic = report.output / "windows-dynamic-ffi"
+    code, out, err, _ = run(report, "windows-dynamic-ffi", [sys.executable, ROOT / "native-tests/run.py", "--mio", cli, "--output", dynamic, "--check-embedded"], timeout=1800)
+    detail = brief(err or out)
+    status = "FAIL"
+    try:
+        result = json.loads((dynamic / "report.json").read_text(encoding="utf-8"))
+        failures = [c for c in result["checks"] if c["status"] == "FAIL"]
+        status = "PASS" if code == 0 and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+        report.hashes["windows-dynamic-ffi"] = result.get("hashes", {})
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("windows-dynamic-ffi", status, "native", detail)
 
 
 def windows_tcp_pe(report, image, label):
