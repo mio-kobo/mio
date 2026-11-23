@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       stage_a_ready: ${{ steps.native.outputs.stage_a_ready }}
+      stage_a_artifact: ${{ format('native-stage-a-{0}-{1}', github.run_id, github.run_attempt) }}
       darwin_arm64: ${{ steps.native.outputs.darwin_arm64 }}
       windows_amd64: ${{ steps.native.outputs.windows_amd64 }}
     permissions:
@@ -121,7 +122,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.linux.outputs.stage_a_artifact }}
           path: build/stage-a
       - name: Native B -> C -> D, mio test, Runtime ABI contract (no Go on this path)
         shell: bash
@@ -177,8 +178,12 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/native-reports
+          pattern: native-report-*-${{ github.run_id }}-*
+          path: build/native-report-artifacts
+      - name: Select the newest report for each platform across attempts
+        run: >-
+          python scripts/ci/native_platforms.py select-reports --reports build/native-report-artifacts
+          --output build/native-reports --run-id "${{ github.run_id }}"
       - name: Combine the platform reports (fails unless every required check is PASS)
         env:
           NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}

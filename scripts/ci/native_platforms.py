@@ -1600,6 +1600,26 @@ def finish(report, cli=None):
 
 # ---------------------------------------------------------------------------------------------------- summary
 
+def select_reports(args):
+    """Keep one complete artifact directory per target, even on a partial rerun."""
+    reports = Path(args.reports)
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    for target in TARGETS.values():
+        prefix = f"native-report-{target}-{args.run_id}-"
+        candidates = [
+            (int(attempt), path)
+            for path in reports.glob(prefix + "*")
+            if path.is_dir() and re.fullmatch(r"[1-9][0-9]*", attempt := path.name[len(prefix):])
+        ]
+        if candidates:
+            # Required checks and matrix evidence must both come from this attempt.
+            # If its report is missing or invalid, the gate will fail for that target.
+            _, newest = max(candidates)
+            newest.rename(output / f"native-report-{target}")
+    return 0
+
+
 def summary(args):
     rows, overall, combined = [], "PASS", {}
     found = {}
@@ -1680,6 +1700,10 @@ def main():
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--targets", default="", help="comma-separated targets that must all have a report (default: the three release targets)")
+    p = sub.add_parser("select-reports")
+    p.add_argument("--reports", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--run-id", required=True, type=int)
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
@@ -1693,6 +1717,8 @@ def main():
         return linux(args, "windows-arm64")
     if args.command == "summary":
         return summary(args)
+    if args.command == "select-reports":
+        return select_reports(args)
     return follower(args, TARGETS[args.command])
 
 
