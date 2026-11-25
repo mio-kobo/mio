@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import tarfile
@@ -82,7 +83,7 @@ def extract(archive, destination):
     return destination / roots.pop()
 
 
-def gate(report, compilers, inputs, target):
+def gate(report, compilers, inputs, target, native_report_attempt=None):
     if report['target'] != target or report['status'] != 'PASS' or report['source_sha'] != inputs['source_sha']:
         raise ValueError('native report target/status/source mismatch')
     # The native report embeds the prepared distribution inputs. Requiring exact
@@ -90,8 +91,18 @@ def gate(report, compilers, inputs, target):
     # compiler version and the native build to one input record.
     if report.get('distribution_input') != inputs:
         raise ValueError('native report distribution inputs do not match the prepared source')
-    if report['run']['id'] != os.environ.get('GITHUB_RUN_ID', '') or report['run']['attempt'] != os.environ.get('GITHUB_RUN_ATTEMPT', ''):
-        raise ValueError('native report belongs to another Actions run')
+    current_attempt = os.environ.get('GITHUB_RUN_ATTEMPT', '')
+    expected_attempt = current_attempt
+    if native_report_attempt is not None:
+        if (not re.fullmatch(r'[1-9][0-9]*', native_report_attempt)
+                or not re.fullmatch(r'[1-9][0-9]*', current_attempt)
+                or int(native_report_attempt) > int(current_attempt)):
+            raise ValueError('invalid native report attempt')
+        if stable_version(inputs['version']) and native_report_attempt != current_attempt:
+            raise ValueError('stable distribution requires a current-attempt native report')
+        expected_attempt = native_report_attempt
+    if report['run']['id'] != os.environ.get('GITHUB_RUN_ID', '') or report['run']['attempt'] != expected_attempt:
+        raise ValueError('native report belongs to another Actions run or attempt')
     checks = {c['name']: c for c in report['checks']}
     for name in ('cli-fixed-point', 'core-cli-fixed-point'):
         fixed = checks.get(name, {})
@@ -113,10 +124,11 @@ def gate(report, compilers, inputs, target):
         raise ValueError('Full embedded Bunko source required')
 
 
-def package(source, compilers, report_path, output, target, seed_report=None, seed_kind=None):
+def package(source, compilers, report_path, output, target, seed_report=None, seed_kind=None,
+            native_report_attempt=None):
     inputs = json.loads((source / 'distribution-input.json').read_text(encoding='utf-8'))
     report = json.loads(report_path.read_text(encoding='utf-8'))
-    gate(report, compilers, inputs, target)
+    gate(report, compilers, inputs, target, native_report_attempt)
     full_sha, core_sha = digest(compilers['full']), digest(compilers['core'])
     if full_sha == core_sha:
         raise ValueError('Core and Full compilers must differ')
@@ -189,6 +201,7 @@ if __name__ == '__main__':
     p.add_argument('--compiler', type=Path, required=True, help='Full compiler with embedded Bunko')
     p.add_argument('--core-compiler', type=Path, required=True, help='Core compiler without embedded Bunko')
     p.add_argument('--report', type=Path, required=True)
+    p.add_argument('--native-report-attempt', help='Attempt of the selected same-run compiler and report artifacts')
     p.add_argument('--seed', choices=SEED_KINDS, default=None,
                    help='Assert the reviewed bootstrap seed profile for a stable version')
     p.add_argument('--seed-report', type=Path)
@@ -196,4 +209,4 @@ if __name__ == '__main__':
     p.add_argument('--target', choices=TARGETS, required=True)
     a = p.parse_args()
     package(a.source.resolve(), dict(full=a.compiler.resolve(), core=a.core_compiler.resolve()),
-            a.report.resolve(), a.output.resolve(), a.target, a.seed_report, a.seed)
+            a.report.resolve(), a.output.resolve(), a.target, a.seed_report, a.seed, a.native_report_attempt)
