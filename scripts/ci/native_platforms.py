@@ -764,9 +764,9 @@ def darwin_thread_programs(report, cli, work):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
-             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
+             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "concurrent_join", "creation_limit", "lifecycle_cycles",
              "shutdown_active", "epoch_retention", "heap_invariants", "alloc_lock", "alloc_lock_stress", "alloc_lock_wait"]
-    stress = ["basic", "nested", "channel_basic", "channel_close", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    stress = ["basic", "nested", "channel_basic", "channel_close", "concurrent_join", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
     darwin_cases = {"channel_exhaustion": b"channel exhaustion: ok\n"}
     names.extend(("channel_exhaustion", "channel_concurrent_alloc"))
     stress.append("channel_concurrent_alloc")

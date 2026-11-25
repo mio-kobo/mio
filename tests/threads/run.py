@@ -44,6 +44,7 @@ PROGRAMS = {
     # Stage one hardening (docs/threading-stages.md)
     "lifecycle_cycles": b"252000\n0\n126000\n",
     "invalid_handles": b"-22\n-22\n-22\niie\nhai\n7\niie\nhai\niie\n7\nhai\n-5\n",
+    "concurrent_join": b"hai\niie\niie\n23\n-22\n7\n",
     "socket_gc_progress": b"20000\n107\nhai\n20000\nhai\nhai\n20000\n1\nhai\n20000\n1\nhai\n",
     "creation_limit": b"hai\nhai\nhai\nhai\n1\n",
     "shutdown_active": b"199990000\nhai\n",

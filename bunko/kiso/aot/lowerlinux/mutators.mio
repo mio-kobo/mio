@@ -618,6 +618,13 @@ waza emit_slot_routines(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rax, 0);
     x86_64.jmp(code, "rt.mut_slot_claim.out");
     x86_64.label(code, "rt.mut_slot_claim.take");
+    // A worker cannot wait for its own kernel tid to be cleared.
+    fs_self(code, x86_64.rcx);
+    x86_64.cmp_rr(code, x86_64.rax, x86_64.rcx);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.mut_slot_claim.other");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.jmp(code, "rt.mut_slot_claim.out");
+    x86_64.label(code, "rt.mut_slot_claim.other");
     x86_64.mov_ri(code, x86_64.rcx, -256);
     x86_64.and_rr(code, x86_64.rdx, x86_64.rcx);
     x86_64.mov_ri(code, x86_64.rcx, 2);

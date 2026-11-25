@@ -15,7 +15,7 @@ koukai teisu worker_root_words=(worker_slots+1)*wr_ctx_words+4+(word_blocks+1)*8
 teisu wr_stride=41600;
 // Context word at +8800: the integer a worker entry returned (0 for an entry that returns nothing); join hands it to the caller.
 teisu wr_result=8800;
-// Context word at +8808: nonzero while the slot is claimed by a start and not yet joined.
+// Context word at +8808: zero when free, -1 during start or join, otherwise the exact joinable handle.
 teisu wr_claim=8808;
 // Context word at +8816: generation of the slot (counts joins; part of the handle). Word at +8824: status of this thread's last join (0 or 22).
 teisu wr_generation=8816;
@@ -574,11 +574,11 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     // pinned in blocked mode until the child has published registration/roots.
     attached_save(c,"attached_worker_start");wr_current(c,p,first);
     wr_ctx(c,p,first,10,1);wr_num(c,12,worker_slots);wr_num(c,13,wr_stride);
-    arm64.assembler_label(c,"worker_slot_scan");emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbnz_x(c,11,"worker_slot_next");
-    // Any registered thread may start threads, so a slot is claimed atomically (claim word at wr_claim, released by join).
+    arm64.assembler_label(c,"worker_slot_scan");
+    // Reserve the slot before initializing any of the pthread context.
     wr_num(c,15,wr_claim);emit(c,arm64.add_x(14,10,15));
-    arm64.assembler_label(c,"worker_slot_claim");emit(c,arm64.ldxr_x(11,14,hai));arm64.assembler_cbnz_x(c,11,"worker_slot_next");emit(c,arm64.movz_x(11,1,0));emit(c,arm64.stxr_x(9,11,14,hai));arm64.assembler_cbnz_x(c,9,"worker_slot_claim");arm64.assembler_b(c,"worker_slot_ready");
-    arm64.assembler_label(c,"worker_slot_next");emit(c,arm64.add_x(10,10,13));emit(c,arm64.sub_imm_x(12,12,1,iie));arm64.assembler_cbnz_x(c,12,"worker_slot_scan");
+    arm64.assembler_label(c,"worker_slot_claim");emit(c,arm64.ldxr_x(11,14,hai));arm64.assembler_cbnz_x(c,11,"worker_slot_next");emit(c,arm64.movn_x(11,0,0));emit(c,arm64.stxr_x(9,11,14,hai));arm64.assembler_cbnz_x(c,9,"worker_slot_claim");arm64.assembler_b(c,"worker_slot_ready");
+    arm64.assembler_label(c,"worker_slot_next");emit(c,arm64.clrex());emit(c,arm64.add_x(10,10,13));emit(c,arm64.sub_imm_x(12,12,1,iie));arm64.assembler_cbnz_x(c,12,"worker_slot_scan");
     // every slot is live: report -11 (no thread was created) instead of aborting
     wr_neg(c,9,11);emit(c,arm64.str_x(9,31,144));attached_restore(c);
     arm64.assembler_label(c,"worker_slot_ready");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.str_x(10,31,0));
@@ -591,11 +591,54 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
     emit(c,arm64.str_x(23,10,568));emit(c,arm64.str_x(28,10,8640));
     kaku worker_address=len(c.words);emit(c,arm64.movz_x(9,0,0));emit(c,arm64.str_x(9,10,gc.thread_entry));
     wr_poll(c,p,first,"gc_block_enter");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_open_shared");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_wait_started");
-    wr_current(c,p,first);wr_call(c,"gc_block_leave");emit(c,arm64.ldr_x(10,31,0));wr_ctx(c,p,first,9,1);emit(c,arm64.sub_x(9,10,9));wr_num(c,13,wr_stride);emit(c,arm64.udiv_x(9,9,13));emit(c,arm64.add_imm_x(11,9,1,iie));wr_num(c,12,wr_generation);emit(c,arm64.add_x(12,10,12));emit(c,arm64.ldr_x(12,12,0));wr_num(c,13,256);emit(c,arm64.mul_x(12,12,13));emit(c,arm64.add_x(11,11,12));emit(c,arm64.str_x(11,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
-    attached_save(c,"attached_worker_join");emit(c,arm64.sub_imm_x(31,31,32,iie));emit(c,arm64.ldr_x(9,31,176));wr_num(c,13,255);emit(c,arm64.and_x(13,9,13));emit(c,arm64.sub_imm_x(13,13,1,iie));emit(c,arm64.cmp_imm_x(13,worker_slots,iie));arm64.assembler_b_cond(c,2,"worker_join_bad");wr_num(c,14,256);emit(c,arm64.udiv_x(14,9,14));move_x(c,9,13);wr_num(c,13,wr_stride);emit(c,arm64.mul_x(9,9,13));wr_ctx(c,p,first,10,1);emit(c,arm64.add_x(10,10,9));
-    arm64.assembler_label(c,"worker_join_ready");emit(c,arm64.ldr_x(11,10,gc.thread_owns_handle));arm64.assembler_cbz_x(c,11,"worker_join_bad");wr_num(c,12,wr_generation);emit(c,arm64.add_x(12,10,12));emit(c,arm64.ldr_x(12,12,0));emit(c,arm64.cmp_x(12,14));arm64.assembler_b_cond(c,1,"worker_join_bad");emit(c,arm64.str_x(10,31,0));wr_current(c,p,first);wr_poll(c,p,first,"gc_block_enter");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_wait_completion");emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_close");wr_current(c,p,first);wr_call(c,"gc_block_leave");wr_current(c,p,first);wr_num(c,9,wr_join_status);emit(c,arm64.add_x(9,0,9));emit(c,arm64.movz_x(10,0,0));emit(c,arm64.str_x(10,9,0));emit(c,arm64.ldr_x(9,31,0));emit(c,arm64.ldr_x(9,9,wr_result));emit(c,arm64.str_x(9,31,176));emit(c,arm64.ldr_x(9,31,0));wr_num(c,15,wr_generation);emit(c,arm64.add_x(14,9,15));emit(c,arm64.ldr_x(10,14,0));emit(c,arm64.add_imm_x(10,10,1,iie));emit(c,arm64.str_x(10,14,0));wr_num(c,15,wr_claim);emit(c,arm64.add_x(14,9,15));emit(c,arm64.movz_x(10,0,0));emit(c,arm64.stlr_x(10,14));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
-    // A handle that is not a live thread handle (never issued, joined, stale generation, made up): the result is -22 and join_status reports it.
-    arm64.assembler_label(c,"worker_join_bad");wr_current(c,p,first);wr_num(c,9,wr_join_status);emit(c,arm64.add_x(9,0,9));wr_num(c,10,22);emit(c,arm64.str_x(10,9,0));
+    wr_current(c,p,first);wr_call(c,"gc_block_leave");emit(c,arm64.ldr_x(10,31,0));wr_ctx(c,p,first,9,1);emit(c,arm64.sub_x(9,10,9));wr_num(c,13,wr_stride);emit(c,arm64.udiv_x(9,9,13));emit(c,arm64.add_imm_x(11,9,1,iie));wr_num(c,12,wr_generation);emit(c,arm64.add_x(12,10,12));emit(c,arm64.ldr_x(12,12,0));wr_num(c,13,256);emit(c,arm64.mul_x(12,12,13));emit(c,arm64.add_x(11,11,12));
+    wr_addr(c,14,10,wr_claim);emit(c,arm64.stlr_x(11,14));
+    emit(c,arm64.str_x(11,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
+    attached_save(c,"attached_worker_join");
+    emit(c,arm64.sub_imm_x(31,31,32,iie));
+    wr_current(c,p,first);
+    emit(c,arm64.ldr_x(9,31,176));
+    wr_num(c,13,255);
+    emit(c,arm64.and_x(13,9,13));
+    emit(c,arm64.sub_imm_x(13,13,1,iie));
+    emit(c,arm64.cmp_imm_x(13,worker_slots,iie));
+    arm64.assembler_b_cond(c,2,"worker_join_bad");
+    wr_num(c,12,wr_stride);
+    emit(c,arm64.mul_x(13,13,12));
+    wr_ctx(c,p,first,10,1);
+    emit(c,arm64.add_x(10,10,13));
+    // Check self before consuming the handle, so another mutator can still join it.
+    emit(c,arm64.cmp_x(10,0));
+    arm64.assembler_b_cond(c,0,"worker_join_bad");
+    // Validate and consume the whole handle in one atomic operation. The slot
+    // stays reserved until pthread cleanup and generation advancement finish.
+    wr_addr(c,14,10,wr_claim);
+    emit(c,arm64.movn_x(13,0,0));
+    arm64.assembler_label(c,"worker_join_claim");
+    emit(c,arm64.ldxr_x(11,14,hai));
+    emit(c,arm64.cmp_x(11,9));
+    arm64.assembler_b_cond(c,1,"worker_join_mismatch");
+    emit(c,arm64.stxr_x(12,13,14,hai));
+    arm64.assembler_cbnz_x(c,12,"worker_join_claim");
+
+    emit(c,arm64.str_x(10,31,0));
+    move_x(c,1,24);
+    wr_call(c,"gc_block_enter");
+    emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_wait_completion");
+    emit(c,arm64.ldr_x(0,31,0));wr_imports(c,p,first);wr_call(c,"thread_close");
+    wr_current(c,p,first);wr_call(c,"gc_block_leave");
+    wr_current(c,p,first);
+    wr_addr(c,9,0,wr_join_status);emit(c,arm64.str_x(31,9,0));
+    emit(c,arm64.ldr_x(9,31,0));
+    emit(c,arm64.ldr_x(10,9,wr_result));emit(c,arm64.str_x(10,31,176));
+    wr_addr(c,14,9,wr_generation);
+    emit(c,arm64.ldr_x(10,14,0));emit(c,arm64.add_imm_x(10,10,1,iie));emit(c,arm64.str_x(10,14,0));
+    wr_addr(c,14,9,wr_claim);emit(c,arm64.stlr_x(31,14));
+    emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
+
+    arm64.assembler_label(c,"worker_join_mismatch");emit(c,arm64.clrex());
+    arm64.assembler_label(c,"worker_join_bad");
+    wr_addr(c,9,0,wr_join_status);wr_num(c,10,22);emit(c,arm64.str_x(10,9,0));
     wr_neg(c,9,22);emit(c,arm64.str_x(9,31,176));emit(c,arm64.add_imm_x(31,31,32,iie));attached_restore(c);
     attached_save(c,"attached_join_status");wr_current(c,p,first);wr_num(c,10,wr_join_status);emit(c,arm64.add_x(10,0,10));emit(c,arm64.ldr_x(9,10,0));emit(c,arm64.str_x(9,31,144));attached_restore(c);
     attached_save(c,"attached_worker_wait");wr_poll(c,p,first,"gc_mutator_poll");wr_current(c,p,first);emit(c,arm64.ldr_x(1,31,144));arm64.assembler_bl(c,"attached_thread_wait");emit(c,arm64.str_x(0,31,144));attached_restore(c);
@@ -616,7 +659,14 @@ waza emit_worker_root_runtime(c:arm64.Assembler,p:[]macho.AddressPatch,first:int
         emit(c,arm64.ldr_x(9,31,0));emit(c,arm64.write_nzcv(9));emit(c,arm64.add_imm_x(31,31,16,iie));attached_restore(c);i=i+1;
     }
     // Main shutdown joins every outstanding child before deleting the key.
-    attached_save(c,"attached_workers_join_all");i=1;aida(i<=worker_slots){wr_ctx(c,p,first,9,i);emit(c,arm64.ldr_x(10,9,gc.thread_owns_handle));kaku done=string.concat("worker_shutdown_",convert.format_int(i));arm64.assembler_cbz_x(c,10,done);wr_num(c,0,i);arm64.assembler_bl(c,"attached_worker_join");arm64.assembler_label(c,done);i=i+1;}
+    attached_save(c,"attached_workers_join_all");i=1;
+    aida(i<=worker_slots){
+        wr_ctx(c,p,first,9,i);wr_addr(c,9,9,wr_claim);emit(c,arm64.ldar_x(0,9));
+        kaku done=string.concat("worker_shutdown_",convert.format_int(i));
+        emit(c,arm64.cmp_imm_x(0,0,iie));arm64.assembler_b_cond(c,13,done);
+        arm64.assembler_bl(c,"attached_worker_join");
+        arm64.assembler_label(c,done);i=i+1;
+    }
     attached_restore(c);
     attached_save(c,"attached_roots_close");
     // Public thread mode: the process ends with the main thread, whatever the other threads are doing; nothing is joined or closed.
