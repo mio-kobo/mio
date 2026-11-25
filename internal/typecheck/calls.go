@@ -156,7 +156,7 @@ func (c *Checker) checkCall(call *ast.CallExpression, expectedResult Kind) (Kind
 		call.TypeArgs[index] = c.runtimeTypeName(bindings[parameter])
 	}
 	call.HasValue = result != KindUnit
-	c.invalidateGlobalFacts()
+	c.invalidateCallFacts()
 	return result, nil
 }
 

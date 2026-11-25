@@ -12,8 +12,9 @@ and ends with "<name>: ok", so an expected file can never encode a failure. Mode
 the program's output, unlike the REPL-style `mio run`) and requires the same transcript:
 that is the VM / Native differential and is recorded separately (engine "reference").
 
-Results (PASS / FAIL / NOT_RUN per case and mode) go to <output>/results.json; nothing is ever reported as PASS that
-was not built, executed and compared. --build-only (cross-target images) records execution as NOT_RUN.
+Results (PASS / FAIL / NOT_RUN per case and mode) go to <output>/results.json. A runnable fixture passes after its
+build, execution and output comparison. Compile-error fixtures compare diagnostics before execution.
+`--build-only` records runnable fixtures as NOT_RUN after a successful cross-build.
 Python only builds paths, starts processes and compares bytes; it generates no code.
 """
 import argparse
@@ -65,6 +66,19 @@ def run(argv, timeout, cwd=None, env=None):
         return None, error.stdout or b"", error.stderr or b"", time.monotonic() - started, True
 
 
+def rejection_error(code, stderr, expected):
+    if code != 1:
+        return "expected a compile error (exit 1), got %s" % code
+    try:
+        diagnostic = json.loads(stderr.splitlines()[0])
+        span = next(label["span"] for label in diagnostic["labels"] if label["primary"])
+        location = span["start"]
+        actual = [diagnostic["code"], location["line"], location["column"]]
+    except (IndexError, KeyError, StopIteration, ValueError, TypeError):
+        return "missing structured diagnostic: %s" % stderr.decode(errors="replace").strip()[:300]
+    return "" if actual == expected else "expected %s, got %s" % (expected, actual)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mio", required=True, help="native Mio CLI that builds the cases")
@@ -81,8 +95,11 @@ def main():
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     mio = Path(args.mio).resolve()
-    CASES = SUITES[args.suite]
-    names = sorted(p.stem for p in CASES.glob("*.mio"))
+    cases = SUITES[args.suite]
+    sources = {p.stem: p for p in cases.glob("*.mio")}
+    if args.suite == "differential":
+        sources.update((p.stem, p) for p in (cases / "compile-errors").glob("*.mio"))
+    names = sorted(sources)
     if args.cases:
         wanted = args.cases.split(",")
         missing = [n for n in wanted if n not in names]
@@ -104,12 +121,41 @@ def main():
         print("%-8s %-18s %-10s %-9s %s" % (status, name, mode, engine, reason), flush=True)
 
     for name in names:
-        source = CASES / (name + ".mio")
-        expected_path = CASES / (name + ".expected")
+        source = sources[name]
+        if source.parent.name == "compile-errors":
+            try:
+                expected_diagnostic = json.loads(source.with_suffix(".diagnostic").read_text())
+            except (OSError, ValueError) as error:
+                record(name, "-", "contract", "FAIL", "missing or invalid diagnostic fixture: %s" % error)
+                continue
+            for mode in args.modes.split(","):
+                image = output / ("%s-%s%s" % (name, mode, suffix))
+                argv = [mio, "build", source.relative_to(ROOT), "--target=" + args.target, "--format=json", "-o", image]
+                if mode == "gc-stress":
+                    argv.append("--gc-stress")
+                elif mode != "normal":
+                    sys.exit("unknown mode " + mode)
+                code, out, err, _, timed_out = run(argv, args.timeout, cwd=ROOT, env=env)
+                (output / ("%s-%s.build.log" % (name, mode))).write_bytes(out + err)
+                why = "build timed out" if timed_out else rejection_error(code, err, expected_diagnostic)
+                if why:
+                    record(name, mode, "native", "FAIL", why)
+                elif not execute:
+                    record(name, mode, "native", "NOT_RUN", "cross-build rejected with the expected diagnostic")
+                else:
+                    record(name, mode, "native", "PASS")
+            if args.reference:
+                argv = [args.reference, ROOT / "bunko", "check", source]
+                code, out, err, _, timed_out = run(argv, args.timeout, cwd=ROOT, env=env)
+                (output / ("%s-reference.stderr" % name)).write_bytes(out + err)
+                why = "reference check timed out" if timed_out else rejection_error(code, err, expected_diagnostic)
+                record(name, "check", "reference", "FAIL" if why else "PASS", why)
+            continue
+        expected_path = source.with_suffix(".expected")
         expected = expected_path.read_bytes() if expected_path.exists() else None
         # contract cases must succeed and end with "<name>: ok"; differential cases may end in a runtime error, whose
         # exit class (0 or nonzero, from the reference VM) is in <name>.exit
-        exit_path = CASES / (name + ".exit")
+        exit_path = source.with_suffix(".exit")
         want_success = args.suite == "contract" or (exit_path.exists() and exit_path.read_text().strip() == "0")
         if expected is None or (args.suite == "contract" and not expected.endswith((name + ": ok\n").encode())) or \
                 (args.suite != "contract" and not exit_path.exists()):

@@ -23,6 +23,8 @@ type Symbol struct {
 	Name string
 	Kind SymbolKind
 	Decl token.Position
+
+	functionDepth int
 }
 
 // 作用域

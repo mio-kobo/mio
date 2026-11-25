@@ -13,8 +13,9 @@ type Resolver struct {
 	functionDepth int
 	loopDepth     int
 
-	bindings map[*ast.Identifier]Symbol
-	nextID   uint64
+	bindings       map[*ast.Identifier]Symbol
+	capturedWrites map[Symbol]bool
+	nextID         uint64
 
 	// lenient 为真时收集可恢复错误并继续解析后续语句。
 	// 这是 LSP 处理未完成源码所需的只读扩展，编译器仍然使用严格模式。
@@ -55,7 +56,12 @@ func (r *Resolver) recoverable(err error) bool {
 
 func (r *Resolver) symbol(name string, kind SymbolKind, decl token.Position) Symbol {
 	r.nextID++
-	return Symbol{ID: r.nextID, Name: name, Kind: kind, Decl: decl}
+	return Symbol{ID: r.nextID, Name: name, Kind: kind, Decl: decl, functionDepth: r.functionDepth}
+}
+
+// HasCapturedWrite reports whether an inner function can reassign symbol.
+func (r *Resolver) HasCapturedWrite(symbol Symbol) bool {
+	return r.capturedWrites[symbol]
 }
 
 // 创建名称解析器
@@ -139,6 +145,12 @@ func (r *Resolver) resolveStatement(stmt ast.Statement) error {
 
 		// 保存赋值目标的符号绑定
 		r.bindings[n.Name] = symbol
+		if symbol.functionDepth < r.functionDepth {
+			if r.capturedWrites == nil {
+				r.capturedWrites = make(map[Symbol]bool)
+			}
+			r.capturedWrites[symbol] = true
+		}
 
 		return r.resolveExpression(n.Value)
 
