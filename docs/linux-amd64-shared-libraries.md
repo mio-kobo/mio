@@ -49,7 +49,7 @@ mio build mio_math --shared --verbose -o libmio_math.so      # prints the exact 
 | `--shared` | build a shared library; the input is a module directory (or a single source file) |
 | `-o <path>` | output path |
 | `--soname <name>` | `DT_SONAME`; default is the base name of the output |
-| `--linker <path\|name>` | linker program; default is detected (`MIO_LD`, `ld.lld`, `ld`, then `MIO_CC`/`CC`/`cc`/`gcc`/`clang`) |
+| `--linker <path\|name>` | linker program; honors `MIO_LD`, then prefers a C driver for declared dependencies or a raw linker for a self-contained module |
 | `--emit=object` | write the relocatable object instead of linking (shared mode only) |
 | `--link`, `-L`, `-l`, `--rpath` | declared dependencies, see [Linker dependencies](#linker-dependencies) |
 | `--verbose` | log the reproducible link command on stderr even when it succeeds |
@@ -126,9 +126,12 @@ mio build mod --shared -o libroot.so              # E_SHARED_LINK: undefined ref
 
 `--link <file.o|.a|.so>`, `-L<dir>`, `-l<name>` and `--rpath <dir>` are passed to the linker in the given order. With a
 compiler driver (`cc`, `gcc`, `clang`) the link adds `-nostdlib`, so nothing is linked that was not declared.
+The linker keeps globals from linked objects and archives local unless Mio declares them as exports.
 `--no-undefined` and `-z text` turn missing libraries and non-PIC objects into link errors: a `-fno-pic` object passed to
 `--link` is refused. A missing linker is `E_SHARED_LINKER` (explicit `--linker` not found, or none installed).
-`MIO_LD` selects a linker without a flag. The linker's stderr is passed through unchanged. All of this goes through
+`MIO_LD` selects a linker without a flag. An explicitly selected raw `ld.lld` may need a `-L` directory for system
+libraries. The default C driver supplies those search paths and keeps any user-provided `-L` entries. The linker’s
+stderr is passed through unchanged. All of this goes through
 one function (`link_shared`), the seam where a Mio native linker will replace the system linker.
 
 ## Supported relocations
@@ -151,7 +154,7 @@ rip-relatively and holds no absolute pointers in data. The writer rejects unknow
 * One mutator per library; no OS threads (`kiso/thread`) inside a shared library, no concurrent first calls.
 * Each library reserves 8.5 GiB of address space; hosts with strict `RLIMIT_AS` need a larger limit.
 * Compiler diagnostics for a malformed `export` reuse the C-declaration message ("expected a C declaration suffix").
-* No `-fvisibility`-style control beyond exporting exactly the declared names; no version scripts; no `DT_INIT`.
+* No `-fvisibility`-style control beyond exporting exactly the declared names; no user-provided version scripts or `DT_INIT` support.
 * Linux x86-64 hosts only; the Go reference compiler parses `export` but never emits a library.
 
 ## Tests

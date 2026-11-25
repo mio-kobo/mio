@@ -56,7 +56,7 @@ koukai waza build_shared_mochi(data: []uint8, gc_stress: bool, options: SharedOp
     kaku object = shared_object(lowered);
     moshi (object.error != "") { kaesu shared_error(string.concat("E_ELF ", object.error)); }
     moshi (options.object_only) { kaesu NativeBuildResult { bytes: object.bytes, error: "" }; }
-    kaesu link_shared(object.bytes, options, output);
+    kaesu link_shared(object.bytes, lowered.exports, options, output);
 }
 
 // The ET_REL object of a lowered shared module: PC32 relocations against .bss for every data-area reference and PLT32
@@ -114,30 +114,31 @@ waza raw_linker(path: string) -> bool {
     kaesu string.has_prefix(name, "ld");
 }
 
-// Candidate linkers in order of preference: explicit --linker, MIO_LD, then the raw linkers, then the C drivers.
-waza find_shared_linker(requested: string) -> string {
+// A compiler driver supplies the system search paths for declared libraries.
+waza find_shared_linker(requested: string, with_dependencies: bool) -> string {
     moshi (requested != "") {
         moshi (string.contains(requested, "/")) { moshi (fs.is_file(requested)) { kaesu requested; } kaesu ""; }
         kaesu search_path(requested);
     }
-    kaku names: []string = [os.getenv("MIO_LD")];
-    kaku at = 0;
-    aida (at < len(names)) {
-        kaku name = names[at];
-        moshi (name != "") {
-            moshi (string.contains(name, "/")) { moshi (fs.is_file(name)) { kaesu name; } }
-            sore { kaku found = search_path(name); moshi (found != "") { kaesu found; } }
+    kaku configured = os.getenv("MIO_LD");
+    moshi (configured != "") {
+        moshi (string.contains(configured, "/")) {
+            moshi (fs.is_file(configured)) { kaesu configured; }
+        } sore {
+            kaku found = search_path(configured);
+            moshi (found != "") { kaesu found; }
         }
-        at = at + 1;
     }
-    kaku defaults: []string = ["ld.lld", "ld"];
-    at = 0;
-    aida (at < len(defaults)) {
-        kaku found = search_path(defaults[at]);
-        moshi (found != "") { kaesu found; }
-        at = at + 1;
+    kaku system = search_path("ld");
+    kaku lld = search_path("ld.lld");
+    moshi (!with_dependencies) {
+        moshi (system != "") { kaesu system; }
+        moshi (lld != "") { kaesu lld; }
     }
-    kaesu find_c_driver();
+    kaku driver = find_c_driver();
+    moshi (driver != "") { kaesu driver; }
+    moshi (system != "") { kaesu system; }
+    kaesu lld;
 }
 
 // Driver-style link options (`-Xlinker -rpath -Xlinker dir`, `-lname`, `-Ldir`, files) to raw-linker arguments.
@@ -181,11 +182,11 @@ waza render_command(arguments: []string) -> string {
 waza write_log(text: string) -> unit { fs.write_all("/dev/stderr", string.to_bytes(string.concat(text, "\n"))); }
 
 // The single linking seam: the system linker today; `--linker native` is reserved for a Mio linker.
-koukai waza link_shared(object: []uint8, options: SharedOptions, output: string) -> NativeBuildResult {
+koukai waza link_shared(object: []uint8, exports: []lowerlinux.SharedExport, options: SharedOptions, output: string) -> NativeBuildResult {
     moshi (options.linker == "native") {
         kaesu shared_error("E_SHARED_LINKER the Mio native linker is reserved and not implemented yet; omit --linker to use the system linker");
     }
-    kaku linker = find_shared_linker(options.linker);
+    kaku linker = find_shared_linker(options.linker, len(options.link_options) > 0);
     moshi (linker == "") {
         moshi (options.linker != "") { kaesu shared_error(string.concat("E_SHARED_LINKER linker not found: ", options.linker)); }
         kaesu shared_error("E_SHARED_LINKER no linker found: install binutils (ld), lld or a C compiler driver, or pass --linker <path> or set MIO_LD");
@@ -194,14 +195,30 @@ koukai waza link_shared(object: []uint8, options: SharedOptions, output: string)
     kaku created = fs.create_dir(directory);
     moshi (created.error != mu) { kaesu shared_error("E_SHARED cannot create a private link directory"); }
     moshi (os.chmod(directory, 448) != 0) { os.remove_dir(directory); kaesu shared_error("E_SHARED cannot protect the link directory"); }
-    kaku result = link_in_directory(object, options, output, linker, directory);
+    kaku result = link_in_directory(object, exports, options, output, linker, directory);
     os.remove(string.concat(directory, "/module.o"));
     os.remove(string.concat(directory, "/library.so"));
+    os.remove(string.concat(directory, "/exports.map"));
     os.remove_dir(directory);
     kaesu result;
 }
 
-waza link_in_directory(object: []uint8, options: SharedOptions, output: string, linker: string, directory: string) -> NativeBuildResult {
+// Linked C objects and archives can define globals of their own. Only the
+// identifiers validated by the Mio export pass belong in the dynamic scope.
+waza shared_export_map(exports: []lowerlinux.SharedExport) -> []uint8 {
+    kaku script = string.new_builder();
+    string.write_string(script, "{ global:\n");
+    kaku at = 0;
+    aida (at < len(exports)) {
+        string.write_string(script, exports[at].symbol);
+        string.write_string(script, ";\n");
+        at = at + 1;
+    }
+    string.write_string(script, "local: *; };\n");
+    kaesu string.to_bytes(string.builder_string(script));
+}
+
+waza link_in_directory(object: []uint8, exports: []lowerlinux.SharedExport, options: SharedOptions, output: string, linker: string, directory: string) -> NativeBuildResult {
     kaku object_path = string.concat(directory, "/module.o");
     kaku library_path = string.concat(directory, "/library.so");
     kaku written = fs.write_all(object_path, object);
@@ -209,17 +226,24 @@ waza link_in_directory(object: []uint8, options: SharedOptions, output: string, 
     kaku soname = options.soname;
     moshi (soname == "") { soname = base_name(output); }
     moshi (soname == "" || string.contains(soname, ",") || string.has_prefix(soname, "-")) { kaesu shared_error("E_SHARED invalid SONAME"); }
+    kaku export_map = string.concat(directory, "/exports.map");
+    kaku restrict_exports = len(options.link_options) > 0;
+    moshi (restrict_exports && fs.write_all(export_map, shared_export_map(exports)).error != mu) {
+        kaesu shared_error("E_SHARED cannot write the linker export map");
+    }
     kaku arguments: []string = [];
     moshi (raw_linker(linker)) {
         // No CRT, no libc: a pure Mio module has no startup code and no dependency. -z defs / --no-undefined makes any
         // unresolved symbol a link error, -z text forbids text relocations, -z noexecstack keeps the stack non-executable.
         array.append_all(arguments, [linker, "-shared", "-soname", soname, "-z", "noexecstack", "-z", "relro", "-z", "now", "-z", "text",
             "--no-undefined", "--hash-style=gnu", "-o", library_path, object_path]);
+        moshi (restrict_exports) { array.append_all(arguments, ["--version-script", export_map]); }
         array.append_all(arguments, raw_link_arguments(options.link_options));
     } sore {
         // -nostdlib: the driver adds neither CRT files nor libc, only what is declared.
         array.append_all(arguments, [linker, "-shared", "-nostdlib", string.concat("-Wl,-soname,", soname), "-Wl,-z,noexecstack",
             "-Wl,-z,relro", "-Wl,-z,now", "-Wl,-z,text", "-Wl,--no-undefined", "-Wl,--hash-style=gnu", "-o", library_path, object_path]);
+        moshi (restrict_exports) { array.append_all(arguments, ["-Xlinker", "--version-script", "-Xlinker", export_map]); }
         array.append_all(arguments, options.link_options);
     }
     moshi (options.verbose) { write_log(string.concat("mio: link: ", render_command(arguments))); }

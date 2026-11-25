@@ -109,9 +109,9 @@ def inspect_library(report, name, path, soname, expected, needed=()):
     program = run("readelf-l", ["readelf", "-W", "-l", path]) or ""
     loads = [line.split() for line in program.splitlines() if line.strip().startswith("LOAD")]
     wx = [line for line in loads if "W" in "".join(line[6:-1]) and "E" in "".join(line[6:-1])]
-    stack = re.search(r"GNU_STACK\s+(?:\S+\s+){5}([RWE ]+?)\s+0x", program)
+    stack = next((line.split() for line in program.splitlines() if line.strip().startswith("GNU_STACK")), [])
     report.record(f"{name}: PT_LOAD segments present, none writable and executable", "PASS" if loads and not wx else "FAIL")
-    report.record(f"{name}: PT_GNU_STACK present and not executable", "PASS" if stack and "E" not in stack.group(1) else "FAIL")
+    report.record(f"{name}: PT_GNU_STACK present and not executable", "PASS" if stack and "E" not in "".join(stack[6:-1]) else "FAIL")
     report.record(f"{name}: PT_DYNAMIC and PT_GNU_RELRO present", "PASS" if "DYNAMIC" in program and "GNU_RELRO" in program else "FAIL")
     sections = run("readelf-S", ["readelf", "-W", "-S", path]) or ""
     report.record(f"{name}: .dynsym .dynstr .dynamic and a hash section exist", "PASS" if all(s in sections for s in (".dynsym", ".dynstr", ".dynamic")) and (".gnu.hash" in sections or ".hash" in sections) else "FAIL")
@@ -229,10 +229,12 @@ def main():
                 report.measurements[f"stress_seconds.{cc}"] = round(process.seconds, 2)
     # LD_BIND_NOW and a fresh process per library: lazy binding must not hide a missing symbol
     if hosts:
-        exe = next(iter(hosts.values()))
         env = dict(os.environ, LD_BIND_NOW="1", LD_DEBUG="")
-        process = report.tool("host.bindnow.std", [exe, libs, "std"], env=env)
-        report.expect("aggregate loads and runs with LD_BIND_NOW=1", process, process is not None and process.returncode == 0)
+        for cc, exe in hosts.items():
+            process = report.tool(f"host.bindnow.std.{cc}", [exe, libs, "std"], env=env)
+            report.expect(f"aggregate loads and runs with LD_BIND_NOW=1 using {cc}", process,
+                          process is not None and process.returncode == 0)
+        exe = next(iter(hosts.values()))
         valgrind = shutil.which("valgrind")
         if valgrind:
             process = report.tool("host.valgrind.math", [valgrind, "--error-exitcode=9", "-q", exe, libs, "math"], timeout=600)
@@ -244,7 +246,7 @@ def main():
     extdep = MODULES / "mio_extdep"
     without = report.tool("extdep.without-lm", [mio, "build", extdep, "--shared", "-o", out / "no_lm.so", *base])
     report.expect("a module calling C sqrt without -lm fails to link with a clear diagnostic", without,
-                  without is not None and without.returncode != 0 and b"E_SHARED_LINK" in without.stderr and b"undefined reference" in without.stderr and not (out / "no_lm.so").exists())
+                  without is not None and without.returncode != 0 and b"E_SHARED_LINK" in without.stderr and any(message in without.stderr for message in (b"undefined reference", b"undefined symbol")) and not (out / "no_lm.so").exists())
     with_lm = report.tool("extdep.with-lm", [mio, "build", extdep, "--shared", "-lm", "--soname", "libmio_extdep.so", "-o", libs / "libmio_extdep.so", *base])
     if report.expect("the same module links with the declared dependency -lm", with_lm, with_lm is not None and with_lm.returncode == 0 and (libs / "libmio_extdep.so").is_file()):
         inspect_library(report, "libmio_extdep", libs / "libmio_extdep.so", "libmio_extdep.so", ["mio_extdep_cbrt", "mio_extdep_sqrt"], needed=["libm.so.6"])
@@ -252,11 +254,14 @@ def main():
         source.write_text('#include <dlfcn.h>\n#include <math.h>\n#include <stdio.h>\nint main(int c,char**v){void*h=dlopen(v[1],RTLD_NOW|RTLD_LOCAL);if(!h){puts(dlerror());return 1;}'
                           'double(*a)(double)=dlsym(h,"mio_extdep_sqrt");double(*b)(double)=dlsym(h,"mio_extdep_cbrt");if(!a||!b)return 2;'
                           'volatile double x=27.0,y=2.25;if(a(y)!=1.5||b(x)!=cbrt(x))return 3;puts("extdep OK");return dlclose(h);}\n')
-        if hosts:
-            cc = next(iter(hosts))
-            report.tool("extdep.compile", [cc, "-o", out / "extdep-host", source, "-ldl", "-lm"])
-            process = report.tool("extdep.run", [out / "extdep-host", libs / "libmio_extdep.so"])
-            report.expect("C host calls Mio -> libm sqrt/cbrt through the declared dependency", process, process is not None and process.returncode == 0 and b"extdep OK" in process.stdout)
+        for cc in hosts:
+            executable = out / f"extdep-host-{cc}"
+            compiled = report.tool(f"extdep.compile.{cc}", [cc, "-o", executable, source, "-ldl", "-lm"])
+            process = report.tool(f"extdep.run.{cc}", [executable, libs / "libmio_extdep.so"]) if executable.is_file() else None
+            report.expect(f"C host ({cc}) calls Mio -> libm sqrt/cbrt through the declared dependency", process,
+                          compiled is not None and compiled.returncode == 0 and process is not None
+                          and process.returncode == 0 and b"extdep OK" in process.stdout)
+
 
     # Keep the driver and raw-ld argument paths independently exercised.
     raw_ld = shutil.which("ld") or shutil.which("ld.lld")
@@ -272,15 +277,18 @@ def main():
         libm = report.tool("linker.libm-path", [cc, "-print-file-name=libm.so"])
         if libm is not None and libm.returncode == 0:
             libm_dir = Path(os.fsdecode(libm.stdout.strip())).resolve().parent
-            selected = out / "driver linker.so"
-            rpath = "$ORIGIN/space dir"
-            process = report.tool("linker.driver", [mio, "build", extdep, "--shared", "--linker", shutil.which(cc),
-                                  "-L", libm_dir, "-l", "m", "--rpath", rpath, "-o", selected, *base])
-            dynamic = report.tool("linker.driver-dynamic", ["readelf", "-d", selected]) if selected.is_file() else None
-            report.expect("explicit compiler driver preserves -L, -l and a literal rpath",
-                          process, process is not None and process.returncode == 0 and dynamic is not None
-                          and dynamic.returncode == 0 and b"[libm.so.6]" in dynamic.stdout
-                          and f"[{rpath}]".encode() in dynamic.stdout)
+            for name, linker in ((cc, shutil.which(cc)), ("ld.lld", shutil.which("ld.lld"))):
+                if not linker:
+                    continue
+                selected = out / f"{name} linker.so"
+                rpath = "$ORIGIN/space dir"
+                process = report.tool(f"linker.explicit.{name}", [mio, "build", extdep, "--shared", "--linker", linker,
+                                      "-L", libm_dir, "-l", "m", "--rpath", rpath, "-o", selected, *base])
+                dynamic = report.tool(f"linker.dynamic.{name}", ["readelf", "-d", selected]) if selected.is_file() else None
+                report.expect(f"explicit linker {name} preserves -L, -l and a literal rpath",
+                              process, process is not None and process.returncode == 0 and dynamic is not None
+                              and dynamic.returncode == 0 and b"[libm.so.6]" in dynamic.stdout
+                              and f"[{rpath}]".encode() in dynamic.stdout)
 
     ext_obj = out / "extdep.o"
     emitted = report.tool("extdep.object", [mio, "build", extdep, "--shared", "--emit=object", "-o", ext_obj, *base])
@@ -321,14 +329,30 @@ def main():
                       and b"--shared applies only" in negative_target.stderr and not image.exists())
     no_flag = report.tool("negative.soname-without-shared", [mio, "build", MODULES / "mio_math", "--soname", "x.so", "-o", out / "t.so", *base])
     report.expect("negative: --soname without --shared is refused", no_flag, no_flag is not None and no_flag.returncode != 0 and b"require --shared" in no_flag.stderr)
+    if hosts:
+        cc = next(iter(hosts))
+        pic_source = out / "pic-dependency.c"
+        pic_source.write_text("int c_dependency_global(void) { return 42; }\n", encoding="utf-8")
+        pic_object = out / "pic-dependency.o"
+        report.tool("pic-dependency.compile", [cc, "-c", "-fPIC", "-o", pic_object, pic_source])
+        library = out / "pic-dependency.so"
+        process = report.tool("pic-dependency.link", [mio, "build", MODULES / "mio_math", "--shared", "--link",
+                              pic_object, "-o", library, *base])
+        report.expect("linked PIC object globals stay out of the dynamic symbol table", process,
+                      process is not None and process.returncode == 0 and library.is_file()
+                      and dynsyms(library, True) == sorted(EXPECTED["math"]))
     # Non-PIC input must not become shared-library output: a -fno-pic object with an absolute relocation is refused by the link.
     if hosts:
         cc = next(iter(hosts))
         bad_c = out / "nonpic.c"
-        bad_c.write_text("int counter; int *address(void) { static int *p = &counter; return p; }\nint nonpic_value(void) { return counter; }\n")
+        bad_c.write_text("int counter; int *address(void) { return &counter; }\n", encoding="utf-8")
         bad_o = out / "nonpic.o"
         compiled = report.tool("nonpic.compile", [cc, "-c", "-fno-pic", "-mcmodel=small", "-O0", "-fno-pie", "-o", bad_o, bad_c])
         if compiled is not None and compiled.returncode == 0:
+            relocs = report.tool("nonpic.relocations", ["readelf", "-Wr", bad_o])
+            absolute = (relocs is not None and relocs.returncode == 0
+                        and re.search(rb"R_X86_64_32S?\s", relocs.stdout) is not None)
+            report.expect("non-PIC input contains an absolute text relocation", relocs, absolute)
             process = report.tool("negative.nonpic", [mio, "build", MODULES / "mio_math", "--shared", "--link", bad_o, "-o", out / "nonpic.so", *base])
             report.expect("negative: a non-PIC object linked into a shared library is refused (no TEXTREL output)", process,
                           process is not None and process.returncode != 0 and b"E_SHARED_LINK" in process.stderr and not (out / "nonpic.so").exists())
