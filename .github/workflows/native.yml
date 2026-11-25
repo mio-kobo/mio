@@ -185,8 +185,30 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/native-reports
+          pattern: native-report-*-${{ github.run_id }}-*
+          path: build/native-attempts
+      - name: Select the newest report artifact for each platform
+        env:
+          NATIVE_RUN_ID: ${{ github.run_id }}
+        run: |
+          mkdir -p build/native-reports
+          for target in linux-amd64 darwin-arm64 windows-amd64 linux-arm64 darwin-amd64 windows-arm64; do
+            latest_artifact=
+            latest_attempt=0
+            for artifact in build/native-attempts/native-report-"$target"-"$NATIVE_RUN_ID"-*; do
+              [[ -d "$artifact" ]] || continue
+              attempt=${artifact##*-}
+              [[ "$attempt" =~ ^[1-9][0-9]*$ ]] || continue
+              if (( attempt > latest_attempt )); then
+                latest_artifact="$artifact"
+                latest_attempt="$attempt"
+              fi
+            done
+            # A newer artifact without report.json must still fail the summary.
+            if [[ -n "$latest_artifact" ]]; then
+              mv "$latest_artifact" "build/native-reports/$target"
+            fi
+          done
       - name: Combine the platform reports (fails unless every required check is PASS)
         env:
           NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}
