@@ -28,6 +28,15 @@ waza lookup_fd(code: arm64.Assembler, closed: string) -> unit {
     rc(code, 11, closed);
 }
 
+waza ctl_change(code: arm64.Assembler, filter: int64, subscription: bool) -> unit {
+    rx(code, arm64.ldr_x(0, 31, 24));
+    rx(code, arm64.ldr_x(1, 31, 32));
+    rx(code, arm64.movz_x(2, filter, 0));
+    moshi (subscription) { rx(code, arm64.ldr_x(4, 31, 40)); }
+    sore { rx(code, arm64.movz_x(4, 0, 0)); }
+    rl(code, "native_reactor_change");
+}
+
 koukai waza emit_reactor_runtime(code: arm64.Assembler, empty: int64) -> unit {
     // ---- reactor_open(kind x0): kind 0 poll kqueue, 1 wake kqueue; any other kind is an invalid argument. Returns a handle token.
     rlabel(code, "native_reactor_open");
@@ -93,8 +102,9 @@ koukai waza emit_reactor_runtime(code: arm64.Assembler, empty: int64) -> unit {
     rb(code, "native_reactor_change_done");
     rlabel(code, "native_reactor_change_error");
     rx(code, arm64.ldr_x(9, 31, 32));
-    rx(code, arm64.cmp_imm_x(9, 2, iie));
-    rc(code, 1, "native_reactor_change_done");
+    rx(code, arm64.movz_x(10, 2, 0));
+    rx(code, arm64.and_x(9, 9, 10));
+    rz(code, 9, "native_reactor_change_done");
     rx(code, arm64.cmp_imm_x(0, 2, iie));
     rc(code, 1, "native_reactor_change_done");
     rx(code, arm64.movz_x(0, 0, 0));
@@ -130,6 +140,21 @@ koukai waza emit_reactor_runtime(code: arm64.Assembler, empty: int64) -> unit {
     rx(code, arm64.str_x(12, 31, 56));
     rx(code, arm64.lsr_x(13, 9, 16));
     rx(code, arm64.str_x(13, 31, 40));
+    // Like epoll, one subscription owns both interests on a descriptor. A disabled,
+    // udata-specific read knote with udata 0 reserves the descriptor in this kqueue.
+    // Its key is distinct from delivery knotes and the kernel drops it on fd close.
+    // The Reactor owner serializes changes. Probe without adding or touching delivery knotes.
+    rx(code, arm64.cmp_imm_x(10, 1, iie));
+    rc(code, 1, "native_reactor_ctl_filters");
+    rx(code, arm64.movz_x(3, 264, 0)); // EV_DISABLE | EV_UDATA_SPECIFIC
+    ctl_change(code, 1, iie);
+    rz(code, 0, "native_reactor_ctl_duplicate");
+    rx(code, arm64.cmp_imm_x(0, 2, iie)); // ENOENT
+    rc(code, 1, "native_reactor_ctl_status");
+    rx(code, arm64.movz_x(3, 265, 0)); // EV_ADD | EV_DISABLE | EV_UDATA_SPECIFIC
+    ctl_change(code, 1, iie);
+    rnz(code, 0, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_filters");
     kaku filter = 1;
     aida (filter <= 2) {
         kaku tag = string.concat("native_reactor_ctl_f", convert.format_int(filter));
@@ -149,16 +174,34 @@ koukai waza emit_reactor_runtime(code: arm64.Assembler, empty: int64) -> unit {
         rlabel(code, string.concat(tag, "_delete"));
         rx(code, arm64.movz_x(3, 2, 0));
         rlabel(code, string.concat(tag, "_call"));
-        rx(code, arm64.ldr_x(0, 31, 24));
-        rx(code, arm64.ldr_x(1, 31, 32));
-        rx(code, arm64.movz_x(2, filter, 0));
-        rx(code, arm64.ldr_x(4, 31, 40));
-        rl(code, "native_reactor_change");
-        rnz(code, 0, "native_reactor_ctl_status");
+        ctl_change(code, filter, hai);
+        rnz(code, 0, "native_reactor_ctl_filter_error");
         rlabel(code, string.concat(tag, "_next"));
         filter = filter + 1;
     }
+    rx(code, arm64.ldr_x(10, 31, 48));
+    rx(code, arm64.cmp_imm_x(10, 2, iie));
+    rc(code, 1, "native_reactor_ctl_ok");
+    rx(code, arm64.movz_x(3, 258, 0)); // EV_DELETE | EV_UDATA_SPECIFIC
+    ctl_change(code, 1, iie);
+    rb(code, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_filter_error");
+    rx(code, arm64.ldr_x(10, 31, 48));
+    rx(code, arm64.cmp_imm_x(10, 1, iie));
+    rc(code, 1, "native_reactor_ctl_status");
+    // A failed ADD can have installed the first filter. Roll back before returning.
+    rx(code, arm64.str_x(0, 31, 64));
+    rx(code, arm64.movz_x(3, 2, 0));
+    ctl_change(code, 1, iie);
+    rx(code, arm64.movz_x(3, 258, 0));
+    ctl_change(code, 1, iie);
+    rx(code, arm64.ldr_x(0, 31, 64));
+    rb(code, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_ok");
     rx(code, arm64.movz_x(0, 0, 0));
+    rb(code, "native_reactor_ctl_status");
+    rlabel(code, "native_reactor_ctl_duplicate");
+    rx(code, arm64.movz_x(0, 17, 0)); // EEXIST
     rb(code, "native_reactor_ctl_status");
     rlabel(code, "native_reactor_ctl_closed");
     rx(code, arm64.movz_x(0, 9, 0));

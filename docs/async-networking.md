@@ -167,6 +167,8 @@ close(reactor)                          -> UnitResult
 `Operation{id, slot, generation}` and `Event{operation, slot, generation, readable, writable, error, hangup}`. The portable operation set is submit / poll / cancel / wake / close; `update` exists because epoll can modify
 interest in place (an IOCP adapter would cancel and resubmit behind the same call).
 
+Each reactor allows one live subscription per socket, with readable and writable interest on the same operation. A second `submit` for that socket returns an error and preserves the first subscription. Use `update` to change its interests or `cancel` before submitting again. Pass the original socket handle to either operation. The Darwin backends reserve the descriptor with a disabled, udata-specific kqueue filter distinct from the readiness filters. Closing the socket or the kqueue releases that reservation.
+
 **Operation identity.** `id` is unique within a reactor and never reused. `slot` is recycled, `generation` is not: a slot's generation increases every time it is released. The kernel is only given the opaque token
 `generation * 1048576 + slot + 1`; token 0 is the internal wake-up descriptor. **Stale rejection.** `poll` drops (and counts in `stale`) every event whose token no longer matches a live operation: a cancelled operation, a
 slot that was released and reused, a kernel event still in flight. **Cancellation.** After `cancel` the operation is never delivered; an event already returned by an earlier `poll` can be re-validated with `current`.

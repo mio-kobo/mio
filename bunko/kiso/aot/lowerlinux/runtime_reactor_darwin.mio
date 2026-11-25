@@ -38,8 +38,8 @@ waza emit_kqueue_change(code: x86_64.Assembler) -> unit {
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_ge, "rt.reactor_change.done");
     x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -8);
-    x86_64.cmp_ri(code, x86_64.rcx, 2);
-    x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_change.done");
+    x86_64.and_ri(code, x86_64.rcx, 2);
+    x86_64.jcc(code, x86_64.cc_e, "rt.reactor_change.done");
     x86_64.cmp_ri(code, x86_64.rax, -2);
     x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_change.done");
     x86_64.mov_ri(code, x86_64.rax, 0);
@@ -47,6 +47,15 @@ waza emit_kqueue_change(code: x86_64.Assembler) -> unit {
     x86_64.mov_rr(code, x86_64.rsp, x86_64.rbp);
     x86_64.pop_r(code, x86_64.rbp);
     x86_64.ret(code);
+}
+
+waza ctl_kqueue_change(code: x86_64.Assembler, filter: int64, subscription: bool) -> unit {
+    x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -32);
+    x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -40);
+    x86_64.mov_ri(code, x86_64.rdx, filter);
+    moshi (subscription) { x86_64.mov_load(code, x86_64.r8, x86_64.rbp, -64); }
+    sore { x86_64.mov_ri(code, x86_64.r8, 0); }
+    x86_64.call(code, "rt.reactor_change");
 }
 
 koukai waza emit_reactor_kqueue(code: x86_64.Assembler) -> unit {
@@ -101,6 +110,21 @@ koukai waza emit_reactor_kqueue(code: x86_64.Assembler) -> unit {
     x86_64.mov_store(code, x86_64.rbp, -56, x86_64.rcx);
     x86_64.shr_ri(code, x86_64.rdx, 16);
     x86_64.mov_store(code, x86_64.rbp, -64, x86_64.rdx);
+    // Reserve one subscription per descriptor and kqueue via a disabled read knote
+    // with the distinct (EV_UDATA_SPECIFIC, udata 0) key. The kernel removes it on fd close.
+    x86_64.cmp_ri(code, x86_64.rsi, 1);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_ctl.filters");
+    x86_64.mov_ri(code, x86_64.rcx, 264); // EV_DISABLE | EV_UDATA_SPECIFIC
+    ctl_kqueue_change(code, 1, iie);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.reactor_ctl.duplicate");
+    x86_64.cmp_ri(code, x86_64.rax, -2); // ENOENT
+    x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_ctl.errno");
+    x86_64.mov_ri(code, x86_64.rcx, 265); // EV_ADD | EV_DISABLE | EV_UDATA_SPECIFIC
+    ctl_kqueue_change(code, 1, iie);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.errno");
+    x86_64.label(code, "rt.reactor_ctl.filters");
     kaku filter = 1;
     aida (filter <= 2) {
         kaku tag = string.concat("rt.reactor_ctl.f", convert.format_int(filter));
@@ -121,18 +145,36 @@ koukai waza emit_reactor_kqueue(code: x86_64.Assembler) -> unit {
         x86_64.label(code, string.concat(tag, ".delete"));
         x86_64.mov_ri(code, x86_64.rcx, 2);
         x86_64.label(code, string.concat(tag, ".call"));
-        x86_64.mov_load(code, x86_64.rdi, x86_64.rbp, -32);
-        x86_64.mov_load(code, x86_64.rsi, x86_64.rbp, -40);
-        x86_64.mov_ri(code, x86_64.rdx, filter);
-        x86_64.mov_load(code, x86_64.r8, x86_64.rbp, -64);
-        x86_64.call(code, "rt.reactor_change");
+        ctl_kqueue_change(code, filter, hai);
         x86_64.test_rr(code, x86_64.rax, x86_64.rax);
-        x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.errno");
+        x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.filter_error");
         x86_64.label(code, string.concat(tag, ".next"));
         filter = filter + 1;
     }
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -48);
+    x86_64.cmp_ri(code, x86_64.rax, 2);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_ctl.ok");
+    x86_64.mov_ri(code, x86_64.rcx, 258); // EV_DELETE | EV_UDATA_SPECIFIC
+    ctl_kqueue_change(code, 1, iie);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.reactor_ctl.errno");
+    x86_64.label(code, "rt.reactor_ctl.ok");
     x86_64.mov_ri(code, x86_64.rsi, 0);
     x86_64.jmp(code, "rt.reactor_ctl.done");
+    x86_64.label(code, "rt.reactor_ctl.filter_error");
+    x86_64.mov_load(code, x86_64.rcx, x86_64.rbp, -48);
+    x86_64.cmp_ri(code, x86_64.rcx, 1);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.reactor_ctl.errno");
+    // Preserve the ADD error and undo the first filter and reservation.
+    x86_64.mov_store(code, x86_64.rbp, -72, x86_64.rax);
+    x86_64.mov_ri(code, x86_64.rcx, 2);
+    ctl_kqueue_change(code, 1, iie);
+    x86_64.mov_ri(code, x86_64.rcx, 258);
+    ctl_kqueue_change(code, 1, iie);
+    x86_64.mov_load(code, x86_64.rax, x86_64.rbp, -72);
+    x86_64.jmp(code, "rt.reactor_ctl.errno");
+    x86_64.label(code, "rt.reactor_ctl.duplicate");
+    x86_64.mov_ri(code, x86_64.rax, -17); // EEXIST
     x86_64.label(code, "rt.reactor_ctl.errno");
     x86_64.neg_r(code, x86_64.rax);
     x86_64.call(code, "rt.sock_classify");
