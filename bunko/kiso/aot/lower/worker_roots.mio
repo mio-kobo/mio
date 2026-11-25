@@ -7,7 +7,8 @@ koukai teisu worker_slots=128;
 koukai teisu word_blocks=16384;
 // Off-heap control words for channels: a pool of word_blocks blocks of 8 words after the thread contexts. Word 0 of the pool counts issued
 // blocks; block h (a handle, 1..word_blocks) starts at word 8*h. Blocks are never reused (a channel's control block stays valid for the life of
-// the process, so a thread still inside send/receive can never touch recycled memory); the 16385th words_new fails with -12.
+// the process, so a thread still inside send/receive or using an old Channel alias can never touch recycled memory).
+// Exhaustion is permanent for that process: words_new returns -12 without issuing a handle or modifying any block.
 // Words per thread context: the fixed records, then (from wr_snapshot) the collector's root snapshot of wr_snapshot_capacity entries.
 teisu wr_ctx_words=5200;
 koukai teisu worker_root_words=(worker_slots+1)*wr_ctx_words+4+(word_blocks+1)*8;
@@ -114,7 +115,7 @@ waza emit_word_natives(c:arm64.Assembler,p:[]macho.AddressPatch,first:int64) -> 
     arm64.assembler_label(c,"native_words_new");emit(c,arm64.cmp_imm_x(0,1,iie));arm64.assembler_b_cond(c,11,"native_word_bad");emit(c,arm64.cmp_imm_x(0,8,iie));arm64.assembler_b_cond(c,12,"native_word_bad");
     wr_pool(c,p,first,9);arm64.assembler_label(c,"native_words_new_retry");emit(c,arm64.ldxr_x(10,9,hai));wr_num(c,14,word_blocks);emit(c,arm64.cmp_x(10,14));arm64.assembler_b_cond(c,2,"native_words_full");
     emit(c,arm64.add_imm_x(11,10,1,iie));emit(c,arm64.stxr_x(12,11,9,hai));arm64.assembler_cbnz_x(c,12,"native_words_new_retry");emit(c,arm64.add_imm_x(0,10,1,iie));emit(c,arm64.ret());
-    arm64.assembler_label(c,"native_words_full");wr_neg(c,0,12);emit(c,arm64.ret());
+    arm64.assembler_label(c,"native_words_full");emit(c,arm64.clrex());wr_neg(c,0,12);emit(c,arm64.ret());
     arm64.assembler_label(c,"native_word_bad");wr_neg(c,0,22);emit(c,arm64.ret());
     // words_free(h, n): blocks stay mapped for the life of the process
     arm64.assembler_label(c,"native_join_status");emit(c,arm64.sub_imm_x(31,31,16,iie));emit(c,arm64.str_x(30,31,0));arm64.assembler_bl(c,"attached_join_status");emit(c,arm64.ldr_x(30,31,0));emit(c,arm64.add_imm_x(31,31,16,iie));emit(c,arm64.ret());
