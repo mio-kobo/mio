@@ -263,7 +263,7 @@ def cli_chain(report, first, target, work, engine="native", checks=False):
 def cli_checks(report, cli, target, work):
     """Locale, help, theme and machine-output checks on the native CLI itself."""
     ansi = "\x1b["
-    def check(name, argv, code=0, contains=(), absent=(), env=None):
+    def check(name, argv, code=0, contains=(), absent=(), env=None, pattern=None):
         actual, out, err, _ = run(report, "cli-" + name, [cli, *argv], cwd=work, timeout=180, env=env)
         text = out + err
         problems = []
@@ -275,6 +275,8 @@ def cli_checks(report, cli, target, work):
         for value in absent:
             if value in text:
                 problems.append("unexpected %r" % value)
+        if pattern is not None and not re.search(pattern, out):
+            problems.append("version output does not match %r" % pattern)
         return report.check("cli-i18n-" + name, "PASS" if not problems else "FAIL", "native",
                             "" if not problems else brief(", ".join(problems)), detail=brief(text))
     check("japanese", ["--lang", "ja-JP", "help"], contains=("使用方法", "コマンド"), absent=(ansi,), env={"NO_COLOR": None, "CI": None})
@@ -283,7 +285,9 @@ def cli_checks(report, cli, target, work):
     check("no-color", ["--color=never", "help"], absent=(ansi,), env={"NO_COLOR": None, "CI": None})
     check("auto-no-color", ["help"], absent=(ansi,), env={"NO_COLOR": "1", "CI": None})
     check("unknown-command", ["--lang", "zh-CN", "help", "missing-command"], code=2, contains=("E_COMMAND", "未知命令"))
-    check("version", ["--lang", "en-US", "--version"], contains=("mio v2.1.2",))
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    check("version", ["--lang", "en-US", "--version"],
+          pattern=rf"^mio v{re.escape(version)}(?:-[0-9A-Za-z.]+)?(?: |$)")
     bad = work / "i18n-machine-bad.mio"
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
@@ -624,7 +628,8 @@ def native_mio_test(report, cli, skips_allowed, target=""):
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
             failures.append(package)
             continue
-        code, out, err, seconds = run(report, label, [cli, "test", package], timeout=900)
+        # This check parses the human-readable summary, so pin its language.
+        code, out, err, seconds = run(report, label, [cli, "test", package, "--lang", "en-US"], timeout=900)
         text = out + err
         passed = count(r"Tests complete: (\d+) passed", text)
         failed = count(r"Tests complete: \d+ passed, (\d+) failed", text)
@@ -1053,7 +1058,7 @@ def darwin_c_abi(report, cli, work):
 
 
 def linux_shared(report, cli, work):
-    """Linux x86-64 shared-library generation (docs/linux-amd64-shared-libraries.md), non-required until it has a CI history.
+    """Required Linux x86-64 shared-library generation check (docs/linux-amd64-shared-libraries.md).
     tests/shared/linux-amd64/run.py builds four independent libraries and one aggregate from real Mio modules with the compiler built from this
     source (`mio build --shared`), inspects every file with readelf/nm/objdump/ldd, loads them from a real C host (dlopen, dlsym, calls, dlclose,
     several libraries at once, a collector stress), runs the negative checks and compares the static executables with the base compiler when one is
@@ -1066,7 +1071,7 @@ def linux_shared(report, cli, work):
     try:
         checks = json.loads((output / "report.json").read_text(encoding="utf-8"))["checks"]
     except (OSError, ValueError, KeyError) as problem:
-        report.check("linux-shared", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)), required=False)
+        report.check("linux-shared", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)))
         return
     count = lambda status: [item["name"] for item in checks if item.get("status") == status]
     passed, failed, not_run = count("PASS"), count("FAIL"), count("NOT_RUN")
@@ -1082,7 +1087,7 @@ def linux_shared(report, cli, work):
     if not passed:
         problems.append("no check passed")
     detail = "%d PASS, %d FAIL, %d NOT_RUN%s" % (len(passed), len(failed), len(not_run), " (tools absent: %s)" % ", ".join(not_run) if not_run and not unexpected else "")
-    report.check("linux-shared", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
+    report.check("linux-shared", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail)
 
 
 def linux_dynamic_libraries(report, cli, work):
