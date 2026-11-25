@@ -1,13 +1,13 @@
 package codegen_test
 
 import (
+	"bufio"
 	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
-	"bufio"
 	"strconv"
+	"strings"
 	"testing"
 
 	miolang "Mio"
@@ -75,7 +75,6 @@ unix_indirect(cptr(0),int32(1),2.0);`
 		t.Fatalf("VM executed C stub: %v", err)
 	}
 }
-
 
 func compileErrorWithPureMio(t testing.TB, source string) string {
 	t.Helper()
