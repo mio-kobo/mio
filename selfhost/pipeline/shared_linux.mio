@@ -250,49 +250,108 @@ waza word_at(data: []uint8, at: int64, width: int64) -> int64 {
     kaesu value;
 }
 
-// Checks ELF64 little-endian ET_DYN EM_X86_64, a PT_DYNAMIC, a non-executable PT_GNU_STACK, no segment that is both
-// writable and executable, no text relocations (DT_TEXTREL, DF_TEXTREL) and a DT_SONAME. Returns "" when all hold.
+// Translate a dynamic virtual address through a file-backed PT_LOAD mapping.
+waza shared_file_offset(data: []uint8, phoff: int64, phnum: int64, address: int64, size: int64) -> int64 {
+    kaku at = 0;
+    aida (at < phnum) {
+        kaku header = phoff + at * 56;
+        moshi (word_at(data, header, 4) == 1) {
+            kaku offset = word_at(data, header + 8, 8);
+            kaku virtual_address = word_at(data, header + 16, 8);
+            kaku file_size = word_at(data, header + 32, 8);
+            moshi (virtual_address >= 0 && address >= virtual_address &&
+                   size <= file_size && address - virtual_address <= file_size - size) {
+                kaesu offset + (address - virtual_address);
+            }
+        }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+// Validate the loader-visible program headers and dynamic tags before returning the image.
 koukai waza verify_shared(data: []uint8, soname: string) -> string {
     moshi (len(data) < 64) { kaesu "E_SHARED_VERIFY file too small for an ELF header"; }
     moshi (data[0] != uint8(127) || data[1] != uint8(69) || data[2] != uint8(76) || data[3] != uint8(70)) { kaesu "E_SHARED_VERIFY not an ELF file"; }
-    moshi (data[4] != uint8(2) || data[5] != uint8(1) || data[6] != uint8(1)) { kaesu "E_SHARED_VERIFY not ELFCLASS64 little-endian version 1"; }
+    moshi (data[4] != uint8(2) || data[5] != uint8(1) || data[6] != uint8(1) || word_at(data, 20, 4) != 1) {
+        kaesu "E_SHARED_VERIFY not ELFCLASS64 little-endian version 1";
+    }
     moshi (word_at(data, 16, 2) != 3) { kaesu "E_SHARED_VERIFY not ET_DYN"; }
     moshi (word_at(data, 18, 2) != 62) { kaesu "E_SHARED_VERIFY not EM_X86_64"; }
     kaku phoff = word_at(data, 32, 8);
-    kaku phentsize = word_at(data, 54, 2);
     kaku phnum = word_at(data, 56, 2);
-    moshi (phentsize != 56 || phoff < 64 || phoff + phnum * 56 > len(data)) { kaesu "E_SHARED_VERIFY invalid program header table"; }
+    moshi (word_at(data, 54, 2) != 56 || phnum == 0 || phoff < 64 || phoff > len(data) - phnum * 56) {
+        kaesu "E_SHARED_VERIFY invalid program header table";
+    }
     kaku dynamic_offset = -1;
     kaku dynamic_size = 0;
+    kaku load_seen = iie;
     kaku stack_seen = iie;
+    kaku relro_seen = iie;
     kaku at = 0;
     aida (at < phnum) {
         kaku header = phoff + at * 56;
         kaku kind = word_at(data, header, 4);
         kaku flags = word_at(data, header + 4, 4);
-        // PF_X = 1, PF_W = 2
-        moshi (kind == 1 && flags - (flags / 4) * 4 == 3) { kaesu "E_SHARED_VERIFY a PT_LOAD segment is writable and executable"; }
+        moshi (kind == 1) {
+            load_seen = hai;
+            // PF_X = 1, PF_W = 2
+            moshi (flags - (flags / 4) * 4 == 3) { kaesu "E_SHARED_VERIFY a PT_LOAD segment is writable and executable"; }
+            kaku offset = word_at(data, header + 8, 8);
+            kaku file_size = word_at(data, header + 32, 8);
+            kaku memory_size = word_at(data, header + 40, 8);
+            moshi (offset < 0 || file_size < 0 || file_size > memory_size || offset > len(data) - file_size) {
+                kaesu "E_SHARED_VERIFY invalid PT_LOAD file span";
+            }
+        }
         moshi (kind == 2) { dynamic_offset = word_at(data, header + 8, 8); dynamic_size = word_at(data, header + 32, 8); }
         moshi (kind == 1685382481) {
             stack_seen = hai;
             moshi (flags - (flags / 2) * 2 == 1) { kaesu "E_SHARED_VERIFY the stack is executable (PT_GNU_STACK has PF_X)"; }
         }
+        moshi (kind == 1685382482) { relro_seen = hai; }
         at = at + 1;
     }
+    moshi (!load_seen) { kaesu "E_SHARED_VERIFY missing PT_LOAD"; }
     moshi (!stack_seen) { kaesu "E_SHARED_VERIFY missing PT_GNU_STACK (the loader would assume an executable stack)"; }
-    moshi (dynamic_offset < 0 || dynamic_offset + dynamic_size > len(data)) { kaesu "E_SHARED_VERIFY missing PT_DYNAMIC"; }
-    kaku soname_found = iie;
+    moshi (!relro_seen) { kaesu "E_SHARED_VERIFY missing PT_GNU_RELRO"; }
+    moshi (dynamic_offset < 0 || dynamic_size < 16 || dynamic_offset > len(data) - dynamic_size) {
+        kaesu "E_SHARED_VERIFY missing or invalid PT_DYNAMIC";
+    }
+    kaku soname_index = -1;
+    kaku strtab_address = -1;
+    kaku strtab_size = 0;
+    kaku bind_now = iie;
+    kaku terminated = iie;
     at = 0;
-    aida (at + 16 <= dynamic_size) {
+    aida (at <= dynamic_size - 16) {
         kaku tag = word_at(data, dynamic_offset + at, 8);
         kaku value = word_at(data, dynamic_offset + at + 8, 8);
-        moshi (tag == 0) { nukeru; }
+        moshi (tag == 0) { terminated = hai; nukeru; }
         moshi (tag == 22) { kaesu "E_SHARED_VERIFY text relocations (DT_TEXTREL): the code is not position independent"; }
-        // DT_FLAGS (30): DF_TEXTREL = 4
+        // DT_FLAGS = 30 (DF_TEXTREL = 4, DF_BIND_NOW = 8); DT_FLAGS_1 = 0x6ffffffb (DF_1_NOW = 1).
         moshi (tag == 30 && (value / 4) - ((value / 4) / 2) * 2 == 1) { kaesu "E_SHARED_VERIFY text relocations (DF_TEXTREL): the code is not position independent"; }
-        moshi (tag == 14) { soname_found = hai; }
+        moshi (tag == 24 || (tag == 30 && (value / 8) - ((value / 8) / 2) * 2 == 1) ||
+               (tag == 1879048187 && value - (value / 2) * 2 == 1)) { bind_now = hai; }
+        moshi (tag == 5) { strtab_address = value; }
+        moshi (tag == 10) { strtab_size = value; }
+        moshi (tag == 14) { soname_index = value; }
         at = at + 16;
     }
-    moshi (!soname_found) { kaesu string.concat("E_SHARED_VERIFY missing DT_SONAME ", soname); }
+    moshi (!terminated) { kaesu "E_SHARED_VERIFY unterminated PT_DYNAMIC"; }
+    moshi (soname_index < 0) { kaesu string.concat("E_SHARED_VERIFY missing DT_SONAME ", soname); }
+    moshi (!bind_now) { kaesu "E_SHARED_VERIFY missing BIND_NOW"; }
+    kaku expected = string.to_bytes(soname);
+    moshi (strtab_address < 0 || strtab_size <= len(expected) || soname_index >= strtab_size - len(expected)) {
+        kaesu "E_SHARED_VERIFY invalid DT_SONAME string";
+    }
+    kaku offset = shared_file_offset(data, phoff, phnum, strtab_address, strtab_size);
+    moshi (offset < 0) { kaesu "E_SHARED_VERIFY unmapped dynamic string table"; }
+    kaku name_at = offset + soname_index;
+    at = 0;
+    aida (at < len(expected) && data[name_at + at] == expected[at]) { at = at + 1; }
+    moshi (at != len(expected) || data[name_at + at] != uint8(0)) {
+        kaesu string.concat("E_SHARED_VERIFY unexpected DT_SONAME, expected ", soname);
+    }
     kaesu "";
 }

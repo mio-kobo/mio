@@ -112,6 +112,12 @@ waza test_invalid_specs_fail_closed() -> unit {
     testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: duplicate, locals: [], relocations: [] }).error == "DUPLICATE_EXPORT x", "duplicate export");
     kaku past_end = [Relocation { at: 62, kind: r_x86_64_pc32, symbol: "", addend: 0 }];
     testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: past_end }).error == "INVALID_RELOCATION_OFFSET", "rel32 past the code");
+    kaku overflow = [Relocation { at: 9223372036854775807, kind: r_x86_64_pc32, symbol: "", addend: -4 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 16, exports: ok.exports, locals: [], relocations: overflow }).error == "INVALID_RELOCATION_OFFSET", "large offset fails before addition");
+    kaku outside_bss = [Relocation { at: 4, kind: r_x86_64_pc32, symbol: "", addend: 13 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 16, exports: ok.exports, locals: [], relocations: outside_bss }).error == "INVALID_RELOCATION_ADDEND", "PC32 must address the data area");
+    kaku wrong_call = [Relocation { at: 4, kind: r_x86_64_plt32, symbol: "sqrt", addend: 0 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: wrong_call }).error == "INVALID_RELOCATION_ADDEND", "PLT32 requires the rel32 addend");
     kaku wrong_symbol = [Relocation { at: 4, kind: r_x86_64_plt32, symbol: "", addend: -4 }];
     testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: wrong_symbol }).error == "INVALID_RELOCATION_SYMBOL", "PLT32 needs a symbol");
 }

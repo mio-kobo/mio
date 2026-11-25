@@ -112,7 +112,7 @@ koukai waza object(spec: ObjectSpec) -> ObjectResult {
     kaku at = 0;
     aida (at < exports) {
         kaku entry = spec.exports[at];
-        moshi (entry.symbol == "" || entry.offset < 0 || entry.size < 0 || entry.offset + entry.size > len(spec.code)) { kaesu fail("INVALID_EXPORT"); }
+        moshi (entry.symbol == "" || entry.offset < 0 || entry.size < 0 || entry.offset > len(spec.code) - entry.size) { kaesu fail("INVALID_EXPORT"); }
         kaku other = 0;
         aida (other < at) {
             moshi (spec.exports[other].symbol == entry.symbol) { kaesu fail(string.concat("DUPLICATE_EXPORT ", entry.symbol)); }
@@ -125,9 +125,13 @@ koukai waza object(spec: ObjectSpec) -> ObjectResult {
     aida (at < len(spec.relocations)) {
         kaku reloc = spec.relocations[at];
         moshi (reloc.kind != r_x86_64_pc32 && reloc.kind != r_x86_64_plt32) { kaesu fail(string.concat("UNSUPPORTED_RELOCATION type ", convert.format_int(reloc.kind))); }
-        moshi (reloc.at < 0 || reloc.at + 4 > len(spec.code)) { kaesu fail("INVALID_RELOCATION_OFFSET"); }
+        moshi (reloc.at < 0 || reloc.at > len(spec.code) - 4) { kaesu fail("INVALID_RELOCATION_OFFSET"); }
         moshi (reloc.kind == r_x86_64_plt32 && reloc.symbol == "") { kaesu fail("INVALID_RELOCATION_SYMBOL"); }
         moshi (reloc.kind == r_x86_64_pc32 && reloc.symbol != "") { kaesu fail("INVALID_RELOCATION_SYMBOL"); }
+        moshi ((reloc.kind == r_x86_64_plt32 && reloc.addend != -4) ||
+               (reloc.kind == r_x86_64_pc32 && (reloc.addend < -4 || reloc.addend > spec.bss_size - 4))) {
+            kaesu fail("INVALID_RELOCATION_ADDEND");
+        }
         moshi (reloc.symbol != "") {
             kaku defined = iie;
             kaku e = 0;
@@ -142,7 +146,7 @@ koukai waza object(spec: ObjectSpec) -> ObjectResult {
     at = 0;
     aida (at < len(spec.locals)) {
         kaku entry = spec.locals[at];
-        moshi (entry.symbol == "" || entry.offset < 0 || entry.size < 0 || entry.offset + entry.size > len(spec.code)) { kaesu fail("INVALID_LOCAL"); }
+        moshi (entry.symbol == "" || entry.offset < 0 || entry.size < 0 || entry.offset > len(spec.code) - entry.size) { kaesu fail("INVALID_LOCAL"); }
         array.push(local_names, add_name(strtab, entry.symbol));
         at = at + 1;
     }

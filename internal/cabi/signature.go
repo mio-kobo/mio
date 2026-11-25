@@ -1,6 +1,8 @@
 // Package cabi describes the C prototypes that the Reference VM can check.
 package cabi
 
+import "strings"
+
 const Prefix = "$cabi::"
 
 // IndirectSymbol is the reserved symbol of an indirect C call. The first
@@ -18,6 +20,11 @@ func ValidSymbol(name string) bool {
 		}
 	}
 	return true
+}
+
+// ValidExportSymbol rejects the reserved runtime prefix on C exports.
+func ValidExportSymbol(name string) bool {
+	return ValidSymbol(name) && !strings.HasPrefix(name, "mio_ffi_v1_")
 }
 
 func TypeCode(name string) string {

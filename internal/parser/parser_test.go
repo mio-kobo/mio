@@ -1488,6 +1488,7 @@ func TestExportAttributeParsesOnPublicFunctionsOnly(t *testing.T) {
 		"symbol":    `koukai waza f() -> int32 export "not valid" { kaesu 1; }`,
 		"missing":   `koukai waza f() -> int32 export { kaesu 1; }`,
 		"prototype": `koukai waza f() export "x" { }`,
+		"reserved":  `koukai waza f() -> unit export "mio_ffi_v1_test" { }`,
 	} {
 		if _, errs := parseForExportTest(source); len(errs) == 0 {
 			t.Fatalf("%s: expected a parse error", name)

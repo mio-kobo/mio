@@ -1315,7 +1315,7 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 	cExport := ""
 	if p.peekToken.Type == token.Ident && p.peekToken.Literal == "export" {
 		p.nextToken()
-		if p.peekToken.Type != token.String || !cabi.ValidSymbol(p.peekToken.Literal) || len(typeParams) != 0 || returnType == nil {
+		if p.peekToken.Type != token.String || !cabi.ValidExportSymbol(p.peekToken.Literal) || len(typeParams) != 0 || returnType == nil {
 			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
 		}
 		p.nextToken()
