@@ -1330,7 +1330,13 @@ func (p *Parser) parseFunctionStatement() (*ast.FunctionStatement, error) {
 				return nil, fmt.Errorf("E_FFI_PROTOTYPE expected ';' after C declaration")
 			}
 			p.nextToken()
-			return &ast.FunctionStatement{Name: name, Parameters: params, ReturnType: returnType, Body: &ast.BlockStatement{}, Native: true, CABI: true, CDLL: dll, CSymbol: export, Range: ast.Span{Start: start, End: p.curToken.End}}, nil
+			end := p.curToken.End
+			return &ast.FunctionStatement{
+				Name: name, Parameters: params, ReturnType: returnType,
+				Body:   &ast.BlockStatement{Range: ast.Span{Start: symbol.Start, End: end}},
+				Native: true, CABI: true, CDLL: dll, CSymbol: export,
+				Range: ast.Span{Start: start, End: end},
+			}, nil
 		}
 		if !cabi.ValidSymbol(symbol.Literal) {
 			return nil, fmt.Errorf("E_CABI expected a C declaration suffix = c followed by a C symbol string")
