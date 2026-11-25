@@ -20,7 +20,7 @@ untouched: for programs without `export` declarations the compiler produces byte
 | Opaque handles instead of GC objects | implemented (by convention, see below) |
 | Several module directories into one library (`mio build a b c --shared`) | implemented |
 | Declared C dependencies (`= c "sym"` with `--link/-L/-l/--rpath`, `DT_NEEDED`, PLT) | implemented |
-| Post-link verification inside the compiler (`ET_DYN`, `EM_X86_64`, no W+X, non-executable stack, no TEXTREL, SONAME) | implemented |
+| Post-link verification inside the compiler (`ET_DYN`, `EM_X86_64`, no W+X, non-executable stack, no TEXTREL, exact SONAME, RELRO and BIND_NOW) | implemented |
 | Strings, arrays, structs or closures as parameters or results | **not supported** (rejected at compile time) |
 | Pointer + length buffers filled by C | **not supported** (Mio has no operation that dereferences a `cptr`) |
 | Callbacks from C into Mio, C threads calling concurrently, OS threads inside the library | **not supported** |
@@ -57,8 +57,9 @@ mio build mio_math --shared --verbose -o libmio_math.so      # prints the exact 
 
 Pipeline: frontend and type check, typed lowering in PIC mode (`kiso/aot/lowerlinux/shared.mio`), the `ET_REL` object
 (`kiso/aot/elfrel`), one linker invocation with an argv vector (never a shell string), then verification of the linked
-file (`selfhost/pipeline/shared_linux.mio`). A link failure is an error with the linker's own messages on stderr plus the
-full command line; no output file is produced.
+file (`selfhost/pipeline/shared_linux.mio`). The verifier checks the dynamic string table for the requested SONAME
+and requires RELRO and immediate binding. A link failure reports `E_SHARED_LINK` and preserves the linker’s stderr
+and command line. Verification failures report `E_SHARED_VERIFY`. Both failures leave the requested output path untouched.
 
 ## C ABI export guide
 
@@ -72,7 +73,7 @@ koukai waza dot(a: int64, b: int64, x: float64) -> float64 export "mio_dot" { ka
   changes meaning, and there is no new keyword.
 * The signature must be an explicit prototype of scalar types: `int8 int16 int32 int64 uint8 uint16 uint32 uint64
   float32 float64 bool cptr`, result a scalar or `unit`. No type parameters. The symbol must be a valid C identifier
-  and not `main`. Violations are compile errors (`E_CABI`).
+  other than `main` or a name starting with `mio_ffi_v1_`. Violations are compile errors (`E_CABI`).
 * Only exported functions become dynamic symbols (`GLOBAL FUNC`, default visibility). Everything else, including every
   runtime routine, is not in `.dynsym`. Local function symbols exist in `.symtab` for debuggers only.
 * Duplicate symbols in one module or across aggregated modules are `E_SHARED_EXPORT` errors. A build without any
@@ -140,8 +141,8 @@ The code generator produces exactly two relocation types, and the `ET_REL` write
 | `R_X86_64_PLT32` | `call symbol@PLT` to a declared C dependency, resolved to a PLT entry and `R_X86_64_JUMP_SLOT` |
 
 `GOTPCREL`, `GOTPCRELX`, `R_X86_64_64` and `RELATIVE` are not needed because Mio code addresses its own data
-rip-relatively and holds no absolute pointers in data; the writer reports `UNSUPPORTED_RELOCATION type N` instead of
-guessing. A self-contained library has no `.rela.dyn` at all.
+rip-relatively and holds no absolute pointers in data. The writer rejects unknown relocation types with
+`UNSUPPORTED_RELOCATION type N` and checks the rel32 spans and addends. A self-contained library has no `.rela.dyn` at all.
 
 ## Known limitations
 
@@ -169,4 +170,4 @@ with `file` (when installed), `readelf -h -l -S -d -s -r`, `nm -D`, `objdump -T`
 libraries loaded together and closed in another order, and repeated open/close. It also checks the negative
 diagnostics, the declared-dependency link, `--emit=object`, reproducibility, and (with `--baseline`) that static
 executables are byte-identical to the base compiler's. Statuses are PASS, FAIL and NOT_RUN; a missing tool is NOT_RUN,
-never PASS. The Native workflow runs it on the linux-amd64 hub as the non-required check `linux-shared`.
+never PASS. The Native workflow runs it on the linux-amd64 hub as the required check `linux-shared`.

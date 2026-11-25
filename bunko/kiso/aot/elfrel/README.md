@@ -16,4 +16,4 @@ Relocations accepted (everything else fails closed with `UNSUPPORTED_RELOCATION`
 | `R_X86_64_PLT32` | 4 | `call symbol@PLT` to a declared external C symbol |
 
 Other failures: `EMPTY_TEXT`, `INVALID_BSS`, `INVALID_EXPORT`, `DUPLICATE_EXPORT`, `INVALID_RELOCATION_OFFSET`,
-`INVALID_RELOCATION_SYMBOL`.
+`INVALID_RELOCATION_SYMBOL`, `INVALID_RELOCATION_ADDEND`.
