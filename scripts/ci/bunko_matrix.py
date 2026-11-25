@@ -122,6 +122,8 @@ def load_reports(directory):
     results = {}
     if not directory:
         return results
+    protocols, _, _ = coverage_config()
+    protocol_names = {name for names in protocols.values() for name in names}
     for report_path in sorted(Path(directory).rglob("report.json")):
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -135,7 +137,7 @@ def load_reports(directory):
             name = check.get("name", "")
             if name.startswith("mio-test bunko/") or name.startswith("mio-test selfhost/"):
                 statuses[name] = check.get("status")
-            elif name in ("mio-run-protocol", "os-process-protocol", "mio-test-protocol", "linux-thread-gc", "windows-dynamic-ffi"):
+            elif name in protocol_names:
                 statuses["protocol " + name] = check.get("status")
         for suite, folder in (("native-differential", "native-differential"), ("runtime-abi-contract", "runtime-abi")):
             results_path = report_path.parent / folder / "results.json"
