@@ -5,14 +5,16 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"Mio/internal/bunko"
 	"Mio/internal/compiler"
 	"Mio/internal/constant"
+	"Mio/internal/diagnostic"
 	"Mio/internal/mochi"
 	"Mio/internal/resolver"
 	"Mio/internal/stdlib"
@@ -48,16 +50,24 @@ func compile(path, bunkoRoot string) (*compiler.Bytecode, error) {
 
 func main() {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "usage: refvm <bunko-root> run <file.mio> | mochi <file.mio> <out.mochi>")
+		fmt.Fprintln(os.Stderr, "usage: refvm <bunko-root> run <file.mio> | mochi <file.mio> <out.mochi> | check <file.mio>")
 		os.Exit(2)
 	}
 	root, command, path := os.Args[1], os.Args[2], os.Args[3]
 	program, err := compile(path, root)
 	if err != nil {
+		var diag *diagnostic.Diagnostic
+		if command == "check" && errors.As(err, &diag) {
+			if encodeErr := json.NewEncoder(os.Stderr).Encode(diag); encodeErr == nil {
+				os.Exit(1)
+			}
+		}
 		fmt.Fprintln(os.Stderr, "refvm:", err)
 		os.Exit(1)
 	}
 	switch command {
+	case "check":
+		return
 	case "mochi":
 		var encoded bytes.Buffer
 		if err := mochi.Validate(program); err != nil {
@@ -93,5 +103,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "refvm: unknown command", command)
 		os.Exit(2)
 	}
-	_ = filepath.Base
 }

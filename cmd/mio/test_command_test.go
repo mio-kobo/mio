@@ -62,6 +62,7 @@ waza test_ok() -> unit { testing.expect(hidden() == 42, "ok"); }
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("MIO_LANG", "")
+			t.Setenv("LANGUAGE", "")
 			t.Setenv("LC_ALL", "")
 			t.Setenv("LC_MESSAGES", "")
 			t.Setenv("LANG", "")

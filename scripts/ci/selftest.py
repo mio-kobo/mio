@@ -38,6 +38,19 @@ bunko_matrix = load("ci_bunko_matrix", HERE / "bunko_matrix.py")
 
 
 class ContractTests(unittest.TestCase):
+    def test_checked_channel_coverage_uses_both_native_thread_suites(self):
+        row = next(row for row in bunko_matrix.build_inventory()
+                   if (row["module"], row["function"]) == ("kiso/thread", "channel_new_checked"))
+        for target, protocol in (("darwin-arm64", "darwin-thread-programs"), ("linux-amd64", "linux-thread-gc")):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                report = Path(directory) / "report.json"
+                for status, expected in (("PASS", "PASS"), ("NOT_RUN", "UNVERIFIED")):
+                    checks = [dict(name=protocol, status=status, engine="native")]
+                    report.write_text(json.dumps(dict(target=target, checks=checks)))
+                    loaded = bunko_matrix.load_reports(directory)
+                    self.assertEqual(bunko_matrix.verdict(row, target, loaded[target])[0], expected)
+        self.assertEqual(bunko_matrix.verdict(row, "windows-amd64", None)[0], "UNSUPPORTED")
+
     def test_dynamic_ffi_protocol_preserves_native_report_status(self):
         row = dict(tests=["protocol windows-dynamic-ffi"], unsupported={}, not_testable="")
         for status, expected in (("PASS", "PASS"), ("FAIL", "FAIL"), ("NOT_RUN", "UNVERIFIED"), (None, "UNVERIFIED")):

@@ -325,6 +325,52 @@ waza eintr(total_ms: int64) -> unit {
     chant("OK");
 }
 
+// The external peer echoes a byte as the reactor owner cancels the read subscription.
+waza cancellation_race(port: int64, rounds: int64) -> unit {
+    kaku started = tcp_async.connect(loopback(port));
+    kaku client = started.connection;
+    kaku r = reactor.open().reactor;
+    moshi (client == mu) { fail("connect cancellation peer"); kaesu; }
+    moshi (r == mu) { fail("open cancellation reactor"); kaesu; }
+    kaku connected = !started.pending;
+    kaku deadline = os.monotonic_ms() + 2000;
+    aida (!connected && os.monotonic_ms() < deadline) {
+        kaku done = tcp_async.finish_connect(client);
+        moshi (done.error != mu) { fail("finish cancellation peer connect"); kaesu; }
+        connected = !done.pending;
+    }
+    moshi (!connected) { fail("cancellation peer connect timed out"); kaesu; }
+    kaku request: []uint8 = [uint8(5)];
+    kaku response: []uint8 = [uint8(0)];
+    kaku round = 0;
+    aida (round < rounds) {
+        kaku old = reactor.submit(r, client.handle, reactor.readable).operation;
+        moshi (old == mu) { fail("subscribe before cancellation"); kaesu; }
+        moshi (tcp_async.write(client, request, 0, 1).count != 1) { fail("trigger peer response"); kaesu; }
+        // Alternate cancelling immediately with cancelling after an event has already been returned.
+        kaku wait = 0;
+        moshi (round - (round / 2) * 2 == 1) { wait = 2000; }
+        kaku before = reactor.poll(r, wait, 8);
+        moshi (before.error != mu || (wait > 0 && len(before.events) != 1)) { fail("poll before cancellation"); kaesu; }
+        moshi (reactor.cancel(r, old, client.handle).error != mu) { fail("cancel subscription"); kaesu; }
+        moshi (len(before.events) > 0 && reactor.current(r, before.events[0])) { fail("cancelled event is still current"); kaesu; }
+        kaku quiet = reactor.poll(r, 0, 8);
+        moshi (quiet.error != mu || len(quiet.events) != 0) { fail("event delivered after cancellation"); kaesu; }
+        kaku fresh = reactor.submit(r, client.handle, reactor.readable).operation;
+        moshi (fresh == mu) { fail("resubscribe after cancellation"); kaesu; }
+        kaku ready = reactor.poll(r, 2000, 8);
+        moshi (ready.error != mu || len(ready.events) != 1 || ready.events[0].operation != fresh.id
+            || !ready.events[0].readable || !reactor.current(r, ready.events[0])) { fail("readiness reached the wrong subscription"); kaesu; }
+        moshi (tcp_async.read(client, response, 0, 1).count != 1 || response[0] != request[0]) { fail("read peer response"); kaesu; }
+        moshi (reactor.cancel(r, fresh, client.handle).error != mu) { fail("cancel fresh subscription"); kaesu; }
+        round = round + 1;
+    }
+    reactor.close(r);
+    tcp_async.close(client);
+    kv("cancel_rounds", round);
+    chant("OK");
+}
+
 waza main() -> unit {
     kaku mode = os.argument(1);
     moshi (mode == mu) {
@@ -341,6 +387,10 @@ waza main() -> unit {
     }
     moshi (mode == "eintr") {
         eintr(arg_int(2));
+        kaesu;
+    }
+    moshi (mode == "cancel-race") {
+        cancellation_race(arg_int(2), arg_int(3));
         kaesu;
     }
     fail("unknown mode");
