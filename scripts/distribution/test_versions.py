@@ -288,13 +288,16 @@ class BootstrapProfileTests(unittest.TestCase):
         self.assertEqual(bootstrap.seed_kind_for('2.1.1'), 'native-v21')
         self.assertEqual(bootstrap.seed_kind_for('2.1.2'), 'native-v21')
         self.assertEqual(bootstrap.profile_for('2.1.2').artifact, 'trusted-native-v21')
-        for version in ('2.2.0', '2.2.1', '3.0.0', '10.0.0'):
+        self.assertEqual(bootstrap.seed_kind_for('2.2.0'), 'native-v21')
+        self.assertEqual(bootstrap.profile_for('2.2.0').artifact, 'trusted-native-v21')
+        for version in ('2.2.1', '3.0.0', '10.0.0'):
             with self.subTest(version=version), self.assertRaises(bootstrap.BootstrapProfileMissing):
                 bootstrap.seed_kind_for(version)
 
     def test_rc_and_unregistered_versions_fail_closed(self):
-        with self.assertRaises(bootstrap.BootstrapProfileMissing):
-            bootstrap.profile_for('2.1.2-rc.1')
+        for version in ('2.1.2-rc.1', '2.2.0-rc.1'):
+            with self.subTest(version=version), self.assertRaises(bootstrap.BootstrapProfileMissing):
+                bootstrap.profile_for(version)
         with self.assertRaises(versions.VersionError):
             bootstrap.profile_for('2.0.0')
 
