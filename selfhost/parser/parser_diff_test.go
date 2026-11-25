@@ -17,6 +17,7 @@ import (
 	miolang "Mio"
 	"Mio/internal/ast"
 	"Mio/internal/diagnostic"
+	"Mio/internal/ffi"
 	"Mio/internal/lexer"
 	goparser "Mio/internal/parser"
 	"Mio/internal/token"
@@ -496,6 +497,14 @@ func normalizeStatement(statement ast.Statement, source string) *canonicalNode {
 		children = append(children, normalizeStatement(value.Body, source))
 		result := node(32, value.Range, children...)
 		result.text, result.integer, result.operator, result.flag = value.Name.Name, len(value.TypeParams), len(value.Parameters), value.Exported
+		result.extra = value.CSymbol
+		if value.CDLL != "" {
+			types := make([]string, len(value.Parameters))
+			for i, parameter := range value.Parameters {
+				types[i] = parameter.DeclaredType.Name
+			}
+			result.extra = ffi.Key(value.CDLL, value.CSymbol, value.ReturnType.Name, types)
+		}
 		return result
 	case *ast.StructStatement:
 		children := normalizeTypeParameters(value.TypeParams, value.Constraints)
@@ -677,6 +686,8 @@ func TestMioParserDifferentialCorpus(t *testing.T) {
 		[]byte(`kaku entries = Map[string, int64](); entries["answer"] = int64(42);`),
 		[]byte(`kaku maximum = 9223372036854775807; kaku magnitude = 9223372036854775808; kaku minimum = -9223372036854775808; kaku below = -9223372036854775809;`),
 		[]byte(`yobu "kiso/array"; koukai waza exported() -> unit { kaesu; }`),
+		[]byte(`koukai waza getpid() -> int32 = c "getpid";`),
+		[]byte(`koukai waza pid() -> uint32 = c "kernel32.dll" "GetCurrentProcessId";`),
 		[]byte(`kaku value = (1 + 2;`), []byte(`waza missing(value: int64 -> unit {}`),
 		[]byte(`moshi hai) {}`), []byte(`kaku = 1;`), []byte(`1 + ;`), []byte("\xff"),
 		// yuzuru: explicit ownership transfer (prefix, one variable name) and its rejected operand forms

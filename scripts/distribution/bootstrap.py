@@ -31,6 +31,10 @@ PROFILE_RANGES = (
     # minor/major line needs a new reviewed entry rather than inheriting this.
     dict(kind=NATIVE_V21, minimum=(2, 1, 1), below=(2, 2, 0),
          reason='reviewed native v2.1 bootstrap seed for the v2.1.x line'),
+    # Mio 2.2.0 starts from the same immutable seed and must establish its own
+    # Full and Core fixed points and evidence. Later versions need review.
+    dict(kind=NATIVE_V21, minimum=(2, 2, 0), below=(2, 2, 1),
+         reason='reviewed native v2.1 bootstrap seed for Mio 2.2.0'),
 )
 
 

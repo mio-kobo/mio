@@ -8,6 +8,7 @@ counted as evidence. Statuses are PASS, FAIL, SKIP, NOT_RUN and NOT_APPLICABLE; 
 
 import argparse
 import json
+import os
 import platform
 import shlex
 import shutil
@@ -36,7 +37,8 @@ class Report:
         argv = [str(part) for part in command]
         log = self.output / (name + ".log")
         try:
-            process = subprocess.run(argv, cwd=ROOT, capture_output=True, timeout=timeout)
+            env = dict(os.environ, MIO_LANG="en-US", LC_ALL="C")
+            process = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as error:
             log.write_text(f"$ {shlex.join(argv)}\n{error}\n", encoding="utf-8")
             self.record(name, "FAIL", log=str(log))

@@ -1,8 +1,14 @@
 package typecheck
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"Mio/internal/diagnostic"
 )
 
 // 测试可空类型的赋值规则
@@ -132,6 +138,48 @@ func TestNullableEarlyReturnMutationInvalidatesFact(t *testing.T) {
 }`
 	if err := checkMioSource(source); err == nil || !strings.Contains(err.Error(), "requires int64") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestNullableLoopBackedge(t *testing.T) {
+	for _, suffix := range []string{"fallthrough", "continue", "callback"} {
+		t.Run(suffix, func(t *testing.T) {
+			path := filepath.Join("..", "..", "tests", "native-differential", "cases", "compile-errors", "nullable_loop_"+suffix)
+			source, err := os.ReadFile(path + ".mio")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture, err := os.ReadFile(path + ".diagnostic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var expected []any
+			if err := json.Unmarshal(fixture, &expected); err != nil || len(expected) != 3 {
+				t.Fatalf("invalid diagnostic fixture %s: %v", fixture, err)
+			}
+			err = checkMioSource(string(source))
+			var diag *diagnostic.Diagnostic
+			if !errors.As(err, &diag) || len(diag.Labels) != 1 || !diag.Labels[0].Primary {
+				t.Fatalf("expected a located diagnostic, got %v", err)
+			}
+			start := diag.Labels[0].Span.Start
+			if diag.Code != expected[0] || float64(start.Line) != expected[1] || float64(start.Column) != expected[2] {
+				t.Fatalf("expected %v, got %s at %d:%d", expected, diag.Code, start.Line, start.Column)
+			}
+		})
+	}
+}
+
+func TestNullableLoopConditionUsesBackedgeFacts(t *testing.T) {
+	err := checkMioSource(`waza run(input: int64?) -> unit {
+    kaku value: int64? = input;
+    moshi (value == mu) { kaesu; }
+    aida (value > 0) { value = mu; }
+}`)
+	var diag *diagnostic.Diagnostic
+	if !errors.As(err, &diag) || diag.Code != "E0302" || len(diag.Labels) != 1 ||
+		diag.Labels[0].Span.Start.Line != 4 || diag.Labels[0].Span.Start.Column != 11 {
+		t.Fatalf("expected E0302 at the loop condition (4:11), got %+v", err)
 	}
 }
 

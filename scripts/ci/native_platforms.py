@@ -647,9 +647,7 @@ def native_mio_test(report, cli, skips_allowed, target=""):
 
 
 def reactor_checks(report, cli, target, work):
-    """The reactor has a backend on linux-amd64 and linux-arm64 (epoll) and darwin-arm64 (kqueue). There: stress (normal and --gc-stress, repeated), a
-    1000-connection load test with an idle-CPU check, and an EINTR test, all natively. Every other target reports NOT_RUN (never PASS),
-    not a required check."""
+    """Run cancellation races, stress, a 1000-connection load test and EINTR on the Linux and Darwin reactor backends."""
     names = {"linux-amd64": "linux-reactor", "linux-arm64": "linux-arm64-reactor", "darwin-arm64": "darwin-reactor", "darwin-amd64": "darwin-amd64-reactor"}
     if target not in names:
         return report.check("reactor", "NOT_RUN", "native", "the reactor backend exists on linux-amd64, linux-arm64, darwin-arm64 and darwin-amd64 only (the primitives fail closed here)", required=False)
@@ -764,9 +762,13 @@ def darwin_thread_programs(report, cli, work):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
-             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
+             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "concurrent_join", "creation_limit", "lifecycle_cycles",
              "shutdown_active", "epoch_retention", "heap_invariants", "alloc_lock", "alloc_lock_stress", "alloc_lock_wait"]
-    stress = ["basic", "nested", "channel_basic", "channel_close", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    stress = ["basic", "nested", "channel_basic", "channel_close", "concurrent_join", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    darwin_cases = {"channel_exhaustion": b"channel exhaustion: ok\n"}
+    names.extend(("channel_exhaustion", "channel_concurrent_alloc"))
+    stress.append("channel_concurrent_alloc")
+    expected = {**module.PROGRAMS, **darwin_cases}
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
     for name in names:
@@ -784,7 +786,7 @@ def darwin_thread_programs(report, cli, work):
             bad = []
             for repeat in range(repeats):
                 code, out, err, seconds = run_sampled(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180, sample_after=20)
-                if code != 0 or out.encode() != module.PROGRAMS[name]:
+                if code != 0 or out.encode() != expected[name]:
                     bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
                     if name != "creation_limit":
                         break

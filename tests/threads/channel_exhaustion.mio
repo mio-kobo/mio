@@ -1,0 +1,61 @@
+// Darwin ARM64's control block limit counts every successful allocation in a process.
+yobu "kiso/os";
+yobu "kiso/thread";
+
+kata Message { value: int64; }
+
+waza require(ok: bool, message: string) -> unit {
+    moshi (!ok) { chant(message); os.exit(1); }
+}
+
+waza rejects(channel: thread.Channel<Message>, errno: int64) -> unit {
+    kaku message = Message { value: 17 };
+    kaku sent = thread.send[Message](channel, yuzuru message);
+    require(!sent.sent && sent.back.value == 17, "failed send returns the payload");
+    kaku received = thread.receive[Message](channel);
+    require(received.closed && received.item.value == -1, "failed receive returns the filler");
+    require(thread.close[Message](channel) == errno, "close reports the error");
+    require(thread.destroy[Message](channel) == errno, "destroy reports the error");
+}
+
+waza use_channel(channel: thread.Channel<Message>, value: int64) -> unit {
+    kaku message = Message { value: value };
+    require(thread.send[Message](channel, yuzuru message).sent, "send on a live channel");
+    kaku received = thread.receive[Message](channel);
+    require(!received.closed && received.item.value == value, "receive on a live channel");
+}
+
+waza main() -> unit {
+    kaku filler = Message { value: -1 };
+    kaku invalid = thread.Channel[Message] { words: 0, ring: [], filler: filler, capacity: 0 };
+    rejects(invalid, -22);
+    // An in-range but unissued control block must also be rejected by the runtime.
+    kaku unissued = thread.Channel[Message] { words: 16384, ring: [], filler: filler, capacity: 0 };
+    rejects(unissued, -22);
+    kaku first = thread.channel_new_checked[Message](1, filler);
+    require(first.error == 0, "initial allocation");
+    kaku anchor = first.channel;
+    moshi (anchor == mu) { os.exit(1); kaesu; }
+    kaku i = 1;
+    aida (i < 16384) {
+        kaku result = thread.channel_new_checked[Message](1, filler);
+        require(result.error == 0, "allocation within the pool limit");
+        kaku channel = result.channel;
+        moshi (channel == mu) { os.exit(1); kaesu; }
+        use_channel(channel, i);
+        require(thread.destroy[Message](channel) == 0, "destroy during allocation churn");
+        i = i + 1;
+    }
+    // A huge requested ring makes it visible if the failed constructor attempts to allocate it.
+    kaku exhausted = thread.channel_new_checked[Message](1099511627776, filler);
+    require(exhausted.channel == mu && exhausted.error == -12, "checked construction reports exhaustion");
+    kaku unavailable = thread.channel_new[Message](1, filler);
+    rejects(unavailable, -12);
+    use_channel(anchor, 42);
+    require(thread.destroy[Message](anchor) == 0, "destroy after exhaustion");
+    require(thread.destroy[Message](anchor) == 0, "destroy remains idempotent");
+    kaku out_of_range = thread.Channel[Message] { words: 16385, ring: [], filler: filler, capacity: 0 };
+    rejects(out_of_range, -22);
+    chant("channel exhaustion: ok");
+}
+main();

@@ -482,7 +482,8 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 		if n.Target == "cptr" {
 			zero, ok := n.Arguments[0].(*ast.IntegerLiteral)
 			if !ok || zero.Value != 0 || zero.Overflow {
-				return KindInvalid, fmt.Errorf("E_FFI_POINTER only cptr(0) constructs a native pointer")
+				return KindInvalid, diagnostic.NewError("E_FFI_POINTER", "cptr(0) constructs null; other C pointers must come from C",
+					diagnostic.FromPositions(n.Span().Start, n.Span().End))
 			}
 			n.Source = source.String()
 			return KindCPtr, nil

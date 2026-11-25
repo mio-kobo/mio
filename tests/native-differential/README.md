@@ -9,3 +9,8 @@ The VM / native differential programs formerly embedded in the Go harness `inter
 configuration and built with `mio build --gc-stress`. `gc_garbage` and `gc_keeps_live_data` run in the default
 configuration only (quadratic under per-allocation collection, as in the former Go harness); they are reported
 `NOT_APPLICABLE` for `--gc-stress`, never PASS.
+
+Cases in `cases/compile-errors` must fail before execution. Each `.diagnostic`
+file records the expected diagnostic code, line, and column as a JSON array.
+The runner compares the structured diagnostic from the native build and the
+Go reference checker.
