@@ -50,7 +50,7 @@ def main():
     def record(name, status, **fields):
         checks[name] = {"status": status, **fields}
 
-    def run(name, argv, *, empty_path=False, success=True, contains=None):
+    def run(name, argv, *, empty_path=False, success=True, contains=None, stderr_contains=None):
         argv = list(map(str, argv))
         env = dict(os.environ, PATH="") if empty_path else None
         try:
@@ -63,6 +63,8 @@ def main():
         valid = (result.returncode == 0) == success
         if contains is not None:
             valid &= contains.encode() in result.stdout + result.stderr
+        if stderr_contains is not None:
+            valid &= stderr_contains.encode() in result.stderr
         record(name, "PASS" if valid else "FAIL", command=argv, exit_code=result.returncode)
         if not valid:
             raise RuntimeError(f"{name} failed, see {logs}")
@@ -74,7 +76,8 @@ def main():
             record(f"{name}-{check}", "NOT_RUN")
     for name in ("data-fixture", "loader-build", "loader-codesign", "loader-run", "loader-gc-build",
                  "loader-gc-run", "loader-verdict", "c-build", "c-run", "reject-missing-export",
-                 "reject-runtime-body", "reject-cross-target", "reject-recursion", "reject-duplicate-symbol"):
+                 "reject-runtime-body", "reject-cross-target", "reject-recursion", "reject-duplicate-symbol",
+                 "reject-missing-export-seatbelt"):
         record(name, "NOT_RUN")
 
     try:
@@ -129,6 +132,11 @@ def main():
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]
         run("reject-missing-export", [*build, HERE / "math.mio"], success=False, contains="--export")
+        # Apply the sandbox to the compiler only so the harness can capture
+        # its inherited stderr even when opening /dev/stderr is forbidden.
+        sandbox = ["/usr/bin/sandbox-exec", "-p", '(version 1) (allow default) (deny file-write* (subpath "/dev"))']
+        run("reject-missing-export-seatbelt", [*sandbox, *build, HERE / "math.mio"], success=False,
+            stderr_contains="--export")
         run("reject-runtime-body", [*build, "kiso/convert", "--export=parse_int=mio_parse"], success=False, contains="E_DYLIB")
         run("reject-cross-target", [*build, HERE / "math.mio", "--export=add=mio_add", "--target=linux-amd64"],
             success=False, contains="Darwin ARM64")
