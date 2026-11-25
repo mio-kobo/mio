@@ -239,8 +239,8 @@ reference VM for Linux Stage A. The stable workflow on revisions with a reviewed
 bootstrap profile uses a separate GitHub-hosted Darwin ARM64 job.
 
 1. The profile is selected from the release version by
-   `scripts/distribution/bootstrap.py`, never from a workflow input. For the
-   v2.1.x line the job retrieves `mio-v2.1.0-darwin-arm64` from the
+   `scripts/distribution/bootstrap.py`, never from a workflow input. For
+   v2.1.x maintenance releases and the explicit v2.2.0 profile, the job retrieves `mio-v2.1.0-darwin-arm64` from the
    [immutable v2.1 seed release](https://github.com/mio-kobo/mio/releases/tag/bootstrap-v2.1.0-seed.1).
    It checks the pinned release tag, release ID, asset ID, asset name, and SHA-256
    from `scripts/distribution/seed_evidence.py`. The download is restricted to
