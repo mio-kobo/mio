@@ -283,7 +283,12 @@ def cli_checks(report, cli, target, work):
     check("no-color", ["--color=never", "help"], absent=(ansi,), env={"NO_COLOR": None, "CI": None})
     check("auto-no-color", ["help"], absent=(ansi,), env={"NO_COLOR": "1", "CI": None})
     check("unknown-command", ["--lang", "zh-CN", "help", "missing-command"], code=2, contains=("E_COMMAND", "未知命令"))
-    check("version", ["--lang", "en-US", "--version"], contains=("mio v2.1.2",))
+    distribution = report.data.get("distribution_input")
+    if distribution is None:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() + "-dev"
+    else:
+        version = distribution["version"]
+    check("version", ["--lang", "en-US", "--version"], contains=(f"mio v{version} (",))
     bad = work / "i18n-machine-bad.mio"
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,

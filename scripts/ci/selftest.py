@@ -38,6 +38,29 @@ bunko_matrix = load("ci_bunko_matrix", HERE / "bunko_matrix.py")
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_cli_version_matches_checkout_or_distribution(self):
+        cases = (
+            (None, "2.2.0-dev", "PASS"),
+            (None, "2.1.2-dev", "FAIL"),
+            ("2.2.0-pr.0123456789ab", "2.2.0-pr.0123456789ab", "PASS"),
+            ("2.2.0-pr.0123456789ab", "2.2.0-pr.0123456789ac", "FAIL"),
+            ("2.2.0", "2.2.0", "PASS"),
+            ("2.2.0", "2.2.0-dev", "FAIL"),
+        )
+        for distribution, actual, expected in cases:
+            with self.subTest(distribution=distribution, actual=actual), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "VERSION").write_text("2.2.0\n", encoding="utf-8")
+                if distribution is not None:
+                    (root / "distribution-input.json").write_text(json.dumps({"version": distribution}), encoding="utf-8")
+                with patch.object(native, "ROOT", root):
+                    report = native.Report("linux-amd64", root / "report")
+                    banner = f"mio v{actual} (pure Mio Native AOT)\n"
+                    with patch.object(native, "run", return_value=(0, banner, "", 0)), patch.object(report, "check") as check:
+                        native.cli_checks(report, Path("mio"), report.target, root)
+                status = next(call.args[1] for call in check.call_args_list if call.args[0] == "cli-i18n-version")
+                self.assertEqual(status, expected)
+
     def test_checked_channel_coverage_uses_both_native_thread_suites(self):
         row = next(row for row in bunko_matrix.build_inventory()
                    if (row["module"], row["function"]) == ("kiso/thread", "channel_new_checked"))
