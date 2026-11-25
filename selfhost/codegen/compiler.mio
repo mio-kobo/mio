@@ -755,8 +755,24 @@ waza compile_function_body(state: CompilerState, reference: resolver.NodeRef, id
         moshi(context.emitter.failed[0]){add_error(state,CompileErrorKind.LimitExceeded(),reference.file_id,reference.node_id,context.emitter.detail[0]);}
 }
 
+waza is_reserved_ffi_symbol(symbol: string, package_path: string) -> bool {
+    moshi (string.has_prefix(symbol, "mio_ffi_v1_")) { kaesu hai; }
+    moshi (package_path == "kiso/ffi/darwin") { kaesu iie; }
+    kaesu symbol == "mio_ffi_store_byte"
+        || symbol == "mio_ffi_load_byte"
+        || symbol == "mio_ffi_call_g"
+        || symbol == "mio_ffi_call_gg"
+        || symbol == "mio_ffi_call_ggg"
+        || symbol == "mio_ffi_call_jj"
+        || symbol == "mio_ffi_call_jgg"
+        || symbol == "mio_ffi_call_lg"
+        || symbol == "mio_ffi_load_pointer"
+        || symbol == "mio_ffi_pointer_offset"
+        || symbol == "mio_ffi_load_word";
+}
+
 waza compile_c_declaration(state: CompilerState, reference: resolver.NodeRef, node: parser.Node, id: int64) -> unit {
-    moshi (string.has_prefix(node.extra, "mio_ffi_") && state.resolved.package_path != "kiso/ffi/darwin") {
+    moshi (is_reserved_ffi_symbol(node.extra, state.resolved.package_path)) {
         add_error(state, CompileErrorKind.UnsupportedNode(), reference.file_id, reference.node_id, "reserved Mio FFI runtime symbol");
         kaesu;
     }

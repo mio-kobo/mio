@@ -162,3 +162,52 @@ waza test_native_cross_package_generic_instances() -> unit {
     testing.expect(result.success, "generic bodies copy caller-owned concrete types into their declaration package");
     testing.expect(instance_count(result) == 2, "cross-package instances retain both concrete identities");
 }
+
+waza compile_in_package(package_path: string, source: string) -> CompileResult {
+    kaku parsed = parser.parse(string.to_bytes(source));
+    kaku resolved = resolver.resolve_program(package_path, parsed);
+    kaku checked = typecheck.check_program(resolved);
+    kaku packages: []resolver.ResolvedPackage = [resolved];
+    kaku checks: []typecheck.TypeCheckResult = [checked];
+    kaku natives: []NativeFunctionLayout = [];
+    kaesu compile_native_modules(packages, checks, natives, iie);
+}
+
+waza has_compile_error(result: CompileResult, text: string) -> bool {
+    kaku at = 0;
+    aida (at < len(result.errors)) {
+        moshi (result.errors[at].detail == text) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+waza test_ffi_reserved_symbol_policy() -> unit {
+    kaku allowed = compile_in_package("sample/app",
+        "waza ver() -> uint32 = c \"mio_ffi_abi_version\"; waza ind(f: cptr, x: int32) -> int32 = c \"mio_ffi_indirect\"; waza ord(x: int64) -> int64 = c \"mio_ordinary_symbol\"; chant(ver()); chant(ind(cptr(0), int32(1))); chant(ord(1));");
+    testing.expect(allowed.success, "mio_ffi_abi_version, mio_ffi_indirect, and ordinary mio_* C declarations are permitted");
+
+    kaku darwin_ok = compile_in_package("kiso/ffi/darwin",
+        "waza p(x: cptr, o: uint64) -> cptr = c \"mio_ffi_load_pointer\"; waza o(a: cptr, b: cptr) -> int64 = c \"mio_ffi_pointer_offset\"; waza w(x: cptr) -> int64 = c \"mio_ffi_load_word\"; waza sb(x: cptr, o: uint64, v: uint8) -> unit = c \"mio_ffi_store_byte\"; waza lb(x: cptr, o: uint64) -> uint8 = c \"mio_ffi_load_byte\"; waza cg(x: cptr) -> int64 = c \"mio_ffi_call_g\"; waza cgg(x: cptr, a: int64) -> int64 = c \"mio_ffi_call_gg\"; waza cggg(x: cptr, a: int64, b: int64) -> int64 = c \"mio_ffi_call_ggg\"; waza cjj(x: cptr, a: float64) -> float64 = c \"mio_ffi_call_jj\"; waza cjgg(x: cptr, a: int64, b: int64) -> float64 = c \"mio_ffi_call_jgg\"; waza clg(x: cptr, a: int64) -> bool = c \"mio_ffi_call_lg\"; chant(w(cptr(0)));");
+    testing.expect(darwin_ok.success, "kiso/ffi/darwin is permitted to declare loader intrinsics");
+
+    kaku blocked_intrinsic = compile_in_package("sample/app",
+        "waza w(x: cptr) -> int64 = c \"mio_ffi_load_word\"; chant(w(cptr(0)));");
+    testing.expect(!blocked_intrinsic.success && has_compile_error(blocked_intrinsic, "reserved Mio FFI runtime symbol"),
+        "user packages cannot declare private loader intrinsics");
+
+    kaku blocked_call = compile_in_package("sample/app",
+        "waza cg(x: cptr) -> int64 = c \"mio_ffi_call_g\"; chant(cg(cptr(0)));");
+    testing.expect(!blocked_call.success && has_compile_error(blocked_call, "reserved Mio FFI runtime symbol"),
+        "user packages cannot declare mio_ffi_call_g");
+
+    kaku blocked_alias_user = compile_in_package("sample/app",
+        "waza a() -> int64 = c \"mio_ffi_v1_g_foo\"; chant(a());");
+    testing.expect(!blocked_alias_user.success && has_compile_error(blocked_alias_user, "reserved Mio FFI runtime symbol"),
+        "user packages cannot declare mio_ffi_v1_ signature aliases");
+
+    kaku blocked_alias_darwin = compile_in_package("kiso/ffi/darwin",
+        "waza a() -> int64 = c \"mio_ffi_v1_g_foo\"; chant(a());");
+    testing.expect(!blocked_alias_darwin.success && has_compile_error(blocked_alias_darwin, "reserved Mio FFI runtime symbol"),
+        "mio_ffi_v1_ signature aliases remain reserved even inside kiso/ffi/darwin");
+}

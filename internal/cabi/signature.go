@@ -1,6 +1,8 @@
 // Package cabi describes the C prototypes that the Reference VM can check.
 package cabi
 
+import "strings"
+
 const Prefix = "$cabi::"
 
 // IndirectSymbol is the reserved symbol of an indirect C call. The first
@@ -67,4 +69,38 @@ func ParamCode(name string, element string) string {
 		return ""
 	}
 	return TypeCode(name)
+}
+
+// IsReservedLoaderIntrinsic reports whether symbol is one of the internal
+// Darwin dylib loader intrinsics owned by kiso/ffi/darwin.
+func IsReservedLoaderIntrinsic(symbol string) bool {
+	switch symbol {
+	case "mio_ffi_store_byte",
+		"mio_ffi_load_byte",
+		"mio_ffi_call_g",
+		"mio_ffi_call_gg",
+		"mio_ffi_call_ggg",
+		"mio_ffi_call_jj",
+		"mio_ffi_call_jgg",
+		"mio_ffi_call_lg",
+		"mio_ffi_load_pointer",
+		"mio_ffi_pointer_offset",
+		"mio_ffi_load_word":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsReservedSymbol reports whether declaring an external C symbol from
+// packagePath is forbidden because it collides with compiler-owned dylib
+// markers or private loader intrinsics.
+func IsReservedSymbol(symbol string, packagePath string) bool {
+	if strings.HasPrefix(symbol, "mio_ffi_v1_") {
+		return true
+	}
+	if packagePath == "kiso/ffi/darwin" {
+		return false
+	}
+	return IsReservedLoaderIntrinsic(symbol)
 }
