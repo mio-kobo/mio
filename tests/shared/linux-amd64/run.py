@@ -116,6 +116,12 @@ def inspect_library(report, name, path, soname, expected, needed=()):
     sections = run("readelf-S", ["readelf", "-W", "-S", path]) or ""
     report.record(f"{name}: .dynsym .dynstr .dynamic and a hash section exist", "PASS" if all(s in sections for s in (".dynsym", ".dynstr", ".dynamic")) and (".gnu.hash" in sections or ".hash" in sections) else "FAIL")
     dynamic = run("readelf-d", ["readelf", "-d", path]) or ""
+    bind_now = re.search(r"\(BIND_NOW\)|\(FLAGS\).*\bBIND_NOW\b|\(FLAGS_1\).*\bNOW\b", dynamic)
+    report.record(f"{name}: dynamic flags request immediate binding", "PASS" if bind_now else "FAIL")
+    if not needed:
+        tables = re.findall(r"\]\s+(\.(?:got|plt)(?:\.[\w.]+)?)\s", sections)
+        report.record(f"{name}: self-contained output has no GOT or PLT sections",
+                      "FAIL" if tables or not sections else "PASS", detail=tables)
     soname_ok = re.search(r"\(SONAME\)\s+Library soname: \[" + re.escape(soname) + r"\]", dynamic) is not None
     report.record(f"{name}: DT_SONAME is {soname}", "PASS" if soname_ok else "FAIL")
     found = re.findall(r"\(NEEDED\)\s+Shared library: \[([^\]]+)\]", dynamic)
@@ -252,6 +258,38 @@ def main():
             process = report.tool("extdep.run", [out / "extdep-host", libs / "libmio_extdep.so"])
             report.expect("C host calls Mio -> libm sqrt/cbrt through the declared dependency", process, process is not None and process.returncode == 0 and b"extdep OK" in process.stdout)
 
+    # Keep the driver and raw-ld argument paths independently exercised.
+    raw_ld = shutil.which("ld") or shutil.which("ld.lld")
+    if raw_ld:
+        selected = out / "environment linker.so"
+        env = dict(os.environ, MIO_LD=raw_ld)
+        process = report.tool("linker.environment", [mio, "build", MODULES / "mio_math", "--shared",
+                              "--verbose", "-o", selected, *base], env=env)
+        report.expect("MIO_LD selects the raw linker", process, process is not None and process.returncode == 0
+                      and f"mio: link: {raw_ld} -shared ".encode() in process.stderr and selected.is_file())
+    if hosts:
+        cc = next(iter(hosts))
+        libm = report.tool("linker.libm-path", [cc, "-print-file-name=libm.so"])
+        if libm is not None and libm.returncode == 0:
+            libm_dir = Path(os.fsdecode(libm.stdout.strip())).resolve().parent
+            selected = out / "driver linker.so"
+            rpath = "$ORIGIN/space dir"
+            process = report.tool("linker.driver", [mio, "build", extdep, "--shared", "--linker", shutil.which(cc),
+                                  "-L", libm_dir, "-l", "m", "--rpath", rpath, "-o", selected, *base])
+            dynamic = report.tool("linker.driver-dynamic", ["readelf", "-d", selected]) if selected.is_file() else None
+            report.expect("explicit compiler driver preserves -L, -l and a literal rpath",
+                          process, process is not None and process.returncode == 0 and dynamic is not None
+                          and dynamic.returncode == 0 and b"[libm.so.6]" in dynamic.stdout
+                          and f"[{rpath}]".encode() in dynamic.stdout)
+
+    ext_obj = out / "extdep.o"
+    emitted = report.tool("extdep.object", [mio, "build", extdep, "--shared", "--emit=object", "-o", ext_obj, *base])
+    relocs = report.tool("extdep.object-relocs", ["readelf", "-Wr", ext_obj]) if ext_obj.is_file() else None
+    calls = re.findall(rb"R_X86_64_PLT32\s+\S+\s+(\w+)\s+-\s+4\s*$", relocs.stdout, re.M) if relocs else []
+    report.expect("ET_REL calls to sqrt and cbrt use PLT32 with addend -4", emitted,
+                  bool(emitted is not None and emitted.returncode == 0 and relocs is not None and relocs.returncode == 0
+                       and set(calls) == {b"sqrt", b"cbrt"}))
+
     # ---- negative checks: diagnostics, no artifact, never a silent success
     def negative(name, argv, needle, label, env=None):
         target = out / f"neg-{name}.so"
@@ -261,6 +299,8 @@ def main():
     negative("not_public", [NEGATIVE / "not_public"], "E_CABI", "`export` on a private function is rejected")
     negative("bad_symbol", [NEGATIVE / "bad_symbol"], "E_CABI", "an invalid C symbol name is rejected")
     negative("reserved_main", [NEGATIVE / "reserved_main"], "E_CABI", "the reserved symbol `main` is rejected")
+    negative("reserved_runtime", [NEGATIVE / "reserved_runtime"], "E_CABI", "the runtime symbol prefix mio_ffi_v1_ is reserved")
+    negative("array_export", [NEGATIVE / "array_export"], "E_CABI", "exporting a byte array parameter is rejected")
     negative("generic", [NEGATIVE / "generic_export"], "E_CABI", "an exported generic function is rejected")
     negative("no_prototype", [NEGATIVE / "missing_return_type"], "E_CABI", "an export without an explicit prototype is rejected")
     negative("duplicate_in_module", [NEGATIVE / "duplicate_in_module"], "duplicate exported symbol same_symbol", "duplicate exported symbols in one module are rejected")
@@ -272,8 +312,13 @@ def main():
     empty.mkdir()
     negative("no_linker_installed", [MODULES / "mio_math"], "E_SHARED_LINKER no linker found", "no linker on PATH is a clear error",
              env={"PATH": str(empty), "HOME": str(out), "MIO_LD": "", "MIO_CC": "", "CC": ""})
-    wrong_target = report.tool("negative.target", [mio, "build", MODULES / "mio_math", "--shared", "--target", "darwin-arm64", "-o", out / "t.so", *base])
-    report.expect("negative: --shared is refused for other targets", wrong_target, wrong_target is not None and wrong_target.returncode != 0 and b"--shared applies only" in wrong_target.stderr)
+    for target in ("linux-arm64", "darwin-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"):
+        image = out / f"wrong-{target}.so"
+        negative_target = report.tool(f"negative.target.{target}",
+                                      [mio, "build", MODULES / "mio_math", "--shared", "--target", target, "-o", image, *base])
+        report.expect(f"negative: --shared is refused for {target}", negative_target,
+                      negative_target is not None and negative_target.returncode != 0
+                      and b"--shared applies only" in negative_target.stderr and not image.exists())
     no_flag = report.tool("negative.soname-without-shared", [mio, "build", MODULES / "mio_math", "--soname", "x.so", "-o", out / "t.so", *base])
     report.expect("negative: --soname without --shared is refused", no_flag, no_flag is not None and no_flag.returncode != 0 and b"require --shared" in no_flag.stderr)
     # Non-PIC input must not become shared-library output: a -fno-pic object with an absolute relocation is refused by the link.
