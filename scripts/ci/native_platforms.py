@@ -767,6 +767,10 @@ def darwin_thread_programs(report, cli, work):
              "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
              "shutdown_active", "epoch_retention", "heap_invariants", "alloc_lock", "alloc_lock_stress", "alloc_lock_wait"]
     stress = ["basic", "nested", "channel_basic", "channel_close", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    darwin_cases = {"channel_exhaustion": b"channel exhaustion: ok\n"}
+    names.extend(("channel_exhaustion", "channel_concurrent_alloc"))
+    stress.append("channel_concurrent_alloc")
+    expected = {**module.PROGRAMS, **darwin_cases}
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
     for name in names:
@@ -784,7 +788,7 @@ def darwin_thread_programs(report, cli, work):
             bad = []
             for repeat in range(repeats):
                 code, out, err, seconds = run_sampled(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180, sample_after=20)
-                if code != 0 or out.encode() != module.PROGRAMS[name]:
+                if code != 0 or out.encode() != expected[name]:
                     bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
                     if name != "creation_limit":
                         break

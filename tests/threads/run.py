@@ -38,6 +38,7 @@ PROGRAMS = {
     "channel_close": b"hai\n24\nhai\n33\niie\n11\nhai\n",
     "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
     "channel_mpmc": b"600\n1379100\n",
+    "channel_concurrent_alloc": b"concurrent channel allocation: ok\n",
     "summary_copy": b"198\n5\n",
     "alloc_cache": b"83\n0\n4\nhai\n",
     # Stage one hardening (docs/threading-stages.md)
