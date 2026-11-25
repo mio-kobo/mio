@@ -1417,16 +1417,15 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / ("mio-A" + suffix)
-    if target == "linux-arm64":
-        # The small untyped bootstrap compiler exhausts its 1 GiB arena while
-        # analyzing the Full CLI's embedded source table. Bootstrap the existing
-        # Core variant first, then use its typed native frontend to build Full.
+    if target in ("linux-arm64", "windows-arm64"):
+        # These AArch64 bootstrap compilers have a 1 GiB arena. Build Core
+        # first so the typed native frontend handles the Full resource table.
         # Full self-build fixed points and every subsequent check still run.
         source = Path(tempfile.mkdtemp(prefix="bootstrap-core-source-", dir=work))
         shutil.copytree(ROOT / "selfhost", source / "selfhost")
         shutil.copytree(ROOT / "bunko", source / "bunko")
         (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
-        core_bootstrap = work / "mio-bootstrap-core"
+        core_bootstrap = work / ("mio-bootstrap-core" + suffix)
         code, out, err, seconds = run(report, "cli-core-bootstrap", [paths["B"]],
                                       stdin=("selfhost/cli\n%s\n" % core_bootstrap).encode(), cwd=source)
         ok = code == 0 and out == profile["tag"] + ": ok\n" and core_bootstrap.is_file()
