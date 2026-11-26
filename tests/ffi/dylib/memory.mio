@@ -1,0 +1,210 @@
+yobu "kiso/array";
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+yobu "kiso/string";
+
+waza require(condition: bool, message: string) -> unit {
+    moshi (!condition) { chant(message); os.exit(1); }
+}
+
+waza buffer(result: darwin.BufferResult) -> darwin.Buffer {
+    kaku handle = result.buffer;
+    moshi (handle != mu) { kaesu handle; }
+    chant(result.error);
+    os.exit(1);
+    kaesu buffer(result);
+}
+
+waza native_pointer(handle: darwin.Buffer) -> cptr {
+    kaku result = darwin.pointer(handle);
+    require(result.error == "", result.error);
+    kaesu result.value;
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku result = darwin.open(path);
+    kaku handle = result.library;
+    moshi (handle != mu) { kaesu handle; }
+    chant(result.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza call(library: darwin.Library, name: string, result: darwin.Scalar, args: []darwin.Scalar,
+    values: []darwin.Value) -> darwin.Value {
+    kaku bound = darwin.bind_c(library, name, darwin.CPrototype { result: result, parameters: args });
+    kaku fn = bound.function;
+    moshi (fn != mu) {
+        kaku evaluated = darwin.invoke(fn, values);
+        require(darwin.release(fn) == "", "release bound function");
+        kaku value = evaluated.value;
+        moshi (value != mu) { kaesu value; }
+        chant(evaluated.error);
+    } sore { chant(bound.error); }
+    os.exit(1);
+    kaesu darwin.Value.Void();
+}
+
+waza verify_scalar(source: darwin.Buffer, scratch: darwin.Buffer, offset: int64, kind: darwin.Scalar, width: int64) -> unit {
+    kaku result = darwin.read_scalar(source, offset, kind);
+    kaku value = result.value;
+    moshi (value != mu) {
+        require(darwin.write_scalar(scratch, 0, value) == "", "store scalar after reading");
+        kaku expected = darwin.read(source, offset, width);
+        kaku actual = darwin.read(scratch, 0, width);
+        require(expected.error == "" && actual.error == "", "read scalar bytes");
+        kaku i = 0;
+        aida (i < width) {
+            require(expected.bytes[i] == actual.bytes[i], "scalar bytes after round trip");
+            i = i + 1;
+        }
+    } sore { require(iie, result.error); }
+}
+
+waza expect_bool(value: darwin.Value) -> bool {
+    awase (value) {
+        baai Bool(x) { kaesu x; }
+        baai Void { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { }
+        baai U32(x) { }
+        baai I64(x) { }
+        baai U64(x) { }
+        baai F32(x) { }
+        baai F64(x) { }
+        baai Ptr(x) { }
+    }
+    kaesu iie;
+}
+
+waza expect_number(value: darwin.Value) -> int64 {
+    awase (value) {
+        baai Bool(x) { }
+        baai Void { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { kaesu int64(x); }
+        baai U32(x) { }
+        baai I64(x) { kaesu x; }
+        baai U64(x) { kaesu int64(x); }
+        baai F32(x) { }
+        baai F64(x) { }
+        baai Ptr(x) { }
+    }
+    kaesu -1;
+}
+
+kaku args = os.arguments();
+require(len(args) == 2 || len(args) == 3, "expected C fixture and optional libcrypto");
+kaku fixture = open(args[1]);
+kaku ptr = darwin.Scalar.Ptr();
+kaku u64 = darwin.Scalar.U64();
+kaku i32 = darwin.Scalar.I32();
+kaku boolean = darwin.Scalar.Bool();
+kaku limit = 9223372036854775807;
+
+require(darwin.alloc(-1).buffer == mu && darwin.alloc(limit).buffer == mu, "invalid and overflowing lengths");
+require(darwin.alloc_aligned(8, 3).buffer == mu, "bad alignment");
+require(darwin.unsafe_borrow(cptr(0), 4, hai).buffer == mu, "null borrow");
+kaku aligned = buffer(darwin.alloc_aligned(20, 4096));
+require(expect_bool(call(fixture, "foreign_aligned", boolean, [ptr, u64],
+    [darwin.Value.Ptr(native_pointer(aligned)), darwin.Value.U64(uint64(4096))])), "native alignment");
+require(darwin.write(aligned, 0, [uint8(10), uint8(20), uint8(30)]) == "", "write bytes");
+kaku view = buffer(darwin.slice(aligned, 1, 2));
+kaku readonly = buffer(darwin.read_only(view));
+require(darwin.read(readonly, 0, 2).bytes[1] == uint8(30), "slice preserves offset");
+require(darwin.fill(readonly, 0, 2, uint8(12)) != "" && darwin.pointer(readonly).error != "", "read-only view");
+require(darwin.free(view) != "" && darwin.release_buffer(aligned) != "", "ownership release rules");
+require(darwin.resize(view, 4).buffer == mu, "cannot resize view");
+require(darwin.resize(aligned, limit).buffer == mu && darwin.read(view, 0, 2).error == "", "failed resize preserves view");
+kaku grown = buffer(darwin.resize(aligned, 32));
+require(expect_bool(call(fixture, "foreign_aligned", boolean, [ptr, u64],
+    [darwin.Value.Ptr(native_pointer(grown)), darwin.Value.U64(uint64(4096))])), "resize preserves alignment");
+require(darwin.read(grown, 0, 3).bytes[2] == uint8(30), "resize preserves data");
+require(darwin.read(aligned, 0, 1).error != "" && darwin.read(view, 0, 1).error != "", "resize invalidates old generation");
+require(darwin.release_buffer(view) == "" && darwin.release_buffer(readonly) == "", "can release stale views");
+require(darwin.write(grown, limit, [uint8(1)]) != "" && darwin.read(grown, 1, limit).error != "", "overflow rejected");
+require(darwin.copy(grown, 1, grown, 0, 3) == "" && darwin.read(grown, 1, 3).bytes[2] == uint8(30), "overlapping copy");
+
+kaku scratch = buffer(darwin.alloc_zeroed(64));
+require(darwin.read(scratch, 63, 1).bytes[0] == uint8(0), "zeroed allocation");
+require(darwin.write_scalar(grown, 1, darwin.Value.I16(int16(-289))) == "", "unaligned signed scalar");
+kaku octets = darwin.read(grown, 1, 2).bytes;
+require(octets[0] == uint8(223) && octets[1] == uint8(254), "little-endian signed scalar");
+verify_scalar(grown, scratch, 1, darwin.Scalar.I16(), 2);
+require(darwin.write_scalar(grown, 3, darwin.Value.U32(uint32(4275878552))) == "", "unsigned scalar");
+verify_scalar(grown, scratch, 3, darwin.Scalar.U32(), 4);
+require(darwin.write_scalar(grown, 7, darwin.Value.F32(float32(-9.25))) == "", "float scalar");
+verify_scalar(grown, scratch, 7, darwin.Scalar.F32(), 4);
+require(darwin.write_scalar(grown, 11, darwin.Value.F64(2.25)) == "", "double scalar");
+verify_scalar(grown, scratch, 11, darwin.Scalar.F64(), 8);
+require(darwin.write_scalar(grown, 20, darwin.Value.U64(uint64(-1))) == "", "full-width unsigned scalar");
+verify_scalar(grown, scratch, 20, u64, 8);
+require(darwin.write_scalar(scratch, 16, darwin.Value.Ptr(native_pointer(grown))) == "", "pointer store");
+require(darwin.unsafe_read_pointer(scratch, 16).value == native_pointer(grown), "pointer load");
+require(darwin.unsafe_read_pointer(scratch, 15).error != "", "unaligned pointer load");
+require(darwin.fill(scratch, 16, 8, uint8(255)) == "" && darwin.unsafe_read_pointer(scratch, 16).error != "", "invalid pointer bits");
+kaku borrowed = buffer(darwin.unsafe_borrow(native_pointer(grown), 32, iie));
+kaku borrowed_view = buffer(darwin.slice(borrowed, 2, 2));
+require(darwin.free(borrowed) != "" && darwin.release_buffer(borrowed) == "", "foreign memory uses foreign ownership");
+require(darwin.read(borrowed_view, 0, 1).error != "" && darwin.release_buffer(borrowed_view) == "", "borrow release invalidates views");
+require(darwin.free(grown) == "" && darwin.free(grown) != "", "free and double free");
+
+kaku text = "Mio 日本語";
+kaku bytes = string.to_bytes(text);
+kaku ctext = buffer(darwin.c_string_buffer(text));
+require(darwin.read_c_string(ctext, 0, len(bytes) + 1).value == text, "UTF-8 C string");
+require(darwin.read_utf8(ctext, 0, len(bytes)).value == text, "explicit UTF-8 byte length");
+require(darwin.read_c_string(ctext, 0, len(bytes)).error != "", "bounded read requires terminator");
+kaku nul = string.from_utf8([uint8(65), uint8(0), uint8(66)]);
+moshi (nul != mu) { require(darwin.c_string_buffer(nul).buffer == mu, "embedded NUL rejected"); }
+sore { require(iie, "embedded NUL source fixture"); }
+
+kaku system = open("/usr/lib/libSystem.B.dylib");
+require(expect_number(call(system, "strlen", u64, [ptr], [darwin.Value.Ptr(native_pointer(ctext))]))
+    == len(bytes), "libSystem reads native UTF-8");
+require(darwin.close(system) == "", "close libSystem");
+kaku zlib = open("/usr/lib/libz.1.dylib");
+require(expect_number(call(zlib, "crc32", u64, [u64, ptr, darwin.Scalar.U32()],
+    [darwin.Value.U64(uint64(0)), darwin.Value.Ptr(native_pointer(ctext)), darwin.Value.U32(uint32(len(bytes)))]))
+    == 2187183787, "zlib reads native buffer");
+require(darwin.close(zlib) == "", "close zlib");
+
+kaku sqlite = open("/usr/lib/libsqlite3.dylib");
+kaku db_name = buffer(darwin.c_string_buffer(":memory:"));
+require(expect_number(call(sqlite, "sqlite3_open", i32, [ptr, ptr],
+    [darwin.Value.Ptr(native_pointer(db_name)), darwin.Value.Ptr(native_pointer(scratch))])) == 0, "SQLite output pointer field");
+kaku db = darwin.unsafe_read_pointer(scratch, 0);
+require(db.error == "" && db.value != cptr(0), "SQLite database handle");
+require(expect_number(call(sqlite, "sqlite3_close", i32, [ptr], [darwin.Value.Ptr(db.value)])) == 0, "SQLite owns database");
+require(darwin.close(sqlite) == "" && darwin.free(db_name) == "", "release SQLite resources");
+
+moshi (len(args) == 3) {
+    kaku crypto = open(args[2]);
+    require(expect_number(call(crypto, "RAND_bytes", i32, [ptr, i32],
+        [darwin.Value.Ptr(native_pointer(scratch)), darwin.Value.I32(int32(32))])) == 1, "OpenSSL writes native buffer");
+    require(darwin.close(crypto) == "", "close OpenSSL");
+}
+
+kaku size = 262144;
+kaku large = buffer(darwin.alloc(size));
+kaku other = buffer(darwin.alloc(size));
+kaku input = array.make[uint8](size, uint8(77));
+require(darwin.write(large, 0, input) == "", "large write");
+require(darwin.copy(other, 0, large, 0, size) == "", "large native copy");
+kaku output = darwin.read(other, 0, size);
+require(output.error == "" && len(output.bytes) == size && output.bytes[size - 1] == uint8(77), "large read");
+require(darwin.free(large) == "" && darwin.free(other) == "", "free large buffers");
+kaku at = 0;
+aida (at < 100) {
+    kaku cycle = buffer(darwin.alloc(at));
+    require(darwin.free(cycle) == "", "repeated allocation cycles");
+    at = at + 1;
+}
+require(darwin.close(fixture) == "" && darwin.free(ctext) == "" && darwin.free(scratch) == "", "release fixture resources");
+chant("Darwin native memory: ok");

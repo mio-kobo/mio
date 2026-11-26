@@ -52,3 +52,7 @@ __asm__(".globl _mio_ffi_v1_g_mio_module_abi_version\n"
         ".set _mio_ffi_v1_g_mio_module_abi_version, _mio_module_abi_version\n"
         ".globl _mio_ffi_v1_g_mio_foreign_fixture\n"
         ".set _mio_ffi_v1_g_mio_foreign_fixture, _mio_foreign_fixture\n");
+
+bool foreign_aligned(const void *pointer, uint64_t alignment) {
+    return pointer != 0 && (uintptr_t)pointer % alignment == 0;
+}

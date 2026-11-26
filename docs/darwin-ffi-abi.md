@@ -72,7 +72,17 @@ Load libraries from trusted sources. dyld can execute initializers during `open`
 
 The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals and calls and can run without a Mio heap, initializers, or runtime globals. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, external calls from library bodies, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
 
-The loader supports single-mutator Mio hosts. Mio-generated library exports use the subset in the export table. Native buffers, C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+The loader supports single-mutator Mio hosts. Mio-generated library exports use the subset in the export table. C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+
+## Native buffers
+
+`alloc`, `alloc_zeroed`, `alloc_aligned`, and `c_string_buffer` return owned native buffers. Release them with `free`. Aligned allocations require a power of two of at least eight bytes. `resize` preserves the original alignment and the common byte prefix. On success it returns a new handle and invalidates the old handle and all of its views. Allocation failure preserves the original handle.
+
+`slice` creates a bounded view, and `read_only` creates a view that rejects writes and mutable pointer extraction. Use `release_buffer` to drop a view or a borrowed handle. Views validate their own tickets and their root tickets before every access. A slice of a read-only buffer remains read-only. Releasing an intermediate view leaves its sibling views valid while the common root lives.
+
+`read` and `write` copy between Mio byte arrays and native memory. `copy` supports overlapping native regions. `read_scalar` and `write_scalar` use little-endian numeric layouts. Pointer loads use `unsafe_read_pointer` and require an aligned field initialized by C or a valid pointer stored with `write_scalar`. The pointee follows the producer's lifetime. `c_string_buffer` rejects embedded NUL bytes. `read_utf8` takes an exact byte length, and `read_c_string` requires a NUL within the specified range.
+
+`pointer` returns a native address for a writable buffer. Keep the root alive while native code uses the address, including any time it retains the address after a call. Resizing or freeing the root during that lifetime makes the address invalid. `unsafe_borrow` creates a checked view over a caller-asserted foreign range. Release the borrow separately and let the original owner or its documented allocator release the underlying storage.
 
 ## Integration
 

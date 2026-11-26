@@ -13,7 +13,8 @@ yobu "kiso/string";
 waza loader_system_symbols() -> []string {
     kaesu ["$cabi::dlopen:kke", "$cabi::dlsym:kkk", "$cabi::dlclose:ek",
         "$cabi::dlerror:k", "$cabi::malloc:kh", "$cabi::free:vk", "$cabi::dladdr:ekk",
-        "$cabi::getsectiondata:kkkkk", "$cabi::calloc:khh"];
+        "$cabi::getsectiondata:kkkkk", "$cabi::calloc:khh", "$cabi::posix_memalign:ekhh",
+        "$cabi::memmove:kkkh", "$cabi::memset:kkeh"];
 }
 
 waza loader_intrinsics() -> []string {
@@ -26,7 +27,9 @@ waza loader_intrinsics() -> []string {
         "$cabi::mio_ffi_darwin_store_u16:vkhd", "$cabi::mio_ffi_darwin_store_u32:vkhf",
         "$cabi::mio_ffi_darwin_store_u64:vkhh", "$cabi::mio_ffi_darwin_store_pointer:vkhk",
         "$cabi::mio_ffi_darwin_store_f32:vkhi", "$cabi::mio_ffi_darwin_store_f64:vkhj",
-        "$cabi::mio_ffi_darwin_load_f32:ikh", "$cabi::mio_ffi_darwin_load_f64:jkh"];
+        "$cabi::mio_ffi_darwin_load_f32:ikh", "$cabi::mio_ffi_darwin_load_f64:jkh",
+        "$cabi::mio_ffi_darwin_advance:kkh", "$cabi::mio_ffi_darwin_load_u16:dkh",
+        "$cabi::mio_ffi_darwin_load_u32:fkh"];
 }
 
 waza index_of_prototype(names: []string, value: string) -> int64 {
@@ -110,6 +113,11 @@ waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
         array.push(words, arm64.ret().word);
         kaesu;
     }
+    moshi (kind == 20) {
+        array.push(words, arm64.add_x(0, 0, 1).word);
+        array.push(words, arm64.ret().word);
+        kaesu;
+    }
     moshi (kind >= 12) {
         array.push(words, arm64.add_x(9, 0, 1).word);
         moshi (kind == 12) { array.push(words, arm64.strh_w(2, 9, 0).word); }
@@ -120,6 +128,8 @@ waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
         moshi (kind == 17) { array.push(words, uint32(4244635936)); }
         moshi (kind == 18) { array.push(words, uint32(3175088416)); }
         moshi (kind == 19) { array.push(words, uint32(4248830240)); }
+        moshi (kind == 21) { array.push(words, arm64.ldrh_w(0, 9, 0).word); }
+        moshi (kind == 22) { array.push(words, arm64.ldr_w(0, 9, 0).word); }
         array.push(words, arm64.ret().word);
         kaesu;
     }
@@ -158,7 +168,7 @@ waza build_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: b
         } sore { append_loader_intrinsic(words, at); }
         at = at + 1;
     }
-    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata", "_calloc"];
+    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata", "_calloc", "_posix_memalign", "_memmove", "_memset"];
     kaku stubs: []int64 = [];
     at = 0;
     aida (at < len(symbols)) {
