@@ -87,3 +87,19 @@ waza test_libc_calls() -> unit {
     testing.expect(call_z_nz(symbol(libc, "strnlen", "z:nz"), empty) == uint64(0), "z:nz with an empty buffer");
     testing.expect(close(libm) == "" && close(libc) == "", "close libc and libm");
 }
+
+// Exported data is not callable: environ and stdout are glibc data symbols in writable, non-executable mappings.
+waza test_data_symbols_are_rejected() -> unit {
+    kaku libc = open_system("libc.so.6");
+    kaku environ = symbol(libc, "environ", "p:");
+    testing.expect(!resolved(environ) && string.has_prefix(error(environ), "E_FFI_NOT_FUNCTION environ"), "environ is refused as a function");
+    testing.expect(string.has_prefix(error(symbol(libc, "stdout", "p:")), "E_FFI_NOT_FUNCTION"), "stdout is refused as a function");
+    kaku abs = symbol(libc, "abs", "i:i");
+    testing.expect(resolved(abs), "a real function still resolves");
+    // strlen is a GNU indirect function (STT_GNU_IFUNC): dlsym returns the selected implementation, which is code
+    testing.expect(resolved(symbol(libc, "strlen", "z:n")), "an IFUNC resolves to executable code");
+    testing.expect(unsafe_address(abs, "i:i") == address(abs, "i:i") && unsafe_address(abs, "i:i") != cptr(0), "address is an alias of unsafe_address");
+    testing.expect(call_i_i(abs, int32(0)) == int32(0) && last_call_ok(), "a zero result of a call that ran is ok");
+    testing.expect(call_i_ii(abs, int32(0), int32(0)) == int32(0) && !last_call_ok(), "a zero result of a refused call is not ok");
+    testing.expect(close(libc) == "" && !close_pending(libc) && libraries_pending_close() == 0, "close leaves nothing pending");
+}

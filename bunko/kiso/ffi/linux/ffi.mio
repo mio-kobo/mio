@@ -28,8 +28,6 @@ waza c_dlopen(path: []uint8, flags: int32) -> cptr = c "dlopen";
 waza c_dlsym(handle: cptr, name: []uint8) -> cptr = c "dlsym";
 waza c_dlclose(handle: cptr) -> int32 = c "dlclose";
 waza c_dlerror() -> cptr = c "dlerror";
-waza c_strnlen(text: cptr, limit: uint64) -> uint64 = c "strnlen";
-waza c_copy_out(destination: []uint8, source: cptr, size: uint64) -> cptr = c "memcpy";
 
 kata Ticket { slot: int64; id: int64; }
 
@@ -37,7 +35,8 @@ kata Ticket { slot: int64; id: int64; }
 koukai kata Library { ticket: Ticket; error: string; }
 koukai kata Function { ticket: Ticket; owner: Ticket; error: string; }
 
-kata LibrarySlot { id: int64; handle: cptr; path: string; }
+// closing: dlclose failed; the slot keeps the dlopen handle so close can retry, and nothing in it is callable.
+kata LibrarySlot { id: int64; handle: cptr; path: string; closing: bool; }
 kata FunctionSlot { id: int64; owner: Ticket; address: cptr; shape: int64; name: string; signature: string; }
 
 kaku libraries: []LibrarySlot = [];
@@ -48,6 +47,7 @@ kaku free_functions: []int64 = [];
 kaku owned: []int64 = [];
 kaku live_library_count: int64 = 0;
 kaku live_function_count: int64 = 0;
+kaku pending_close_count: int64 = 0;
 kaku next_id: int64 = 1;
 kaku call_error: string = "";
 
@@ -84,12 +84,10 @@ waza has_nul(text: string) -> bool {
 // The message dlerror() holds, or fallback when there is none. Bounded: never reads past max_text bytes.
 waza loader_error(fallback: string) -> string {
     kaku message = c_dlerror();
-    moshi (message == cptr(0)) { kaesu fallback; }
-    kaku size = int64(c_strnlen(message, uint64(max_text)));
+    moshi (message == cptr(0) || !native_resolved()) { kaesu fallback; }
+    kaku size = native_strnlen(message, max_text);
     moshi (size <= 0) { kaesu fallback; }
-    kaku copy: []uint8 = array.make[uint8](size, uint8(0));
-    c_copy_out(copy, message, uint64(size));
-    kaku text = string.from_utf8(copy);
+    kaku text = string.from_utf8(read_native(message, size));
     moshi (text == mu) { kaesu fallback; }
     kaesu text;
 }
@@ -155,7 +153,7 @@ koukai waza shape_of(signature: string) -> int64 {
 
 waza add_library(handle: cptr, path: string) -> Library {
     kaku id = fresh_id();
-    kaku entry = LibrarySlot { id: id, handle: handle, path: path };
+    kaku entry = LibrarySlot { id: id, handle: handle, path: path, closing: iie };
     kaku slot = 0;
     moshi (len(free_libraries) > 0) {
         slot = free_libraries[len(free_libraries) - 1];
@@ -172,9 +170,12 @@ waza add_library(handle: cptr, path: string) -> Library {
 }
 
 waza load(path: string, request: string) -> Library {
+    // Resolve the helpers first: any dlsym after a failed dlopen would clear its dlerror message.
+    native_ready();
     c_dlerror();
     kaku handle = c_dlopen(cstring(request), int32(rtld_now + rtld_local));
     moshi (handle == cptr(0)) { kaesu failed_library(string.concat("E_FFI_LOAD ", loader_error("dlopen failed"))); }
+    invalidate_maps();
     kaesu add_library(handle, path);
 }
 
@@ -200,11 +201,28 @@ koukai waza open_system(name: string) -> Library {
     kaesu load(name, name);
 }
 
+// The slot of an open library, or -1 (closed, closing after a failed dlclose, or never opened).
 waza library_slot(ticket: Ticket) -> int64 {
+    kaku slot = any_library_slot(ticket);
+    moshi (slot < 0 || libraries[slot].closing) { kaesu -1; }
+    kaesu slot;
+}
+
+waza any_library_slot(ticket: Ticket) -> int64 {
     moshi (ticket.slot < 0 || ticket.slot >= len(libraries)) { kaesu -1; }
     moshi (libraries[ticket.slot].id != ticket.id) { kaesu -1; }
     kaesu ticket.slot;
 }
+
+// close_pending reports whether an earlier close invalidated library but dlclose failed. Its functions are not
+// callable; calling close again retries dlclose.
+koukai waza close_pending(library: Library) -> bool {
+    kaku slot = any_library_slot(library.ticket);
+    kaesu slot >= 0 && libraries[slot].closing;
+}
+
+// libraries_pending_close counts libraries whose dlclose failed and has not been retried successfully.
+koukai waza libraries_pending_close() -> int64 { kaesu pending_close_count; }
 
 // failed reports whether open or open_system failed for this library.
 koukai waza failed(library: Library) -> bool { kaesu library.error != ""; }
@@ -224,8 +242,13 @@ koukai waza path(library: Library) -> string {
 
 // close invalidates library and every function resolved from it, then unloads it with dlclose. It returns ""
 // on success. Closing twice, or closing a library that never loaded, returns an error and does nothing.
+// When dlclose fails the invalidation stands (no function of the library becomes callable again), the result is
+// E_FFI_CLOSE and the library stays pending (close_pending); a later close retries dlclose and returns "" once it
+// succeeds.
 koukai waza close(library: Library) -> string {
     moshi (failed(library)) { kaesu "E_FFI_STATE the library did not load"; }
+    kaku pending = any_library_slot(library.ticket);
+    moshi (pending >= 0 && libraries[pending].closing) { kaesu finish_close(pending, iie); }
     kaku slot = library_slot(library.ticket);
     moshi (slot < 0) { kaesu "E_FFI_CLOSED the library is already closed"; }
     kaku handle = libraries[slot].handle;
@@ -236,11 +259,26 @@ koukai waza close(library: Library) -> string {
         moshi (entry.id != 0 && entry.owner.slot == slot && entry.owner.id == library.ticket.id) { free_function(at); }
         at = at + 1;
     }
-    libraries[slot] = LibrarySlot { id: 0, handle: cptr(0), path: "" };
-    array.push(free_libraries, slot);
     live_library_count = live_library_count - 1;
+    kaku entry = libraries[slot];
+    libraries[slot] = LibrarySlot { id: entry.id, handle: handle, path: entry.path, closing: hai };
+    pending_close_count = pending_close_count + 1;
+    kaesu finish_close(slot, hai);
+}
+
+// dlclose of a closing slot; frees the slot on success, keeps it pending on failure.
+waza finish_close(slot: int64, first: bool) -> string {
+    native_ready();
     c_dlerror();
-    moshi (c_dlclose(handle) != int32(0)) { kaesu string.concat("E_FFI_CLOSE ", loader_error("dlclose failed")); }
+    moshi (c_dlclose(libraries[slot].handle) != int32(0)) {
+        kaku reason = loader_error("dlclose failed");
+        moshi (first) { kaesu string.concat("E_FFI_CLOSE ", reason); }
+        kaesu string.concat("E_FFI_CLOSE retry failed: ", reason);
+    }
+    libraries[slot] = LibrarySlot { id: 0, handle: cptr(0), path: "", closing: iie };
+    array.push(free_libraries, slot);
+    pending_close_count = pending_close_count - 1;
+    invalidate_maps();
     kaesu "";
 }
 
@@ -263,12 +301,16 @@ koukai waza symbol(library: Library, name: string, signature: string) -> Functio
     moshi (owner < 0) { kaesu failed_function(library.ticket, "E_FFI_CLOSED the library is closed"); }
     moshi (len(string.to_bytes(name)) == 0 || has_nul(name)) { kaesu failed_function(library.ticket, "E_FFI_SYMBOL invalid symbol name"); }
     moshi (!valid_signature(signature)) { kaesu failed_function(library.ticket, string.concat("E_FFI_SIGNATURE invalid signature ", signature)); }
-    // dlerror() must be cleared first: NULL is a legal symbol value in general, an error is not.
+    // dlerror() must be cleared first: NULL is a legal symbol value in general, an error is not. The helpers are
+    // resolved before, because their dlsym calls would clear a failure message.
+    native_ready();
     c_dlerror();
     kaku address = c_dlsym(libraries[owner].handle, cstring(name));
     moshi (address == cptr(0)) {
         kaesu failed_function(library.ticket, string.concat("E_FFI_SYMBOL ", loader_error(string.concat("symbol has no address: ", name))));
     }
+    kaku code = code_check(address, name);
+    moshi (code != "") { kaesu failed_function(library.ticket, code); }
     kaku id = fresh_id();
     kaku entry = FunctionSlot { id: id, owner: library.ticket, address: address, shape: shape_of(signature), name: name, signature: signature };
     kaku slot = 0;
@@ -335,8 +377,12 @@ koukai waza check(function: Function, signature: string) -> string {
 }
 
 // last_error is "" after a typed call that reached native code, otherwise the reason the most recent typed
-// call (or address) was refused.
+// call (or unsafe_address) was refused.
 koukai waza last_error() -> string { kaesu call_error; }
+
+// last_call_ok reports whether the most recent typed call reached native code. A refused call returns zero, and zero
+// can also be a real result, so this (or last_error) is how a caller tells them apart.
+koukai waza last_call_ok() -> bool { kaesu call_error == ""; }
 
 // The gate in front of every native call: the function's address when the call may proceed, otherwise
 // cptr(0) with the reason in last_error().
@@ -353,11 +399,15 @@ waza gate(function: Function, shape: int64) -> cptr {
     kaesu entry.address;
 }
 
-// address returns the native address of function for a hand-written `= c "mio_ffi_indirect"` declaration,
-// after the same validation as a typed call; cptr(0) (with last_error() set) when it would be refused. An
-// indirect call through cptr(0) traps with a nil-reference error instead of jumping to address 0. The
-// declaration must match the real C prototype: the signature only records what the caller claims. Do not
-// keep the address: it is not invalidated by close or release.
+// UNSAFE. unsafe_address returns the raw native address of function for a hand-written
+// `= c "mio_ffi_indirect"` declaration, after the same validation as a typed call; cptr(0) (with last_error() set)
+// when it would be refused. An indirect call through cptr(0) traps with a nil-reference error instead of jumping to
+// address 0. The returned address is a plain integer-like value: it does not own or pin the library, and close or
+// release cannot invalidate a copy of it. Call unsafe_address at the call site; never cache the address. The
+// declaration must match the real C prototype: the signature only records what the caller claims.
+koukai waza unsafe_address(function: Function, signature: string) -> cptr { kaesu address(function, signature); }
+
+// address is the earlier name of unsafe_address, kept for compatibility. It is exactly as unsafe.
 koukai waza address(function: Function, signature: string) -> cptr {
     kaku shape = shape_of(signature);
     moshi (shape < 0) { call_error = string.concat("E_FFI_SIGNATURE invalid signature ", signature); kaesu cptr(0); }

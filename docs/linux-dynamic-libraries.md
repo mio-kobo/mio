@@ -112,8 +112,9 @@ A complete program that loads libc and libm by name is [examples/linux-amd64/ffi
 | `release(function) -> string` | Frees one function handle; its library stays open. A second release is `E_FFI_STALE`. |
 | `check(function, signature) -> string` | `""` when a call of that signature would be accepted, otherwise the reason. |
 | `call_<result>_<parameters>(function, ...)` | Typed calls (below). |
-| `last_error() -> string` | `""` after a typed call that reached native code, otherwise why the most recent typed call or `address` was refused. |
-| `address(function, signature) -> cptr` | The validated address for a hand-written `= c "mio_ffi_indirect"` declaration, or `cptr(0)` with `last_error()` set. |
+| `last_error() -> string`, `last_call_ok() -> bool` | `""` / `hai` after a typed call that reached native code, otherwise why the most recent typed call or `unsafe_address` was refused. A zero result alone never tells a refused call from a real zero. |
+| `unsafe_address(function, signature) -> cptr` | **Unsafe.** The validated raw address for a hand-written `= c "mio_ffi_indirect"` declaration, or `cptr(0)` with `last_error()` set. `address` is the earlier name, kept as an alias. |
+| `close_pending(library)`, `libraries_pending_close()` | Whether a `close` invalidated the library but `dlclose` failed (a later `close` retries), and how many are pending. |
 | `valid_signature(signature)`, `shape_of(signature)` | Signature validation and its integer code (`-1` when invalid). |
 | `cstring(text) -> []uint8` | A fresh NUL-terminated copy of the UTF-8 bytes; it does not alias the string. |
 | `libraries_open()`, `functions_live()` | Live handle counts, for leak checks. |
@@ -124,15 +125,24 @@ Each wrapper is one fixed System V AMD64 prototype and its name spells the signa
 
 Every call goes through one gate before the native call: the handle's slot must exist and still hold the handle's id, and the shape the function was resolved with must equal the wrapper's shape. A refused call makes no native call, returns zero (`iie`, `cptr(0)`, nothing for `v`) and sets `last_error()`. Zero can also be a legitimate result, so code that must distinguish the two checks `last_error()` or validates once with `check`.
 
-For a prototype that has no wrapper (more than 16 signature letters, `int8`/`int16` parameters, other buffer layouts), declare the bridge yourself and pass the validated address:
+For a prototype that has no wrapper (more than 16 signature letters, `int8`/`int16` parameters, other buffer layouts), declare the bridge yourself and pass the validated address. This is the unsafe part of the API:
 
 ```mio
 waza raw_scale(f: cptr, a: int64, factor: float32) -> float64 = c "mio_ffi_indirect";
 kaku scale = linux.symbol(lib, "my_scale", "p:");     // illustrative symbol; the declaration above is its real prototype
-chant(raw_scale(linux.address(scale, "p:"), 3, float32(1.5)));
+chant(raw_scale(linux.unsafe_address(scale, "p:"), 3, float32(1.5)));
 ```
 
-`address` performs the same gate, so a closed, released or mismatched function gives `cptr(0)`, and the indirect bridge traps on `cptr(0)` with `runtime error: nil reference` instead of jumping to address 0 (`tests/ffi/linux-amd64-dynamic/cases/traps/stale_address.mio`). A hand-written declaration is only as correct as its match with the C prototype, and an address copied into a variable is not invalidated by a later `close`: call `address` at the call site.
+`unsafe_address` performs the same gate, so a closed, released or mismatched function gives `cptr(0)`, and the indirect bridge traps on `cptr(0)` with `runtime error: nil reference` instead of jumping to address 0 (`tests/ffi/linux-amd64-dynamic/cases/traps/stale_address.mio`). The raw address does **not** own or pin the library and does not get the lifetime guarantees of a `Function` handle: a copy kept in a variable is not invalidated by a later `close` or `release`, and calling it after the library is unloaded is undefined behaviour. Call `unsafe_address` at the call site and never cache the result. A hand-written declaration is only as correct as its match with the C prototype. Prefer the typed wrappers, which re-check the handle on every call.
+
+### Functions versus data
+
+`symbol` refuses addresses that cannot be code, before anything can call them (`E_FFI_NOT_FUNCTION`):
+
+* the address must lie in an executable mapping of the process (`/proc/self/maps`, cached and re-read when a library is opened or closed or an address is not found); exported data in a non-executable segment is refused here;
+* where the C library provides `dladdr1` (glibc), the exported ELF symbol at exactly that address must not have a data type (`STT_OBJECT`, `STT_COMMON`, `STT_TLS`). This catches read-only data placed in the executable segment by `-z noseparate-code` layouts (`tests/ffi/linux-amd64-dynamic/cases/test_ffi_symbol_kind.mio`).
+
+Limits: an executable address is not proof that the declared prototype is right. GNU indirect functions (`STT_GNU_IFUNC`, for example glibc's `strlen`) resolve to an implementation chosen by the loader; that address is checked only for being executable. Symbol interposition (`LD_PRELOAD`, earlier libraries) is the loader's normal behaviour and is not detected. Without `dladdr1` (musl) only the mapping check applies. Code in anonymous executable mappings (JIT) is refused because it is not part of a loaded image.
 
 ## Memory ownership
 
@@ -141,6 +151,7 @@ chant(raw_scale(linux.address(scale, "p:"), 3, float32(1.5)));
 * Results move across the boundary by value: integers, floats and pointers as registers, buffers by filling a Mio array the caller sized (`mio_zlib_compress` reports the number of bytes written).
 * A `Library` owns its `Function` handles: `close` frees them. The package owns the `dlopen` handle; it is never exposed.
 * Loader error messages are copied out of `dlerror()` with `strnlen` bounded to 64 KiB, so a corrupt message cannot make the copy run away.
+* The package calls `memset`, `memcpy`, `strnlen`, `dladdr` and `dladdr1` through the indirect bridge after resolving them with `dlsym(RTLD_DEFAULT)`, so it declares none of them with `= c "..."` and cannot conflict with a user program's own prototype for them (a C symbol has one prototype per program). It declares `dlopen`, `dlsym`, `dlclose` and `dlerror` directly with their standard prototypes.
 
 ## Error handling
 
@@ -155,13 +166,15 @@ Every failure is a value; none of them aborts the program except the nil-referen
 | `E_FFI_CLOSED` | the library was closed (use after unload, double close, a function of a closed library) |
 | `E_FFI_STALE` | the function handle was released |
 | `E_FFI_STATE` | the library or symbol never resolved |
-| `E_FFI_CLOSE` | `dlclose` reported a failure (the handles were already invalidated) |
+| `E_FFI_CLOSE` | `dlclose` reported a failure; the handles stay invalidated and the library is pending (`close_pending`). `E_FFI_CLOSE retry failed:` when a retry fails again |
+| `E_FFI_NOT_FUNCTION` | the resolved address is not executable code (data symbol, unmapped address) |
 
 C functions report their own errors through return values (`-1` for a null handle, negative zlib codes, SQLite result codes); the Mio side reads them as ordinary integers.
 
 ## Lifecycle
 
 * `open` calls `dlopen` once per `Library`. Opening the same file twice gives two `Library` values; the system loader reference-counts the mapping and `close` calls `dlclose` once per `Library`, so closing one leaves the other usable.
+* If `dlclose` fails, the invalidation stands: no function of the library becomes callable again and no new symbol can be resolved from it. The slot keeps the `dlopen` handle and is not reused; `close` on the same `Library` retries `dlclose` and returns `""` once it succeeds (fault injection: `test_ffi_close_failure`, with an `LD_PRELOAD` `dlclose` that fails twice).
 * `close` invalidates the library and its functions before calling `dlclose`. Every `Function` of that library then refuses calls with `E_FFI_CLOSED`: the stale function pointer is never executed. A reload gives a new `Library` and new `Function` values; the old ones stay dead even if the file is mapped at the same address again and even when the new handles reuse the old slots.
 * `close` scans the function table only while the library still owns live functions, so closing a library is O(1) when its functions were released and does not depend on how many functions other libraries hold.
 * Libraries are not unloaded when the `Library` value is collected: Mio has no finalizers. A library that is never closed stays loaded for the life of the process; a function that is never released stays in the table until its library is closed.
