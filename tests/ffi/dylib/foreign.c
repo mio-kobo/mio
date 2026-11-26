@@ -56,3 +56,32 @@ __asm__(".globl _mio_ffi_v1_g_mio_module_abi_version\n"
 bool foreign_aligned(const void *pointer, uint64_t alignment) {
     return pointer != 0 && (uintptr_t)pointer % alignment == 0;
 }
+
+#include <stdatomic.h>
+#include <time.h>
+
+static _Atomic int64_t waiting;
+static _Atomic bool resume;
+
+int64_t foreign_waiting(void) {
+    return atomic_load(&waiting);
+}
+
+int64_t foreign_resume(void) {
+    atomic_store(&resume, true);
+    return 0;
+}
+
+int64_t foreign_hold(int64_t value) {
+    const struct timespec delay = {0, 1000000};
+    atomic_fetch_add(&waiting, 1);
+    for (int tick = 0; tick < 10000; ++tick) {
+        if (atomic_load(&resume)) {
+            atomic_fetch_sub(&waiting, 1);
+            return value;
+        }
+        nanosleep(&delay, 0);
+    }
+    atomic_fetch_sub(&waiting, 1);
+    return -1;
+}

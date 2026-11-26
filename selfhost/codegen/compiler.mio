@@ -623,6 +623,14 @@ waza emit_match(state: CompilerState, context: CompileContext, file_id: int64, n
         aida (binding_index < arm.integer) {
             get_slot(context, temporary); emit_u16(context.emitter, OP_GET_ENUM_VALUE, binding_index);
             kaku symbol_id = binding_of(state, file_id, arm.children[binding_index]); kaku slot = 0;
+            // The exact-root backend must know scalar payloads even when an
+            // application never constructs this particular variant.
+            moshi (state.typed) {
+                kaku descriptor = array_descriptor(state, symbol_type(state, symbol_id));
+                moshi ((descriptor >= 1 && descriptor <= 4) || (descriptor >= 12 && descriptor <= 17)) {
+                    emit_u8(context.emitter, OP_TYPE_CONSTRAINT, descriptor);
+                }
+            }
             moshi (context.in_function) { slot = len(context.local_symbols); array.push(context.local_symbols, symbol_id); array.push(context.local_slots, slot); }
             sore { slot = state.next_global[0]; state.next_global[0] = slot + 1; array.push(state.global_symbols, symbol_id); array.push(state.global_slots, slot); }
             set_slot(context, slot);

@@ -1,0 +1,127 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+yobu "kiso/thread";
+
+waza sleep_us(micros: uint32) -> int32 = c "usleep";
+
+waza require(condition: bool, detail: string) -> unit {
+    moshi (!condition) { chant(detail); os.exit(1); }
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku opened = darwin.open(path);
+    kaku library = opened.library;
+    moshi (library != mu) { kaesu library; }
+    chant(opened.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bind(library: darwin.Library, name: string, parameters: []darwin.Scalar) -> darwin.Function {
+    kaku result = darwin.bind_c(library, name, darwin.CPrototype {
+        result: darwin.Scalar.I64(), parameters: parameters
+    });
+    kaku binding = result.function;
+    moshi (binding != mu) { kaesu binding; }
+    chant(result.error);
+    os.exit(1);
+    kaesu bind(library, name, parameters);
+}
+
+waza alloc(length: int64) -> darwin.Buffer {
+    kaku result = darwin.alloc(length);
+    kaku buffer = result.buffer;
+    moshi (buffer != mu) { kaesu buffer; }
+    chant(result.error);
+    os.exit(1);
+    kaesu alloc(length);
+}
+
+kata Payload { buffer: darwin.Buffer; number: int64; }
+
+kaku args = os.arguments();
+require(len(args) == 3, "expected C and Mio dylib paths");
+kaku fixture = open(args[1]);
+kaku second_reference = open(args[1]);
+kaku hold = bind(fixture, "foreign_hold", [darwin.Scalar.I64()]);
+kaku hold_again = bind(fixture, "foreign_hold", [darwin.Scalar.I64()]);
+kaku waiting = bind(second_reference, "foreign_waiting", []);
+kaku resume = bind(second_reference, "foreign_resume", []);
+kaku filler = alloc(1);
+kaku transfer = thread.channel_new[Payload](2, Payload { buffer: filler, number: 0 });
+
+waza blocked() -> int64 {
+    kaku rooted = [21, 22, 23];
+    kaku result = darwin.invoke_int64_1(hold, rooted[0]);
+    moshi (result.error != "") { kaesu -1; }
+    kaesu result.value + rooted[1];
+}
+
+waza blocked_generic() -> int64 {
+    kaku rooted = [19, 20, 21];
+    kaku result = darwin.invoke(hold_again, [darwin.Value.I64(rooted[1])]);
+    moshi (result.error != "" || result.value == mu) { kaesu -1; }
+    kaesu rooted[0] + rooted[2];
+}
+
+waza contestant() -> int64 {
+    kaku i = 0;
+    kaku total = 0;
+    aida (i < 24) {
+        kaku local_fixture = open(args[1]);
+        kaku identity = bind(local_fixture, "foreign_i64", [darwin.Scalar.I64()]);
+        kaku result = darwin.invoke_int64_1(identity, i + 1);
+        require(result.error == "" && result.value == i, "concurrent bind and invoke");
+        require(darwin.release(identity) == "" && darwin.close(local_fixture) == "", "concurrent release and close");
+        kaku stress = [i, i + 1, i + 2];
+        total = total + stress[0];
+        i = i + 1;
+    }
+    kaku local_buffer = alloc(64);
+    require(darwin.write(local_buffer, 0, [uint8(41), uint8(42)]) == "", "worker writes native buffer");
+    kaku payload = Payload { buffer: local_buffer, number: total };
+    require(thread.send[Payload](transfer, yuzuru payload).sent, "worker transfers owned buffer");
+    kaesu total;
+}
+
+waza exercise_mio_image() -> int64 {
+    kaku library = open(args[2]);
+    kaku result = darwin.symbol(library, "mio_math_add", darwin.Prototype.Int64FromTwoInt64());
+    kaku function = result.function;
+    moshi (function != mu) {
+        kaku answer = darwin.invoke_int64_2(function, 20, 22);
+        require(answer.error == "" && answer.value == 42, "worker calls Mio dylib");
+    } sore { require(iie, result.error); }
+    require(darwin.close(library) == "", "worker closes Mio dylib");
+    kaesu 42;
+}
+
+kaku a = thread.start(blocked);
+kaku b = thread.start(blocked_generic);
+require(a > 0 && b > 0, "start blocked workers");
+kaku limit = os.monotonic_ms() + 8000;
+aida (darwin.invoke_int64(waiting).value < 2 && os.monotonic_ms() < limit) {
+    sleep_us(uint32(1000));
+}
+require(darwin.invoke_int64(waiting).value == 2, "two C calls entered concurrently");
+require(darwin.close(fixture) == "library is busy", "pin prevents close during calls");
+require(darwin.release(hold) == "", "release admitted function");
+require(darwin.invoke_int64_1(hold, 0).error != "", "release rejects future calls");
+
+kaku c = thread.start(contestant);
+kaku d = thread.start(exercise_mio_image);
+require(c > 0 && d > 0, "start independent workers");
+kaku received = thread.receive[Payload](transfer);
+require(!received.closed && received.item.number == 276, "receive worker allocation");
+kaku native_bytes = darwin.read(received.item.buffer, 0, 2);
+require(native_bytes.error == "" && native_bytes.bytes[1] == uint8(42), "read transferred native buffer");
+require(darwin.free(received.item.buffer) == "", "free transferred native buffer");
+require(thread.join(c) == 276 && thread.join(d) == 42, "workers made progress while C was blocked");
+require(darwin.invoke_int64(waiting).value == 2, "C workers remain blocked during GC work");
+require(darwin.invoke_int64(resume).error == "", "resume C calls");
+require(thread.join(a) == 43 && thread.join(b) == 40, "native results and managed roots restored");
+require(darwin.close(fixture) == "" && darwin.close(second_reference) == "", "close references after join");
+require(darwin.free(filler) == "", "release channel filler");
+require(thread.close[Payload](transfer) == 0, "close ownership transfer channel");
+require(thread.destroy[Payload](transfer) == 0, "destroy ownership transfer channel");
+chant("Darwin threaded FFI: ok");

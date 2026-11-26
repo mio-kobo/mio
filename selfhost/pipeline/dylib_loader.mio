@@ -14,7 +14,8 @@ waza loader_system_symbols() -> []string {
     kaesu ["$cabi::dlopen:kke", "$cabi::dlsym:kkk", "$cabi::dlclose:ek",
         "$cabi::dlerror:k", "$cabi::malloc:kh", "$cabi::free:vk", "$cabi::dladdr:ekk",
         "$cabi::getsectiondata:kkkkk", "$cabi::calloc:khh", "$cabi::posix_memalign:ekhh",
-        "$cabi::memmove:kkkh", "$cabi::memset:kkeh"];
+        "$cabi::memmove:kkkh", "$cabi::memset:kkeh",
+        "$cabi::os_unfair_lock_lock:vk", "$cabi::os_unfair_lock_unlock:vk"];
 }
 
 waza loader_intrinsics() -> []string {
@@ -143,32 +144,77 @@ waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
     array.push(words, arm64.br_x(16).word);
 }
 
+waza append_loader_entries(words: []uint32, count: int64) -> []int64 {
+    kaku entries: []int64 = [];
+    kaku at = 0;
+    aida (at < count) {
+        array.push(entries, len(words));
+        moshi (at == 11) {
+            kaku bridge = dynamic_call_words();
+            moshi (bridge.error != mu) { kaesu []; }
+            array.append_all(words, bridge.words);
+        } sore { append_loader_intrinsic(words, at); }
+        at = at + 1;
+    }
+    kaesu entries;
+}
+
+waza c_label_function(label: string) -> int64 {
+    kaku id = 0;
+    kaku at = 10;
+    kaku digits = string.to_bytes(label);
+    aida (at < len(digits)) {
+        id = id * 10 + int64(digits[at]) - 48;
+        at = at + 1;
+    }
+    kaesu id;
+}
+
+waza link_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: bool,
+    options: []string, intrinsics: []string, entries: []int64) -> NativeBuildResult {
+    kaku labels: []arm64.Label = [];
+    kaku words = lowered.words;
+    kaku at = 0;
+    aida (at < len(lowered.labels)) {
+        kaku label = lowered.labels[at];
+        kaku intrinsic = -1;
+        moshi (string.has_prefix(label.name, "cabi_call_")) {
+            kaku id = c_label_function(label.name);
+            intrinsic = index_of_prototype(intrinsics, file.functions[id].name);
+        }
+        moshi (intrinsic < 0) { array.push(labels, label); }
+        sore {
+            kaku branch = arm64.bl(entries[intrinsic] - label.word);
+            moshi (branch.error != mu) { kaesu dylib_build_error("E_FFI call stub out of range"); }
+            words[label.word] = branch.word;
+        }
+        at = at + 1;
+    }
+    kaesu link_c_image(file, lower.LowerResult { words: words, constants: lowered.constants,
+        globals: lowered.globals, patches: lowered.patches, error: mu,
+        function_words: lowered.function_words, labels: labels }, workers, options);
+}
+
 waza build_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, options: []string) -> NativeBuildResult {
-    moshi (workers || len(options) != 0) { kaesu dylib_build_error("E_FFI dynamic loading requires a single-mutator image without extra linker options"); }
     kaku system = loader_system_symbols();
     kaku intrinsics = loader_intrinsics();
+    kaku requires_linker = workers || len(options) != 0;
     kaku at = 0;
     aida (at < len(file.functions)) {
         kaku name = file.functions[at].name;
         moshi (cabi.is_external(name) && index_of_prototype(system, name) < 0 && index_of_prototype(intrinsics, name) < 0) {
-            kaesu dylib_build_error("E_FFI dynamic loading cannot be mixed with other C declarations");
+            requires_linker = hai;
         }
         at = at + 1;
     }
     kaku words = lowered.words;
     kaku patches = lowered.patches;
-    kaku entries: []int64 = [];
-    at = 0;
-    aida (at < len(intrinsics)) {
-        array.push(entries, len(words));
-        moshi (at == 11) {
-            kaku bridge = dynamic_call_words();
-            moshi (bridge.error != mu) { kaesu dylib_build_error("E_FFI cannot encode dynamic call bridge"); }
-            array.append_all(words, bridge.words);
-        } sore { append_loader_intrinsic(words, at); }
-        at = at + 1;
-    }
-    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata", "_calloc", "_posix_memalign", "_memmove", "_memset"];
+    kaku entries = append_loader_entries(words, len(intrinsics));
+    moshi (len(entries) != len(intrinsics)) { kaesu dylib_build_error("E_FFI cannot encode dynamic call bridge"); }
+    moshi (requires_linker) { kaesu link_loader_image(file, lowered, workers, options, intrinsics, entries); }
+    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free",
+        "_dladdr", "_getsectiondata", "_calloc", "_posix_memalign", "_memmove", "_memset",
+        "_os_unfair_lock_lock", "_os_unfair_lock_unlock"];
     kaku stubs: []int64 = [];
     at = 0;
     aida (at < len(symbols)) {
@@ -194,8 +240,7 @@ waza build_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: b
             words[label.word] = jump.word;
         }
         moshi (string.has_prefix(label.name, "cabi_call_")) {
-            kaku id = 0; kaku index = 10; kaku digits = string.to_bytes(label.name);
-            aida (index < len(digits)) { id = id * 10 + int64(digits[index]) - 48; index = index + 1; }
+            kaku id = c_label_function(label.name);
             kaku name = file.functions[id].name;
             kaku intrinsic = index_of_prototype(intrinsics, name);
             kaku target = 0;

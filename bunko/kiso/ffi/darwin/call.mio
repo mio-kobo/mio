@@ -194,9 +194,7 @@ waza integer_value(bits: int64, kind: int64) -> Value {
     kaesu Value.Bool(low_unsigned(bits, 256) != 0);
 }
 
-koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
-    kaku entry = function_entry(function);
-    moshi (entry == mu) { kaesu CallResult { value: mu, error: "invalid or released function" }; }
+waza invoke_entry(entry: FunctionEntry, arguments: []Value) -> CallResult {
     kaku codes = string.to_bytes(entry.signature);
     moshi (len(arguments) != len(codes) - 1) {
         kaesu CallResult { value: mu, error: "wrong C argument count" };
@@ -221,4 +219,12 @@ koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
     kaku value = unpack_result(frame, int64(codes[0]));
     native_free(frame);
     kaesu CallResult { value: value, error: "" };
+}
+
+koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
+    kaku entry = pin_function(function, "");
+    moshi (entry == mu) { kaesu CallResult { value: mu, error: "invalid or released function" }; }
+    kaku result = invoke_entry(entry, arguments);
+    unpin_library(entry.owner);
+    kaesu result;
 }

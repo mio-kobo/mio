@@ -123,16 +123,16 @@ waza allocate_buffer(length: int64, alignment: int64, zeroed: bool) -> BufferRes
         writable: hai, alignment: alignment, owned: hai, root_slot: -1, root_id: 0 });
 }
 
-koukai waza alloc(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, iie); }
+waza alloc_locked(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, iie); }
 
-koukai waza alloc_zeroed(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, hai); }
+waza alloc_zeroed_locked(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, hai); }
 
-koukai waza alloc_aligned(length: int64, alignment: int64) -> BufferResult {
+waza alloc_aligned_locked(length: int64, alignment: int64) -> BufferResult {
     moshi (!valid_alignment(alignment)) { kaesu buffer_error("invalid native buffer alignment"); }
     kaesu allocate_buffer(length, alignment, iie);
 }
 
-koukai waza resize(buffer: Buffer, length: int64) -> BufferResult {
+waza resize_locked(buffer: Buffer, length: int64) -> BufferResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu buffer_error(handle_error()); }
     moshi (!entry.owned) { kaesu buffer_error("resize requires an owned buffer"); }
@@ -153,7 +153,7 @@ koukai waza resize(buffer: Buffer, length: int64) -> BufferResult {
     kaesu BufferResult { buffer: Buffer { ticket: Ticket { id: id }, slot: slot }, error: "" };
 }
 
-koukai waza free(buffer: Buffer) -> string {
+waza free_locked(buffer: Buffer) -> string {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu handle_error(); }
     moshi (!entry.owned) { kaesu "free requires an owned native buffer"; }
@@ -164,7 +164,7 @@ koukai waza free(buffer: Buffer) -> string {
 
 // Borrowed ranges belong to foreign code. The caller vouches that the entire
 // range is mapped and remains valid until the borrow and its views are released.
-koukai waza unsafe_borrow(address: cptr, length: int64, writable: bool) -> BufferResult {
+waza unsafe_borrow_locked(address: cptr, length: int64, writable: bool) -> BufferResult {
     kaku bits = pointer_offset(address, cptr(0));
     moshi (!valid_size(length) || bits <= 0 || bits > 9223372036854775807 - length) {
         kaesu buffer_error("invalid borrowed native range");
@@ -175,7 +175,7 @@ koukai waza unsafe_borrow(address: cptr, length: int64, writable: bool) -> Buffe
         writable: writable, alignment: 0, owned: iie, root_slot: -1, root_id: 0 });
 }
 
-koukai waza release_buffer(buffer: Buffer) -> string {
+waza release_buffer_locked(buffer: Buffer) -> string {
     kaku slot = buffer_slot(buffer);
     moshi (slot < 0) { kaesu handle_error(); }
     moshi (buffers[slot].owned) { kaesu "release requires a borrowed buffer or view"; }
@@ -193,27 +193,27 @@ waza buffer_view(buffer: Buffer, entry: BufferEntry, offset: int64, length: int6
         length: length, writable: writable, alignment: 0, owned: iie, root_slot: root, root_id: root_id });
 }
 
-koukai waza slice(buffer: Buffer, offset: int64, length: int64) -> BufferResult {
+waza slice_locked(buffer: Buffer, offset: int64, length: int64) -> BufferResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu buffer_error(handle_error()); }
     moshi (!valid_range(entry.length, offset, length)) { kaesu buffer_error("native buffer range is out of bounds"); }
     kaesu buffer_view(buffer, entry, offset, length, entry.writable);
 }
 
-koukai waza read_only(buffer: Buffer) -> BufferResult {
+waza read_only_locked(buffer: Buffer) -> BufferResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu buffer_error(handle_error()); }
     kaesu buffer_view(buffer, entry, 0, entry.length, iie);
 }
 
-koukai waza pointer(buffer: Buffer) -> PointerResult {
+waza pointer_locked(buffer: Buffer) -> PointerResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu PointerResult { value: cptr(0), error: handle_error() }; }
     moshi (!entry.writable) { kaesu PointerResult { value: cptr(0), error: "native buffer is read-only" }; }
     kaesu PointerResult { value: entry.address, error: "" };
 }
 
-koukai waza read(buffer: Buffer, offset: int64, length: int64) -> BytesResult {
+waza read_locked(buffer: Buffer, offset: int64, length: int64) -> BytesResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu BytesResult { bytes: [], error: handle_error() }; }
     kaku error = access_error(entry, offset, length, iie);
@@ -227,7 +227,7 @@ koukai waza read(buffer: Buffer, offset: int64, length: int64) -> BytesResult {
     kaesu BytesResult { bytes: bytes, error: "" };
 }
 
-koukai waza write(buffer: Buffer, offset: int64, bytes: []uint8) -> string {
+waza write_locked(buffer: Buffer, offset: int64, bytes: []uint8) -> string {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu handle_error(); }
     kaku error = access_error(entry, offset, len(bytes), hai);
@@ -240,7 +240,7 @@ koukai waza write(buffer: Buffer, offset: int64, bytes: []uint8) -> string {
     kaesu "";
 }
 
-koukai waza fill(buffer: Buffer, offset: int64, length: int64, byte: uint8) -> string {
+waza fill_locked(buffer: Buffer, offset: int64, length: int64, byte: uint8) -> string {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu handle_error(); }
     kaku error = access_error(entry, offset, length, hai);
@@ -249,7 +249,7 @@ koukai waza fill(buffer: Buffer, offset: int64, length: int64, byte: uint8) -> s
     kaesu "";
 }
 
-koukai waza copy(destination: Buffer, to: int64, source: Buffer, from: int64, length: int64) -> string {
+waza copy_locked(destination: Buffer, to: int64, source: Buffer, from: int64, length: int64) -> string {
     kaku out = live_buffer(destination);
     kaku input = live_buffer(source);
     moshi (out == mu) { kaesu handle_error(); }
@@ -269,7 +269,7 @@ waza read_integer(address: cptr, offset: uint64, width: int64) -> int64 {
     kaesu load_word(advance_pointer(address, offset));
 }
 
-koukai waza read_scalar(buffer: Buffer, offset: int64, kind: Scalar) -> CallResult {
+waza read_scalar_locked(buffer: Buffer, offset: int64, kind: Scalar) -> CallResult {
     kaku code = scalar_code(kind);
     moshi (code == 118 || code == 107) { kaesu CallResult { value: mu, error: "expected a numeric or bool scalar" }; }
     kaku width = cabi.darwin_scalar_size(code);
@@ -283,7 +283,7 @@ koukai waza read_scalar(buffer: Buffer, offset: int64, kind: Scalar) -> CallResu
     kaesu CallResult { value: integer_value(read_integer(entry.address, at, width), code), error: "" };
 }
 
-koukai waza write_scalar(buffer: Buffer, offset: int64, value: Value) -> string {
+waza write_scalar_locked(buffer: Buffer, offset: int64, value: Value) -> string {
     kaku code = value_code(value);
     moshi (code == 118) { kaesu "void has no in-memory representation"; }
     kaku entry = live_buffer(buffer);
@@ -303,7 +303,7 @@ waza aligned_pointer(address: cptr, offset: int64) -> bool {
 
 // Pointer fields must have been initialized by a native pointer producer.
 // The buffer bounds check covers the field, while the pointee is foreign-owned.
-koukai waza unsafe_read_pointer(buffer: Buffer, offset: int64) -> PointerResult {
+waza unsafe_read_pointer_locked(buffer: Buffer, offset: int64) -> PointerResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu PointerResult { value: cptr(0), error: handle_error() }; }
     kaku error = access_error(entry, offset, 8, iie);
@@ -318,30 +318,30 @@ koukai waza unsafe_read_pointer(buffer: Buffer, offset: int64) -> PointerResult 
     kaesu PointerResult { value: value, error: "" };
 }
 
-koukai waza c_string_buffer(value: string) -> BufferResult {
+waza c_string_buffer_locked(value: string) -> BufferResult {
     kaku bytes = string.to_bytes(value);
     kaku at = 0;
     aida (at < len(bytes)) {
         moshi (bytes[at] == uint8(0)) { kaesu buffer_error("C string contains an embedded NUL"); }
         at = at + 1;
     }
-    kaku allocated = alloc_zeroed(len(bytes) + 1);
+    kaku allocated = alloc_zeroed_locked(len(bytes) + 1);
     kaku buffer = allocated.buffer;
     moshi (buffer == mu) { kaesu allocated; }
-    kaku error = write(buffer, 0, bytes);
-    moshi (error != "") { free(buffer); kaesu buffer_error(error); }
+    kaku error = write_locked(buffer, 0, bytes);
+    moshi (error != "") { free_locked(buffer); kaesu buffer_error(error); }
     kaesu allocated;
 }
 
-koukai waza read_utf8(buffer: Buffer, offset: int64, length: int64) -> StringResult {
-    kaku result = read(buffer, offset, length);
+waza read_utf8_locked(buffer: Buffer, offset: int64, length: int64) -> StringResult {
+    kaku result = read_locked(buffer, offset, length);
     moshi (result.error != "") { kaesu StringResult { value: "", error: result.error }; }
     kaku value = string.from_utf8(result.bytes);
     moshi (value == mu) { kaesu StringResult { value: "", error: "native buffer contains invalid UTF-8" }; }
     kaesu StringResult { value: value, error: "" };
 }
 
-koukai waza read_c_string(buffer: Buffer, offset: int64, limit: int64) -> StringResult {
+waza read_c_string_locked(buffer: Buffer, offset: int64, limit: int64) -> StringResult {
     kaku entry = live_buffer(buffer);
     moshi (entry == mu) { kaesu StringResult { value: "", error: handle_error() }; }
     kaku error = access_error(entry, offset, limit, iie);
@@ -349,9 +349,149 @@ koukai waza read_c_string(buffer: Buffer, offset: int64, limit: int64) -> String
     kaku at = 0;
     aida (at < limit) {
         moshi (load_byte(entry.address, uint64(offset + at)) == uint8(0)) {
-            kaesu read_utf8(buffer, offset, at);
+            kaesu read_utf8_locked(buffer, offset, at);
         }
         at = at + 1;
     }
     kaesu StringResult { value: "", error: "C string has no NUL within its byte limit" };
+}
+
+koukai waza alloc(length: int64) -> BufferResult {
+    registry_lock();
+    kaku result = alloc_locked(length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza alloc_zeroed(length: int64) -> BufferResult {
+    registry_lock();
+    kaku result = alloc_zeroed_locked(length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza alloc_aligned(length: int64, alignment: int64) -> BufferResult {
+    registry_lock();
+    kaku result = alloc_aligned_locked(length, alignment);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza resize(buffer: Buffer, length: int64) -> BufferResult {
+    registry_lock();
+    kaku result = resize_locked(buffer, length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza free(buffer: Buffer) -> string {
+    registry_lock();
+    kaku result = free_locked(buffer);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza unsafe_borrow(address: cptr, length: int64, writable: bool) -> BufferResult {
+    registry_lock();
+    kaku result = unsafe_borrow_locked(address, length, writable);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza release_buffer(buffer: Buffer) -> string {
+    registry_lock();
+    kaku result = release_buffer_locked(buffer);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza slice(buffer: Buffer, offset: int64, length: int64) -> BufferResult {
+    registry_lock();
+    kaku result = slice_locked(buffer, offset, length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza read_only(buffer: Buffer) -> BufferResult {
+    registry_lock();
+    kaku result = read_only_locked(buffer);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza pointer(buffer: Buffer) -> PointerResult {
+    registry_lock();
+    kaku result = pointer_locked(buffer);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza read(buffer: Buffer, offset: int64, length: int64) -> BytesResult {
+    registry_lock();
+    kaku result = read_locked(buffer, offset, length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza write(buffer: Buffer, offset: int64, bytes: []uint8) -> string {
+    registry_lock();
+    kaku result = write_locked(buffer, offset, bytes);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza fill(buffer: Buffer, offset: int64, length: int64, byte: uint8) -> string {
+    registry_lock();
+    kaku result = fill_locked(buffer, offset, length, byte);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza copy(destination: Buffer, to: int64, source: Buffer, from: int64, length: int64) -> string {
+    registry_lock();
+    kaku result = copy_locked(destination, to, source, from, length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza read_scalar(buffer: Buffer, offset: int64, kind: Scalar) -> CallResult {
+    registry_lock();
+    kaku result = read_scalar_locked(buffer, offset, kind);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza write_scalar(buffer: Buffer, offset: int64, value: Value) -> string {
+    registry_lock();
+    kaku result = write_scalar_locked(buffer, offset, value);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza unsafe_read_pointer(buffer: Buffer, offset: int64) -> PointerResult {
+    registry_lock();
+    kaku result = unsafe_read_pointer_locked(buffer, offset);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza c_string_buffer(value: string) -> BufferResult {
+    registry_lock();
+    kaku result = c_string_buffer_locked(value);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza read_utf8(buffer: Buffer, offset: int64, length: int64) -> StringResult {
+    registry_lock();
+    kaku result = read_utf8_locked(buffer, offset, length);
+    registry_unlock();
+    kaesu result;
+}
+
+koukai waza read_c_string(buffer: Buffer, offset: int64, limit: int64) -> StringResult {
+    registry_lock();
+    kaku result = read_c_string_locked(buffer, offset, limit);
+    registry_unlock();
+    kaesu result;
 }
