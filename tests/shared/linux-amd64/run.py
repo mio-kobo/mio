@@ -247,6 +247,21 @@ def main():
     without = report.tool("extdep.without-lm", [mio, "build", extdep, "--shared", "-o", out / "no_lm.so", *base])
     report.expect("a module calling C sqrt without -lm fails to link with a clear diagnostic", without,
                   without is not None and without.returncode != 0 and b"E_SHARED_LINK" in without.stderr and any(message in without.stderr for message in (b"undefined reference", b"undefined symbol")) and not (out / "no_lm.so").exists())
+    redirected_path = out / "linker-stderr.log"
+    failed_output = out / "no_lm_redirected.so"
+    redirected_argv = [mio, "build", str(extdep), "--shared", "--format=json", "-o", str(failed_output), *base]
+    before, after = b"before mio\n", b"after mio\n"
+    with redirected_path.open("wb") as redirected:
+        redirected.write(before)
+        redirected.flush()
+        redirected_error = subprocess.run(redirected_argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=redirected, timeout=300)
+        redirected.write(after)
+    diagnostics = redirected_path.read_bytes()
+    report.expect("link errors preserve the linker diagnostics when stderr is a regular file", redirected_error,
+                  redirected_error.returncode != 0 and diagnostics.startswith(before) and diagnostics.endswith(after)
+                  and b"\0" not in diagnostics and any(message in diagnostics for message in (b"undefined reference", b"undefined symbol"))
+                  and b"E_SHARED_LINK" in diagnostics and b"mio: link command:" in diagnostics and b'"code":"E0401"' in diagnostics
+                  and not failed_output.exists())
     with_lm = report.tool("extdep.with-lm", [mio, "build", extdep, "--shared", "-lm", "--soname", "libmio_extdep.so", "-o", libs / "libmio_extdep.so", *base])
     if report.expect("the same module links with the declared dependency -lm", with_lm, with_lm is not None and with_lm.returncode == 0 and (libs / "libmio_extdep.so").is_file()):
         inspect_library(report, "libmio_extdep", libs / "libmio_extdep.so", "libmio_extdep.so", ["mio_extdep_cbrt", "mio_extdep_sqrt"], needed=["libm.so.6"])

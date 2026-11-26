@@ -179,7 +179,21 @@ waza render_command(arguments: []string) -> string {
     kaesu text;
 }
 
-waza write_log(text: string) -> unit { fs.write_all("/dev/stderr", string.to_bytes(string.concat(text, "\n"))); }
+// A successful verbose link can also emit warnings. Open the log after
+// the linker completes and append without truncating its diagnostics.
+waza write_log(text: string) -> unit {
+    kaku opened = fs.open_append("/dev/stderr");
+    kaku file = opened.file;
+    moshi (file == mu) { kaesu; }
+    kaku bytes = string.to_bytes(string.concat(text, "\n"));
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku result = fs.write(file, bytes, at, len(bytes) - at);
+        moshi (result.error != mu || result.count <= 0) { nukeru; }
+        at = at + result.count;
+    }
+    fs.close(file);
+}
 
 // The single linking seam: the system linker today; `--linker native` is reserved for a Mio linker.
 koukai waza link_shared(object: []uint8, exports: []lowerlinux.SharedExport, options: SharedOptions, output: string) -> NativeBuildResult {
@@ -246,17 +260,18 @@ waza link_in_directory(object: []uint8, exports: []lowerlinux.SharedExport, opti
         moshi (restrict_exports) { array.append_all(arguments, ["-Xlinker", "--version-script", "-Xlinker", export_map]); }
         array.append_all(arguments, options.link_options);
     }
-    moshi (options.verbose) { write_log(string.concat("mio: link: ", render_command(arguments))); }
-    // The linker's own diagnostics stay on stderr; its exit status decides.
+    // The linker inherits stderr. On failure the CLI writes the resulting
+    // diagnostic to the same descriptor, including the command.
     kaku status = os.spawn(linker, arguments);
     moshi (status != 0) {
-        write_log(string.concat("mio: link command: ", render_command(arguments)));
-        kaesu shared_error(string.concat("E_SHARED_LINK linker ", string.concat(linker, string.concat(" failed with status ", convert.format_int(status)))));
+        kaku detail = string.concat("E_SHARED_LINK linker ", string.concat(linker, string.concat(" failed with status ", convert.format_int(status))));
+        kaesu shared_error(string.concat(detail, string.concat("\nmio: link command: ", render_command(arguments))));
     }
     kaku linked = fs.read_all(library_path);
     moshi (linked.error != mu || len(linked.data) == 0) { kaesu shared_error("E_SHARED_LINK cannot read the linked shared object"); }
     kaku problem = verify_shared(linked.data, soname);
     moshi (problem != "") { kaesu shared_error(problem); }
+    moshi (options.verbose) { write_log(string.concat("mio: link: ", render_command(arguments))); }
     kaesu NativeBuildResult { bytes: linked.data, error: "" };
 }
 

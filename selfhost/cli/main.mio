@@ -6,6 +6,7 @@ yobu "kiso/aot/cabi";
 yobu "kiso/encoding/mochi";
 yobu "kiso/convert";
 yobu "kiso/fs";
+yobu "kiso/math";
 yobu "kiso/string";
 yobu "selfhost/frontend";
 yobu "selfhost/diagnostic";
@@ -373,8 +374,16 @@ waza run() -> unit {
         kaku shared_options = pipeline.SharedOptions { soname: soname, linker: linker, link_options: link_options, verbose: opts.verbose, object_only: emit_object };
         compiled = pipeline.build_shared_source(".", entry, bunko, gc_stress, shared_options, output);
         moshi (compiled.error != "") {
+            moshi (string.has_prefix(compiled.error, "E_SHARED_LINK ") ||
+                   string.has_prefix(compiled.error, "E_SHARED_VERIFY ")) {
+                moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
+                // The native failure primitive writes to inherited fd 2.
+                // Reopening /dev/stderr for writing can truncate linker diagnostics.
+                kaku message = diagnostic.failure_with_cause(compiled.error, i18n.text(language, i18n.key_err_analysis), entry, opts);
+                math.fail(string.trim_space(message));
+                kaesu;
+            }
             source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));
-            moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
             kaesu;
         }
         moshi (facade != "") { os.remove(entry); os.remove_dir(facade); }
