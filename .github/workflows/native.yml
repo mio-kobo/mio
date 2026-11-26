@@ -12,12 +12,21 @@ on:
         description: Verify examples with the native CLI after the fixed point
         type: boolean
         default: false
+      darwin_benchmark_parallelism:
+        description: Experimental Darwin thread benchmark parallelism (1=serial default, 2=bounded 2-group split)
+        type: choice
+        options: ['1', '2']
+        default: '1'
   workflow_call:
     inputs:
       run_examples:
         description: Verify examples with the native CLI after the fixed point
         type: boolean
         default: false
+      darwin_benchmark_parallelism:
+        description: Experimental Darwin thread benchmark parallelism (1=serial default, 2=bounded 2-group split)
+        type: string
+        default: '1'
   pull_request:
     branches: ['Mio-[0-9]*', 'EXP/windows-amd64-c-ffi']
   push:
@@ -134,6 +143,7 @@ jobs:
         shell: bash
         env:
           EXPECTED_SHA256: ${{ needs.linux.outputs[matrix.sha_output] }}
+          MIO_DARWIN_BENCHMARK_PARALLELISM: ${{ matrix.target == 'darwin-arm64' && (inputs.darwin_benchmark_parallelism || '1') || '1' }}
         run: >-
           python scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}"
           --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}"
@@ -153,6 +163,39 @@ jobs:
             build/native/${{ matrix.target }}/windows-dynamic-ffi/*.json
             build/native/${{ matrix.target }}/windows-dynamic-ffi/*.log
             build/native/${{ matrix.target }}/windows-dynamic-ffi/*.mio
+          if-no-files-found: error
+          retention-days: 7
+  darwin-benchmark-group2:
+    name: Native / darwin-arm64 benchmark group 2 (pilot)
+    needs: linux
+    if: ${{ inputs.darwin_benchmark_parallelism == '2' && !cancelled() && needs.linux.outputs.stage_a_ready == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.linux.outputs.stage_a_artifact }}
+          path: build/stage-a
+      - name: Run Darwin thread benchmark group 2 (alloc_4, mpmc_probe, mpmc_long)
+        shell: bash
+        env:
+          EXPECTED_SHA256: ${{ needs.linux.outputs.darwin_arm64 }}
+        run: >-
+          python scripts/ci/native_platforms.py darwin-bench --stage-a build/stage-a/mio-darwin-arm64
+          --expect-sha256 "$EXPECTED_SHA256" --output build/native/darwin-arm64-bench-g2 --phase-group 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-darwin-bench-group2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/native/darwin-arm64-bench-g2/report.json
+            build/native/darwin-arm64-bench-g2/logs/
           if-no-files-found: error
           retention-days: 7
   # The three additional targets live in their own reusable workflows (one native runner each) and are required here.

@@ -910,7 +910,20 @@ def darwin_thread_bench(report, cli, work):
 BASELINE_SHA = "ebff537c86f0b669794000ddcabd45e3cab92b1f"
 
 
-def darwin_thread_phases(report, cli, work):
+DARWIN_BENCH_PHASE_GROUPS = {
+    "all": ["start_join", "fan_join", "pingpong", "alloc_1", "alloc_2", "alloc_4", "alloc_s1", "alloc_s4", "mpmc_probe", "mpmc_long"],
+    "1": ["start_join", "fan_join", "pingpong", "alloc_1", "alloc_2", "alloc_s1", "alloc_s4"],
+    "2": ["alloc_4", "mpmc_probe", "mpmc_long"],
+}
+
+
+def darwin_benchmark_phases_for_group(group: str = "all") -> list[str]:
+    if group not in DARWIN_BENCH_PHASE_GROUPS:
+        raise ValueError(f"unknown Darwin benchmark phase group: {group}")
+    return list(DARWIN_BENCH_PHASE_GROUPS[group])
+
+
+def darwin_thread_phases(report, cli, work, phase_group: str = "all"):
     """Evidence only (non-required): every benchmark phase of benchmarks/threads/efficiency.mio built and run as its own process with its own budget
     (scripts/ci/thread_bench.py), plus the 10 s mpmc_probe that reports per-worker counts. Unlike darwin-thread-bench, an unfinished mpmc cannot hide
     start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded)."""
@@ -919,7 +932,7 @@ def darwin_thread_phases(report, cli, work):
     # Weak scaling alloc_1/2/4 (2000000 iterations per thread), strong scaling alloc_s1/alloc_s4 (4000000 in total; alloc_2 is the 2-thread point),
     # the original mpmc_long reproducer (unchanged program, 120 s watchdog) and the bounded probe. Everything lands under logs/ so the CI upload keeps
     # reports, raw stdout/stderr of every run (failed and timed-out ones too), samples and symbol maps.
-    phases = ["start_join", "fan_join", "pingpong", "alloc_1", "alloc_2", "alloc_4", "alloc_s1", "alloc_s4", "mpmc_probe", "mpmc_long"]
+    phases = darwin_benchmark_phases_for_group(phase_group)
     phases_dir = report.logs / "thread-phases"
     argv = [sys.executable, ROOT / "scripts/ci/thread_bench.py", "--mio", str(cli), "--target", "darwin-arm64", "--repeat", "4", "--budget", "120",
             "--sample-after", "25", "--symbols", "--output", str(phases_dir)]
@@ -1628,7 +1641,9 @@ def follower(args, target):
             darwin_thread_faults(report, cli, work / "thread-faults")
             darwin_thread_repro(report, cli, work / "thread-repro")
             darwin_thread_bench(report, cli, work / "thread-bench")
-            darwin_thread_phases(report, cli, work / "thread-phases")
+            parallelism = os.environ.get("MIO_DARWIN_BENCHMARK_PARALLELISM", "1").strip()
+            phase_group = "1" if parallelism == "2" else "all"
+            darwin_thread_phases(report, cli, work / "thread-phases", phase_group=phase_group)
             darwin_thread_observe(report, cli, work / "thread-observe")
             darwin_c_abi(report, cli, work / "c-abi")
             darwin_dylib(report, cli)
@@ -1870,6 +1885,11 @@ def main():
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--run-id", required=True, type=int)
+    p = sub.add_parser("darwin-bench")
+    p.add_argument("--stage-a", required=True)
+    p.add_argument("--expect-sha256", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--phase-group", default="2", choices=("1", "2", "all"))
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
@@ -1885,6 +1905,23 @@ def main():
         return summary(args)
     if args.command == "select-reports":
         return select_reports(args)
+    if args.command == "darwin-bench":
+        report = Report("darwin-arm64", args.output)
+        if not verify_host(report):
+            return finish(report)
+        work = report.output / "work"
+        work.mkdir(exist_ok=True)
+        stage_a = Path(args.stage_a).resolve()
+        cli = work / stage_a.name
+        shutil.copyfile(stage_a, cli)
+        os.chmod(cli, 0o755)
+        cli_b = work / "mio-B"
+        ok, reason, _ = cli_build(report, "cli-B", cli, "selfhost/cli", "darwin-arm64", cli_b)
+        if not ok:
+            report.check("darwin-bench-cli", "FAIL", "native", reason, required=False)
+            return finish(report)
+        darwin_thread_phases(report, cli_b, work / "thread-phases", phase_group=args.phase_group)
+        return finish(report)
     return follower(args, TARGETS[args.command])
 
 
