@@ -1,0 +1,170 @@
+yobu "kiso/array";
+yobu "kiso/fs";
+yobu "kiso/string";
+
+// Package-internal native helpers of kiso/ffi/linux.
+//
+// The libc functions used for raw memory access (memset, memcpy, strnlen, dladdr, dladdr1) are resolved once through
+// dlsym(RTLD_DEFAULT) and called through the System V indirect bridge. A C symbol can have only one prototype per
+// program, so declaring them with `= c "memcpy"` here would make every user program that declares memcpy with another
+// prototype fail to build; the indirect bridge has no such conflict. Only the dl* entry points are direct declarations.
+//
+// Pointer bits: memset(p, 0, 0) returns p and touches no memory, so calling it with a cptr argument and an int64 result
+// (or the reverse) converts between a pointer and its address bits exactly. User-space x86-64 addresses are below
+// 2^47, so the bits are a non-negative int64. These conversions never leave this package.
+
+waza n_bits(f: cptr, p: cptr, c: int32, n: uint64) -> int64 = c "mio_ffi_indirect";
+waza n_pointer(f: cptr, p: int64, c: int32, n: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_copy_out(f: cptr, destination: []uint8, source: cptr, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_strnlen(f: cptr, text: cptr, limit: uint64) -> uint64 = c "mio_ffi_indirect";
+waza n_dladdr(f: cptr, address: cptr, info: []uint8) -> int32 = c "mio_ffi_indirect";
+waza n_dladdr1(f: cptr, address: cptr, info: []uint8, extra: []uint8, flags: int32) -> int32 = c "mio_ffi_indirect";
+
+kaku native_state: int64 = 0;   // 0 not resolved, 1 ready, -1 unavailable
+kaku p_memset: cptr = cptr(0);
+kaku p_memcpy: cptr = cptr(0);
+kaku p_strnlen: cptr = cptr(0);
+kaku p_dladdr: cptr = cptr(0);
+kaku p_dladdr1: cptr = cptr(0);
+
+kata MapRange { start: int64; end: int64; readable: bool; executable: bool; }
+kaku map_ranges: []MapRange = [];
+kaku maps_valid: bool = iie;
+
+waza default_symbol(name: string) -> cptr {
+    c_dlerror();
+    kaesu c_dlsym(cptr(0), cstring(name));
+}
+
+waza native_ready() -> bool {
+    moshi (native_state == 0) {
+        p_memset = default_symbol("memset");
+        p_memcpy = default_symbol("memcpy");
+        p_strnlen = default_symbol("strnlen");
+        p_dladdr = default_symbol("dladdr");
+        // dladdr1 is a glibc extension; without it the ELF symbol-type check is skipped (see code_check).
+        p_dladdr1 = default_symbol("dladdr1");
+        native_state = -1;
+        moshi (p_memset != cptr(0) && p_memcpy != cptr(0) && p_strnlen != cptr(0) && p_dladdr != cptr(0)) { native_state = 1; }
+    }
+    kaesu native_state == 1;
+}
+
+// Whether native_ready already succeeded (no dl call is made).
+waza native_resolved() -> bool { kaesu native_state == 1; }
+
+waza address_bits(pointer: cptr) -> int64 { kaesu n_bits(p_memset, pointer, int32(0), uint64(0)); }
+waza pointer_at(bits: int64) -> cptr { kaesu n_pointer(p_memset, bits, int32(0), uint64(0)); }
+
+// Copies size bytes at pointer into a fresh array. The caller guarantees the range is readable.
+waza read_native(pointer: cptr, size: int64) -> []uint8 {
+    kaku copy: []uint8 = array.make[uint8](size, uint8(0));
+    moshi (size > 0) { n_copy_out(p_memcpy, copy, pointer, uint64(size)); }
+    kaesu copy;
+}
+
+waza native_strnlen(text: cptr, limit: int64) -> int64 { kaesu int64(n_strnlen(p_strnlen, text, uint64(limit))); }
+
+waza word_le(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// /proc/self/maps
+
+waza hex_digit(byte: int64) -> int64 {
+    moshi (byte >= 48 && byte <= 57) { kaesu byte - 48; }
+    moshi (byte >= 97 && byte <= 102) { kaesu byte - 87; }
+    kaesu -1;
+}
+
+waza load_maps() -> bool {
+    kaku read = fs.read_all("/proc/self/maps");
+    moshi (read.error != mu) { kaesu iie; }
+    kaku data = read.data;
+    kaku ranges: []MapRange = [];
+    kaku at = 0;
+    aida (at < len(data)) {
+        kaku start = 0;
+        kaku digits = 0;
+        aida (at < len(data) && hex_digit(int64(data[at])) >= 0) { start = start * 16 + hex_digit(int64(data[at])); at = at + 1; digits = digits + 1; }
+        kaku valid = digits > 0 && digits <= 12 && at < len(data) && data[at] == uint8(45);
+        kaku end = 0;
+        moshi (valid) {
+            at = at + 1;
+            digits = 0;
+            aida (at < len(data) && hex_digit(int64(data[at])) >= 0) { end = end * 16 + hex_digit(int64(data[at])); at = at + 1; digits = digits + 1; }
+            valid = digits > 0 && digits <= 12 && at + 4 < len(data) && data[at] == uint8(32);
+        }
+        moshi (valid) {
+            // perms: r w x p|s; the third letter is x for executable mappings
+            array.push(ranges, MapRange { start: start, end: end, readable: data[at + 1] == uint8(114), executable: data[at + 3] == uint8(120) });
+        }
+        aida (at < len(data) && data[at] != uint8(10)) { at = at + 1; }
+        at = at + 1;
+    }
+    map_ranges = ranges;
+    maps_valid = hai;
+    kaesu len(ranges) > 0;
+}
+
+// 1 when bits lies in an executable mapping, 0 in a non-executable one, -1 when unmapped or unknown.
+waza mapping_kind(bits: int64) -> int64 { kaesu mapping(bits, iie); }
+
+// Whether [bits, bits + size) lies inside one readable mapping.
+waza readable_range(bits: int64, size: int64) -> bool { kaesu mapping(bits, hai) == 1 && mapping(bits + size - 1, hai) == 1; }
+
+waza mapping(bits: int64, need_read: bool) -> int64 {
+    kaku attempt = 0;
+    aida (attempt < 2) {
+        moshi (!maps_valid || attempt == 1) {
+            moshi (!load_maps()) { kaesu -1; }
+        }
+        kaku at = 0;
+        aida (at < len(map_ranges)) {
+            kaku range = map_ranges[at];
+            moshi (bits >= range.start && bits < range.end) {
+                moshi (need_read) { moshi (range.readable) { kaesu 1; } kaesu 0; }
+                moshi (range.executable) { kaesu 1; }
+                kaesu 0;
+            }
+            at = at + 1;
+        }
+        attempt = attempt + 1;
+    }
+    kaesu -1;
+}
+
+waza invalidate_maps() -> unit { maps_valid = iie; }
+
+// The executable-code check in front of every resolved function. It rejects addresses outside an executable mapping
+// and, where dladdr1 is available, exported ELF symbols whose type is a data type (STT_OBJECT, STT_COMMON, STT_TLS).
+// It does not prove that the declared prototype is right.
+waza code_check(address: cptr, name: string) -> string {
+    moshi (!native_ready()) { kaesu "E_FFI_STATE the libc helpers memset, memcpy, strnlen and dladdr are unavailable"; }
+    kaku bits = address_bits(address);
+    kaku kind = mapping_kind(bits);
+    moshi (kind < 0) { kaesu string.concat("E_FFI_NOT_FUNCTION the address of ", string.concat(name, " is not in a mapped image")); }
+    moshi (kind == 0) { kaesu string.concat("E_FFI_NOT_FUNCTION ", string.concat(name, " is not in an executable mapping (a data symbol?)")); }
+    moshi (p_dladdr1 != cptr(0)) {
+        kaku info: []uint8 = array.make[uint8](32, uint8(0));
+        kaku extra: []uint8 = array.make[uint8](8, uint8(0));
+        // RTLD_DL_SYMENT = 1: extra receives the ElfW(Sym) * of the symbol dladdr matched
+        moshi (n_dladdr1(p_dladdr1, address, info, extra, int32(1)) != int32(0)) {
+            kaku symbol_address = word_le(info, 24, 8);
+            kaku entry = word_le(extra, 0, 8);
+            moshi (symbol_address == bits && entry > 0 && readable_range(entry, 24)) {
+                kaku sym = read_native(pointer_at(entry), 24);
+                kaku kind_code = int64(sym[4]) - (int64(sym[4]) / 16) * 16;
+                moshi (kind_code == 1 || kind_code == 5 || kind_code == 6) {
+                    kaesu string.concat("E_FFI_NOT_FUNCTION ", string.concat(name, " is an ELF data symbol"));
+                }
+            }
+        }
+    }
+    kaesu "";
+}

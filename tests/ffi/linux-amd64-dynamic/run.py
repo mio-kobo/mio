@@ -20,7 +20,13 @@ MODULES = {  # file -> (sources, extra link flags, expected exports, expected NE
     "libmio_crypto.so": (["mio_crypto.c"], ["-lcrypto"], ["mio_sha256"], ["libcrypto.so"]),
     "libmio_dep_inner.so": (["mio_dep_inner.c"], [], ["mio_inner_value"], []),
     "libmio_dep_outer.so": (["mio_dep_outer.c"], ["-L{out}", "-lmio_dep_inner", "-Wl,-rpath,$ORIGIN"], ["mio_outer_value"], ["libmio_dep_inner.so"]),
+    "libmio_data.so": (["mio_data.c"], [], ["mio_data_function"], []),
+    # .rodata inside the executable segment: only the ELF symbol type identifies mio_data_table as data
+    "libmio_data_rx.so": (["mio_data.c"], ["-Wl,-z,noseparate-code"], ["mio_data_function"], []),
+    "libmio_dlclose_fault.so": (["mio_dlclose_fault.c"], ["-ldl"], ["dlclose"], []),
 }
+# Cases that need an environment of their own (fault injection through LD_PRELOAD).
+CASE_ENV = {"test_ffi_close_failure": {"LD_PRELOAD": "{lib}/libmio_dlclose_fault.so", "MIO_FFI_FAULT_DLCLOSE": "2"}}
 
 results = []
 
@@ -122,7 +128,8 @@ def run_cases(args, out):
             record(name_label, "FAIL", "mio build failed: " + (p.stderr.strip().splitlines() or [""])[0])
             continue
         # run from the lib directory so that "./libmio_math.so" resolves
-        p, secs = run(out, "run_" + name_label, [str(exe)], env=run_env, cwd=lib, timeout=900)
+        case_env = dict(run_env, **{key: value.replace("{lib}", str(lib)) for key, value in CASE_ENV.get(name, {}).items()})
+        p, secs = run(out, "run_" + name_label, [str(exe)], env=case_env, cwd=lib, timeout=900)
         lines = p.stdout.strip().splitlines()
         passed = p.returncode == 0 and lines and lines[-1] == name + " PASS"
         record(name_label, "PASS" if passed else "FAIL", "%.2fs" % secs if passed else "rc=%d: %s" % (p.returncode, " | ".join(lines[-3:])))

@@ -1,0 +1,26 @@
+yobu "../support";
+yobu "kiso/ffi/linux";
+yobu "kiso/string";
+
+// Run with LD_PRELOAD=libmio_dlclose_fault.so MIO_FFI_FAULT_DLCLOSE=2: the first two dlclose calls fail.
+kaku run = support.begin("test_ffi_close_failure");
+kaku pending_before = linux.libraries_pending_close();
+kaku lib = linux.open(support.absolute("libmio_math.so"));
+kaku add = linux.symbol(lib, "mio_add", "i:ii");
+support.expect(run, "callable before close", linux.call_i_ii(add, int32(2), int32(3)) == int32(5));
+kaku first = linux.close(lib);
+support.expect(run, "first dlclose failure is reported", string.has_prefix(first, "E_FFI_CLOSE"));
+support.expect(run, "the library is pending, not open", linux.close_pending(lib) && !linux.is_open(lib) && linux.libraries_pending_close() == pending_before + 1);
+support.expect(run, "its functions stay invalid after the failure", !linux.is_live(add) && linux.call_i_ii(add, int32(2), int32(3)) == int32(0) && string.has_prefix(linux.last_error(), "E_FFI_CLOSED"));
+support.expect(run, "no new symbol from a pending library", string.has_prefix(linux.error(linux.symbol(lib, "mio_add", "i:ii")), "E_FFI_CLOSED"));
+support.expect(run, "unsafe_address of a function of a pending library is null", linux.unsafe_address(add, "i:ii") == cptr(0));
+kaku second = linux.close(lib);
+support.expect(run, "a failed retry is reported and stays pending", string.has_prefix(second, "E_FFI_CLOSE retry failed") && linux.close_pending(lib));
+support.expect(run, "the next retry succeeds", linux.close(lib) == "" && !linux.close_pending(lib) && linux.libraries_pending_close() == pending_before);
+support.expect(run, "closing again is a normal double close", string.has_prefix(linux.close(lib), "E_FFI_CLOSED"));
+// a pending slot is not reused while pending; after cleanup a new library works normally
+kaku again = linux.open(support.absolute("libmio_math.so"));
+kaku add2 = linux.symbol(again, "mio_add", "i:ii");
+support.expect(run, "a reopened library works", linux.call_i_ii(add2, int32(40), int32(2)) == int32(42) && !linux.is_live(add));
+support.expect(run, "close reopened", linux.close(again) == "");
+support.finish(run);
