@@ -24,6 +24,19 @@ MODULES = (
     }),
     ("convert", "kiso/convert", {"scale_float64": ("mio_convert_scale_float64", "jgg")}),
     ("json", "kiso/encoding/json", {"digit": ("mio_json_digit", "lg")}),
+    ("wide", HERE / "wide.mio", {
+        "remember": ("mio_wide_remember", "vk"),
+        "pointer_identity": ("mio_wide_pointer", "kk"),
+        "unsigned_identity": ("mio_wide_unsigned", "hh"),
+        "narrow": ("mio_wide_narrow", "gabcdef"),
+        "signed_byte": ("mio_wide_signed_byte", "aa"),
+        "unsigned_half": ("mio_wide_unsigned_half", "dd"),
+        "spill": ("mio_wide_spill", "j" + "gjgi" * 4 + "aidjlkf"),
+    }),
+    ("state", HERE / "state.mio", {
+        "current": ("mio_state_current", "g"), "next": ("mio_state_next", "g"),
+        "initialize": ("mio_state_initialize", "vg"), "finalize": ("mio_state_finalize", "v"),
+    }),
 )
 
 
@@ -79,7 +92,9 @@ def main():
                  "reject-runtime-body", "reject-cross-target", "reject-recursion", "reject-duplicate-symbol",
                  "reject-missing-export-seatbelt", "foreign-fixture", "foreign-build", "foreign-run",
                  "foreign-gc-build", "foreign-gc-run", "foreign-codesign",
-                 "memory-build", "memory-run", "memory-gc-build", "memory-gc-run", "memory-openssl"):
+                 "memory-build", "memory-run", "memory-gc-build", "memory-gc-run", "memory-openssl",
+                 "wide-c-build", "wide-c-run", "state-c-build", "state-c-run", "state-other-build",
+                 "reject-dylib-top-level"):
         record(name, "NOT_RUN")
 
     try:
@@ -122,18 +137,34 @@ def main():
         loader = artifacts / "loader"
         run("loader-build", [mio, "build", HERE / "loader.mio", "--bunko-root", BUNKO, "-o", loader], empty_path=True)
         run("loader-codesign", ["codesign", "--verify", "--strict", loader])
-        transcript = run("loader-run", [loader, *libraries, data], empty_path=True, contains="dylib loader: ok")
+        transcript = run("loader-run", [loader, *libraries[:3], data], empty_path=True, contains="dylib loader: ok")
         iterations, direct_ms, ffi_ms = map(int, transcript.splitlines()[1:])
         report["timing"] = dict(iterations=iterations, native_ms=direct_ms, ffi_ms=ffi_ms)
         stress = artifacts / "loader-gc"
         run("loader-gc-build", [mio, "build", HERE / "loader.mio", "--gc-stress", "--bunko-root", BUNKO, "-o", stress], empty_path=True)
-        run("loader-gc-run", [stress, *libraries, data], empty_path=True, contains="dylib loader: ok")
+        run("loader-gc-run", [stress, *libraries[:3], data], empty_path=True, contains="dylib loader: ok")
         record("loader-verdict", "PASS")
 
         oracle = artifacts / "oracle"
         run("c-build", ["xcrun", "clang", "-arch", "arm64", "-Wall", "-Wextra", "-Werror", HERE / "oracle.c",
-                        *libraries, "-Wl,-rpath,@loader_path", "-o", oracle])
+                        *libraries[:3], "-Wl,-rpath,@loader_path", "-o", oracle])
         run("c-run", [oracle], empty_path=True)
+
+        wide_oracle = artifacts / "wide-oracle"
+        run("wide-c-build", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                             "-Wall", "-Wextra", "-Werror", HERE / "wide_oracle.c", libraries[3],
+                             "-Wl,-rpath,@loader_path", "-o", wide_oracle])
+        run("wide-c-run", [wide_oracle], empty_path=True)
+
+        state_other = artifacts / "libmio_state_other.dylib"
+        state_flags = [flag for source_name, (symbol, _) in MODULES[4][2].items()
+                       for flag in ("--export", f"{source_name}={symbol}")]
+        run("state-other-build", [mio, "build", "--kind=dylib", HERE / "state.mio", *state_flags,
+                                  "--bunko-root", BUNKO, "-o", state_other], empty_path=True)
+        state_oracle = artifacts / "state-oracle"
+        run("state-c-build", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                             "-Wall", "-Wextra", "-Werror", HERE / "state_oracle.c", "-o", state_oracle])
+        run("state-c-run", [state_oracle, libraries[4], state_other], empty_path=True)
 
         foreign = artifacts / "libforeign.dylib"
         run("foreign-fixture", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
@@ -171,6 +202,10 @@ def main():
             success=False, contains="Darwin ARM64")
         run("reject-duplicate-symbol", [*build, HERE / "math.mio", "--export=add=mio_same",
                                         "--export=root=mio_same"], success=False, contains="E_DYLIB")
+        initializer = artifacts / "initializer.mio"
+        initializer.write_text("waza initial() -> int64 { kaesu 1; }\nkaku value = initial();\nwaza get() -> int64 { kaesu value; }\n")
+        run("reject-dylib-top-level", [*build, initializer, "--export=get=mio_get"],
+            success=False, contains="module scope supports only scalar literal initialization")
         recursive = artifacts / "recursive.mio"
         recursive.write_text("waza loop(a: int64) -> int64 { kaesu loop(a); }\n")
         run("reject-recursion", [*build, recursive, "--export=loop=mio_loop"], success=False, contains="recursive")

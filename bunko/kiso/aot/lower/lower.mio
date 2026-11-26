@@ -157,16 +157,29 @@ waza empty_string_id(constants: []mochi.Constant, ids: []int64) -> int64 {
     kaesu unique;
 }
 
+// Signed narrow constants occupy a sign-extended native word.
+waza constant_high(constant: mochi.Constant) -> uint32 {
+    kaku low = constant.bits.low;
+    moshi ((constant.tag == uint8(5) && low >= uint32(128)) ||
+        (constant.tag == uint8(6) && low >= uint32(32768)) ||
+        (constant.tag == uint8(7) && low >= uint32(2147483648))) {
+        kaesu uint32(4294967295);
+    }
+    kaesu constant.bits.high;
+}
+
+waza constant_low(constant: mochi.Constant) -> uint32 {
+    kaku low = constant.bits.low;
+    moshi (constant.tag == uint8(5) && low >= uint32(128)) { kaesu low + uint32(4294967040); }
+    moshi (constant.tag == uint8(6) && low >= uint32(32768)) { kaesu low + uint32(4294901760); }
+    kaesu low;
+}
+
 waza emit_constant(code: arm64.Assembler, constants: []mochi.Constant, ids: []int64, at: int64) -> LowerError? {
     moshi (at < 0 || at >= len(constants)) { kaesu LowerError.InvalidOperand(3000 + at); }
     kaku constant = constants[at];
-    kaku high = constant.bits.high;
-    kaku low = constant.bits.low;
-    // Signed fixed-width constants are serialized as their exact 8/16/32-bit
-    // payload and occupy a sign-extended raw runtime slot.
-    moshi (constant.tag == uint8(5) && low >= uint32(128)) { high = uint32(4294967295); low = low + uint32(4294967040); }
-    moshi (constant.tag == uint8(6) && low >= uint32(32768)) { high = uint32(4294967295); low = low + uint32(4294901760); }
-    moshi (constant.tag == uint8(7) && low >= uint32(2147483648)) { high = uint32(4294967295); }
+    kaku high = constant_high(constant);
+    kaku low = constant_low(constant);
     moshi (constant.tag == uint8(2)) {
         kaku tagged = ids[at] * 2 + 1;
         high = uint32(0); low = uint32(tagged);

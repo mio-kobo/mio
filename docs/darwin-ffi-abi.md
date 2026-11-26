@@ -15,14 +15,27 @@ Every library publishes `int64_t mio_module_abi_version(void)`. It returns `1`. 
 
 | Mio type | C type | Code |
 | --- | --- | --- |
+| `unit` | `void` (result only) | `v` |
+| `int8` | `int8_t` | `a` |
+| `uint8` | `uint8_t` | `b` |
+| `int16` | `int16_t` | `c` |
+| `uint16` | `uint16_t` | `d` |
 | `int32` | `int32_t` | `e` |
 | `uint32` | `uint32_t` | `f` |
 | `int64` | `int64_t` | `g` |
+| `uint64` | `uint64_t` | `h` |
 | `float32` | `float` | `i` |
 | `float64` | `double` | `j` |
+| `cptr` | opaque C pointer | `k` |
 | `bool` | `_Bool` (eight bits, canonical values 0 and 1) | `l` |
 
-Exports support up to eight fixed parameters and one scalar result. C reaches a thunk that collects the separate Darwin GP and FP argument banks into Mio's machine-word convention, including the eighth GP argument in `x7`. It uses a 16-byte-aligned stack, preserves the ABI's callee-saved registers and returns in `x0` or `v0`. The library code uses PC-relative intra-image branches. The writer also supports bounds-checked ADRP/ADD patches to image text, constants, and zero-initialized data.
+Exports support up to 256 fixed scalar parameters. The entry thunk reads the two Darwin register banks independently and unpacks stack arguments at their natural alignment. It repacks those values into Mio's sequential register and machine-word stack convention. The thunk preserves callee-saved registers and returns in `x0` or `v0`. Previously published ABI v1 aliases retain their names.
+
+## Private data and lifecycle
+
+Scalar `teisu` values are compiled as constants. A private mutable global may start with a scalar literal. That literal becomes bytes in the library's writable data section. A library can explicitly export initialization and finalization functions. dyld does not run Mio top-level code when opening or closing the image.
+
+References to the same loaded image share its globals. Separately loaded images can have independent private state. A stateful library requires the caller to serialize access to its globals. Call explicit initialization and finalization according to the library's API.
 
 ## Open, bind and call from Mio
 
@@ -70,9 +83,9 @@ Load libraries from trusted sources. dyld can execute initializers during `open`
 
 ## Ownership and current limits
 
-The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals and calls and can run without a Mio heap, initializers, or runtime globals. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, external calls from library bodies, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
+The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals, scalar globals and direct calls without a Mio heap. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, external calls from library bodies, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
 
-The loader supports single-mutator Mio hosts. Mio-generated library exports use the subset in the export table. C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+The loader supports single-mutator Mio hosts. Mio-generated library exports use the fixed scalar types in the export table. C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
 
 ## Native buffers
 

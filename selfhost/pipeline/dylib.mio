@@ -13,25 +13,19 @@ yobu "kiso/string";
 
 waza dylib_build_error(message: string) -> NativeBuildResult { kaesu NativeBuildResult { bytes: [], error: message }; }
 
-waza dylib_type(name: string) -> string {
-    moshi (name == "int64" || name == "int32" || name == "uint32" ||
-        name == "float32" || name == "float64" || name == "bool") { kaesu cabi.type_code(name); }
-    kaesu "";
-}
-
 waza export_prototype(checked: typecheck.TypeCheckResult, source_name: string, c_name: string) -> string {
     kaku index = 0;
     aida (index < len(checked.signatures)) {
         kaku fn = checked.signatures[index];
         moshi (fn.name == source_name && fn.package_path == checked.package_path) {
-            moshi (len(fn.type_parameters) != 0 || len(fn.parameters) > 8) { kaesu ""; }
-            kaku result = dylib_type(checked.types[fn.result].name);
+            moshi (len(fn.type_parameters) != 0 || len(fn.parameters) > 256) { kaesu ""; }
+            kaku result = cabi.type_code(checked.types[fn.result].name);
             moshi (result == "") { kaesu ""; }
             kaku prototype = string.concat(cabi.prefix, string.concat(c_name, string.concat(":", result)));
             kaku at = 0;
             aida (at < len(fn.parameters)) {
-                kaku parameter = dylib_type(checked.types[fn.parameters[at]].name);
-                moshi (parameter == "") { kaesu ""; }
+                kaku parameter = cabi.type_code(checked.types[fn.parameters[at]].name);
+                moshi (parameter == "" || parameter == "v") { kaesu ""; }
                 prototype = string.concat(prototype, parameter);
                 at = at + 1;
             }
@@ -79,9 +73,9 @@ koukai waza build_signed_dylib(root: string, entry: string, bunko_root: string, 
     }
     kaku lowered = lower.compile_dylib(file, exports);
     moshi (lowered.error != "") { kaesu dylib_build_error(lowered.error); }
-    kaku image = macho.dylib(macho.DylibSpec {
-        image: macho.ImageSpec { words: lowered.words, constants: [], globals: 0, patches: [] },
-        install_name: string.concat("@rpath/", basename), exports: lowered.exports });
+    kaku image = macho.dylib_with_globals(macho.DylibSpec {
+        image: macho.ImageSpec { words: lowered.words, constants: [], globals: file.global_count, patches: lowered.patches },
+        install_name: string.concat("@rpath/", basename), exports: lowered.exports }, lowered.static_data);
     moshi (image.error != mu) { kaesu dylib_build_error("E_DYLIB cannot encode Mach-O library"); }
     kaku signed = sign.adhoc_dylib(image.bytes);
     moshi (signed.error != "") { kaesu dylib_build_error(string.concat("E_SIGN ", signed.error)); }

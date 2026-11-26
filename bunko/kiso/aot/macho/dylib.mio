@@ -43,13 +43,16 @@ waza ascii_name(bytes: []uint8) -> bool {
     kaesu hai;
 }
 
+// C name (1024 bytes), ABI alias prefix, result, 256 parameters and separators.
+teisu max_export_name_bytes = 1296;
+
 waza export_nodes(exports: []DylibExport, word_count: int64) -> []ExportNode {
     kaku nodes: []ExportNode = [ExportNode { address: [], edges: [] }];
     kaku index = 0;
     aida (index < len(exports)) {
         kaku entry = exports[index];
         kaku name = string.to_bytes(entry.name);
-        moshi (len(name) < 2 || len(name) > 127 || name[0] != uint8(95) ||
+        moshi (len(name) < 2 || len(name) > max_export_name_bytes || name[0] != uint8(95) ||
             !ascii_name(name) || entry.word < 0 || entry.word >= word_count) { kaesu []; }
         kaku current = 0;
         kaku at = 0;
@@ -147,6 +150,10 @@ waza dylib_name(output: binary.BinaryWriter, command: int64, name: []uint8) -> M
 // A dependency-free body may use ADRP/ADD image-relative patches. The only
 // dylib dependency is libSystem, required by dyld for a userland image.
 koukai waza dylib(spec: DylibSpec) -> ImageResult {
+    kaesu dylib_with_globals(spec, []);
+}
+
+koukai waza dylib_with_globals(spec: DylibSpec, initial: []uint8) -> ImageResult {
     kaku image = spec.image;
     kaku empty = plan(0, 0, 0);
     moshi (len(image.words) == 0) { kaesu dylib_failure(empty, MachOError.EmptyText()); }
@@ -155,6 +162,9 @@ koukai waza dylib(spec: DylibSpec) -> ImageResult {
         kaesu dylib_failure(empty, MachOError.ImageTooLarge());
     }
     kaku layout = plan(len(image.words) * 4, len(image.constants), image.globals);
+    moshi (len(initial) != 0 && len(initial) != image.globals * 8) {
+        kaesu dylib_failure(layout, MachOError.TooManyGlobals());
+    }
     kaku name = string.to_bytes(spec.install_name);
     moshi (len(name) <= 7 || len(name) > 127 || !ascii_name(name) || !string.has_prefix(spec.install_name, "@rpath/") ||
         len(spec.exports) == 0 || len(spec.exports) > 128) { kaesu dylib_failure(layout, MachOError.InvalidExport()); }
@@ -163,7 +173,7 @@ koukai waza dylib(spec: DylibSpec) -> ImageResult {
     kaku trie = export_trie(nodes);
     kaku symoff = align(layout.linkedit_offset + len(trie), 8);
     kaku stroff = symoff + len(spec.exports) * 16;
-    kaku names = binary.writer(1 + len(spec.exports) * 128);
+    kaku names = binary.writer(1 + len(spec.exports) * (max_export_name_bytes + 1));
     kaku symbols = binary.writer(len(spec.exports) * 16);
     kaku failure = zeros(names, 1);
     kaku index = 0;
@@ -235,6 +245,12 @@ koukai waza dylib(spec: DylibSpec) -> ImageResult {
     moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
     failure = put_bytes(output, image.constants);
     moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    moshi (len(initial) > 0) {
+        failure = zeros(output, layout.data_offset - binary.writer_offset(output));
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+        failure = put_bytes(output, initial);
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    }
     failure = zeros(output, layout.linkedit_offset - binary.writer_offset(output));
     moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
     failure = put_bytes(output, trie);
