@@ -19,6 +19,7 @@ jobs:
     outputs:
       linux_modules: ${{ steps.plan.outputs.linux_modules }}
       macos_modules: ${{ steps.plan.outputs.macos_modules }}
+      source_sha: ${{ steps.provenance.outputs.source_sha }}
     env:
       # Native Verification stays deferred (NOT_RUN) unless the repository variable is exactly "enabled".
       MIO_NATIVE_VERIFICATION: ${{ vars.MIO_NATIVE_VERIFICATION }}
@@ -36,6 +37,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
           persist-credentials: false
+      - id: provenance
+        name: Resolve and record immutable source revision
+        run: |
+          SOURCE_SHA=$(git rev-parse --verify HEAD)
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "requested_ref=${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }} resolved_sha=$SOURCE_SHA workflow_ref=${{ github.workflow_ref }} run_id=${{ github.run_id }} attempt_id=${{ github.run_attempt }}"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
@@ -75,6 +82,7 @@ jobs:
     uses: ./.github/workflows/native.yml
     with:
       run_examples: true
+      source_sha: ${{ needs.policy.outputs.source_sha }}
   full:
     name: Full / ${{ matrix.target }}
     needs: policy
@@ -95,12 +103,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
+          ref: ${{ needs.policy.outputs.source_sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify immutable source provenance
+        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ needs.policy.outputs.source_sha }}"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -137,12 +147,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
+          ref: ${{ needs.policy.outputs.source_sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify immutable source provenance
+        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ needs.policy.outputs.source_sha }}"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

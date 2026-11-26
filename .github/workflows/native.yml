@@ -18,6 +18,10 @@ on:
         description: Verify examples with the native CLI after the fixed point
         type: boolean
         default: false
+      source_sha:
+        description: Optional immutable commit SHA to check out and verify
+        type: string
+        default: ''
   pull_request:
     branches: ['Mio-[0-9]*', 'EXP/windows-amd64-c-ffi']
   push:
@@ -41,10 +45,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify source provenance
+        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ inputs.source_sha }}"
       # Go is used only for the reference VM host that runs the Stage A lowering and the VM differential.
       - uses: actions/setup-go@v5
         with:
@@ -122,10 +129,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify source provenance
+        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ inputs.source_sha }}"
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.linux.outputs.stage_a_artifact }}
@@ -161,16 +171,19 @@ jobs:
     uses: ./.github/workflows/native-arm64.yml
     with:
       run_examples: ${{ inputs.run_examples || false }}
+      source_sha: ${{ inputs.source_sha || '' }}
   darwin-amd64:
     name: darwin-amd64
     uses: ./.github/workflows/native-darwin-amd64.yml
     with:
       run_examples: ${{ inputs.run_examples || false }}
+      source_sha: ${{ inputs.source_sha || '' }}
   windows-arm64:
     name: windows-arm64
     uses: ./.github/workflows/native-windows-arm64.yml
     with:
       run_examples: ${{ inputs.run_examples || false }}
+      source_sha: ${{ inputs.source_sha || '' }}
 
   # Linux distribution and libc compatibility (tests/linux-compat): the CLI built by the linux-amd64 job runs inside
   # each distribution container on the x86-64 host (native execution, no emulation). Static and dynamic executables,
@@ -189,6 +202,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
@@ -224,6 +238,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
