@@ -25,7 +25,8 @@ untouched: for programs without `export` declarations the compiler produces byte
 | Pointer + length buffers filled by C | **not supported** (Mio has no operation that dereferences a `cptr`) |
 | Callbacks from C into Mio, C threads calling concurrently, OS threads inside the library | **not supported** |
 | GOT-relative (`GOTPCREL*`) addressing and `R_X86_64_64`/`RELATIVE` data pointers | **not generated** (the code needs none); the object writer rejects them |
-| A Mio native linker | **reserved**: `--linker native` reports that it is not implemented |
+| Mio native linker for self-contained modules (`--linker native`, `kiso/aot/elfdyn`): no cc, ld or lld | implemented (milestone 1, see [Native linker](#native-linker)) |
+| Native linking of declared C shared-library dependencies (`-l`, `-L`, `--link lib.so`, `--rpath`; `DT_NEEDED`, `DT_RUNPATH`, PLT/GOT, `R_X86_64_JUMP_SLOT`) | implemented (milestone 2, see [Native linker](#native-linker)); object files and archives are refused |
 | Shared libraries for linux-arm64, darwin, windows | **not supported** |
 | Go reference compiler (`cmd/mio`) | parses `export` with the same rules and ignores it; it cannot produce shared libraries (the Linux native pipeline is Mio-hosted) |
 
@@ -42,6 +43,7 @@ mio build mio_math --shared --soname libmio_math.so.1 -o libmio_math.so.1
 mio build mio_math --shared --emit=object -o math.o         # the ET_REL object only, no linker
 mio build mio_math --shared --linker /usr/bin/ld.lld -o libmio_math.so
 mio build mio_math --shared --verbose -o libmio_math.so      # prints the exact link command
+mio build mio_math --shared --linker native -o libmio_math.so # Mio links it; no external tool is run
 ```
 
 | Option | Meaning |
@@ -49,7 +51,7 @@ mio build mio_math --shared --verbose -o libmio_math.so      # prints the exact 
 | `--shared` | build a shared library; the input is a module directory (or a single source file) |
 | `-o <path>` | output path |
 | `--soname <name>` | `DT_SONAME`; default is the base name of the output |
-| `--linker <path\|name>` | linker program; honors `MIO_LD`, then prefers a C driver for declared dependencies or a raw linker for a self-contained module |
+| `--linker <path\|name>` | linker program; honors `MIO_LD`, then prefers a C driver for declared dependencies or a raw linker for a self-contained module. `--linker native` selects the Mio linker and never falls back |
 | `--emit=object` | write the relocatable object instead of linking (shared mode only) |
 | `--link`, `-L`, `-l`, `--rpath` | declared dependencies, see [Linker dependencies](#linker-dependencies) |
 | `--verbose` | log the reproducible link command on stderr even when it succeeds |
@@ -132,7 +134,64 @@ The linker keeps globals from linked objects and archives local unless Mio decla
 `MIO_LD` selects a linker without a flag. An explicitly selected raw `ld.lld` may need a `-L` directory for system
 libraries. The default C driver supplies those search paths and keeps any user-provided `-L` entries. The linker’s
 stderr is passed through unchanged. All of this goes through
-one function (`link_shared`), the seam where a Mio native linker will replace the system linker.
+one function (`link_shared`); `--linker native` goes through `link_native` instead (next section).
+
+## Native linker
+
+`mio build --shared --linker native` links the lowered module with `kiso/aot/elfdyn`, a pure Mio ELF64 `ET_DYN`
+writer. It consumes the same linker input as the `ET_REL` writer (`elfrel.ObjectSpec`: code, data-area size, exports,
+local symbols, relocations) and runs no external program: not `cc`, `ld`, `ld.lld` or any other tool. The CLI then runs
+the same `verify_shared` check as for the system linker.
+
+Milestone 1 covers **self-contained modules**, whose only relocations are `R_X86_64_PC32` references from `.text` to the
+module's own data area; milestone 2 adds declared shared-library dependencies (below). The distance between the two is fixed at link time, so the linker resolves every reference
+itself and the output needs no dynamic relocation, no GOT, no PLT and no `DT_NEEDED`:
+
+| Part | Content |
+| --- | --- |
+| Segments | `PT_LOAD` R (headers, `.gnu.hash`, `.dynsym`, `.dynstr`), `PT_LOAD` R+X (`.text`), `PT_LOAD` R+W (`.dynamic`, then `.bss` from the next page), `PT_DYNAMIC`, `PT_GNU_RELRO` (the `.dynamic` page), `PT_GNU_STACK` without X |
+| Dynamic tags | `DT_SONAME`, `DT_GNU_HASH`, `DT_STRTAB`, `DT_SYMTAB`, `DT_STRSZ`, `DT_SYMENT`, `DT_FLAGS=BIND_NOW`, `DT_FLAGS_1=NOW` |
+| Dynamic symbols | exactly the exports, `GLOBAL FUNC` default visibility, grouped by GNU hash bucket; local functions only in `.symtab` |
+| Determinism | the output is a pure function of the input; the acceptance test rebuilds and compares bytes |
+
+### Declared shared-library dependencies
+
+```sh
+mio build mod --shared --linker native -lm -o libroot.so
+mio build mod --shared --linker native -L /opt/x/lib -l example --rpath '$ORIGIN' -o libmodule.so
+mio build mod --shared --linker native --link /usr/lib/x86_64-linux-gnu/libz.so.1 -o libmodule.so
+```
+
+The dependencies are read by `kiso/aot/elfdso`, which treats every file as untrusted input (all offsets, sizes, counts
+and string indexes are bounds-checked):
+
+* `-l name` is searched as `libname.so` in the `-L` directories, then `/lib/x86_64-linux-gnu`, `/usr/lib/x86_64-linux-gnu`,
+  `/lib64`, `/usr/lib64`, `/lib`, `/usr/lib`, `/usr/local/lib`. `--link` takes an absolute path to a `.so`.
+* A dependency is an ELF64 x86-64 `ET_DYN` with a section header table and `.dynsym`, or a GNU ld script limited to
+  `OUTPUT_FORMAT`, `GROUP`/`INPUT` with absolute paths and `AS_NEEDED` (glibc's `libm.so` and `libc.so` are such scripts).
+  Archives inside a script (`libc_nonshared.a`) are skipped; any other script command, a relative path or `-l` inside a
+  script, nested scripts, other architectures, truncated or malformed files are errors.
+* Every external C symbol the module calls must be a function (`STT_FUNC`, `STT_GNU_IFUNC` or `STT_NOTYPE`) defined by
+  one of the declared libraries; the first library in declaration order wins. Otherwise: `E_SHARED_LINKER undefined
+  symbol <name>: not defined by the declared libraries (...)`. Transitive dependencies are loaded by `ld.so` at run time
+  but are not searched at link time, like GNU ld's default `--no-copy-dt-needed-entries`.
+* `DT_NEEDED` lists the declared libraries (by `DT_SONAME`, or file name when a library has none) in declaration order;
+  `AS_NEEDED` members only when they define a used symbol. `--rpath` values become one colon-joined `DT_RUNPATH`.
+* Each import is an undefined `GLOBAL FUNC` dynamic symbol (placed before the GNU hash symbol offset), a 16-byte PLT stub
+  `jmp *GOT(%rip)` in the executable segment and a `.got.plt` slot with an `R_X86_64_JUMP_SLOT` relocation (`DT_JMPREL`,
+  `DT_PLTRELSZ`, `DT_PLTREL=RELA`, `DT_PLTGOT`). With `DF_BIND_NOW` every slot is bound before the library runs, so the
+  GOT lies in `PT_GNU_RELRO` and no lazy-binding stub (PLT0) is needed. `R_X86_64_RELATIVE` and `R_X86_64_GLOB_DAT` are
+  not generated: Mio code holds no absolute data pointers and references external symbols only through calls.
+* No symbol versions are recorded; the loader binds each import to the library's default version of the symbol.
+
+Not supported (refused): object files and archives as inputs, linker options other than `-l`/`-L`/`--link`/`--rpath`,
+calls to the module's own exports through the PLT, external data references, TLS, symbol versioning, COMDAT and
+linker scripts beyond the subset above. Unknown relocation types (`UNSUPPORTED_RELOCATION type N`), out-of-range or overlapping rel32 fields, duplicate exports
+and invalid SONAMEs are link errors. None of these falls back to a system linker. `DT_HASH` (SysV hash) is not emitted,
+which matches the system-linker path (`--hash-style=gnu`); loaders without `DT_GNU_HASH` support are not targeted.
+
+The native linker is not a general-purpose ELF linker and is not GNU ld compatible: it links exactly what the Mio code
+generator produces plus declared shared libraries.
 
 ## Supported relocations
 
@@ -161,6 +220,8 @@ rip-relatively and holds no absolute pointers in data. The writer rejects unknow
 
 ```sh
 mio test bunko/kiso/aot/elfrel                                   # ET_REL writer unit tests
+mio test bunko/kiso/aot/elfdyn                                   # native ET_DYN linker unit tests
+mio test bunko/kiso/aot/elfdso                                   # dependency reader (shared objects, ld scripts)
 mio test selfhost/pipeline --run='shared|linker|rejects|accepts' # verifier and linker helpers
 python3 tests/shared/linux-amd64/run.py --mio <mio> [--baseline <mio-from-base-commit>] --output build/shared
 ```
@@ -172,5 +233,7 @@ with `file` (when installed), `readelf -h -l -S -d -s -r`, `nm -D`, `objdump -T`
 `dlsym`, argument/result checks for every export, callee-saved register preservation, a collector stress, five
 libraries loaded together and closed in another order, and repeated open/close. It also checks the negative
 diagnostics, the declared-dependency link, `--emit=object`, reproducibility, and (with `--baseline`) that static
-executables are byte-identical to the base compiler's. Statuses are PASS, FAIL and NOT_RUN; a missing tool is NOT_RUN,
+executables are byte-identical to the base compiler's. The same libraries are linked again with `--linker native`
+while `PATH`, `MIO_LD` and `MIO_CC` point only to trap programs that record any execution (and under `strace -f -e
+execve` when strace is installed), inspected with the same tools and loaded by the same C host suites. Statuses are PASS, FAIL and NOT_RUN; a missing tool is NOT_RUN,
 never PASS. The Native workflow runs it on the linux-amd64 hub as the required check `linux-shared`.
