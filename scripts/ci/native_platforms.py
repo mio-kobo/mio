@@ -1140,15 +1140,16 @@ def darwin_thread_observe(report, cli, work):
     report.check("darwin-thread-observe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
 
 
-def darwin_dylib(report, cli):
-    output = report.logs / "dylib"
-    code, out, err, seconds = run(
-        report, "darwin-dylib-run",
-        [sys.executable, ROOT / "tests/ffi/dylib/run.py", "--mio", cli, "--output", output],
-        timeout=900,
+def darwin_dylib(report, cli, *, full=True):
+    name = "darwin-dylib" if full else "darwin-dylib-core"
+    output = report.logs / ("dylib" if full else "dylib-core")
+    flags = ["--embedded-bunko"] if full else []
+    code, out, err, _ = run(
+        report, f"{name}-run",
+        [sys.executable, ROOT / "tests/ffi/dylib/run.py", "--mio", cli, "--output", output, *flags],
+        timeout=600,
     )
-    report.check("darwin-dylib", "PASS" if code == 0 else "FAIL", "native", brief(out + err, 300))
-
+    report.check(name, "PASS" if code == 0 else "FAIL", "native", brief(out + err, 300))
 
 def darwin_c_abi(report, cli, work):
     """Darwin ARM64 C ABI acceptance (docs/darwin-arm64-c-ffi.md), non-required until it has a CI history. tests/ffi/darwin-arm64/run.py builds Clang
@@ -1720,6 +1721,8 @@ def follower(args, target):
             darwin_thread_observe(report, cli, work / "thread-observe")
             darwin_c_abi(report, cli, work / "c-abi")
             darwin_dylib(report, cli)
+            if core is not None:
+                darwin_dylib(report, core, full=False)
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)

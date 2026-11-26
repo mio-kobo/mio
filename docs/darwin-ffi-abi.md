@@ -121,6 +121,14 @@ Compose `scalar_layout`, `array_layout`, `struct_layout`, and `union_layout` to 
 
 Natural padding and nested fixed-size arrays follow Apple's LP64 layout and are verified against Clang. Packed declarations, bitfields, configurable vector alignment, aggregate parameters and aggregate returns by value require separate ABI support.
 
+## macOS deployment and signing
+
+Both dylib paths declare macOS 11.0 as their minimum deployment target. The SDK used to build the image can be newer. Choose C symbols and frameworks available on the oldest system where the library will run. Apple Silicon integration uses the host macOS version recorded in the test report.
+
+Ad-hoc signing is sufficient for the local native test hosts. An app with Hardened Runtime library validation generally loads Apple-signed libraries or libraries with the app's signing Team ID. Sign distributed dylibs as part of their owning application or plug-in's distribution process. The integration suite also verifies that a hardened host loads the system framework and reports a library validation error for an ad-hoc third-party dylib while the protection is enabled. [Apple library validation documentation](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.cs.disable-library-validation)
+
+Callbacks into Mio's managed runtime still require a native reentry protocol for root registration, blocking state, and callback lifetime. An ordinary fixed C shim can wrap Objective-C framework APIs today. Direct Objective-C messaging and the Swift ABI are future interfaces. [Apple Silicon interoperability guidance](https://developer.apple.com/documentation/apple-silicon/addressing-architectural-differences-in-your-macos-code)
+
 ## Integration
 
 ```sh
@@ -128,3 +136,18 @@ python3 tests/ffi/dylib/run.py --mio /path/to/current/mio --output build/dylib
 ```
 
 The driver builds and inspects the math, convert, and JSON libraries and runs a Mio loader and a separately Clang-linked C oracle. The JSON export tests the tokenizer's digit predicate. The convert export tests the decimal parser's binary scaling helper and assumes parser-sized exponents. The test driver records SHA-256 hashes, symbols, load results, ordinary and GC stress runs, and timing samples.
+
+For Full distribution coverage, add `--embedded-bunko`. The Core run uses
+the external Bunko tree. The Apple Silicon native workflow requires both
+results. It also runs the direct C ABI, Runtime ABI and thread regression suites.
+
+Run the alternating performance audit with an original baseline report
+produced on the same Apple Silicon machine.
+
+```sh
+python3 benchmarks/ffi/darwin/run.py --baseline-report build/baseline/report.json \
+  --mio ./build/mio --output build/darwin-performance
+```
+
+The benchmark writes raw intervals, medians, sample variance, inputs,
+compiler and artifact hashes, and host information to `performance.json`.

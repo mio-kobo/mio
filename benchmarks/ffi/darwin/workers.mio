@@ -1,0 +1,80 @@
+yobu "kiso/array";
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+yobu "kiso/thread";
+
+waza clock_nanoseconds(clock: int32) -> uint64 = c "clock_gettime_nsec_np";
+waza now() -> int64 { kaesu int64(clock_nanoseconds(int32(8))); }
+
+waza require(ok: bool, detail: string) -> unit {
+    moshi (!ok) { chant(detail); os.exit(1); }
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku opened = darwin.open(path);
+    kaku library = opened.library;
+    moshi (library != mu) { kaesu library; }
+    chant(opened.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bind(library: darwin.Library) -> darwin.Function {
+    kaku found = darwin.symbol(library, "mio_math_add", darwin.Prototype.Int64FromTwoInt64());
+    kaku function = found.function;
+    moshi (function != mu) { kaesu function; }
+    chant(found.error);
+    os.exit(1);
+    kaesu bind(library);
+}
+
+kaku args = os.arguments();
+require(len(args) == 2, "expected worker benchmark dylib path");
+kaku library = open(args[1]);
+kaku function = bind(library);
+
+waza empty_worker() -> int64 { kaesu 1; }
+
+waza worker() -> int64 {
+    kaku sum = 0;
+    kaku at = 0;
+    aida (at < 1024) {
+        sum = sum + darwin.invoke_int64_2(function, 20, 22).value;
+        at = at + 1;
+    }
+    kaesu sum;
+}
+
+waza batch(count: int64, name: string) -> unit {
+    kaku active: []int64 = [];
+    kaku at = 0;
+    kaku start = now();
+    aida (at < count) {
+        kaku handle = thread.start(worker);
+        require(handle > 0, "start benchmark worker");
+        array.push(active, handle);
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(active)) {
+        require(thread.join(active[at]) == 43008, "join benchmark worker");
+        at = at + 1;
+    }
+    kaku elapsed = now() - start;
+    chant(name);
+    chant(elapsed);
+}
+
+kaku at = 0;
+kaku start = now();
+aida (at < 128) {
+    require(thread.join(thread.start(empty_worker)) == 1, "create and join empty worker");
+    at = at + 1;
+}
+kaku elapsed = now() - start;
+chant("create_join_128");
+chant(elapsed);
+batch(1, "worker_call_1024x1");
+batch(2, "worker_call_1024x2");
+batch(4, "worker_call_1024x4");
+require(darwin.close(library) == "", "close worker benchmark dylib");
