@@ -83,7 +83,9 @@ def main():
             if name == "candidate":
                 for program in (checked, workers):
                     lines = command([program, dylibs[0]]).splitlines()
-                    row.update(dict(zip(lines[::2], map(int, lines[1::2]), strict=True)))
+                    if not lines or len(lines) % 2:
+                        raise ValueError(f"{program.name} produced an incomplete benchmark transcript")
+                    row.update(dict(zip(lines[::2], map(int, lines[1::2]))))
                 row["native_reference_call_10000"] = int(command([raw, dylibs[0]]))
             results[name].append(row)
     integration = json.loads((candidate / "report.json").read_text(encoding="utf-8"))
