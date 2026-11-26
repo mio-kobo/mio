@@ -72,9 +72,20 @@ Both are Linux-only; Darwin ARM64 and Windows reject them at build time.
   never unloads.
 
 The matrix is produced by `tests/linux-compat/run.py` in the Native workflow (`Linux compatibility / <image>`), running
-the CLI inside each container on an x86-64 host. Results are only recorded here once a run has passed. Locally
-(Debian 13, glibc 2.41): 20 PASS. The native linker is NOT_AVAILABLE in this branch because it comes from the
-`--linker native` PRs.
+the CLI inside each container on an x86-64 host. Results from the first hosted run of this branch (the native linker
+is NOT_AVAILABLE on every image because it comes from the `--linker native` PRs):
+
+| Image | libc | Result | Notes |
+| --- | --- | --- | --- |
+| debian:12 | glibc 2.36 | 20 PASS | everything below, including binaries built on ubuntu-24.04 |
+| debian:13 | glibc 2.41 | 20 PASS | |
+| ubuntu:24.04 | glibc 2.39 | 20 PASS | |
+| ubuntu:22.04 | glibc 2.35 | NOT_RUN | the first run failed in `apt-get update` (Ubuntu mirror mid-sync) before any check; `setup.sh` now retries |
+| alpine:3.20 | musl 1.2.5 | 17 PASS, 1 NOT_RUN, 2 UNSUPPORTED | static and musl-built dynamic executables (`/lib/ld-musl-x86_64.so.1`), `kiso/ffi/linux` loading and native memory against `libc.musl-x86_64.so.1` (normal and `--gc-stress`), system-linker shared libraries with every C host suite: PASS. The static binary built on glibc also runs. Glibc-built dynamic binaries: UNSUPPORTED on musl. The package tests use glibc library names: NOT_RUN there |
+
+Each passing glibc image checked: static and dynamic executables, `PT_INTERP`, `GLIBC_2.34` as the highest required
+symbol version, `kiso/ffi/linux` and native memory (normal and `--gc-stress`), `mio test bunko/kiso/ffi/linux`, system
+linker shared libraries with seven C host suites, and the ubuntu-24.04-built static, dynamic and FFI binaries.
 
 ## Building native modules
 
