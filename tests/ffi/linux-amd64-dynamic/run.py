@@ -171,6 +171,14 @@ def trap_cases(args, out):
     else:
         r, _ = run(out, "run_empty_buffer", [str(bin_dir / "empty_buffer")])
         record("empty buffer is a valid argument", "PASS" if r.returncode == 0 and r.stdout.strip() == "hai" else "FAIL")
+    p, _ = run(out, "mio_build_stale_address", [args.mio, "build", str(HERE / "cases/traps/stale_address.mio"), "-o", str(bin_dir / "stale_address")], env=env)
+    if p.returncode != 0:
+        record("stale linux.address traps instead of calling an unloaded library", "FAIL", "build failed")
+    else:
+        r, _ = run(out, "run_stale_address", [str(bin_dir / "stale_address")], cwd=out / "lib")
+        lines = r.stdout.split()
+        trapped = r.returncode != 0 and "nil reference" in (r.stdout + r.stderr) and lines[:2] == ["42", "before"] and "unreachable" not in r.stdout
+        record("stale linux.address traps instead of calling an unloaded library", "PASS" if trapped else "FAIL", "rc=%d" % r.returncode)
 
 
 def bench(args, out):

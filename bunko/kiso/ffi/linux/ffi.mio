@@ -1,0 +1,459 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// kiso/ffi/linux: run-time loading of ELF shared objects on Linux x86-64 (System V AMD64 ABI).
+// See docs/linux-dynamic-libraries.md.
+//
+// Libraries and functions are opaque, generation-checked handles. A handle names a slot in a
+// module-private table together with the unique id the slot held when the handle was issued; ids are
+// never reused, so a handle whose slot was freed and reused stays invalid. Closing a library frees every
+// function resolved from it. Every typed call validates the handle and the resolved signature before
+// the native call is issued: an invalid, released, stale or mismatched call returns zero and records
+// the reason in last_error(); foreign code is never entered for it.
+//
+// Signature letters (result ":" parameters): v void, i int32, u uint32, l int64, z uint64/size_t,
+// f float32, d float64, b bool (C uint8_t 0/1), p pointer/handle (opaque cptr),
+// n buffer: the data of a []uint8, passed as the address of its first byte for the duration of the
+// call. A signature has at most 16 letters, exactly one result letter and v only as the result.
+//
+// Threads: programs that declare C functions cannot use OS threads on Linux AMD64 (the compiler rejects
+// them), so the tables below are only ever touched by one thread.
+
+teisu rtld_now = 2;
+teisu rtld_local = 0;
+teisu max_signature = 16;
+teisu max_text = 65536;
+
+waza c_dlopen(path: []uint8, flags: int32) -> cptr = c "dlopen";
+waza c_dlsym(handle: cptr, name: []uint8) -> cptr = c "dlsym";
+waza c_dlclose(handle: cptr) -> int32 = c "dlclose";
+waza c_dlerror() -> cptr = c "dlerror";
+waza c_strnlen(text: cptr, limit: uint64) -> uint64 = c "strnlen";
+waza c_copy_out(destination: []uint8, source: cptr, size: uint64) -> cptr = c "memcpy";
+
+kata Ticket { slot: int64; id: int64; }
+
+// A Library or Function whose error is not "" is a failed result; it never names a live slot.
+koukai kata Library { ticket: Ticket; error: string; }
+koukai kata Function { ticket: Ticket; owner: Ticket; error: string; }
+
+kata LibrarySlot { id: int64; handle: cptr; path: string; }
+kata FunctionSlot { id: int64; owner: Ticket; address: cptr; shape: int64; name: string; signature: string; }
+
+kaku libraries: []LibrarySlot = [];
+kaku functions: []FunctionSlot = [];
+kaku free_libraries: []int64 = [];
+kaku free_functions: []int64 = [];
+// owned[slot]: live functions resolved from the library in that slot, so close scans only when it must.
+kaku owned: []int64 = [];
+kaku live_library_count: int64 = 0;
+kaku live_function_count: int64 = 0;
+kaku next_id: int64 = 1;
+kaku call_error: string = "";
+
+waza no_ticket() -> Ticket { kaesu Ticket { slot: -1, id: 0 }; }
+waza failed_library(error: string) -> Library { kaesu Library { ticket: no_ticket(), error: error }; }
+waza failed_function(owner: Ticket, error: string) -> Function { kaesu Function { ticket: no_ticket(), owner: owner, error: error }; }
+
+waza fresh_id() -> int64 {
+    kaku id = next_id;
+    next_id = next_id + 1;
+    kaesu id;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Text helpers
+
+// cstring returns a fresh NUL-terminated copy of text's UTF-8 bytes. It does not alias the string.
+koukai waza cstring(text: string) -> []uint8 {
+    kaku bytes = string.to_bytes(text);
+    array.push(bytes, uint8(0));
+    kaesu bytes;
+}
+
+waza has_nul(text: string) -> bool {
+    kaku bytes = string.to_bytes(text);
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0)) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+// The message dlerror() holds, or fallback when there is none. Bounded: never reads past max_text bytes.
+waza loader_error(fallback: string) -> string {
+    kaku message = c_dlerror();
+    moshi (message == cptr(0)) { kaesu fallback; }
+    kaku size = int64(c_strnlen(message, uint64(max_text)));
+    moshi (size <= 0) { kaesu fallback; }
+    kaku copy: []uint8 = array.make[uint8](size, uint8(0));
+    c_copy_out(copy, message, uint64(size));
+    kaku text = string.from_utf8(copy);
+    moshi (text == mu) { kaesu fallback; }
+    kaesu text;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Signatures
+
+// valid_signature reports whether signature is a well-formed signature string (see the letters above).
+koukai waza valid_signature(signature: string) -> bool {
+    kaku bytes = string.to_bytes(signature);
+    moshi (len(bytes) < 2 || len(bytes) > max_signature) { kaesu iie; }
+    kaku colon = 0 - 1;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku letter = int64(bytes[at]);
+        moshi (letter == 58) {
+            moshi (colon >= 0) { kaesu iie; }
+            colon = at;
+        } sore {
+            moshi (letter_code(letter) == 0) { kaesu iie; }
+            // v is only a result; n is only a parameter
+            moshi (letter == 118 && at != 0) { kaesu iie; }
+            moshi (letter == 110 && colon < 0) { kaesu iie; }
+        }
+        at = at + 1;
+    }
+    kaesu colon == 1;
+}
+
+waza letter_code(letter: int64) -> int64 {
+    moshi (letter == 118) { kaesu 2; }  // v
+    moshi (letter == 105) { kaesu 3; }  // i
+    moshi (letter == 117) { kaesu 4; }  // u
+    moshi (letter == 108) { kaesu 5; }  // l
+    moshi (letter == 122) { kaesu 6; }  // z
+    moshi (letter == 102) { kaesu 7; }  // f
+    moshi (letter == 100) { kaesu 8; }  // d
+    moshi (letter == 98) { kaesu 9; }   // b
+    moshi (letter == 112) { kaesu 10; } // p
+    moshi (letter == 110) { kaesu 11; } // n
+    kaesu 0;
+}
+
+// shape_of is the injective base-12 code of a valid signature (":" is 1, letters 2..11), so a call compares
+// one integer instead of two strings. It is -1 for an invalid signature.
+koukai waza shape_of(signature: string) -> int64 {
+    moshi (!valid_signature(signature)) { kaesu -1; }
+    kaku bytes = string.to_bytes(signature);
+    kaku value = 0;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku letter = int64(bytes[at]);
+        kaku code = 1;
+        moshi (letter != 58) { code = letter_code(letter); }
+        value = value * 12 + code;
+        at = at + 1;
+    }
+    kaesu value;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Libraries
+
+waza add_library(handle: cptr, path: string) -> Library {
+    kaku id = fresh_id();
+    kaku entry = LibrarySlot { id: id, handle: handle, path: path };
+    kaku slot = 0;
+    moshi (len(free_libraries) > 0) {
+        slot = free_libraries[len(free_libraries) - 1];
+        array.truncate(free_libraries, len(free_libraries) - 1);
+        libraries[slot] = entry;
+        owned[slot] = 0;
+    } sore {
+        slot = len(libraries);
+        array.push(libraries, entry);
+        array.push(owned, 0);
+    }
+    live_library_count = live_library_count + 1;
+    kaesu Library { ticket: Ticket { slot: slot, id: id }, error: "" };
+}
+
+waza load(path: string, request: string) -> Library {
+    c_dlerror();
+    kaku handle = c_dlopen(cstring(request), int32(rtld_now + rtld_local));
+    moshi (handle == cptr(0)) { kaesu failed_library(string.concat("E_FFI_LOAD ", loader_error("dlopen failed"))); }
+    kaesu add_library(handle, path);
+}
+
+// open loads the shared object at path with RTLD_NOW | RTLD_LOCAL: every undefined symbol is bound before
+// open returns and the library's symbols do not satisfy later loads. The path must be absolute or contain a
+// "/" (for example "./libfoo.so"); a bare name is rejected instead of silently searching the system library
+// path (use open_system for that).
+koukai waza open(path: string) -> Library {
+    moshi (len(string.to_bytes(path)) == 0) { kaesu failed_library("E_FFI_PATH empty library path"); }
+    moshi (has_nul(path)) { kaesu failed_library("E_FFI_PATH library path contains a NUL byte"); }
+    moshi (!string.contains(path, "/")) {
+        kaesu failed_library("E_FFI_PATH library path must be absolute or contain a directory part such as ./libname.so");
+    }
+    kaesu load(path, path);
+}
+
+// open_system loads a library by file name through the system loader's search (LD_LIBRARY_PATH, the cache
+// and the default directories), for example "libz.so.1". The name must not contain "/".
+koukai waza open_system(name: string) -> Library {
+    moshi (len(string.to_bytes(name)) == 0) { kaesu failed_library("E_FFI_PATH empty library name"); }
+    moshi (has_nul(name)) { kaesu failed_library("E_FFI_PATH library name contains a NUL byte"); }
+    moshi (string.contains(name, "/")) { kaesu failed_library("E_FFI_PATH a system library name must not contain /; use open for paths"); }
+    kaesu load(name, name);
+}
+
+waza library_slot(ticket: Ticket) -> int64 {
+    moshi (ticket.slot < 0 || ticket.slot >= len(libraries)) { kaesu -1; }
+    moshi (libraries[ticket.slot].id != ticket.id) { kaesu -1; }
+    kaesu ticket.slot;
+}
+
+// failed reports whether open or open_system failed for this library.
+koukai waza failed(library: Library) -> bool { kaesu library.error != ""; }
+
+// library_error is the reason open failed, or "".
+koukai waza library_error(library: Library) -> string { kaesu library.error; }
+
+// is_open reports whether library loaded and has not been closed.
+koukai waza is_open(library: Library) -> bool { kaesu library.error == "" && library_slot(library.ticket) >= 0; }
+
+// path is the path or name the library was opened with; "" when it is not open.
+koukai waza path(library: Library) -> string {
+    kaku slot = library_slot(library.ticket);
+    moshi (slot < 0) { kaesu ""; }
+    kaesu libraries[slot].path;
+}
+
+// close invalidates library and every function resolved from it, then unloads it with dlclose. It returns ""
+// on success. Closing twice, or closing a library that never loaded, returns an error and does nothing.
+koukai waza close(library: Library) -> string {
+    moshi (failed(library)) { kaesu "E_FFI_STATE the library did not load"; }
+    kaku slot = library_slot(library.ticket);
+    moshi (slot < 0) { kaesu "E_FFI_CLOSED the library is already closed"; }
+    kaku handle = libraries[slot].handle;
+    // Invalidate first: no handle of this library can reach native code once close has started.
+    kaku at = 0;
+    aida (owned[slot] > 0 && at < len(functions)) {
+        kaku entry = functions[at];
+        moshi (entry.id != 0 && entry.owner.slot == slot && entry.owner.id == library.ticket.id) { free_function(at); }
+        at = at + 1;
+    }
+    libraries[slot] = LibrarySlot { id: 0, handle: cptr(0), path: "" };
+    array.push(free_libraries, slot);
+    live_library_count = live_library_count - 1;
+    c_dlerror();
+    moshi (c_dlclose(handle) != int32(0)) { kaesu string.concat("E_FFI_CLOSE ", loader_error("dlclose failed")); }
+    kaesu "";
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Functions
+
+waza free_function(slot: int64) -> unit {
+    kaku owner = functions[slot].owner.slot;
+    owned[owner] = owned[owner] - 1;
+    functions[slot] = FunctionSlot { id: 0, owner: no_ticket(), address: cptr(0), shape: 0, name: "", signature: "" };
+    array.push(free_functions, slot);
+    live_function_count = live_function_count - 1;
+}
+
+// symbol resolves name in library. signature records the C prototype the caller claims for it; every call
+// through the returned Function must use a wrapper of exactly that signature.
+koukai waza symbol(library: Library, name: string, signature: string) -> Function {
+    moshi (failed(library)) { kaesu failed_function(library.ticket, "E_FFI_STATE the library did not load"); }
+    kaku owner = library_slot(library.ticket);
+    moshi (owner < 0) { kaesu failed_function(library.ticket, "E_FFI_CLOSED the library is closed"); }
+    moshi (len(string.to_bytes(name)) == 0 || has_nul(name)) { kaesu failed_function(library.ticket, "E_FFI_SYMBOL invalid symbol name"); }
+    moshi (!valid_signature(signature)) { kaesu failed_function(library.ticket, string.concat("E_FFI_SIGNATURE invalid signature ", signature)); }
+    // dlerror() must be cleared first: NULL is a legal symbol value in general, an error is not.
+    c_dlerror();
+    kaku address = c_dlsym(libraries[owner].handle, cstring(name));
+    moshi (address == cptr(0)) {
+        kaesu failed_function(library.ticket, string.concat("E_FFI_SYMBOL ", loader_error(string.concat("symbol has no address: ", name))));
+    }
+    kaku id = fresh_id();
+    kaku entry = FunctionSlot { id: id, owner: library.ticket, address: address, shape: shape_of(signature), name: name, signature: signature };
+    kaku slot = 0;
+    moshi (len(free_functions) > 0) {
+        slot = free_functions[len(free_functions) - 1];
+        array.truncate(free_functions, len(free_functions) - 1);
+        functions[slot] = entry;
+    } sore {
+        slot = len(functions);
+        array.push(functions, entry);
+    }
+    live_function_count = live_function_count + 1;
+    owned[owner] = owned[owner] + 1;
+    kaesu Function { ticket: Ticket { slot: slot, id: id }, owner: library.ticket, error: "" };
+}
+
+waza function_slot(ticket: Ticket) -> int64 {
+    moshi (ticket.slot < 0 || ticket.slot >= len(functions)) { kaesu -1; }
+    moshi (functions[ticket.slot].id != ticket.id) { kaesu -1; }
+    kaesu ticket.slot;
+}
+
+// error is the reason symbol failed, or "".
+koukai waza error(function: Function) -> string { kaesu function.error; }
+
+// resolved reports whether symbol succeeded for this function (it may have been released or closed since).
+koukai waza resolved(function: Function) -> bool { kaesu function.error == ""; }
+
+// is_live reports whether function can still be called: it resolved, it was not released and its library
+// is still open.
+koukai waza is_live(function: Function) -> bool { kaesu function.error == "" && function_slot(function.ticket) >= 0; }
+
+// signature is the signature function was resolved with; "" when it is not live.
+koukai waza signature(function: Function) -> string {
+    kaku slot = function_slot(function.ticket);
+    moshi (slot < 0) { kaesu ""; }
+    kaesu functions[slot].signature;
+}
+
+// release frees one function handle. Its library stays open. Returns "" or the reason it was not live.
+koukai waza release(function: Function) -> string {
+    kaku slot = function_slot(function.ticket);
+    moshi (slot < 0) { kaesu dead_reason(function); }
+    free_function(slot);
+    kaesu "";
+}
+
+waza dead_reason(function: Function) -> string {
+    moshi (function.error != "") { kaesu "E_FFI_STATE the symbol was not resolved"; }
+    moshi (library_slot(function.owner) < 0) { kaesu "E_FFI_CLOSED the library was closed"; }
+    kaesu "E_FFI_STALE the function handle was released";
+}
+
+// check returns "" when function is live and was resolved with exactly signature, otherwise the reason a call
+// of that signature would be refused.
+koukai waza check(function: Function, signature: string) -> string {
+    moshi (!valid_signature(signature)) { kaesu string.concat("E_FFI_SIGNATURE invalid signature ", signature); }
+    kaku slot = function_slot(function.ticket);
+    moshi (slot < 0) { kaesu dead_reason(function); }
+    moshi (functions[slot].shape != shape_of(signature)) {
+        kaesu string.concat("E_FFI_SIGNATURE resolved as ", string.concat(functions[slot].signature, string.concat(", called as ", signature)));
+    }
+    kaesu "";
+}
+
+// last_error is "" after a typed call that reached native code, otherwise the reason the most recent typed
+// call (or address) was refused.
+koukai waza last_error() -> string { kaesu call_error; }
+
+// The gate in front of every native call: the function's address when the call may proceed, otherwise
+// cptr(0) with the reason in last_error().
+waza gate(function: Function, shape: int64) -> cptr {
+    kaku slot = function.ticket.slot;
+    moshi (slot < 0 || slot >= len(functions)) { call_error = dead_reason(function); kaesu cptr(0); }
+    kaku entry = functions[slot];
+    moshi (entry.id != function.ticket.id) { call_error = dead_reason(function); kaesu cptr(0); }
+    moshi (entry.shape != shape) {
+        call_error = "E_FFI_SIGNATURE the call does not match the resolved signature";
+        kaesu cptr(0);
+    }
+    call_error = "";
+    kaesu entry.address;
+}
+
+// address returns the native address of function for a hand-written `= c "mio_ffi_indirect"` declaration,
+// after the same validation as a typed call; cptr(0) (with last_error() set) when it would be refused. An
+// indirect call through cptr(0) traps with a nil-reference error instead of jumping to address 0. The
+// declaration must match the real C prototype: the signature only records what the caller claims. Do not
+// keep the address: it is not invalidated by close or release.
+koukai waza address(function: Function, signature: string) -> cptr {
+    kaku shape = shape_of(signature);
+    moshi (shape < 0) { call_error = string.concat("E_FFI_SIGNATURE invalid signature ", signature); kaesu cptr(0); }
+    kaesu gate(function, shape);
+}
+
+// libraries_open and functions_live count the live handles in this process (for leak checks).
+koukai waza libraries_open() -> int64 { kaesu live_library_count; }
+koukai waza functions_live() -> int64 { kaesu live_function_count; }
+
+// ---------------------------------------------------------------------------------------------------
+// Typed calls. Each wrapper is one fixed System V AMD64 prototype; its name spells the signature
+// (call_<result>_<parameters>). A refused call returns zero (iie, cptr(0)) and sets last_error().
+
+teisu s_v = 25;           // "v:"
+teisu s_i = 37;           // "i:"
+teisu s_l = 61;           // "l:"
+teisu s_p = 121;          // "p:"
+teisu s_z = 73;           // "z:"
+teisu s_i_i = 447;        // "i:i"
+teisu s_l_l = 737;        // "l:l"
+teisu s_d_d = 1172;       // "d:d"
+teisu s_b_i = 1311;       // "b:i"
+teisu s_i_p = 454;        // "i:p"
+teisu s_v_p = 310;        // "v:p"
+teisu s_p_n = 1463;       // "p:n"
+teisu s_i_ii = 5367;      // "i:ii"
+teisu s_l_ll = 8849;      // "l:ll"
+teisu s_f_ff = 12331;     // "f:ff"
+teisu s_d_dd = 14072;     // "d:dd"
+teisu s_z_nz = 10650;     // "z:nz"
+teisu s_u_nz = 7194;      // "u:nz"
+teisu s_l_pn = 8915;      // "l:pn"
+teisu s_i_pn = 5459;      // "i:pn"
+teisu s_i_nzn = 65603;    // "i:nzn"
+teisu s_l_pnnz = 1283898; // "l:pnnz"
+teisu s_l_nznz = 1284906; // "l:nznz"
+
+waza raw_v(f: cptr) -> unit = c "mio_ffi_indirect";
+waza raw_i(f: cptr) -> int32 = c "mio_ffi_indirect";
+waza raw_l(f: cptr) -> int64 = c "mio_ffi_indirect";
+waza raw_p(f: cptr) -> cptr = c "mio_ffi_indirect";
+waza raw_z(f: cptr) -> uint64 = c "mio_ffi_indirect";
+waza raw_i_i(f: cptr, a: int32) -> int32 = c "mio_ffi_indirect";
+waza raw_l_l(f: cptr, a: int64) -> int64 = c "mio_ffi_indirect";
+waza raw_d_d(f: cptr, a: float64) -> float64 = c "mio_ffi_indirect";
+waza raw_b_i(f: cptr, a: int32) -> bool = c "mio_ffi_indirect";
+waza raw_i_p(f: cptr, handle: cptr) -> int32 = c "mio_ffi_indirect";
+waza raw_v_p(f: cptr, handle: cptr) -> unit = c "mio_ffi_indirect";
+waza raw_p_n(f: cptr, data: []uint8) -> cptr = c "mio_ffi_indirect";
+waza raw_i_ii(f: cptr, a: int32, b: int32) -> int32 = c "mio_ffi_indirect";
+waza raw_l_ll(f: cptr, a: int64, b: int64) -> int64 = c "mio_ffi_indirect";
+waza raw_f_ff(f: cptr, a: float32, b: float32) -> float32 = c "mio_ffi_indirect";
+waza raw_d_dd(f: cptr, a: float64, b: float64) -> float64 = c "mio_ffi_indirect";
+waza raw_z_nz(f: cptr, data: []uint8, size: uint64) -> uint64 = c "mio_ffi_indirect";
+waza raw_u_nz(f: cptr, data: []uint8, size: uint64) -> uint32 = c "mio_ffi_indirect";
+waza raw_l_pn(f: cptr, handle: cptr, text: []uint8) -> int64 = c "mio_ffi_indirect";
+waza raw_i_pn(f: cptr, handle: cptr, text: []uint8) -> int32 = c "mio_ffi_indirect";
+waza raw_i_nzn(f: cptr, data: []uint8, size: uint64, out: []uint8) -> int32 = c "mio_ffi_indirect";
+waza raw_l_pnnz(f: cptr, handle: cptr, text: []uint8, out: []uint8, size: uint64) -> int64 = c "mio_ffi_indirect";
+waza raw_l_nznz(f: cptr, a: []uint8, an: uint64, b: []uint8, bn: uint64) -> int64 = c "mio_ffi_indirect";
+
+koukai waza call_v_(s: Function) -> unit { kaku f = gate(s, s_v); moshi (f == cptr(0)) { kaesu; } raw_v(f); }
+koukai waza call_i_(s: Function) -> int32 { kaku f = gate(s, s_i); moshi (f == cptr(0)) { kaesu int32(0); } kaesu raw_i(f); }
+koukai waza call_l_(s: Function) -> int64 { kaku f = gate(s, s_l); moshi (f == cptr(0)) { kaesu 0; } kaesu raw_l(f); }
+koukai waza call_p_(s: Function) -> cptr { kaku f = gate(s, s_p); moshi (f == cptr(0)) { kaesu cptr(0); } kaesu raw_p(f); }
+koukai waza call_z_(s: Function) -> uint64 { kaku f = gate(s, s_z); moshi (f == cptr(0)) { kaesu uint64(0); } kaesu raw_z(f); }
+koukai waza call_i_i(s: Function, a: int32) -> int32 { kaku f = gate(s, s_i_i); moshi (f == cptr(0)) { kaesu int32(0); } kaesu raw_i_i(f, a); }
+koukai waza call_l_l(s: Function, a: int64) -> int64 { kaku f = gate(s, s_l_l); moshi (f == cptr(0)) { kaesu 0; } kaesu raw_l_l(f, a); }
+koukai waza call_d_d(s: Function, a: float64) -> float64 { kaku f = gate(s, s_d_d); moshi (f == cptr(0)) { kaesu 0.0; } kaesu raw_d_d(f, a); }
+koukai waza call_b_i(s: Function, a: int32) -> bool { kaku f = gate(s, s_b_i); moshi (f == cptr(0)) { kaesu iie; } kaesu raw_b_i(f, a); }
+koukai waza call_i_p(s: Function, handle: cptr) -> int32 { kaku f = gate(s, s_i_p); moshi (f == cptr(0)) { kaesu int32(0); } kaesu raw_i_p(f, handle); }
+koukai waza call_v_p(s: Function, handle: cptr) -> unit { kaku f = gate(s, s_v_p); moshi (f == cptr(0)) { kaesu; } raw_v_p(f, handle); }
+// (buffer) -> pointer, typically a NUL-terminated name made with cstring
+koukai waza call_p_n(s: Function, data: []uint8) -> cptr { kaku f = gate(s, s_p_n); moshi (f == cptr(0)) { kaesu cptr(0); } kaesu raw_p_n(f, data); }
+koukai waza call_i_ii(s: Function, a: int32, b: int32) -> int32 { kaku f = gate(s, s_i_ii); moshi (f == cptr(0)) { kaesu int32(0); } kaesu raw_i_ii(f, a, b); }
+koukai waza call_l_ll(s: Function, a: int64, b: int64) -> int64 { kaku f = gate(s, s_l_ll); moshi (f == cptr(0)) { kaesu 0; } kaesu raw_l_ll(f, a, b); }
+koukai waza call_f_ff(s: Function, a: float32, b: float32) -> float32 { kaku f = gate(s, s_f_ff); moshi (f == cptr(0)) { kaesu float32(0.0); } kaesu raw_f_ff(f, a, b); }
+koukai waza call_d_dd(s: Function, a: float64, b: float64) -> float64 { kaku f = gate(s, s_d_dd); moshi (f == cptr(0)) { kaesu 0.0; } kaesu raw_d_dd(f, a, b); }
+// (buffer, its length) wrappers pass len(data) as the size_t argument.
+koukai waza call_z_nz(s: Function, data: []uint8) -> uint64 { kaku f = gate(s, s_z_nz); moshi (f == cptr(0)) { kaesu uint64(0); } kaesu raw_z_nz(f, data, uint64(len(data))); }
+koukai waza call_u_nz(s: Function, data: []uint8) -> uint32 { kaku f = gate(s, s_u_nz); moshi (f == cptr(0)) { kaesu uint32(0); } kaesu raw_u_nz(f, data, uint64(len(data))); }
+koukai waza call_l_pn(s: Function, handle: cptr, text: []uint8) -> int64 { kaku f = gate(s, s_l_pn); moshi (f == cptr(0)) { kaesu 0; } kaesu raw_l_pn(f, handle, text); }
+koukai waza call_i_pn(s: Function, handle: cptr, text: []uint8) -> int32 { kaku f = gate(s, s_i_pn); moshi (f == cptr(0)) { kaesu int32(0); } kaesu raw_i_pn(f, handle, text); }
+// (input, its length, output): the output buffer's size is part of the C function's contract
+koukai waza call_i_nzn(s: Function, data: []uint8, out: []uint8) -> int32 {
+    kaku f = gate(s, s_i_nzn); moshi (f == cptr(0)) { kaesu int32(0); }
+    kaesu raw_i_nzn(f, data, uint64(len(data)), out);
+}
+// (handle, text, output, its length)
+koukai waza call_l_pnnz(s: Function, handle: cptr, text: []uint8, out: []uint8) -> int64 {
+    kaku f = gate(s, s_l_pnnz); moshi (f == cptr(0)) { kaesu 0; }
+    kaesu raw_l_pnnz(f, handle, text, out, uint64(len(out)));
+}
+// (input, its length, output, its length), for example compress / decompress
+koukai waza call_l_nznz(s: Function, a: []uint8, b: []uint8) -> int64 {
+    kaku f = gate(s, s_l_nznz); moshi (f == cptr(0)) { kaesu 0; }
+    kaesu raw_l_nznz(f, a, uint64(len(a)), b, uint64(len(b)));
+}
