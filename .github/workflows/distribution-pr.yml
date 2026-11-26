@@ -154,30 +154,19 @@ jobs:
     - run: python -m unittest discover -s scripts/distribution -p 'test_*.py' -v
     - run: python -m unittest discover -s scripts/package_managers -p 'test_*.py' -v
     - run: python -m unittest discover -s docker -p 'test_*.py' -v
-  candidates:
+  candidate-darwin:
+    name: candidates (darwin-arm64, macos-15, mio-B, mio-core-B)
     needs:
     - scope
-    - follower
+    - follower-darwin-arm64
     - packaging-tests
     - trusted-seed
     if: >-
-      !cancelled() && needs.follower.result == 'success' &&
+      !cancelled() && needs.follower-darwin-arm64.result == 'success' &&
       needs.packaging-tests.result == 'success' &&
       (needs.scope.outputs.kind == 'stable' && needs.trusted-seed.result == 'success' ||
        needs.scope.outputs.kind != 'stable' && needs.trusted-seed.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - target: darwin-arm64
-          runner: macos-15
-          compiler: mio-B
-          core_compiler: mio-core-B
-        - target: windows-amd64
-          runner: windows-2025
-          compiler: mio-B.exe
-          core_compiler: mio-core-B.exe
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -189,13 +178,13 @@ jobs:
     - uses: ./.github/actions/download-run-artifact
       id: compiler
       with:
-        artifact: distribution-compiler-${{ matrix.target }}
+        artifact: distribution-compiler-darwin-arm64
         path: build/compiler
         current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - uses: ./.github/actions/download-run-artifact
       id: evidence
       with:
-        artifact: native-report-${{ matrix.target }}
+        artifact: native-report-darwin-arm64
         path: build/evidence
         current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
     - name: Prepare identical candidate inputs
@@ -217,44 +206,21 @@ jobs:
           exit 1
         fi
         python scripts/distribution/package.py --source build/distribution-source \
-          --compiler build/compiler/${{ matrix.compiler }} --core-compiler build/compiler/${{ matrix.core_compiler }} \
-          --native-report-attempt "$REPORT_ATTEMPT" --report build/evidence/report.json --target ${{ matrix.target }} --output build/candidates \
+          --compiler build/compiler/mio-B --core-compiler build/compiler/mio-core-B \
+          --native-report-attempt "$REPORT_ATTEMPT" --report build/evidence/report.json --target darwin-arm64 --output build/candidates \
           ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
     - name: Run relocated candidates outside the repository
-      run: python scripts/distribution/verify.py --target ${{ matrix.target }} --output build/candidates
-    - name: Install current official WinGet client
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
-        Repair-WinGetPackageManager -Force -Latest
-        winget --version
-        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+      run: python scripts/distribution/verify.py --target darwin-arm64 --output build/candidates
     - name: Install package manager test dependencies
       shell: bash
       run: |
         python -m pip install PyYAML==6.0.3
-        if [ "${{ runner.os }}" = Linux ]; then sudo apt-get update && sudo apt-get install -y apt-utils gnupg; fi
-    - name: Build self-contained Windows installers from verified ZIPs
-      if: runner.os == 'Windows'
-      run: python scripts/package_managers/windows.py --assets build/candidates
     - name: Real package manager install, offline payload, upgrade and uninstall
-      run: python scripts/package_managers/test_install.py --assets build/candidates --target ${{ matrix.target }}
-    - name: Chocolatey install, offline tools, coexistence, upgrade and uninstall
-      if: runner.os == 'Windows'
-      run: python scripts/package_managers/test_chocolatey_install.py --assets build/candidates
-    - uses: actions/upload-artifact@v4
-      if: always() && runner.os == 'Windows'
-      with:
-        name: chocolatey-tests-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |
-          build/candidates/chocolatey-test/*.nupkg
-          build/candidates/chocolatey-verification.json
-        if-no-files-found: error
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target darwin-arm64
     - uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: mio-candidates-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        name: mio-candidates-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
         path: 'build/candidates/*.tar.gz
 
           build/candidates/*.zip
@@ -275,7 +241,123 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: distribution-diagnostics-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        name: distribution-diagnostics-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: 'build/candidates/*-installer.log
+
+          build/candidates/*.json
+
+          build/evidence/
+
+          '
+        if-no-files-found: warn
+        retention-days: 14
+  candidate-windows:
+    name: candidates (windows-amd64, windows-2025, mio-B.exe, mio-core-B.exe)
+    needs:
+    - scope
+    - follower-windows-amd64
+    - packaging-tests
+    - trusted-seed
+    if: >-
+      !cancelled() && needs.follower-windows-amd64.result == 'success' &&
+      needs.packaging-tests.result == 'success' &&
+      (needs.scope.outputs.kind == 'stable' && needs.trusted-seed.result == 'success' ||
+       needs.scope.outputs.kind != 'stable' && needs.trusted-seed.result == 'skipped')
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/download-run-artifact
+      id: compiler
+      with:
+        artifact: distribution-compiler-windows-amd64
+        path: build/compiler
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - uses: ./.github/actions/download-run-artifact
+      id: evidence
+      with:
+        artifact: native-report-windows-amd64
+        path: build/evidence
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - name: Prepare identical candidate inputs
+      run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
+    - uses: ./.github/actions/download-run-artifact
+      if: needs.scope.outputs.kind == 'stable'
+      with:
+        artifact: ${{ needs.scope.outputs.seed_artifact }}
+        path: build/trusted-seed
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - name: Package verified native B as Core and Full
+      shell: bash
+      env:
+        COMPILER_ATTEMPT: ${{ steps.compiler.outputs.attempt }}
+        REPORT_ATTEMPT: ${{ steps.evidence.outputs.attempt }}
+      run: |
+        if [[ "$COMPILER_ATTEMPT" != "$REPORT_ATTEMPT" || -z "$REPORT_ATTEMPT" ]]; then
+          echo "Compiler and report artifacts must come from the same attempt" >&2
+          exit 1
+        fi
+        python scripts/distribution/package.py --source build/distribution-source \
+          --compiler build/compiler/mio-B.exe --core-compiler build/compiler/mio-core-B.exe \
+          --native-report-attempt "$REPORT_ATTEMPT" --report build/evidence/report.json --target windows-amd64 --output build/candidates \
+          ${{ needs.scope.outputs.kind == 'stable' && format('--seed {0} --seed-report build/trusted-seed/{1}-report.json', needs.scope.outputs.seed_kind, needs.scope.outputs.seed_artifact) || '' }}
+    - name: Run relocated candidates outside the repository
+      run: python scripts/distribution/verify.py --target windows-amd64 --output build/candidates
+    - name: Install current official WinGet client
+      shell: pwsh
+      run: |
+        Install-Module Microsoft.WinGet.Client -Force -Repository PSGallery
+        Repair-WinGetPackageManager -Force -Latest
+        winget --version
+        if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --yes --no-progress; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+    - name: Install package manager test dependencies
+      shell: bash
+      run: |
+        python -m pip install PyYAML==6.0.3
+    - name: Build self-contained Windows installers from verified ZIPs
+      run: python scripts/package_managers/windows.py --assets build/candidates
+    - name: Real package manager install, offline payload, upgrade and uninstall
+      run: python scripts/package_managers/test_install.py --assets build/candidates --target windows-amd64
+    - name: Chocolatey install, offline tools, coexistence, upgrade and uninstall
+      run: python scripts/package_managers/test_chocolatey_install.py --assets build/candidates
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: chocolatey-tests-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          build/candidates/chocolatey-test/*.nupkg
+          build/candidates/chocolatey-verification.json
+        if-no-files-found: error
+    - uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: mio-candidates-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: 'build/candidates/*.tar.gz
+
+          build/candidates/*.zip
+
+          build/candidates/*-setup.exe
+
+          build/candidates/SHA256SUMS
+
+          build/candidates/verification.json
+
+          build/candidates/native-report.json
+
+          build/candidates/package-manager-verification.json
+
+          '
+        if-no-files-found: error
+        retention-days: 14
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: distribution-diagnostics-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
         path: 'build/candidates/*-installer.log
 
           build/candidates/*.json
@@ -291,7 +373,8 @@ jobs:
     - scope
     - packaging-tests
     - summary
-    - candidates
+    - candidate-darwin
+    - candidate-windows
     - docker-full-offline
     - candidate-linux
     - apt-distributions
@@ -387,24 +470,11 @@ jobs:
           build/native/linux-amd64/work/mio-core-B
         if-no-files-found: error
         retention-days: 7
-  follower:
-    name: Distribution native / ${{ matrix.target }}
+  follower-darwin-arm64:
+    name: Distribution native / darwin-arm64
     needs: [scope, linux]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - target: darwin-arm64
-          command: darwin
-          runner: macos-15
-          image: mio-darwin-arm64
-          sha_output: darwin_arm64
-        - target: windows-amd64
-          command: windows
-          runner: windows-2025
-          image: mio-windows-amd64.exe
-          sha_output: windows_amd64
-    runs-on: ${{ matrix.runner }}
+    if: needs.scope.outputs.wrapper_only != 'true' && !cancelled() && needs.linux.result == 'success'
+    runs-on: macos-15
     timeout-minutes: 150
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -423,25 +493,25 @@ jobs:
     - name: Native B -> C -> D, mio test, Runtime ABI contract (no Go on this path)
       shell: bash
       env:
-        EXPECTED_SHA256: ${{ needs.linux.outputs[matrix.sha_output] }}
-      run: python build/distribution-source/scripts/ci/native_platforms.py ${{ matrix.command }} --stage-a "build/stage-a/${{ matrix.image }}" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/${{ matrix.target }}" ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
+        EXPECTED_SHA256: ${{ needs.linux.outputs.darwin_arm64 }}
+      run: python build/distribution-source/scripts/ci/native_platforms.py darwin --stage-a "build/stage-a/mio-darwin-arm64" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/darwin-arm64" ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
     - uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: native-report-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: 'build/native/${{ matrix.target }}/report.json
+        name: native-report-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: 'build/native/darwin-arm64/report.json
 
-          build/native/${{ matrix.target }}/logs/
+          build/native/darwin-arm64/logs/
 
-          build/native/${{ matrix.target }}/runtime-abi/results.json
+          build/native/darwin-arm64/runtime-abi/results.json
 
-          build/native/${{ matrix.target }}/runtime-abi/*.std*
+          build/native/darwin-arm64/runtime-abi/*.std*
 
-          build/native/${{ matrix.target }}/native-differential/results.json
+          build/native/darwin-arm64/native-differential/results.json
 
-          build/native/${{ matrix.target }}/native-differential/*.std*
+          build/native/darwin-arm64/native-differential/*.std*
 
-          build/native/${{ matrix.target }}/examples/
+          build/native/darwin-arm64/examples/
 
           '
         if-no-files-found: error
@@ -449,10 +519,65 @@ jobs:
     - uses: actions/upload-artifact@v4
       if: success()
       with:
-        name: distribution-compiler-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+        name: distribution-compiler-darwin-arm64-${{ github.run_id }}-${{ github.run_attempt }}
         path: |
-          build/native/${{ matrix.target }}/work/mio-B*
-          build/native/${{ matrix.target }}/work/mio-core-B*
+          build/native/darwin-arm64/work/mio-B*
+          build/native/darwin-arm64/work/mio-core-B*
+        if-no-files-found: error
+        retention-days: 7
+  follower-windows-amd64:
+    name: Distribution native / windows-amd64
+    needs: [scope, linux]
+    if: needs.scope.outputs.wrapper_only != 'true' && !cancelled() && needs.linux.result == 'success'
+    runs-on: windows-2025
+    timeout-minutes: 150
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - uses: ./.github/actions/download-run-artifact
+      with:
+        artifact: native-stage-a
+        path: build/stage-a
+        current_attempt_only: ${{ needs.scope.outputs.kind == 'stable' && 'true' || 'false' }}
+    - name: Prepare source-free candidate build inputs
+      run: python scripts/distribution/prepare.py --disposable-checkout build/distribution-source
+    - name: Native B -> C -> D, mio test, Runtime ABI contract (no Go on this path)
+      shell: bash
+      env:
+        EXPECTED_SHA256: ${{ needs.linux.outputs.windows_amd64 }}
+      run: python build/distribution-source/scripts/ci/native_platforms.py windows --stage-a "build/stage-a/mio-windows-amd64.exe" --expect-sha256 "$EXPECTED_SHA256" --output "build/native/windows-amd64" ${{ needs.scope.outputs.kind == 'stable' && '--run-examples' || '' }}
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: native-report-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: 'build/native/windows-amd64/report.json
+
+          build/native/windows-amd64/logs/
+
+          build/native/windows-amd64/runtime-abi/results.json
+
+          build/native/windows-amd64/runtime-abi/*.std*
+
+          build/native/windows-amd64/native-differential/results.json
+
+          build/native/windows-amd64/native-differential/*.std*
+
+          build/native/windows-amd64/examples/
+
+          '
+        if-no-files-found: error
+        retention-days: 7
+    - uses: actions/upload-artifact@v4
+      if: success()
+      with:
+        name: distribution-compiler-windows-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          build/native/windows-amd64/work/mio-B*
+          build/native/windows-amd64/work/mio-core-B*
         if-no-files-found: error
         retention-days: 7
   summary:
@@ -461,7 +586,8 @@ jobs:
     needs:
     - scope
     - linux
-    - follower
+    - follower-darwin-arm64
+    - follower-windows-amd64
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
