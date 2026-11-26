@@ -129,3 +129,52 @@ waza test_gnu_hash_table() -> unit {
     }
     testing.expect(found == len(names), "every export is found through bucket and chain");
 }
+
+// An import of sqrt from libm.so.6 with a RUNPATH: PLT stub, GOT slot, JUMP_SLOT relocation, NEEDED and RUNPATH.
+waza imported() -> elfrel.ObjectSpec {
+    // call rel32; ret
+    kaku code: []uint8 = [uint8(232), uint8(0), uint8(0), uint8(0), uint8(0), uint8(195)];
+    kaku exports: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "mio_root", offset: 0, size: 6 }];
+    kaku relocations: []elfrel.Relocation = [elfrel.Relocation { at: 1, kind: elfrel.r_x86_64_plt32, symbol: "sqrt", addend: -4 }];
+    kaesu elfrel.ObjectSpec { code: code, bss_size: 0, exports: exports, locals: [], relocations: relocations };
+}
+
+waza dynamic_value(b: []uint8, tag: int64) -> int64 {
+    kaku dynamic = word(b, 232 + 8, 8);
+    kaku at = 0;
+    aida (word(b, dynamic + at * 16, 8) != 0) {
+        moshi (word(b, dynamic + at * 16, 8) == tag) { kaesu word(b, dynamic + at * 16 + 8, 8); }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+waza test_imports() -> unit {
+    kaku linked = link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "$ORIGIN/lib", symbols: ["sqrt"] });
+    testing.expect(linked.error == "", "a declared import links");
+    kaku b = linked.bytes;
+    testing.expect(dynamic_value(b, 1) > 0 && dynamic_value(b, 29) > 0, "DT_NEEDED and DT_RUNPATH");
+    kaku got = dynamic_value(b, 3);
+    kaku jmprel = dynamic_value(b, 23);
+    testing.expect(got > 0 && dynamic_value(b, 2) == 24 && dynamic_value(b, 20) == 7 && jmprel > 0, "PLTGOT, PLTRELSZ, PLTREL = RELA, JMPREL");
+    // the one JUMP_SLOT relocation targets GOT[3] and dynamic symbol 1 (sqrt)
+    testing.expect(word(b, jmprel, 8) == got + 24 && word(b, jmprel + 8, 8) == 4294967296 + 7, "R_X86_64_JUMP_SLOT on GOT[3] for sym 1");
+    // the call reaches the PLT stub, and the stub jumps through GOT[3]
+    kaku text = 4096;
+    kaku stub = text + 5 + word(b, text + 1, 4);
+    testing.expect(b[stub] == uint8(255) && b[stub + 1] == uint8(37), "call rel32 lands on a jmp *[rip+disp32] stub");
+    testing.expect(stub + 6 + word(b, stub + 2, 4) == got + 24, "the stub reads GOT[3]");
+    testing.expect(word(b, got, 8) == word(b, 232 + 8, 8), "GOT[0] holds _DYNAMIC");
+    kaku relro = 288;
+    testing.expect(word(b, relro + 16, 8) <= got && word(b, relro + 16, 8) + word(b, relro + 40, 8) >= got + 32, "PT_GNU_RELRO covers the GOT");
+    testing.expect(link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "", symbols: ["cbrt"] }).error == "UNRESOLVED_SYMBOL sqrt", "an unresolved import");
+    testing.expect(link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6", "libm.so.6"], runpath: "", symbols: ["sqrt"] }).error == "DUPLICATE_NEEDED libm.so.6", "duplicate DT_NEEDED");
+    kaku self: []elfrel.Relocation = [elfrel.Relocation { at: 1, kind: elfrel.r_x86_64_plt32, symbol: "mio_root", addend: -4 }];
+    kaku spec = imported();
+    testing.expect(link_with(elfrel.ObjectSpec { code: spec.code, bss_size: 0, exports: spec.exports, locals: [], relocations: self }, "libroot.so", Imports { needed: ["libm.so.6"], runpath: "", symbols: ["mio_root"] }).error == "UNSUPPORTED_SELF_REFERENCE mio_root", "a call to an own export through the PLT");
+    kaku again = link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "$ORIGIN/lib", symbols: ["sqrt"] }).bytes;
+    kaku same = len(again) == len(b);
+    kaku at = 0;
+    aida (same && at < len(b)) { same = again[at] == b[at]; at = at + 1; }
+    testing.expect(same, "deterministic output with imports");
+}

@@ -1,0 +1,6 @@
+// A module with two declared C dependencies (libm and zlib) for the native linker's DT_NEEDED ordering checks.
+waza c_sqrt(x: float64) -> float64 = c "sqrt";
+waza c_adler32(adler: uint64, data: cptr, size: uint32) -> uint64 = c "adler32";
+koukai waza hypot(x: float64, y: float64) -> float64 export "mio_extdep2_hypot" { kaesu c_sqrt(x * x + y * y); }
+// zlib returns the initial Adler-32 value 1 for a null buffer
+koukai waza adler_seed() -> uint64 export "mio_extdep2_adler_seed" { kaesu c_adler32(uint64(7), cptr(0), uint32(0)); }

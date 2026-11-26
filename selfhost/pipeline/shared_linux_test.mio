@@ -133,8 +133,10 @@ waza test_native_linker_output_and_refusals() -> unit {
     testing.expect(linked.error == "" && verify_shared(linked.bytes, "libnative.so") == "", "the native output passes verify_shared with the output's base name as SONAME");
     kaku external: []elfrel.Relocation = [elfrel.Relocation { at: 3, kind: elfrel.r_x86_64_plt32, symbol: "sqrt", addend: -4 }];
     kaku refused = link_native(native_spec(external), native_options([]), "libnative.so");
-    testing.expect(string.has_prefix(refused.error, "E_SHARED_LINKER the Mio native linker does not link external C symbols yet (the module calls sqrt)"), "external C symbols are refused by name");
-    testing.expect(string.has_prefix(link_native(native_spec(data), native_options(["-lm"]), "libnative.so").error, "E_SHARED_LINKER the Mio native linker links self-contained modules only"), "library options are refused");
+    testing.expect(string.has_prefix(refused.error, "E_SHARED_LINKER undefined symbol sqrt: not defined by the declared libraries (none)"), "an external C symbol without a declared library is undefined");
+    testing.expect(string.has_prefix(link_native(native_spec(data), native_options(["-Wl,-z,lazy"]), "libnative.so").error, "E_SHARED_LINKER the native linker does not support the link option -Wl,-z,lazy"), "unsupported link options are refused");
+    testing.expect(string.has_prefix(link_native(native_spec(data), native_options(["/nonexistent/helper.o"]), "libnative.so").error, "E_SHARED_LINKER the native linker links shared libraries only"), "object files are refused");
+    testing.expect(string.has_prefix(link_native(native_spec(data), native_options(["/nonexistent/libnothing.so"]), "libnative.so").error, "E_SHARED_LINKER cannot read the declared library /nonexistent/libnothing.so"), "a missing library file is reported");
     testing.expect(link_native(native_spec(data), SharedOptions { soname: "-bad", linker: "native", link_options: [], verbose: iie, object_only: iie }, "x.so").error == "E_SHARED invalid SONAME", "an invalid SONAME is refused");
     testing.expect(string.has_prefix(link_shared([], [], native_options([]), "x.so").error, "E_SHARED_LINKER the Mio native linker takes the lowered module"), "the system-linker seam never accepts a native request");
 }
