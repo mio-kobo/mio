@@ -1,6 +1,7 @@
 yobu "kiso/array";
 yobu "kiso/encoding/json";
 yobu "kiso/os";
+yobu "kiso/fs";
 yobu "selfhost/lsp";
 
 waza mark_dirty(state: Session, uri: string) -> unit {
@@ -81,6 +82,9 @@ waza document_notification(state: Session, document: json.Document, params: int6
         kaku closed = lsp.close_document(state.documents, uri);
         remove_dirty(state, uri);
         moshi (closed != mu) {
+            kaku file = analysis_path(state, uri);
+            forget_workspace_summary(state.workspace, file);
+            moshi (lsp.path_from_uri(uri).valid) { update_workspace_disk(state, file, fs.is_file(file)); }
             state.schedule[2] = state.schedule[2] + 1;
             kaku at = 0;
             aida (at<len(state.documents.documents)) {
@@ -100,6 +104,10 @@ waza document_notification(state: Session, document: json.Document, params: int6
             }
             lsp.replace_document(state.documents, uri, json.text(document, text));
         }
+        kaku file = analysis_path(state, uri);
+        forget_workspace_summary(state.workspace, file);
+        kaku parsed = lsp.path_from_uri(uri);
+        moshi (parsed.valid) { update_workspace_disk(state, file, fs.is_file(file)); }
         mark_affected(state, uri);
         state.schedule[1] = 0;
         kaesu;
@@ -115,6 +123,7 @@ waza document_notification(state: Session, document: json.Document, params: int6
         }
         kaku language = json.text(document, json.member(document, item, "languageId"));
         lsp.open_document(state.documents, lsp.Document { uri: uri, language: language, version: version, text: json.text(document, text) });
+        forget_workspace_summary(state.workspace, analysis_path(state, uri));
         mark_affected(state, uri);
         kaesu;
     }
@@ -149,5 +158,8 @@ waza document_notification(state: Session, document: json.Document, params: int6
         at = at + 1;
     }
     kaku changed = lsp.change_document(state.documents, uri, version, changes);
-    moshi (changed.document != mu && !changed.stale) { mark_affected(state, uri); }
+    moshi (changed.document != mu && !changed.stale) {
+        forget_workspace_summary(state.workspace, analysis_path(state, uri));
+        mark_affected(state, uri);
+    }
 }

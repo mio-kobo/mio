@@ -27,15 +27,16 @@ waza align(value: int64, boundary: int64) -> int64 { kaesu ((value + boundary - 
 // Deterministic local ad-hoc signature for our relocation-free ARM64 images.
 // No identity, certificate, entitlement or notarization is claimed. Every code
 // page hash covers the final header and final LC_CODE_SIGNATURE/__LINKEDIT.
-koukai waza adhoc(image: []uint8) -> SignResult { kaesu sign_image(image, iie); }
+koukai waza adhoc(image: []uint8) -> SignResult { kaesu sign_image(image, 2, iie); }
 // Explicit dynamic-image path: preserves an existing dyld binding payload.
-koukai waza adhoc_linked(image: []uint8) -> SignResult { kaesu sign_image(image, hai); }
-waza sign_image(image: []uint8, linked: bool) -> SignResult {
+koukai waza adhoc_linked(image: []uint8) -> SignResult { kaesu sign_image(image, 2, hai); }
+koukai waza adhoc_dylib(image: []uint8) -> SignResult { kaesu sign_image(image, 6, hai); }
+waza sign_image(image: []uint8, kind: int64, linked: bool) -> SignResult {
     moshi (len(image) < 768 || len(image) > 67108864 || len(image) != align(len(image), 16)) {
         kaesu failure("invalid unsigned image length");
     }
-    moshi (read32(image, 0) != 4277009103 || read32(image, 4) != 16777228 || read32(image, 12) != 2) {
-        kaesu failure("expected ARM64 Mach-O executable");
+    moshi (read32(image, 0) != 4277009103 || read32(image, 4) != 16777228 || read32(image, 12) != kind) {
+        kaesu failure("unexpected ARM64 Mach-O image type");
     }
     kaku count = read32(image, 16);
     kaku command_bytes = read32(image, 20);
@@ -124,7 +125,7 @@ waza sign_image(image: []uint8, linked: bool) -> SignResult {
     output[cd + 37] = uint8(2);
     output[cd + 39] = uint8(12);
     write32(output, cd + 76, text_limit, hai);
-    write32(output, cd + 84, 1, hai);
+    moshi (kind == 2) { write32(output, cd + 84, 1, hai); }
     output[cd + 88] = uint8(109);
     output[cd + 89] = uint8(105);
     output[cd + 90] = uint8(111);

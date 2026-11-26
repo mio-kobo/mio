@@ -42,3 +42,36 @@ waza test_appended_runtime_data_preserves_global_envelope() -> unit {
     testing.expect(executable_with_runtime_data(ImageSpec {
                 words: spec.words, constants: [], globals: 2053, patches: [] }, 1).error != mu, "runtime extension cannot bypass source/private bound");
 }
+
+waza test_dylib_exports_and_command_layout() -> unit {
+    kaku code = ImageSpec {
+        words: [arm64.ret().word, arm64.ret().word],
+        constants: [uint8(13)], globals: 1, patches: []
+    };
+    kaku spec = DylibSpec {
+        image: code, install_name: "@rpath/libunit.dylib",
+        exports: [DylibExport { name: "_mio_a", word: 0 }, DylibExport { name: "_mio_ab", word: 1 }]
+    };
+    kaku image = dylib(spec);
+    testing.expect(image.error == mu, "dylib with text, constants, and data");
+    testing.expect(binary.read_u32_le(image.bytes, 12).value == uint32(6), "MH_DYLIB file type");
+    kaku commands = binary.read_u32_le(image.bytes, 16).value;
+    kaku at = 32;
+    kaku index = 0;
+    kaku has_id = iie;
+    kaku has_exports = iie;
+    kaku executable_command = iie;
+    aida (index < int64(commands)) {
+        kaku command = int64(binary.read_u32_le(image.bytes, at).value);
+        moshi (command == 13) { has_id = hai; }
+        moshi (command == 2147483699) { has_exports = hai; }
+        moshi (command == 2147483688 || command == 14) { executable_command = hai; }
+        at = at + int64(binary.read_u32_le(image.bytes, at + 4).value);
+        index = index + 1;
+    }
+    testing.expect(has_id && has_exports && !executable_command, "dylib load commands");
+    testing.expect(dylib(DylibSpec { image: code, install_name: spec.install_name,
+        exports: [spec.exports[0], spec.exports[0]] }).error != mu, "duplicate export rejected");
+    testing.expect(dylib(DylibSpec { image: code, install_name: spec.install_name,
+        exports: [DylibExport { name: "_mio_oob", word: 2 }] }).error != mu, "out-of-range export rejected");
+}

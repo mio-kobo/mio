@@ -105,7 +105,10 @@ try:
   name=json.loads(name);actual=(snapshot/'bunko'/name).read_bytes()
   require(json.loads(body).encode()==actual and len(actual)==int(length) and hashlib.sha256(actual).hexdigest()==digest,'stale embedded module: '+name)
   require(name not in entries,'duplicate embedded module: '+name);entries[name]=digest
- expected={str(p.relative_to(snapshot/'bunko')):sha(p) for p in (snapshot/'bunko/kiso').rglob('*.mio') if not p.name.endswith('_test.mio')}
+ # Match the distribution bundle inventory. Dotted directories contain
+ # archived sources, such as tcp.before-patch, outside the shipped modules.
+ expected={str(p.relative_to(snapshot/'bunko')):sha(p) for p in (snapshot/'bunko/kiso').rglob('*.mio')
+           if not p.name.endswith('_test.mio') and not any('.' in part for part in p.relative_to(snapshot/'bunko').parts[:-1])}
  require(entries==expected,'embedded Bunko module set differs; refresh resources before freezing')
  def run(label,argv):
   argv=list(map(str,argv));print(label+' START',flush=True);start=time.monotonic();timed=False

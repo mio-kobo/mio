@@ -49,7 +49,7 @@ waza slice(data: []uint8, first: int64, end: int64) -> string {
 }
 waza value_of(option: string, prefix: string) -> string { kaesu slice(string.to_bytes(option), string.byte_len(prefix), string.byte_len(option)); }
 waza takes_value(option: string) -> bool {
-    kaesu option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--soname" || option == "--linker" || option == "--stdin-filepath" || link_option(option);
+    kaesu option == "--kind" || option == "--export" || option == "-o" || option == "--bunko-root" || option == "--target" || option == "--emit-symbols" || option == "--soname" || option == "--linker" || option == "--stdin-filepath" || link_option(option);
 }
 
 waza link_option(option: string) -> bool {
@@ -246,6 +246,7 @@ waza run() -> unit {
     }
     kaku opts=diagnostic.Options {format:"human",color:color,verbose:iie,lang:language,theme:selected_theme};
     kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku link_options: []string = []; kaku link_raw: []string = []; kaku shared = iie; kaku soname = ""; kaku linker = ""; kaku emit_object = iie; kaku entries: []string = []; kaku at = 2;
+    kaku build_kind = "exe"; kaku export_sources: []string = []; kaku export_symbols: []string = [];
     aida (at < len(args)) {
         kaku option = args[at];
         moshi (option == "--") {
@@ -309,6 +310,31 @@ waza run() -> unit {
             moshi (name == "--soname") { soname = value; } sore { linker = value; }
             tsuzuku;
         }
+        moshi (option == "--kind" || string.has_prefix(option, "--kind=") ||
+            option == "--export" || string.has_prefix(option, "--export=")) {
+            kaku value = "";
+            moshi (option == "--kind" || option == "--export") {
+                moshi (at + 1 >= len(args)) { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, option), 2); kaesu; }
+                at = at + 1;
+                value = args[at];
+            } sore {
+                moshi (string.has_prefix(option, "--kind=")) { value = value_of(option, "--kind="); }
+                sore { value = value_of(option, "--export="); }
+            }
+            moshi (option == "--kind" || string.has_prefix(option, "--kind=")) {
+                moshi (value != "dylib" && value != "exe") { fail(error_message("E_OPTIONS", i18n.key_err_unknown_option, string.concat("--kind=", value)), 2); kaesu; }
+                build_kind = value;
+            } sore {
+                kaku bytes = string.to_bytes(value);
+                kaku separator = 0;
+                aida (separator < len(bytes) && bytes[separator] != uint8(61)) { separator = separator + 1; }
+                moshi (separator == 0 || separator + 1 >= len(bytes)) { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--export <source=symbol>"), 2); kaesu; }
+                array.push(export_sources, slice(bytes, 0, separator));
+                array.push(export_symbols, slice(bytes, separator + 1, len(bytes)));
+            }
+            at = at + 1;
+            tsuzuku;
+        }
         moshi (option == "--emit-symbols") {
             moshi (at + 1 >= len(args) || args[at + 1] == "") { fail(error_message("E_OPTIONS", i18n.key_err_missing_value, "--emit-symbols"), 2); kaesu; }
             symbols = args[at + 1]; at = at + 2; tsuzuku;
@@ -327,7 +353,7 @@ waza run() -> unit {
     moshi (len(entries) > 1 && !shared) { fail(error_message("E_OPTIONS", i18n.key_err_multiple_entries, ""), 2); kaesu; }
     moshi (len(entries) >= 1) { entry = entries[0]; }
     moshi (!shared && (soname != "" || linker != "" || emit_object)) { fail(error_message("E_OPTIONS", i18n.key_err_shared_options, ""), 2); kaesu; }
-    moshi (shared && (command != "build" || emit_mochi || (target != "linux-amd64") || (emit_object && (soname != "" || linker != "" || len(link_raw) != 0)))) {
+    moshi (shared && (command != "build" || build_kind != "exe" || len(export_sources) != 0 || emit_mochi || (target != "linux-amd64") || (emit_object && (soname != "" || linker != "" || len(link_raw) != 0)))) {
         fail(error_message("E_OPTIONS", i18n.key_err_shared_options, ""), 2); kaesu;
     }
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
@@ -347,6 +373,18 @@ waza run() -> unit {
     // run/exec start the image on this machine, so it must be built for the host; --target defaults to the host.
     moshi (target != host && (command == "run" || command == "exec")) { fail(error_message("E_TARGET", i18n.key_err_host_target, host), 2); kaesu; }
     moshi (entry == "" || output == "") { fail(error_message("E_OPTIONS", i18n.key_err_empty_paths, ""), 2); kaesu; }
+    moshi (build_kind == "dylib") {
+        moshi (command != "build" || target != "darwin-arm64" || emit_mochi || gc_stress ||
+            observe || symbols != "" || len(link_options) != 0) {
+            fail(error_message("E_OPTIONS", i18n.key_err_dylib_options, ""), 2); kaesu;
+        }
+        kaku built = pipeline.build_signed_dylib(".", entry, bunko, output, export_sources, export_symbols);
+        moshi (built.error != "") { source_failure(entry, bunko, opts, built.error, i18n.text(language, i18n.key_err_analysis)); kaesu; }
+        kaku written = fs.write_all(output, built.bytes);
+        moshi (written.error != mu) { fail(error_message("E_IO", i18n.key_err_write_native, ""), 1); }
+        kaesu;
+    }
+    moshi (len(export_sources) != 0) { fail(error_message("E_OPTIONS", i18n.key_err_dylib_options, ""), 2); kaesu; }
     moshi(command=="check"){
         kaku analyzed=frontend.analyze_source(".",entry,bunko,[],iie);
         moshi (analysis_failed(analyzed, entry, opts, i18n.text(language, i18n.key_err_analysis))) { os.exit(1); kaesu; }

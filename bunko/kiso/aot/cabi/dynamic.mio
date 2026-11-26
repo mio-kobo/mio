@@ -1,0 +1,21 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// An alias at the same text address describes a compiler-emitted C entry.
+// The symbol name is last so different signatures cannot share a prefix.
+koukai waza dylib_marker(symbol: string, result: string, parameters: string) -> string {
+    kaesu string.concat("mio_ffi_v1_", string.concat(result, string.concat(parameters, string.concat("_", symbol))));
+}
+
+koukai waza dylib_signature_marker(signature: Signature) -> string {
+    kaku kinds: []uint8 = [];
+    array.push(kinds, uint8(signature.result));
+    kaku at = 0;
+    aida (at < len(signature.parameters)) {
+        array.push(kinds, uint8(signature.parameters[at]));
+        at = at + 1;
+    }
+    kaku encoded = string.from_utf8(kinds);
+    moshi (encoded == mu) { kaesu ""; }
+    kaesu dylib_marker(signature.symbol, encoded, "");
+}

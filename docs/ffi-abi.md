@@ -1,5 +1,7 @@
 # Mio Native FFI ABI v1
 
+For Darwin ARM64 shared libraries and runtime loading, see [Darwin FFI ABI v1](darwin-ffi-abi.md).
+
 Native FFI v1 adds checked Windows AMD64 dynamic calls to the existing fixed-prototype C declarations. It is independent of **Runtime ABI Revision RA-1**. It does not revise Object ABI v1, either GC profile, root tracking, Mio's own calling convention, or the current Linux ELF implementation.
 
 ## Source audit and implementation boundary
