@@ -1,0 +1,89 @@
+yobu "../support";
+yobu "kiso/array";
+yobu "kiso/ffi/linux";
+yobu "kiso/string";
+
+// Native memory with real libraries: zlib's in/out length cell, OpenSSL SHA256 into an owned digest buffer, a
+// borrowed C string from SQLite, a 4 MiB round trip and allocation churn. Prototypes are hand-written indirect
+// declarations called through linux.unsafe_address at the call site.
+waza z_compress2(f: cptr, destination: cptr, destination_length: cptr, source: cptr, source_length: uint64, level: int32) -> int32 = c "mio_ffi_indirect";
+waza z_uncompress(f: cptr, destination: cptr, destination_length: cptr, source: cptr, source_length: uint64) -> int32 = c "mio_ffi_indirect";
+waza crypto_sha256(f: cptr, data: cptr, size: uint64, digest: cptr) -> cptr = c "mio_ffi_indirect";
+waza sqlite_version(f: cptr) -> cptr = c "mio_ffi_indirect";
+
+kaku run = support.begin("test_ffi_memory");
+kaku owned_before = linux.buffers_owned();
+
+// 64 KiB of patterned data, compressed and decompressed entirely in native buffers
+kaku size = 65536;
+kaku pattern: []uint8 = array.make[uint8](size, uint8(0));
+kaku i = 0;
+aida (i < size) { pattern[i] = uint8(support.mod(i * 7 + 3, 251)); i = i + 1; }
+kaku source = linux.alloc(size);
+support.expect(run, "write the source", linux.write(source, 0, pattern) == "");
+kaku zlib = linux.open_system("libz.so.1");
+kaku compress = linux.symbol(zlib, "compress2", "i:pppzi");
+kaku uncompress = linux.symbol(zlib, "uncompress", "i:pppz");
+kaku packed = linux.alloc(size + 1024);
+kaku cell = linux.alloc_zeroed(8);
+linux.set_uint64(cell, 0, uint64(size + 1024));
+kaku status = z_compress2(linux.unsafe_address(compress, "i:pppzi"), linux.pointer(packed), linux.pointer(cell), linux.pointer(source), uint64(size), int32(9));
+kaku packed_size = linux.get_int64(cell, 0);
+support.expect(run, "compress2 into a native buffer", status == int32(0) && packed_size > 0 && packed_size < size);
+kaku unpacked = linux.alloc(size);
+linux.set_int64(cell, 0, size);
+status = z_uncompress(linux.unsafe_address(uncompress, "i:pppz"), linux.pointer(unpacked), linux.pointer(cell), linux.pointer(packed), uint64(packed_size));
+kaku back = linux.read(unpacked, 0, size);
+kaku same = len(back) == size;
+i = 0;
+aida (same && i < size) { same = back[i] == pattern[i]; i = i + 1; }
+support.expect(run, "uncompress restores the data byte for byte", status == int32(0) && linux.get_int64(cell, 0) == size && same);
+
+// OpenSSL SHA256 of the same data into an owned 32-byte digest buffer (oracle: Python hashlib)
+kaku crypto = linux.open_system("libcrypto.so.3");
+kaku sha = linux.symbol(crypto, "SHA256", "p:pzp");
+kaku digest = linux.alloc(32);
+kaku result = crypto_sha256(linux.unsafe_address(sha, "p:pzp"), linux.pointer(source), uint64(size), linux.pointer(digest));
+support.expect(run, "SHA256 writes the digest buffer and returns it", result == linux.pointer(digest) &&
+    support.hex(linux.read(digest, 0, 32)) == "93d1a595bb5828c088e99c53df8dca5511567b7724bc2325cf3e54d725fa069b");
+kaku abc = linux.c_string_buffer("abc");
+crypto_sha256(linux.unsafe_address(sha, "p:pzp"), linux.pointer(abc), uint64(3), linux.pointer(digest));
+support.expect(run, "SHA256(\"abc\") known answer", support.hex(linux.read(digest, 0, 32)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+// SQLite returns a static C string: borrow it read-only and read it as UTF-8
+kaku sqlite = linux.open_system("libsqlite3.so.0");
+kaku version = linux.symbol(sqlite, "sqlite3_libversion", "p:");
+kaku text = linux.unsafe_borrow(sqlite_version(linux.unsafe_address(version, "p:")), 16, iie);
+waza starts(value: string?, prefix: string) -> bool {
+    moshi (value == mu) { kaesu iie; }
+    kaesu string.has_prefix(value, prefix);
+}
+support.expect(run, "a borrowed SQLite C string reads as 3.x", starts(linux.c_string(text, 0), "3."));
+support.expect(run, "borrowed memory is not freed here", string.has_prefix(linux.free(text), "E_FFI_BORROWED") && linux.release_buffer(text) == "");
+
+// 4 MiB round trip and 20,000 allocate/write/read/free cycles
+kaku big = array.make[uint8](4194304, uint8(90));
+big[4194303] = uint8(91);
+kaku large = linux.alloc(4194304);
+linux.write(large, 0, big);
+kaku tail = linux.read(large, 4194300, 4);
+support.expect(run, "4 MiB transfer", len(tail) == 4 && tail[3] == uint8(91) && tail[0] == uint8(90));
+kaku ok = hai;
+kaku cycle = 0;
+aida (cycle < 20000) {
+    kaku b = linux.alloc(64);
+    moshi (linux.set_int32(b, 60, int32(cycle)) != "" || linux.get_int32(b, 60) != int32(cycle) || linux.free(b) != "") { ok = iie; }
+    cycle = cycle + 1;
+}
+support.expect(run, "20000 allocation cycles", ok);
+
+linux.free(large);
+linux.free(abc);
+linux.free(digest);
+linux.free(source);
+linux.free(packed);
+linux.free(unpacked);
+linux.free(cell);
+support.expect(run, "no leaked native buffers", linux.buffers_owned() == owned_before);
+support.expect(run, "close", linux.close(zlib) == "" && linux.close(crypto) == "" && linux.close(sqlite) == "");
+support.finish(run);

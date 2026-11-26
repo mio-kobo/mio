@@ -69,15 +69,16 @@ class DriverTest(unittest.TestCase):
 
     def test_platform_exclusion_follows_bunko_matrix(self):
         ffi = examples.FFI_LINUX
+        memory = examples.FFI_MEMORY
         with patch.object(examples, "tcp_exclusion", side_effect=lambda target: "no Winsock" if target == "windows-amd64" else None):
-            self.assertEqual(set(examples.exclusions("windows-amd64")), {*examples.TCP, ffi})
+            self.assertEqual(set(examples.exclusions("windows-amd64")), {*examples.TCP, ffi, memory})
             self.assertEqual(examples.exclusions("windows-amd64")[examples.TCP[0]], "no Winsock")
-            self.assertEqual(set(examples.exclusions("darwin-arm64")), {examples.PE_EXECUTION, ffi})
+            self.assertEqual(set(examples.exclusions("darwin-arm64")), {examples.PE_EXECUTION, ffi, memory})
             self.assertEqual(set(examples.exclusions("linux-amd64")), {examples.PE_EXECUTION})
         with patch.object(examples, "tcp_exclusion", return_value=None):
-            self.assertEqual(set(examples.exclusions("windows-amd64")), {ffi})
+            self.assertEqual(set(examples.exclusions("windows-amd64")), {ffi, memory})
             # The AMD64 PE would only run under x64 emulation on Windows ARM64: excluded with a reason, never counted as PASS.
-            self.assertEqual(set(examples.exclusions("windows-arm64")), {examples.PE_EXECUTION, ffi})
+            self.assertEqual(set(examples.exclusions("windows-arm64")), {examples.PE_EXECUTION, ffi, memory})
             self.assertIn("emulation", examples.exclusions("windows-arm64")[examples.PE_EXECUTION])
         # The Linux FFI example runs only where kiso/ffi/linux is supported, with the matrix's recorded reason elsewhere.
         for target in ("darwin-arm64", "darwin-amd64", "linux-arm64", "windows-amd64", "windows-arm64"):

@@ -1,3 +1,4 @@
+yobu "kiso/array";
 yobu "kiso/convert";
 yobu "kiso/ffi/linux";
 yobu "kiso/os";
@@ -108,4 +109,35 @@ t1 = now_ns(spec);
 report("hot_ffi_gated_call", t1 - t0, n);
 moshi (sum != expected) { chant("MISMATCH gated"); os.exit(1); }
 linux.close(lib);
+
+// Native memory: 100,000 alloc(64) + set_int64 + get_int64 + free cycles, then 4 MiB copied in and out 50 times.
+kaku cycles = 100000;
+kaku checksum = 0;
+t0 = now_ns(spec);
+i = 0;
+aida (i < cycles) {
+    kaku cell = linux.alloc(64);
+    linux.set_int64(cell, 56, i);
+    checksum = checksum + linux.get_int64(cell, 56);
+    linux.free(cell);
+    i = i + 1;
+}
+t1 = now_ns(spec);
+report("native_alloc_set_get_free_64B", t1 - t0, cycles);
+moshi (checksum != (cycles - 1) * cycles / 2 || linux.buffers_owned() != 0) { chant("MISMATCH native alloc"); os.exit(1); }
+kaku megabytes: []uint8 = array.make[uint8](4194304, uint8(3));
+kaku native = linux.alloc(4194304);
+kaku rounds = 50;
+kaku seen = 0;
+t0 = now_ns(spec);
+i = 0;
+aida (i < rounds) {
+    linux.write(native, 0, megabytes);
+    seen = seen + int64(linux.read(native, 0, 4194304)[4194303]);
+    i = i + 1;
+}
+t1 = now_ns(spec);
+report("native_copy_in_out_4MiB", t1 - t0, rounds);
+moshi (seen != 3 * rounds) { chant("MISMATCH native copy"); os.exit(1); }
+linux.free(native);
 chant("DONE");
