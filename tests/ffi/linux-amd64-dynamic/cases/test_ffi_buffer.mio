@@ -1,40 +1,40 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
 kaku run = support.begin("test_ffi_buffer");
-kaku lib = ffi.open(support.absolute("libmio_buffer.so"));
-support.expect(run, "open", !ffi.failed(lib));
-kaku length = ffi.symbol(lib, "mio_buffer_length", "z:nz");
-kaku checksum = ffi.symbol(lib, "mio_buffer_checksum", "z:nz");
+kaku lib = linux.open(support.absolute("libmio_buffer.so"));
+support.expect(run, "open", !linux.failed(lib));
+kaku length = linux.symbol(lib, "mio_buffer_length", "z:nz");
+kaku checksum = linux.symbol(lib, "mio_buffer_checksum", "z:nz");
 
 kaku hello = string.to_bytes("hello");
-support.expect(run, "length", ffi.call_z_nz(length, hello) == uint64(5));
+support.expect(run, "length", linux.call_z_nz(length, hello) == uint64(5));
 // FNV-1a 64 of "hello" is a known value: a430d84680aabd0b
-support.expect(run, "checksum known value", ffi.call_z_nz(checksum, hello) == uint64(-6615550055289275125));
-support.expect(run, "empty buffer", ffi.call_z_nz(length, string.to_bytes("")) == uint64(0));
-support.expect(run, "empty checksum is the FNV offset", ffi.call_z_nz(checksum, string.to_bytes("")) == uint64(-3750763034362895579));
+support.expect(run, "checksum known value", linux.call_z_nz(checksum, hello) == uint64(-6615550055289275125));
+support.expect(run, "empty buffer", linux.call_z_nz(length, string.to_bytes("")) == uint64(0));
+support.expect(run, "empty checksum is the FNV offset", linux.call_z_nz(checksum, string.to_bytes("")) == uint64(-3750763034362895579));
 
 // UTF-8 data: bytes, not code points
 kaku utf8 = string.to_bytes("日本語");
-support.expect(run, "utf8 length", ffi.call_z_nz(length, utf8) == uint64(9));
-support.expect(run, "utf8 checksum differs from ascii", ffi.call_z_nz(checksum, utf8) != ffi.call_z_nz(checksum, hello));
+support.expect(run, "utf8 length", linux.call_z_nz(length, utf8) == uint64(9));
+support.expect(run, "utf8 checksum differs from ascii", linux.call_z_nz(checksum, utf8) != linux.call_z_nz(checksum, hello));
 
 // the C side reads exactly the declared length: an embedded NUL stops the length scan but not the checksum
 kaku with_nul: []uint8 = [uint8(65), uint8(0), uint8(66)];
-support.expect(run, "nul stops length", ffi.call_z_nz(length, with_nul) == uint64(1));
+support.expect(run, "nul stops length", linux.call_z_nz(length, with_nul) == uint64(1));
 kaku one: []uint8 = [uint8(65)];
-support.expect(run, "checksum covers the whole length", ffi.call_z_nz(checksum, with_nul) != ffi.call_z_nz(checksum, one));
+support.expect(run, "checksum covers the whole length", linux.call_z_nz(checksum, with_nul) != linux.call_z_nz(checksum, one));
 
 // large buffer: 4 MiB of a repeating pattern, mutated between calls (the C side sees current data)
 kaku big: []uint8 = array.make[uint8](4194304, uint8(7));
-support.expect(run, "large length", ffi.call_z_nz(length, big) == uint64(4194304));
-kaku before = ffi.call_z_nz(checksum, big);
+support.expect(run, "large length", linux.call_z_nz(length, big) == uint64(4194304));
+kaku before = linux.call_z_nz(checksum, big);
 big[4194303] = uint8(8);
-support.expect(run, "large checksum sees the last byte", ffi.call_z_nz(checksum, big) != before);
+support.expect(run, "large checksum sees the last byte", linux.call_z_nz(checksum, big) != before);
 big[100] = uint8(0);
-support.expect(run, "large length stops at the NUL", ffi.call_z_nz(length, big) == uint64(100));
-support.expect(run, "no error", ffi.error(length) == "" && ffi.error(checksum) == "");
-support.expect(run, "close", ffi.close(lib) == "");
+support.expect(run, "large length stops at the NUL", linux.call_z_nz(length, big) == uint64(100));
+support.expect(run, "no error", linux.last_error() == "");
+support.expect(run, "close", linux.close(lib) == "");
 support.finish(run);

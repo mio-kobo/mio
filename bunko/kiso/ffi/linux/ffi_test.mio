@@ -1,0 +1,105 @@
+yobu "kiso/string";
+yobu "kiso/testing";
+
+waza test_signatures() -> unit {
+    testing.expect(valid_signature("i:ii") && valid_signature("v:") && valid_signature("l:nznz"), "well-formed signatures");
+    testing.expect(!valid_signature("") && !valid_signature(":") && !valid_signature("i"), "missing result or colon");
+    testing.expect(!valid_signature("ii:i") && !valid_signature("i:i:i"), "exactly one result letter and one colon");
+    testing.expect(!valid_signature("i:v") && !valid_signature("n:z"), "v only as a result, n only as a parameter");
+    testing.expect(!valid_signature("i:x") && !valid_signature("I:i"), "unknown letters");
+    testing.expect(valid_signature("i:pppppppppppppp") && !valid_signature("i:ppppppppppppppp"), "at most 16 letters");
+    testing.expect(shape_of("i:x") == -1, "invalid signatures have no shape");
+    testing.expect(shape_of("i:ii") != shape_of("i:iu") && shape_of("l:z") != shape_of("z:l"), "shapes distinguish signatures");
+}
+
+// The wrappers compare against constants; each must be the shape of the signature its name spells.
+waza test_wrapper_shapes() -> unit {
+    testing.expect(s_v == shape_of("v:") && s_i == shape_of("i:") && s_l == shape_of("l:") && s_p == shape_of("p:") && s_z == shape_of("z:"), "nullary shapes");
+    testing.expect(s_i_i == shape_of("i:i") && s_l_l == shape_of("l:l") && s_d_d == shape_of("d:d") && s_b_i == shape_of("b:i"), "unary scalar shapes");
+    testing.expect(s_i_p == shape_of("i:p") && s_v_p == shape_of("v:p") && s_p_n == shape_of("p:n"), "unary pointer and buffer shapes");
+    testing.expect(s_i_ii == shape_of("i:ii") && s_l_ll == shape_of("l:ll") && s_f_ff == shape_of("f:ff") && s_d_dd == shape_of("d:dd"), "binary scalar shapes");
+    testing.expect(s_z_nz == shape_of("z:nz") && s_u_nz == shape_of("u:nz") && s_l_pn == shape_of("l:pn") && s_i_pn == shape_of("i:pn"), "buffer shapes");
+    testing.expect(s_i_nzn == shape_of("i:nzn") && s_l_pnnz == shape_of("l:pnnz") && s_l_nznz == shape_of("l:nznz"), "multi-buffer shapes");
+}
+
+waza test_path_policy() -> unit {
+    testing.expect(string.has_prefix(library_error(open("")), "E_FFI_PATH"), "empty path");
+    testing.expect(string.has_prefix(library_error(open("libc.so.6")), "E_FFI_PATH"), "bare names are not searched by open");
+    testing.expect(string.has_prefix(library_error(open_system("/lib/libc.so.6")), "E_FFI_PATH"), "open_system takes names only");
+    kaku missing = open("/nonexistent-mio-ffi/libmissing.so");
+    testing.expect(failed(missing) && string.has_prefix(library_error(missing), "E_FFI_LOAD"), "missing file is a load error");
+    testing.expect(!is_open(missing) && string.has_prefix(close(missing), "E_FFI_STATE"), "a failed library cannot be closed");
+    testing.expect(string.has_prefix(error(symbol(missing, "x", "i:")), "E_FFI_STATE"), "a failed library resolves nothing");
+}
+
+waza test_handles() -> unit {
+    kaku before_libraries = libraries_open();
+    kaku before_functions = functions_live();
+    kaku libc = open_system("libc.so.6");
+    testing.expect(!failed(libc) && is_open(libc) && path(libc) == "libc.so.6", "libc opens by name");
+    kaku strlen = symbol(libc, "strlen", "z:n");
+    testing.expect(resolved(strlen) && is_live(strlen) && signature(strlen) == "z:n", "strlen resolves");
+    testing.expect(check(strlen, "z:n") == "" && string.has_prefix(check(strlen, "z:nz"), "E_FFI_SIGNATURE"), "check compares signatures");
+    testing.expect(string.has_prefix(error(symbol(libc, "mio_no_such_symbol", "i:")), "E_FFI_SYMBOL"), "missing symbol");
+    testing.expect(string.has_prefix(error(symbol(libc, "strlen", "i:q")), "E_FFI_SIGNATURE"), "malformed signature");
+    testing.expect(libraries_open() == before_libraries + 1 && functions_live() == before_functions + 1, "live handle counts");
+    // a typed call with the wrong prototype is refused before native code
+    testing.expect(call_i_ii(strlen, int32(1), int32(2)) == int32(0) && string.has_prefix(last_error(), "E_FFI_SIGNATURE"), "mismatched call refused");
+    testing.expect(address(strlen, "z:n") != cptr(0) && last_error() == "", "address of a live function");
+    kaku again = symbol(libc, "strlen", "z:n");
+    testing.expect(release(again) == "" && !is_live(again) && is_live(strlen), "release frees one handle");
+    testing.expect(string.has_prefix(release(again), "E_FFI_STALE"), "double release");
+    testing.expect(close(libc) == "" && !is_open(libc), "close");
+    testing.expect(!is_live(strlen) && address(strlen, "z:n") == cptr(0) && string.has_prefix(last_error(), "E_FFI_CLOSED"), "close invalidates functions");
+    testing.expect(string.has_prefix(close(libc), "E_FFI_CLOSED"), "double close");
+    testing.expect(libraries_open() == before_libraries && functions_live() == before_functions, "counts return to the start");
+    // a reopened library reuses the freed slots, but the old handles stay invalid
+    kaku reopened = open_system("libc.so.6");
+    kaku fresh = symbol(reopened, "strlen", "z:n");
+    testing.expect(fresh.ticket.slot == strlen.ticket.slot && is_live(fresh) && !is_live(strlen), "slot reuse keeps stale handles stale");
+    testing.expect(reopened.ticket.slot == libc.ticket.slot && is_open(reopened) && !is_open(libc), "library slot reuse keeps stale libraries closed");
+    testing.expect(close(reopened) == "", "close reopened");
+}
+
+// Real native calls through the typed wrappers, using functions every glibc system has.
+waza test_libc_calls() -> unit {
+    kaku libc = open_system("libc.so.6");
+    kaku libm = open_system("libm.so.6");
+    testing.expect(is_open(libc) && is_open(libm), "libc and libm open");
+    call_v_(symbol(libc, "tzset", "v:"));
+    testing.expect(last_error() == "", "v: tzset");
+    testing.expect(call_i_(symbol(libc, "getpid", "i:")) > int32(0), "i: getpid");
+    testing.expect(call_l_(symbol(libc, "random", "l:")) >= 0 && last_error() == "", "l: random");
+    testing.expect(call_p_(symbol(libc, "__errno_location", "p:")) != cptr(0), "p: __errno_location");
+    testing.expect(call_z_(symbol(libc, "__ctype_get_mb_cur_max", "z:")) != uint64(0), "z: __ctype_get_mb_cur_max");
+    testing.expect(call_i_i(symbol(libc, "abs", "i:i"), int32(-7)) == int32(7), "i:i abs");
+    testing.expect(call_l_l(symbol(libc, "labs", "l:l"), -9000000000) == 9000000000, "l:l labs");
+    testing.expect(call_d_d(symbol(libm, "sqrt", "d:d"), 81.0) == 9.0, "d:d sqrt");
+    testing.expect(call_d_dd(symbol(libm, "pow", "d:dd"), 2.0, 10.0) == 1024.0, "d:dd pow");
+    testing.expect(call_f_ff(symbol(libm, "fmaxf", "f:ff"), float32(1.5), float32(-2.0)) == float32(1.5), "f:ff fmaxf");
+    testing.expect(call_i_p(symbol(libc, "fflush", "i:p"), cptr(0)) == int32(0), "i:p fflush(NULL)");
+    call_v_p(symbol(libc, "free", "v:p"), cptr(0));
+    testing.expect(last_error() == "", "v:p free(NULL)");
+    testing.expect(call_p_n(symbol(libc, "getenv", "p:n"), cstring("MIO_FFI_LINUX_SURELY_UNSET_VARIABLE")) == cptr(0) && last_error() == "", "p:n getenv");
+    kaku text: []uint8 = [uint8(104), uint8(105), uint8(0), uint8(33)];
+    testing.expect(call_z_nz(symbol(libc, "strnlen", "z:nz"), text) == uint64(2), "z:nz strnlen stops at the NUL");
+    kaku empty: []uint8 = [];
+    testing.expect(call_z_nz(symbol(libc, "strnlen", "z:nz"), empty) == uint64(0), "z:nz with an empty buffer");
+    testing.expect(close(libm) == "" && close(libc) == "", "close libc and libm");
+}
+
+// Exported data is not callable: environ and stdout are glibc data symbols in writable, non-executable mappings.
+waza test_data_symbols_are_rejected() -> unit {
+    kaku libc = open_system("libc.so.6");
+    kaku environ = symbol(libc, "environ", "p:");
+    testing.expect(!resolved(environ) && string.has_prefix(error(environ), "E_FFI_NOT_FUNCTION environ"), "environ is refused as a function");
+    testing.expect(string.has_prefix(error(symbol(libc, "stdout", "p:")), "E_FFI_NOT_FUNCTION"), "stdout is refused as a function");
+    kaku abs = symbol(libc, "abs", "i:i");
+    testing.expect(resolved(abs), "a real function still resolves");
+    // strlen is a GNU indirect function (STT_GNU_IFUNC): dlsym returns the selected implementation, which is code
+    testing.expect(resolved(symbol(libc, "strlen", "z:n")), "an IFUNC resolves to executable code");
+    testing.expect(unsafe_address(abs, "i:i") == address(abs, "i:i") && unsafe_address(abs, "i:i") != cptr(0), "address is an alias of unsafe_address");
+    testing.expect(call_i_i(abs, int32(0)) == int32(0) && last_call_ok(), "a zero result of a call that ran is ok");
+    testing.expect(call_i_ii(abs, int32(0), int32(0)) == int32(0) && !last_call_ok(), "a zero result of a refused call is not ok");
+    testing.expect(close(libc) == "" && !close_pending(libc) && libraries_pending_close() == 0, "close leaves nothing pending");
+}

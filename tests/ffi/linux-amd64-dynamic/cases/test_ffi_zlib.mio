@@ -1,38 +1,38 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
 kaku run = support.begin("test_ffi_zlib");
-kaku lib = ffi.open(support.absolute("libmio_zlib.so"));
-support.expect(run, "open", !ffi.failed(lib));
-kaku compress = ffi.symbol(lib, "mio_zlib_compress", "l:nznz");
-kaku decompress = ffi.symbol(lib, "mio_zlib_decompress", "l:nznz");
-kaku crc = ffi.symbol(lib, "mio_zlib_crc32", "u:nz");
-kaku bound = ffi.symbol(lib, "mio_zlib_bound", "z:nz");
+kaku lib = linux.open(support.absolute("libmio_zlib.so"));
+support.expect(run, "open", !linux.failed(lib));
+kaku compress = linux.symbol(lib, "mio_zlib_compress", "l:nznz");
+kaku decompress = linux.symbol(lib, "mio_zlib_decompress", "l:nznz");
+kaku crc = linux.symbol(lib, "mio_zlib_crc32", "u:nz");
+kaku bound = linux.symbol(lib, "mio_zlib_bound", "z:nz");
 
 // well-known CRC-32 check value
-support.expect(run, "crc32(123456789)", ffi.call_u_nz(crc, string.to_bytes("123456789")) == uint32(3421780262));
-support.expect(run, "crc32(empty)", ffi.call_u_nz(crc, string.to_bytes("")) == uint32(0));
+support.expect(run, "crc32(123456789)", linux.call_u_nz(crc, string.to_bytes("123456789")) == uint32(3421780262));
+support.expect(run, "crc32(empty)", linux.call_u_nz(crc, string.to_bytes("")) == uint32(0));
 
 // round trip of a highly compressible 1 MiB buffer
 kaku size = 1048576;
 kaku original: []uint8 = array.make[uint8](size, uint8(0));
 kaku i = 0;
 aida (i < size) { original[i] = uint8(support.mod(i / 64, 251)); i = i + 1; }
-kaku capacity = int64(ffi.call_z_nz(bound, original));
+kaku capacity = int64(linux.call_z_nz(bound, original));
 support.expect(run, "bound is larger than the input", capacity > size);
 kaku packed: []uint8 = array.make[uint8](capacity, uint8(0));
-kaku packed_size = ffi.call_l_nznz(compress, original, packed);
+kaku packed_size = linux.call_l_nznz(compress, original, packed);
 support.expect(run, "compressed", packed_size > 0);
 support.expect(run, "actually smaller", packed_size < 65536);
 kaku exact: []uint8 = array.make[uint8](packed_size, uint8(0));
 i = 0;
 aida (i < packed_size) { exact[i] = packed[i]; i = i + 1; }
 kaku restored: []uint8 = array.make[uint8](size, uint8(0));
-kaku restored_size = ffi.call_l_nznz(decompress, exact, restored);
+kaku restored_size = linux.call_l_nznz(decompress, exact, restored);
 support.expect(run, "decompressed length", restored_size == size);
-support.expect(run, "integrity: crc32 matches", ffi.call_u_nz(crc, restored) == ffi.call_u_nz(crc, original));
+support.expect(run, "integrity: crc32 matches", linux.call_u_nz(crc, restored) == linux.call_u_nz(crc, original));
 kaku same = hai;
 i = 0;
 aida (i < size) { moshi (restored[i] != original[i]) { same = iie; } i = i + 1; }
@@ -40,16 +40,16 @@ support.expect(run, "integrity: every byte matches", same);
 
 // error codes
 kaku tiny: []uint8 = array.make[uint8](4, uint8(0));
-support.expect(run, "output buffer too small", ffi.call_l_nznz(compress, original, tiny) < 0);
+support.expect(run, "output buffer too small", linux.call_l_nznz(compress, original, tiny) < 0);
 kaku garbage = string.to_bytes("this is not zlib data at all");
-support.expect(run, "corrupt input reports a data error", ffi.call_l_nznz(decompress, garbage, restored) == -3);
+support.expect(run, "corrupt input reports a data error", linux.call_l_nznz(decompress, garbage, restored) == -3);
 kaku corrupt: []uint8 = array.make[uint8](packed_size, uint8(0));
 i = 0;
 aida (i < packed_size) { corrupt[i] = exact[i]; i = i + 1; }
 corrupt[packed_size / 2] = uint8(support.mod(int64(corrupt[packed_size / 2]) + 1, 256));
-kaku rc = ffi.call_l_nznz(decompress, corrupt, restored);
+kaku rc = linux.call_l_nznz(decompress, corrupt, restored);
 support.expect(run, "bit flip is detected", rc < 0);
-support.expect(run, "short output buffer", ffi.call_l_nznz(decompress, exact, tiny) < 0);
-support.expect(run, "no ffi error", ffi.error(compress) == "" && ffi.error(decompress) == "");
-support.expect(run, "close", ffi.close(lib) == "");
+support.expect(run, "short output buffer", linux.call_l_nznz(decompress, exact, tiny) < 0);
+support.expect(run, "no ffi error", linux.last_error() == "");
+support.expect(run, "close", linux.close(lib) == "");
 support.finish(run);

@@ -1,0 +1,487 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// Native memory for kiso/ffi/linux: bounded, generation-checked buffers in C memory.
+//
+// A Buffer is an opaque handle like Library and Function. Resource categories:
+//   owned     alloc / alloc_zeroed / alloc_aligned / c_string_buffer; this package's malloc family allocated it and
+//             only free (or resize) releases it. free makes the buffer and every view of it stale.
+//   view      slice / read_only of a live buffer; borrows its root, never frees it; release drops the handle.
+//   borrowed  unsafe_borrow of foreign memory (for example a pointer a C library returned): the caller asserts
+//             the address and length; free is refused (release the memory with the library's own destructor);
+//             release drops the handle.
+// Every read, write and copy checks the handle, its root and the byte range (no integer overflow: offsets and
+// lengths are checked against the length before any addition) and refuses writes through read-only buffers.
+// Results that are values (read, get_*, c_string) record failures in last_error(); check last_call_ok().
+// Mio arrays never become native buffers: data is copied in and out, so C can never retain a managed object.
+
+teisu max_buffer = 1099511627776; // 1 TiB: far above any real allocation, far below int64 overflow
+teisu max_alignment = 1048576;
+
+koukai kata Buffer { ticket: Ticket; error: string; }
+
+// root_slot/root_id: the owned or borrowed allocation this buffer lives in (itself for roots).
+kata BufferSlot { id: int64; bits: int64; length: int64; writable: bool; owned: bool; borrowed: bool; root_slot: int64; root_id: int64; }
+
+kaku buffers: []BufferSlot = [];
+kaku free_buffers: []int64 = [];
+kaku live_owned_count: int64 = 0;
+
+waza dead_slot() -> BufferSlot { kaesu BufferSlot { id: 0, bits: 0, length: 0, writable: iie, owned: iie, borrowed: iie, root_slot: -1, root_id: 0 }; }
+waza failed_buffer(error: string) -> Buffer { set_call_error(error); kaesu Buffer { ticket: no_ticket(), error: error }; }
+
+waza new_buffer_slot(bits: int64, length: int64, writable: bool, owned: bool, borrowed: bool, root_slot: int64, root_id: int64) -> Buffer {
+    kaku id = fresh_id();
+    kaku slot = 0;
+    moshi (len(free_buffers) > 0) {
+        slot = free_buffers[len(free_buffers) - 1];
+        array.truncate(free_buffers, len(free_buffers) - 1);
+    } sore {
+        slot = len(buffers);
+        array.push(buffers, dead_slot());
+    }
+    kaku root = root_slot;
+    kaku rid = root_id;
+    moshi (root < 0) { root = slot; rid = id; }
+    buffers[slot] = BufferSlot { id: id, bits: bits, length: length, writable: writable, owned: owned, borrowed: borrowed, root_slot: root, root_id: rid };
+    moshi (owned) { live_owned_count = live_owned_count + 1; }
+    set_call_error("");
+    kaesu Buffer { ticket: Ticket { slot: slot, id: id }, error: "" };
+}
+
+// The slot of a live buffer whose root is still live, or -1.
+waza buffer_slot(buffer: Buffer) -> int64 {
+    kaku slot = buffer.ticket.slot;
+    moshi (buffer.error != "" || slot < 0 || slot >= len(buffers)) { kaesu -1; }
+    kaku entry = buffers[slot];
+    moshi (entry.id != buffer.ticket.id || entry.id == 0) { kaesu -1; }
+    moshi (entry.root_slot < 0 || entry.root_slot >= len(buffers) || buffers[entry.root_slot].id != entry.root_id) { kaesu -1; }
+    kaesu slot;
+}
+
+waza stale_reason(buffer: Buffer) -> string {
+    moshi (buffer.error != "") { kaesu "E_FFI_STATE the buffer was never created"; }
+    kaesu "E_FFI_STALE the buffer was freed, resized or released";
+}
+
+waza drop_slot(slot: int64) -> unit {
+    moshi (buffers[slot].owned) { live_owned_count = live_owned_count - 1; }
+    buffers[slot] = dead_slot();
+    array.push(free_buffers, slot);
+}
+
+// Range check without overflow: 0 <= offset <= length and 0 <= size <= length - offset.
+waza in_range(length: int64, offset: int64, size: int64) -> bool {
+    kaesu offset >= 0 && size >= 0 && offset <= length && size <= length - offset;
+}
+
+waza bounds_error(offset: int64, size: int64, length: int64) -> string {
+    kaku text = string.concat("E_FFI_BOUNDS offset ", int_text(offset));
+    text = string.concat(text, string.concat(" length ", int_text(size)));
+    kaesu string.concat(text, string.concat(" outside a buffer of ", string.concat(int_text(length), " bytes")));
+}
+
+waza int_text(value: int64) -> string {
+    moshi (value == 0) { kaesu "0"; }
+    kaku negative = value < 0;
+    kaku x = value;
+    kaku digits: []uint8 = [];
+    aida (x != 0) {
+        kaku d = x - (x / 10) * 10;
+        moshi (d < 0) { d = -d; }
+        array.push(digits, uint8(48 + d));
+        x = x / 10;
+    }
+    kaku out: []uint8 = [];
+    moshi (negative) { array.push(out, uint8(45)); }
+    kaku at = len(digits) - 1;
+    aida (at >= 0) { array.push(out, digits[at]); at = at - 1; }
+    kaku text = string.from_utf8(out);
+    moshi (text == mu) { kaesu "?"; }
+    kaesu text;
+}
+
+// A checked access: the slot, or -1 with last_error() set.
+waza access(buffer: Buffer, offset: int64, size: int64, write: bool) -> int64 {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { set_call_error(stale_reason(buffer)); kaesu -1; }
+    kaku entry = buffers[slot];
+    moshi (!in_range(entry.length, offset, size)) { set_call_error(bounds_error(offset, size, entry.length)); kaesu -1; }
+    moshi (write && !entry.writable) { set_call_error("E_FFI_READONLY the buffer is read-only"); kaesu -1; }
+    set_call_error("");
+    kaesu slot;
+}
+
+waza at_offset(slot: int64, offset: int64) -> cptr { kaesu pointer_at(buffers[slot].bits + offset); }
+
+// ---------------------------------------------------------------------------------------------------
+// Allocation
+
+waza allocated(pointer: cptr, size: int64) -> Buffer {
+    moshi (pointer == cptr(0)) { kaesu failed_buffer(string.concat("E_FFI_NOMEM cannot allocate ", string.concat(int_text(size), " bytes"))); }
+    kaesu new_buffer_slot(address_bits(pointer), size, hai, hai, iie, -1, 0);
+}
+
+waza size_error(size: int64) -> string {
+    moshi (size < 0 || size > max_buffer) { kaesu string.concat("E_FFI_SIZE invalid buffer size ", int_text(size)); }
+    moshi (!native_ready()) { kaesu "E_FFI_STATE the libc memory functions are unavailable"; }
+    kaesu "";
+}
+
+// alloc returns an owned, writable buffer of size bytes (contents unspecified). A zero size is valid.
+koukai waza alloc(size: int64) -> Buffer {
+    kaku problem = size_error(size);
+    moshi (problem != "") { kaesu failed_buffer(problem); }
+    kaku request = size;
+    moshi (request == 0) { request = 1; }
+    kaesu allocated(native_malloc(request), size);
+}
+
+// alloc_zeroed returns an owned buffer whose bytes are all zero.
+koukai waza alloc_zeroed(size: int64) -> Buffer {
+    kaku problem = size_error(size);
+    moshi (problem != "") { kaesu failed_buffer(problem); }
+    kaku request = size;
+    moshi (request == 0) { request = 1; }
+    kaesu allocated(native_calloc(request), size);
+}
+
+// alloc_aligned returns an owned buffer whose address is a multiple of alignment (a power of two, 8 to 1 MiB).
+koukai waza alloc_aligned(size: int64, alignment: int64) -> Buffer {
+    kaku problem = size_error(size);
+    moshi (problem != "") { kaesu failed_buffer(problem); }
+    kaku power = 8;
+    aida (power < alignment && power < max_alignment) { power = power * 2; }
+    moshi (alignment < 8 || alignment > max_alignment || power != alignment) {
+        kaesu failed_buffer(string.concat("E_FFI_ALIGNMENT invalid alignment ", int_text(alignment)));
+    }
+    kaku request = size;
+    moshi (request == 0) { request = 1; }
+    kaesu allocated(native_aligned(alignment, request), size);
+}
+
+// free releases an owned buffer and invalidates every view of it. Freeing twice, freeing a view or freeing borrowed
+// memory is an error and does nothing.
+koukai waza free(buffer: Buffer) -> string {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaku reason = stale_reason(buffer); set_call_error(reason); kaesu reason; }
+    kaku entry = buffers[slot];
+    moshi (entry.borrowed) { set_call_error("E_FFI_BORROWED borrowed memory is released by its owner; use release"); kaesu "E_FFI_BORROWED borrowed memory is released by its owner; use release"; }
+    moshi (!entry.owned) { set_call_error("E_FFI_NOT_OWNER a view cannot be freed; free its owner or release the view"); kaesu "E_FFI_NOT_OWNER a view cannot be freed; free its owner or release the view"; }
+    native_free(pointer_at(entry.bits));
+    drop_slot(slot);
+    set_call_error("");
+    kaesu "";
+}
+
+// resize changes the size of an owned buffer (realloc). On success the old handle and its views are stale and the
+// returned buffer replaces them; on failure the old buffer is unchanged and the result has an error.
+koukai waza resize(buffer: Buffer, size: int64) -> Buffer {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaesu failed_buffer(stale_reason(buffer)); }
+    kaku entry = buffers[slot];
+    moshi (!entry.owned) { kaesu failed_buffer("E_FFI_NOT_OWNER only an owned buffer can be resized"); }
+    kaku problem = size_error(size);
+    moshi (problem != "") { kaesu failed_buffer(problem); }
+    kaku request = size;
+    moshi (request == 0) { request = 1; }
+    kaku moved = native_realloc(pointer_at(entry.bits), request);
+    moshi (moved == cptr(0)) { kaesu failed_buffer(string.concat("E_FFI_NOMEM cannot resize to ", string.concat(int_text(size), " bytes"))); }
+    drop_slot(slot);
+    kaesu new_buffer_slot(address_bits(moved), size, hai, hai, iie, -1, 0);
+}
+
+// UNSAFE. unsafe_borrow wraps foreign memory the caller asserts is valid for length bytes for as long as the handle
+// is used (for example a buffer a C library returned and still owns). It is never freed by this package.
+koukai waza unsafe_borrow(pointer: cptr, length: int64, writable: bool) -> Buffer {
+    moshi (!native_ready()) { kaesu failed_buffer("E_FFI_STATE the libc memory functions are unavailable"); }
+    moshi (pointer == cptr(0)) { kaesu failed_buffer("E_FFI_NULL cannot borrow a null pointer"); }
+    moshi (length < 0 || length > max_buffer) { kaesu failed_buffer(string.concat("E_FFI_SIZE invalid buffer size ", int_text(length))); }
+    kaesu new_buffer_slot(address_bits(pointer), length, writable, iie, hai, -1, 0);
+}
+
+// slice returns a view of length bytes at offset; it has the writability of buffer and dies with its root.
+koukai waza slice(buffer: Buffer, offset: int64, length: int64) -> Buffer {
+    kaku slot = access(buffer, offset, length, iie);
+    moshi (slot < 0) { kaesu failed_buffer(last_error()); }
+    kaku entry = buffers[slot];
+    kaesu new_buffer_slot(entry.bits + offset, length, entry.writable, iie, iie, entry.root_slot, entry.root_id);
+}
+
+// read_only returns a view of the whole buffer that refuses every write.
+koukai waza read_only(buffer: Buffer) -> Buffer {
+    kaku slot = access(buffer, 0, 0, iie);
+    moshi (slot < 0) { kaesu failed_buffer(last_error()); }
+    kaku entry = buffers[slot];
+    kaesu new_buffer_slot(entry.bits, entry.length, iie, iie, iie, entry.root_slot, entry.root_id);
+}
+
+// release drops a view or a borrowed buffer. An owned buffer must be freed instead.
+koukai waza release_buffer(buffer: Buffer) -> string {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaku reason = stale_reason(buffer); set_call_error(reason); kaesu reason; }
+    moshi (buffers[slot].owned) { set_call_error("E_FFI_OWNER an owned buffer is released with free"); kaesu "E_FFI_OWNER an owned buffer is released with free"; }
+    // a borrowed root takes its views with it
+    drop_slot(slot);
+    set_call_error("");
+    kaesu "";
+}
+
+koukai waza buffer_error(buffer: Buffer) -> string { kaesu buffer.error; }
+koukai waza buffer_live(buffer: Buffer) -> bool { kaesu buffer_slot(buffer) >= 0; }
+koukai waza buffer_length(buffer: Buffer) -> int64 {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaesu -1; }
+    kaesu buffers[slot].length;
+}
+koukai waza buffer_writable(buffer: Buffer) -> bool { kaku slot = buffer_slot(buffer); kaesu slot >= 0 && buffers[slot].writable; }
+koukai waza buffer_owned(buffer: Buffer) -> bool { kaku slot = buffer_slot(buffer); kaesu slot >= 0 && buffers[slot].owned; }
+koukai waza buffers_owned() -> int64 { kaesu live_owned_count; }
+
+// pointer is the address to pass to C for a `p` parameter; cptr(0) (with last_error) when the buffer is not live.
+// The address is borrowed: it is valid until the buffer is freed or resized, and C must not keep it longer.
+koukai waza pointer(buffer: Buffer) -> cptr {
+    kaku slot = access(buffer, 0, 0, iie);
+    moshi (slot < 0) { kaesu cptr(0); }
+    kaesu pointer_at(buffers[slot].bits);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Bytes
+
+// read copies length bytes at offset into a new Mio array; [] with last_error set when refused.
+koukai waza read(buffer: Buffer, offset: int64, length: int64) -> []uint8 {
+    kaku slot = access(buffer, offset, length, iie);
+    moshi (slot < 0) { kaesu []; }
+    kaesu read_native(at_offset(slot, offset), length);
+}
+
+// write copies all of data into the buffer at offset.
+koukai waza write(buffer: Buffer, offset: int64, data: []uint8) -> string {
+    kaku slot = access(buffer, offset, len(data), hai);
+    moshi (slot < 0) { kaesu last_error(); }
+    native_write(at_offset(slot, offset), data, len(data));
+    kaesu "";
+}
+
+// fill sets length bytes at offset to value.
+koukai waza fill(buffer: Buffer, offset: int64, length: int64, value: uint8) -> string {
+    kaku slot = access(buffer, offset, length, hai);
+    moshi (slot < 0) { kaesu last_error(); }
+    native_fill(at_offset(slot, offset), int64(value), length);
+    kaesu "";
+}
+
+// copy moves length bytes between (possibly overlapping) buffers.
+koukai waza copy(destination: Buffer, destination_offset: int64, source: Buffer, source_offset: int64, length: int64) -> string {
+    kaku from = access(source, source_offset, length, iie);
+    moshi (from < 0) { kaesu last_error(); }
+    kaku to = access(destination, destination_offset, length, hai);
+    moshi (to < 0) { kaesu last_error(); }
+    native_move(at_offset(to, destination_offset), at_offset(from, source_offset), length);
+    kaesu "";
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Scalars (little endian, any alignment)
+
+waza unsigned_at(buffer: Buffer, offset: int64, width: int64) -> int64 {
+    kaku bytes = read(buffer, offset, width);
+    moshi (len(bytes) != width) { kaesu 0; }
+    kaesu word_le(bytes, 0, width);
+}
+
+waza signed(value: int64, width: int64) -> int64 {
+    moshi (width == 8) { kaesu value; }
+    kaku limit = 1;
+    kaku i = 0;
+    aida (i < width) { limit = limit * 256; i = i + 1; }
+    moshi (value >= limit / 2) { kaesu value - limit; }
+    kaesu value;
+}
+
+// Little-endian bytes of a two's-complement value of width bytes (width 8 handles negative int64).
+waza le_bytes(value: int64, width: int64) -> []uint8 {
+    kaku out: []uint8 = [];
+    kaku x = value;
+    kaku negative = x < 0;
+    moshi (negative) { x = -(x + 1); }
+    kaku i = 0;
+    aida (i < width) {
+        kaku b = x - (x / 256) * 256;
+        moshi (negative) { b = 255 - b; }
+        array.push(out, uint8(b));
+        x = x / 256;
+        i = i + 1;
+    }
+    kaesu out;
+}
+
+waza store(buffer: Buffer, offset: int64, value: int64, width: int64) -> string { kaesu write(buffer, offset, le_bytes(value, width)); }
+
+koukai waza get_uint8(buffer: Buffer, offset: int64) -> uint8 { kaesu uint8(unsigned_at(buffer, offset, 1)); }
+koukai waza get_int8(buffer: Buffer, offset: int64) -> int8 { kaesu int8(signed(unsigned_at(buffer, offset, 1), 1)); }
+koukai waza get_uint16(buffer: Buffer, offset: int64) -> uint16 { kaesu uint16(unsigned_at(buffer, offset, 2)); }
+koukai waza get_int16(buffer: Buffer, offset: int64) -> int16 { kaesu int16(signed(unsigned_at(buffer, offset, 2), 2)); }
+koukai waza get_uint32(buffer: Buffer, offset: int64) -> uint32 { kaesu uint32(unsigned_at(buffer, offset, 4)); }
+koukai waza get_int32(buffer: Buffer, offset: int64) -> int32 { kaesu int32(signed(unsigned_at(buffer, offset, 4), 4)); }
+koukai waza get_int64(buffer: Buffer, offset: int64) -> int64 { kaesu signed_word8(read(buffer, offset, 8)); }
+koukai waza get_uint64(buffer: Buffer, offset: int64) -> uint64 { kaesu uint64(signed_word8(read(buffer, offset, 8))); }
+koukai waza get_pointer(buffer: Buffer, offset: int64) -> cptr {
+    kaku bits = signed_word8(read(buffer, offset, 8));
+    moshi (!last_call_ok() || bits == 0) { kaesu cptr(0); }
+    kaesu pointer_at(bits);
+}
+
+// Two's-complement int64 from 8 little-endian bytes (0 for a refused read).
+waza signed_word8(bytes: []uint8) -> int64 {
+    moshi (len(bytes) != 8) { kaesu 0; }
+    moshi (int64(bytes[7]) < 128) { kaesu word_le(bytes, 0, 8); }
+    // negative: -(~x + 1) computed bytewise without overflow
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < 8) {
+        value = value + (255 - int64(bytes[i])) * scale;
+        moshi (i < 7) { scale = scale * 256; }
+        i = i + 1;
+    }
+    kaesu -value - 1;
+}
+
+koukai waza set_uint8(buffer: Buffer, offset: int64, value: uint8) -> string { kaesu store(buffer, offset, int64(value), 1); }
+koukai waza set_int8(buffer: Buffer, offset: int64, value: int8) -> string { kaesu store(buffer, offset, int64(value), 1); }
+koukai waza set_uint16(buffer: Buffer, offset: int64, value: uint16) -> string { kaesu store(buffer, offset, int64(value), 2); }
+koukai waza set_int16(buffer: Buffer, offset: int64, value: int16) -> string { kaesu store(buffer, offset, int64(value), 2); }
+koukai waza set_uint32(buffer: Buffer, offset: int64, value: uint32) -> string { kaesu store(buffer, offset, int64(value), 4); }
+koukai waza set_int32(buffer: Buffer, offset: int64, value: int32) -> string { kaesu store(buffer, offset, int64(value), 4); }
+koukai waza set_int64(buffer: Buffer, offset: int64, value: int64) -> string { kaesu store(buffer, offset, value, 8); }
+koukai waza set_uint64(buffer: Buffer, offset: int64, value: uint64) -> string { kaesu store(buffer, offset, int64(value), 8); }
+koukai waza set_pointer(buffer: Buffer, offset: int64, value: cptr) -> string {
+    moshi (!native_ready()) { kaesu "E_FFI_STATE the libc memory functions are unavailable"; }
+    kaesu store(buffer, offset, address_bits(value), 8);
+}
+
+// IEEE 754 binary64 / binary32 from and to their bit patterns, exactly (subnormals, signed zero, infinities, NaN).
+waza power2(exponent: int64) -> float64 {
+    kaku value = 1.0;
+    kaku e = exponent;
+    aida (e > 0) { value = value * 2.0; e = e - 1; }
+    aida (e < 0) { value = value / 2.0; e = e + 1; }
+    kaesu value;
+}
+
+waza decode_float(bytes: []uint8, width: int64) -> float64 {
+    moshi (len(bytes) != width) { kaesu 0.0; }
+    kaku top = int64(bytes[width - 1]);
+    kaku negative = top >= 128;
+    kaku exponent_bits = 11;
+    kaku fraction_bits = 52;
+    moshi (width == 4) { exponent_bits = 8; fraction_bits = 23; }
+    // magnitude bits without the sign
+    kaku magnitude = word_le(bytes, 0, width - 1) + (top - (top / 128) * 128) * power_int(256, width - 1);
+    kaku fraction_scale = power_int(2, fraction_bits);
+    kaku exponent = magnitude / fraction_scale;
+    kaku fraction = magnitude - exponent * fraction_scale;
+    kaku max_exponent = power_int(2, exponent_bits) - 1;
+    kaku bias = max_exponent / 2;
+    kaku zero = 0.0;
+    kaku value = 0.0;
+    moshi (exponent == max_exponent) {
+        moshi (fraction == 0) { value = 1.0 / zero; } sore { value = zero / zero; }
+    } sore {
+        moshi (exponent == 0) { value = float64(fraction) * power2(1 - bias - fraction_bits); }
+        sore { value = float64(fraction + fraction_scale) * power2(exponent - bias - fraction_bits); }
+    }
+    moshi (negative) { kaesu -value; }
+    kaesu value;
+}
+
+waza power_int(base: int64, exponent: int64) -> int64 {
+    kaku value = 1;
+    kaku i = 0;
+    aida (i < exponent) { value = value * base; i = i + 1; }
+    kaesu value;
+}
+
+// Bit pattern of value as width bytes (4: value must already be exactly representable as binary32).
+waza encode_float(value: float64, width: int64) -> []uint8 {
+    kaku exponent_bits = 11;
+    kaku fraction_bits = 52;
+    moshi (width == 4) { exponent_bits = 8; fraction_bits = 23; }
+    kaku max_exponent = power_int(2, exponent_bits) - 1;
+    kaku bias = max_exponent / 2;
+    kaku fraction_scale = power_int(2, fraction_bits);
+    kaku negative = value < 0.0 || (value == 0.0 && 1.0 / value < 0.0);
+    kaku magnitude = value;
+    moshi (negative) { magnitude = -value; }
+    kaku exponent = 0;
+    kaku fraction = 0;
+    moshi (value != value) {
+        exponent = max_exponent; fraction = fraction_scale / 2; negative = iie;
+    } sore {
+        moshi (magnitude - magnitude != 0.0) { exponent = max_exponent; } sore {
+            moshi (magnitude != 0.0) {
+                kaku e = 0;
+                kaku m = magnitude;
+                aida (m >= 2.0) { m = m / 2.0; e = e + 1; }
+                aida (m < 1.0) { m = m * 2.0; e = e - 1; }
+                moshi (e + bias >= max_exponent) { exponent = max_exponent; } sore {
+                    moshi (e + bias <= 0) {
+                        // subnormal: fraction = magnitude / 2^(1 - bias - fraction_bits)
+                        fraction = int64(magnitude / power2(1 - bias - fraction_bits));
+                    } sore {
+                        exponent = e + bias;
+                        fraction = int64((m - 1.0) * float64(fraction_scale));
+                    }
+                }
+            }
+        }
+    }
+    kaku bits = exponent * fraction_scale + fraction;
+    moshi (width == 8 && negative) {
+        // sign bit 63: build the bytes directly to stay inside int64
+        kaku out = le_bytes(bits, 8);
+        out[7] = uint8(int64(out[7]) + 128);
+        kaesu out;
+    }
+    moshi (negative) { bits = bits + power_int(2, 31); }
+    kaesu le_bytes(bits, width);
+}
+
+koukai waza get_float64(buffer: Buffer, offset: int64) -> float64 { kaesu decode_float(read(buffer, offset, 8), 8); }
+koukai waza get_float32(buffer: Buffer, offset: int64) -> float32 { kaesu float32(decode_float(read(buffer, offset, 4), 4)); }
+koukai waza set_float64(buffer: Buffer, offset: int64, value: float64) -> string { kaesu write(buffer, offset, encode_float(value, 8)); }
+koukai waza set_float32(buffer: Buffer, offset: int64, value: float32) -> string { kaesu write(buffer, offset, encode_float(float64(value), 4)); }
+
+// ---------------------------------------------------------------------------------------------------
+// C strings
+
+// c_string_buffer returns an owned buffer holding the UTF-8 bytes of text and a terminating NUL. Text containing NUL
+// is refused (it could not be read back as the same C string).
+koukai waza c_string_buffer(text: string) -> Buffer {
+    kaku bytes = string.to_bytes(text);
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0)) { kaesu failed_buffer("E_FFI_NUL the text contains a NUL byte"); }
+        at = at + 1;
+    }
+    kaku buffer = alloc(len(bytes) + 1);
+    moshi (buffer.error != "") { kaesu buffer; }
+    array.push(bytes, uint8(0));
+    write(buffer, 0, bytes);
+    kaesu buffer;
+}
+
+// c_string reads the NUL-terminated UTF-8 string starting at offset. The NUL must lie inside the buffer; mu (with
+// last_error) when there is none or the bytes are not UTF-8.
+koukai waza c_string(buffer: Buffer, offset: int64) -> string? {
+    kaku slot = access(buffer, offset, 0, iie);
+    moshi (slot < 0) { kaesu mu; }
+    kaku available = buffers[slot].length - offset;
+    kaku size = native_strnlen(at_offset(slot, offset), available);
+    moshi (size >= available) { set_call_error("E_FFI_BOUNDS no NUL terminator inside the buffer"); kaesu mu; }
+    kaku text = string.from_utf8(read_native(at_offset(slot, offset), size));
+    moshi (text == mu) { set_call_error("E_FFI_UTF8 the C string is not valid UTF-8"); kaesu mu; }
+    kaesu text;
+}

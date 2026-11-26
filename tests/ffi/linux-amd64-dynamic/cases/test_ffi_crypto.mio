@@ -1,17 +1,17 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
 yobu "kiso/crypto/sha256";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
 kaku run = support.begin("test_ffi_crypto");
-kaku lib = ffi.open(support.absolute("libmio_crypto.so"));
-support.expect(run, "open", !ffi.failed(lib));
-kaku sha = ffi.symbol(lib, "mio_sha256", "i:nzn");
+kaku lib = linux.open(support.absolute("libmio_crypto.so"));
+support.expect(run, "open", !linux.failed(lib));
+kaku sha = linux.symbol(lib, "mio_sha256", "i:nzn");
 
-waza digest(sha_symbol: ffi.Symbol, text: string) -> string {
+waza digest(sha_symbol: linux.Function, text: string) -> string {
     kaku out: []uint8 = array.make[uint8](32, uint8(0));
-    kaku rc = ffi.call_i_nzn(sha_symbol, string.to_bytes(text), out);
+    kaku rc = linux.call_i_nzn(sha_symbol, string.to_bytes(text), out);
     moshi (rc != int32(0)) { kaesu "error"; }
     kaesu support.hex(out);
 }
@@ -27,13 +27,13 @@ kaku big: []uint8 = array.make[uint8](1000003, uint8(0));
 kaku i = 0;
 aida (i < len(big)) { big[i] = uint8(support.mod(i * 31 + 7, 256)); i = i + 1; }
 kaku native_out: []uint8 = array.make[uint8](32, uint8(0));
-support.expect(run, "large input status", ffi.call_i_nzn(sha, big, native_out) == int32(0));
+support.expect(run, "large input status", linux.call_i_nzn(sha, big, native_out) == int32(0));
 support.expect(run, "large input matches kiso/crypto/sha256", support.hex(native_out) == support.hex(sha256.sum(big)));
 
 // error code: output buffer is the caller's responsibility, a null-equivalent is not representable,
 // so check that distinct inputs give distinct digests and the result is deterministic
 support.expect(run, "deterministic", digest(sha, "mio") == digest(sha, "mio"));
 support.expect(run, "different inputs differ", digest(sha, "mio") != digest(sha, "Mio"));
-support.expect(run, "no ffi error", ffi.error(sha) == "");
-support.expect(run, "close", ffi.close(lib) == "");
+support.expect(run, "no ffi error", linux.last_error() == "");
+support.expect(run, "close", linux.close(lib) == "");
 support.finish(run);
