@@ -171,6 +171,49 @@ jobs:
     with:
       run_examples: ${{ inputs.run_examples || false }}
 
+  # Linux distribution and libc compatibility (tests/linux-compat): the CLI built by the linux-amd64 job runs inside
+  # each distribution container on the x86-64 host (native execution, no emulation). Static and dynamic executables,
+  # kiso/ffi/linux loading and native memory against the container's own libc, shared libraries loaded by a C host
+  # built there, and binaries built on the host run in the container. Non-required until it has a CI history.
+  linux-compat:
+    name: Linux compatibility / ${{ matrix.image }}
+    needs: linux
+    if: ${{ !cancelled() && needs.linux.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04', 'alpine:3.20']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-compilers-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/compat-compilers
+      - name: Build the cross-distribution binaries on the host (ubuntu-24.04)
+        run: |
+          set -o pipefail
+          chmod +x build/compat-compilers/mio-B
+          python3 tests/linux-compat/run.py --prebuild-only --mio build/compat-compilers/mio-B --output build/compat-prebuilt
+      - name: Run the compatibility checks in ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -o pipefail
+          label=$(echo "$IMAGE" | tr ':/' '--')
+          docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w "$IMAGE" sh -c \
+            "sh tests/linux-compat/setup.sh && python3 tests/linux-compat/run.py --mio build/compat-compilers/mio-B --prebuilt build/compat-prebuilt --output build/compat/$label"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-compat-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/compat/
+          if-no-files-found: warn
+          retention-days: 7
+
   summary:
     name: Native / required
     if: always()

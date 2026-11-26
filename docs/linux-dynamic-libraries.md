@@ -56,6 +56,26 @@ Both are Linux-only; Darwin ARM64 and Windows reject them at build time.
 * **GC objects never cross the boundary.** `string`, arrays other than `[]uint8`, `Map`, structs, enums and closures are rejected by the type checker. A string is passed as a NUL-terminated byte buffer made explicitly (`linux.cstring`), and results come back as scalars or are copied out of C memory into a Mio array.
 * **RA-1** (Runtime ABI) is unchanged: no object layout, no header and no GC protocol was altered. The `m` bridge reads the existing array object's data-pointer field and does nothing else.
 
+## Distribution and libc compatibility
+
+* **The Mio CLI** and static Mio executables are static ELF64 files (no `PT_INTERP`, no libc). They do not depend on
+  the distribution's C library.
+* **Dynamically linked executables** (programs with C declarations) are linked by the system C driver of the build
+  machine. It chooses the program interpreter: `/lib64/ld-linux-x86-64.so.2` with glibc, `/lib/ld-musl-x86_64.so.1`
+  with musl. The compiler hardcodes neither. Built on glibc they require **glibc 2.34 or newer** (measured with
+  `objdump -T`: the highest version needed is `GLIBC_2.34`, where `dlopen`/`dlsym` moved into libc). A glibc-linked
+  executable does not run on musl, so build on the target libc.
+* **`kiso/ffi/linux`** uses `dlopen`/`dlsym`/`dlclose`/`dlerror`, `RTLD_DEFAULT` (address 0 on glibc and musl), and
+  `memset`, `memcpy`, `strnlen`, `dladdr`, `memmove`, `malloc`, `calloc`, `realloc`, `free` and `posix_memalign`, all
+  present in glibc and musl. `dladdr1` (glibc only) enables the ELF symbol-type check. Library names differ: glibc's C
+  library is `libc.so.6`, musl's is `libc.musl-x86_64.so.1`, which also contains the math functions. musl's `dlclose`
+  never unloads.
+
+The matrix is produced by `tests/linux-compat/run.py` in the Native workflow (`Linux compatibility / <image>`), running
+the CLI inside each container on an x86-64 host. Results are only recorded here once a run has passed. Locally
+(Debian 13, glibc 2.41): 20 PASS. The native linker is NOT_AVAILABLE in this branch because it comes from the
+`--linker native` PRs.
+
 ## Building native modules
 
 The sources are in `tests/ffi/linux-amd64-dynamic/modules/`. Binaries are built into the output directory and are never committed.
