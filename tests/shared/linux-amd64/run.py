@@ -242,6 +242,77 @@ def main():
         else:
             report.record("valgrind memory check", "NOT_RUN", reason="valgrind is not installed")
 
+    # ---- the Mio native linker (`--linker native`): the same libraries linked by kiso/aot/elfdyn with no linker available.
+    # PATH holds only trap programs named like every linker and C driver; any invocation leaves a marker file.
+    native_libs = out / "lib-native"
+    native_libs.mkdir()
+    traps = out / "trap-tools"
+    traps.mkdir()
+    marker = out / "trap-invoked"
+    for tool in ("ld", "ld.lld", "ld.bfd", "ld.gold", "lld", "cc", "gcc", "clang", "x86_64-linux-gnu-ld", "x86_64-linux-gnu-gcc"):
+        trap = traps / tool
+        trap.write_text(f"#!/bin/sh\necho {tool} >> '{marker}'\nexit 97\n", encoding="utf-8")
+        trap.chmod(0o755)
+    native_env = {"PATH": str(traps), "HOME": str(out), "MIO_LD": str(traps / "ld"), "MIO_CC": str(traps / "cc"), "CC": str(traps / "cc")}
+    native_sizes = {}
+    for name in ("math", "bytes", "text", "collections"):
+        target = native_libs / f"libmio_{name}.so"
+        process = report.tool(f"native.build.{name}", [mio, "build", MODULES / f"mio_{name}", "--shared", "--linker", "native",
+                              "--soname", f"libmio_{name}.so", "-o", target, *base], env=native_env)
+        report.expect(f"native linker: build libmio_{name}.so with no linker on PATH", process,
+                      process is not None and process.returncode == 0 and target.is_file() and not process.stderr,
+                      stderr=process.stderr.decode(errors="replace")[:300] if process else "")
+        if target.is_file():
+            native_sizes[target.name] = target.stat().st_size
+            report.measurements[f"native_build_seconds.{name}"] = round(process.seconds, 2)
+    target = native_libs / "libmio_std.so"
+    process = report.tool("native.build.std", [mio, "build", *(MODULES / f"mio_{n}" for n in ("math", "bytes", "text", "collections")), "--shared",
+                          "--linker", "native", "--soname", "libmio_std.so", "-o", target, *base], env=native_env)
+    report.expect("native linker: build the four-module aggregate libmio_std.so", process, process is not None and process.returncode == 0 and target.is_file())
+    if target.is_file():
+        native_sizes[target.name] = target.stat().st_size
+    report.measurements["native_sizes_bytes"] = native_sizes
+    report.record("native linker: no linker or C driver was executed (trap programs untouched)", "FAIL" if marker.exists() else "PASS",
+                  detail=marker.read_text() if marker.exists() else "")
+    again = out / "native-again.so"
+    process = report.tool("native.build.math-again", [mio, "build", MODULES / "mio_math", "--shared", "--linker", "native",
+                          "--soname", "libmio_math.so", "-o", again, *base], env=native_env)
+    first_native = (native_libs / "libmio_math.so").read_bytes() if (native_libs / "libmio_math.so").is_file() else b""
+    report.expect("native linker: output is deterministic (second build byte-identical)", process,
+                  process is not None and again.is_file() and again.read_bytes() == first_native and first_native != b"")
+    verbose = report.tool("native.verbose", [mio, "build", MODULES / "mio_math", "--shared", "--linker", "native", "--verbose",
+                          "-o", out / "native-verbose.so", *base], env=native_env)
+    report.expect("native linker: --verbose names the native linker", verbose,
+                  verbose is not None and verbose.returncode == 0 and b"mio: link: native" in verbose.stderr)
+    strace = shutil.which("strace")
+    if strace:
+        traced = out / "native-strace.log"
+        process = report.tool("native.strace", [strace, "-f", "-qq", "-e", "trace=execve", "-o", traced, mio, "build", MODULES / "mio_math",
+                              "--shared", "--linker", "native", "-o", out / "native-traced.so", *base])
+        execs = [line for line in traced.read_text(errors="replace").splitlines() if "execve(" in line] if traced.is_file() else []
+        report.expect("native linker: strace sees exactly one execve (mio itself)", process,
+                      process is not None and process.returncode == 0 and len(execs) == 1, detail=execs[:4])
+    else:
+        report.record("native linker: strace execve trace", "NOT_RUN", reason="strace is not installed; the trap-program check above covers PATH and MIO_LD/MIO_CC")
+    for name in ("math", "bytes", "text", "collections", "std"):
+        path = native_libs / f"libmio_{name}.so"
+        if path.is_file():
+            inspect_library(report, f"native libmio_{name}", path, f"libmio_{name}.so", EXPECTED[name])
+    for cc, exe in hosts.items():
+        for suite in HOST_SUITES:
+            process = report.tool(f"native.host.{cc}.{suite}", [exe, native_libs, suite])
+            ok = process is not None and process.returncode == 0 and b"FAIL" not in process.stdout and process.stdout.rstrip().endswith(f"{suite}: OK".encode())
+            checks = process.stdout.count(b"PASS ") if process else 0
+            report.record(f"native linker: C host ({cc}) suite {suite} ({checks} checks)", "PASS" if ok else "FAIL",
+                          output=(process.stdout.decode(errors="replace")[-400:] if process and not ok else ""), exit=process.returncode if process else None)
+        process = report.tool(f"native.host.bindnow.{cc}", [exe, native_libs, "std"], env=dict(os.environ, LD_BIND_NOW="1"))
+        report.expect(f"native linker: aggregate loads and runs with LD_BIND_NOW=1 using {cc}", process, process is not None and process.returncode == 0)
+    if hosts and shutil.which("valgrind"):
+        process = report.tool("native.valgrind.math", [shutil.which("valgrind"), "--error-exitcode=9", "-q", next(iter(hosts.values())), native_libs, "math"], timeout=600)
+        report.expect("native linker: valgrind finds no invalid access in libmio_math.so", process, process is not None and process.returncode == 0)
+    elif hosts:
+        report.record("native linker: valgrind memory check", "NOT_RUN", reason="valgrind is not installed")
+
     # ---- declared external dependency (libm): honest DT_NEEDED, and a link failure without the declaration
     extdep = MODULES / "mio_extdep"
     without = report.tool("extdep.without-lm", [mio, "build", extdep, "--shared", "-o", out / "no_lm.so", *base])
@@ -329,7 +400,11 @@ def main():
     negative("duplicate_in_module", [NEGATIVE / "duplicate_in_module"], "duplicate exported symbol same_symbol", "duplicate exported symbols in one module are rejected")
     negative("duplicate_across", [NEGATIVE / "duplicate_across" / "a", NEGATIVE / "duplicate_across" / "b"], "duplicate exported symbol dup_symbol", "duplicate exported symbols across aggregated modules are rejected")
     negative("no_export", [NEGATIVE / "no_export"], "E_SHARED_EXPORT no exported function", "a module without any export is rejected")
-    negative("native_linker", [MODULES / "mio_math", "--linker", "native"], "E_SHARED_LINKER the Mio native linker is reserved", "--linker native is reserved and says so")
+    negative("native_external", [MODULES / "mio_extdep", "--linker", "native"], "E_SHARED_LINKER the Mio native linker does not link external C symbols yet",
+             "--linker native refuses a module that calls an external C symbol instead of falling back", env=native_env)
+    negative("native_link_options", [MODULES / "mio_math", "--linker", "native", "-lm"], "E_SHARED_LINKER the Mio native linker links self-contained modules only",
+             "--linker native refuses library options instead of falling back", env=native_env)
+    report.record("native linker negatives: no linker or C driver was executed", "FAIL" if marker.exists() else "PASS")
     negative("missing_linker_path", [MODULES / "mio_math", "--linker", "/nonexistent/bin/ld"], "E_SHARED_LINKER linker not found: /nonexistent/bin/ld", "an explicit but missing linker is a clear error")
     empty = out / "empty-path"
     empty.mkdir()
