@@ -1604,7 +1604,10 @@ waza analyze_types_from(file: mochi.File, trace: bool, exports: []ScalarExport) 
                 handled = hai;
             }
             moshi (!handled && opcode == 55) {
-                type_pop(stack);
+                kaku input = type_pop(stack);
+                // The typed frontend emits separate float-to-int64 opcodes.
+                // This conversion can infer an otherwise unobserved enum payload.
+                moshi (operand == 4) { ok = type_require(arena, input, type_integer); }
                 kaku node = type_new(arena, type_integer);
                 kaku descriptor = operand + 11;
                 moshi (operand == 4) {

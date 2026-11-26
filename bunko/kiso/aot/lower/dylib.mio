@@ -11,11 +11,13 @@ koukai kata DylibCode {
     exports: []macho.DylibExport;
     patches: []macho.AddressPatch;
     static_data: []uint8;
+    labels: []arm64.Label;
+    has_imports: bool;
     error: string;
 }
 
 waza scalar_library_failure(error: string) -> DylibCode {
-    kaesu DylibCode { words: [], exports: [], patches: [], static_data: [], error: error };
+    kaesu DylibCode { words: [], exports: [], patches: [], static_data: [], labels: [], has_imports: iie, error: error };
 }
 
 waza library_scalar(analysis: types.TypeAnalysis, node: int64) -> bool {
@@ -211,17 +213,38 @@ koukai waza compile_dylib(file: mochi.File, exports: []types.ScalarExport) -> Dy
     kaku code = arm64.assembler();
     kaku patches: []macho.AddressPatch = [];
     kaku ids = string_ids(file.constants);
+    kaku has_imports = iie;
     at = 0;
     aida (at < len(file.functions)) {
         moshi (reachable[at]) {
             kaku f = file.functions[at];
-            moshi (!scalar_library_body(analysis, f)) {
-                kaesu scalar_library_failure(string.concat("E_DYLIB unsupported scalar body in ", f.name));
-            }
             arm64.assembler_label(code, function_label(at));
-            moshi (emit_function_prologue(code, f) != mu ||
-                emit_block(code, patches, file, analysis, ids, f.instructions, string.concat(function_label(at), "_"), at, hai) != mu) {
-                kaesu scalar_library_failure(string.concat("E_DYLIB cannot lower ", f.name));
+            moshi (cabi.is_external(f.name)) {
+                kaku declaration = cabi.signature(f.name, f.parameter_count, f.returns_value);
+                moshi (!declaration.valid || declaration.indirect || len(f.instructions) != 0 || len(f.captures) != 0 ||
+                    f.local_count != f.parameter_count) {
+                    kaesu scalar_library_failure("E_DYLIB invalid fixed C import");
+                }
+                kaku parameter = 0;
+                aida (parameter < len(declaration.parameters)) {
+                    moshi (declaration.parameters[parameter] == 109) {
+                        kaesu scalar_library_failure("E_DYLIB C imports require unmanaged scalar arguments");
+                    }
+                    parameter = parameter + 1;
+                }
+                moshi (emit_function_prologue(code, f) != mu) {
+                    kaesu scalar_library_failure("E_DYLIB invalid C import frame");
+                }
+                emit_c_body(code, patches, declaration, at, 0);
+                has_imports = hai;
+            } sore {
+                moshi (!scalar_library_body(analysis, f)) {
+                    kaesu scalar_library_failure(string.concat("E_DYLIB unsupported scalar body in ", f.name));
+                }
+                moshi (emit_function_prologue(code, f) != mu ||
+                    emit_block(code, patches, file, analysis, ids, f.instructions, string.concat(function_label(at), "_"), at, hai) != mu) {
+                    kaesu scalar_library_failure(string.concat("E_DYLIB cannot lower ", f.name));
+                }
             }
             emit_function_epilogue(code, at);
         }
@@ -246,5 +269,5 @@ koukai waza compile_dylib(file: mochi.File, exports: []types.ScalarExport) -> Dy
         kaesu scalar_library_failure("E_DYLIB unresolved ARM64 fixup");
     }
     kaesu DylibCode { words: assembled.words, exports: symbols, patches: patches,
-        static_data: static_data.bytes, error: "" };
+        static_data: static_data.bytes, labels: code.labels, has_imports: has_imports, error: "" };
 }

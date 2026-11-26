@@ -38,6 +38,11 @@ waza export_prototype(checked: typecheck.TypeCheckResult, source_name: string, c
 
 koukai waza build_signed_dylib(root: string, entry: string, bunko_root: string, output: string,
     source_names: []string, c_names: []string) -> NativeBuildResult {
+    kaesu build_linked_dylib(root, entry, bunko_root, output, source_names, c_names, []);
+}
+
+koukai waza build_linked_dylib(root: string, entry: string, bunko_root: string, output: string,
+    source_names: []string, c_names: []string, link_options: []string) -> NativeBuildResult {
     kaku basename = path.base(output);
     moshi (!string.has_suffix(basename, ".dylib") || len(source_names) == 0 || len(source_names) != len(c_names)) {
         kaesu dylib_build_error("E_DYLIB expected a .dylib output and at least one --export source=symbol");
@@ -73,9 +78,17 @@ koukai waza build_signed_dylib(root: string, entry: string, bunko_root: string, 
     }
     kaku lowered = lower.compile_dylib(file, exports);
     moshi (lowered.error != "") { kaesu dylib_build_error(lowered.error); }
+    kaku install_name = string.concat("@rpath/", basename);
+    moshi (lowered.has_imports || len(link_options) != 0) {
+        kaku body = lower.LowerResult { words: lowered.words, constants: [], globals: file.global_count,
+            patches: lowered.patches, error: mu, function_words: [], labels: lowered.labels };
+        kaesu link_darwin_native(file, body, iie, link_options, DarwinLibraryLink {
+            install_name: install_name, exports: lowered.exports, static_data: lowered.static_data
+        });
+    }
     kaku image = macho.dylib_with_globals(macho.DylibSpec {
         image: macho.ImageSpec { words: lowered.words, constants: [], globals: file.global_count, patches: lowered.patches },
-        install_name: string.concat("@rpath/", basename), exports: lowered.exports }, lowered.static_data);
+        install_name: install_name, exports: lowered.exports }, lowered.static_data);
     moshi (image.error != mu) { kaesu dylib_build_error("E_DYLIB cannot encode Mach-O library"); }
     kaku signed = sign.adhoc_dylib(image.bytes);
     moshi (signed.error != "") { kaesu dylib_build_error(string.concat("E_SIGN ", signed.error)); }

@@ -1,6 +1,6 @@
 # Mio FFI ABI v1 on Darwin ARM64
 
-Mio can build Apple Silicon Mach-O shared libraries from scalar source functions. A library has an install name of `@rpath/<output filename>` and an ad-hoc signature. The native Mio compiler writes the image, the export trie and symbol table, and the signature. Its only load dependency is macOS libSystem.
+Mio can build Apple Silicon Mach-O shared libraries from scalar source functions. A library has an install name of `@rpath/<output filename>` and an ad-hoc signature. The native Mio compiler writes the image, the export trie and symbol table, and the signature. A self-contained dylib has one load dependency, macOS libSystem.
 
 ## Build and link a library
 
@@ -30,6 +30,12 @@ Every library publishes `int64_t mio_module_abi_version(void)`. It returns `1`. 
 | `bool` | `_Bool` (eight bits, canonical values 0 and 1) | `l` |
 
 Exports support up to 256 fixed scalar parameters. The entry thunk reads the two Darwin register banks independently and unpacks stack arguments at their natural alignment. It repacks those values into Mio's sequential register and machine-word stack convention. The thunk preserves callee-saved registers and returns in `x0` or `v0`. Previously published ABI v1 aliases retain their names.
+
+## Link native dependencies
+
+A library may declare fixed scalar C imports and link with `--link`, `-L`, `-l`, `-F`, `-framework`, and `--rpath`. Reachable C imports or explicit linker arguments select Apple Clang and ld to link the Mio-emitted ARM64 code. The final image receives an ad-hoc signature and retains the same explicit export list and ABI aliases. Self-contained builds use Mio's Mach-O writer and signer without Xcode.
+
+The install name remains `@rpath/<output filename>`. Add runpaths that match deployment. For example, `--rpath @loader_path/../lib` resolves dependencies relative to the generated dylib. `@executable_path` resolves relative to the program dyld launched. Transitive libraries declare their own install names and dependencies. An undefined import fails the build with an Apple linker diagnostic, and a missing load dependency surfaces through `darwin.open` as a dyld diagnostic.
 
 ## Private data and lifecycle
 
@@ -83,7 +89,7 @@ Load libraries from trusted sources. dyld can execute initializers during `open`
 
 ## Ownership and current limits
 
-The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals, scalar globals and direct calls without a Mio heap. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, external calls from library bodies, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
+The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals, scalar globals and direct calls without a Mio heap. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
 
 The loader supports single-mutator Mio hosts. Mio-generated library exports use the fixed scalar types in the export table. C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
 
