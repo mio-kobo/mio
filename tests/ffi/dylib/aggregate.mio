@@ -1,0 +1,110 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+
+waza require(condition: bool, detail: string) -> unit {
+    moshi (!condition) { chant(detail); os.exit(1); }
+}
+
+waza layout(result: darwin.LayoutResult) -> darwin.CLayout {
+    kaku type = result.layout;
+    moshi (type != mu) { kaesu type; }
+    chant(result.error);
+    os.exit(1);
+    kaesu layout(result);
+}
+
+waza buffer(result: darwin.BufferResult) -> darwin.Buffer {
+    kaku output = result.buffer;
+    moshi (output != mu) { kaesu output; }
+    chant(result.error);
+    os.exit(1);
+    kaesu buffer(result);
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku result = darwin.open(path);
+    kaku library = result.library;
+    moshi (library != mu) { kaesu library; }
+    chant(result.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bind(library: darwin.Library, name: string, kind: darwin.Scalar) -> darwin.Function {
+    kaku result = darwin.bind_c(library, name, darwin.CPrototype { result: darwin.Scalar.I64(), parameters: [kind] });
+    kaku binding = result.function;
+    moshi (binding != mu) { kaesu binding; }
+    chant(result.error);
+    os.exit(1);
+    kaesu bind(library, name, kind);
+}
+
+waza expect_number(result: darwin.CallResult) -> int64 {
+    kaku value = result.value;
+    moshi (value == mu) { chant(result.error); kaesu -1; }
+    awase (value) {
+        baai I64(x) { kaesu x; }
+        baai Void { }
+        baai Bool(x) { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { }
+        baai U32(x) { }
+        baai U64(x) { }
+        baai F32(x) { }
+        baai F64(x) { }
+        baai Ptr(x) { }
+    }
+    kaesu -1;
+}
+
+kaku args = os.arguments();
+require(len(args) == 2, "expected C aggregate fixture");
+kaku lib = open(args[1]);
+kaku scalar_byte = layout(darwin.scalar_layout(darwin.Scalar.U8()));
+kaku scalar_half = layout(darwin.scalar_layout(darwin.Scalar.U16()));
+kaku scalar_word = layout(darwin.scalar_layout(darwin.Scalar.U32()));
+kaku scalar_double = layout(darwin.scalar_layout(darwin.Scalar.F64()));
+kaku scalar_pointer = layout(darwin.scalar_layout(darwin.Scalar.Ptr()));
+kaku pair = layout(darwin.struct_layout([scalar_half, scalar_double]));
+kaku storage = layout(darwin.union_layout([scalar_word, layout(darwin.array_layout(scalar_byte, 8))]));
+kaku rows = layout(darwin.array_layout(pair, 3));
+kaku packet = layout(darwin.struct_layout([scalar_byte, rows, storage, scalar_pointer]));
+kaku measure = bind(lib, "aggregate_measure", darwin.Scalar.I64());
+kaku expected = [pair.size, pair.alignment, darwin.field_offset(pair, 1).value,
+    storage.size, storage.alignment, packet.size, packet.alignment, darwin.field_offset(packet, 0).value,
+    darwin.field_offset(packet, 1).value, darwin.field_offset(packet, 2).value, darwin.field_offset(packet, 3).value];
+kaku at = 0;
+aida (at < len(expected)) {
+    require(darwin.invoke_int64_1(measure, at).value == expected[at], "Clang sizeof, _Alignof and offsetof");
+    at = at + 1;
+}
+require(darwin.field_offset(packet, 4).error != "", "bounds-checked aggregate field");
+require(darwin.array_layout(pair, 9223372036854775807).layout == mu, "array layout overflow");
+require(darwin.struct_layout([]).layout == mu, "empty structure rejected");
+require(darwin.scalar_layout(darwin.Scalar.Void()).layout == mu, "void storage rejected");
+require(darwin.field_offset(storage, 1).value == 0, "union fields share storage");
+
+kaku native = buffer(darwin.alloc_aggregate(packet));
+kaku external = buffer(darwin.alloc(8));
+kaku tag_at = darwin.field_offset(packet, 0).value;
+kaku rows_at = darwin.field_offset(packet, 1).value;
+kaku inner_count = darwin.field_offset(pair, 0).value;
+kaku inner_scale = darwin.field_offset(pair, 1).value;
+require(darwin.write_scalar(native, tag_at, darwin.Value.U8(uint8(7))) == "", "tag store");
+require(darwin.write_scalar(native, rows_at + pair.size + inner_count, darwin.Value.U16(uint16(123))) == "", "nested array field");
+require(darwin.write_scalar(native, rows_at + pair.size + inner_scale, darwin.Value.F64(-2.25)) == "", "nested aligned float");
+require(darwin.write_scalar(native, darwin.field_offset(packet, 2).value, darwin.Value.U32(uint32(305441741))) == "", "union storage");
+require(darwin.write_scalar(external, 0, darwin.Value.I64(-12)) == "", "pointee");
+require(darwin.write_scalar(native, darwin.field_offset(packet, 3).value,
+    darwin.Value.Ptr(darwin.pointer(external).value)) == "", "pointer field");
+kaku update = bind(lib, "aggregate_update", darwin.Scalar.Ptr());
+require(expect_number(darwin.invoke(update, [darwin.Value.Ptr(darwin.pointer(native).value)])) == 42, "pass aggregate by pointer");
+require(darwin.read(native, tag_at, 1).bytes[0] == uint8(42), "C changes tag");
+kaku bytes = darwin.read(native, rows_at + pair.size * 2 + inner_count, 2).bytes;
+require(bytes[0] == uint8(83) && bytes[1] == uint8(18), "C changes nested scalar");
+require(darwin.free(external) == "" && darwin.free(native) == "", "free aggregate roots");
+require(darwin.close(lib) == "", "close aggregate fixture");
+chant("Darwin aggregate layout: ok");

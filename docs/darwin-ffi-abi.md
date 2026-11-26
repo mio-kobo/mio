@@ -115,6 +115,12 @@ Mio applies C default promotions to the unnamed arguments. It promotes `float32`
 
 `pointer` returns a native address for a writable buffer. Keep the root alive while native code uses the address, including any time it retains the address after a call. Resizing or freeing the root during that lifetime makes the address invalid. `unsafe_borrow` creates a checked view over a caller-asserted foreign range. Release the borrow separately and let the original owner or its documented allocator release the underlying storage.
 
+## C aggregate storage
+
+Compose `scalar_layout`, `array_layout`, `struct_layout`, and `union_layout` to describe naturally aligned Darwin C storage. Layouts report byte size, alignment, and field offsets. Use `alloc_aggregate` to allocate zeroed native storage, `field_offset` for checked offset lookup, and the scalar access functions to populate it. Pass the native buffer pointer to a function whose C prototype takes a pointer to the structure or union.
+
+Natural padding and nested fixed-size arrays follow Apple's LP64 layout and are verified against Clang. Packed declarations, bitfields, configurable vector alignment, aggregate parameters and aggregate returns by value require separate ABI support.
+
 ## Integration
 
 ```sh

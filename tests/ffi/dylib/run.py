@@ -101,7 +101,8 @@ def main():
                  "dependencies-missing-leaf", "dependencies-undefined-symbol",
                  "threaded-build", "threaded-run", "threaded-gc-build", "threaded-gc-run", "threaded-sign",
                  "threaded-c-build", "threaded-c-run", "variadic-build", "variadic-run",
-                 "variadic-gc-build", "variadic-gc-run"):
+                 "variadic-gc-build", "variadic-gc-run", "aggregate-fixture", "aggregate-build",
+                 "aggregate-run", "aggregate-gc-build", "aggregate-gc-run"):
         record(name, "NOT_RUN")
 
     try:
@@ -262,6 +263,16 @@ def main():
             run(f"variadic{suffix}-build", [mio, "build", HERE / "variadic.mio", *flags,
                                             "--bunko-root", BUNKO, "-o", program], empty_path=True)
             run(f"variadic{suffix}-run", [program, foreign], empty_path=True, contains="Darwin variadic FFI: ok")
+
+        aggregate = artifacts / "libaggregate.dylib"
+        run("aggregate-fixture", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                                  "-Wall", "-Wextra", "-Werror", "-dynamiclib", HERE / "aggregate.c", "-o", aggregate])
+        for suffix, flags in (("", []), ("-gc", ["--gc-stress"])):
+            program = artifacts / f"aggregate{suffix}"
+            run(f"aggregate{suffix}-build", [mio, "build", HERE / "aggregate.mio", *flags,
+                                             "--bunko-root", BUNKO, "-o", program], empty_path=True)
+            run(f"aggregate{suffix}-run", [program, aggregate], empty_path=True,
+                contains="Darwin aggregate layout: ok")
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]
