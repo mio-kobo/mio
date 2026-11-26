@@ -23,6 +23,8 @@ HERE = Path(__file__).resolve().parent
 MODULES = HERE / "modules"
 NEGATIVE = HERE / "negative"
 HOST_C = HERE / "host" / "host.c"
+# The zlib runtime (no development package needed): linked by absolute path in the native-linker checks.
+ZLIB = next((p for p in ("/lib/x86_64-linux-gnu/libz.so.1", "/usr/lib/x86_64-linux-gnu/libz.so.1", "/lib/libz.so.1", "/usr/lib/libz.so.1") if Path(p).is_file()), "/lib/x86_64-linux-gnu/libz.so.1")
 
 # The exact C ABI of each stand-alone library. A library exports precisely this set: nothing else, ever.
 EXPECTED = {
@@ -313,6 +315,54 @@ def main():
     elif hosts:
         report.record("native linker: valgrind memory check", "NOT_RUN", reason="valgrind is not installed")
 
+    # ---- native linker with declared shared-library dependencies: -lm (a glibc linker script), an absolute --link path,
+    # --rpath, DT_NEEDED in declaration order, PLT/GOT with JUMP_SLOT relocations, and real calls from a C host.
+    native_ext = native_libs / "libmio_extdep.so"
+    rpath = "$ORIGIN/native dir"
+    process = report.tool("native.extdep", [mio, "build", MODULES / "mio_extdep", "--shared", "--linker", "native", "-lm", "--rpath", rpath,
+                          "--soname", "libmio_extdep.so", "-o", native_ext, *base], env=native_env)
+    if report.expect("native linker: links a module calling libm through -lm (linker script) with no linker on PATH", process,
+                     process is not None and process.returncode == 0 and native_ext.is_file()):
+        inspect_library(report, "native libmio_extdep", native_ext, "libmio_extdep.so", ["mio_extdep_cbrt", "mio_extdep_sqrt"], needed=["libm.so.6"])
+        dynamic = report.tool("native.extdep.readelf-d", ["readelf", "-d", native_ext])
+        relocs = report.tool("native.extdep.readelf-r", ["readelf", "-Wr", native_ext])
+        slots = re.findall(rb"R_X86_64_JUMP_SLOT\s+\S+\s+(\w+)", relocs.stdout) if relocs else []
+        report.record("native linker: RUNPATH is the literal --rpath and the imports are JUMP_SLOT relocations", "PASS" if dynamic is not None
+                      and f"Library runpath: [{rpath}]".encode() in dynamic.stdout and sorted(slots) == [b"cbrt", b"sqrt"] else "FAIL", detail=[s.decode() for s in slots])
+        source = out / "native-extdep.c"
+        source.write_text('#include <dlfcn.h>\n#include <math.h>\n#include <stdio.h>\nint main(int c,char**v){void*h=dlopen(v[1],RTLD_NOW|RTLD_LOCAL);if(!h){puts(dlerror());return 1;}'
+                          'double(*a)(double)=dlsym(h,"mio_extdep_sqrt");double(*b)(double)=dlsym(h,"mio_extdep_cbrt");if(!a||!b)return 2;'
+                          'for(int i=0;i<100000;i++){volatile double x=27.0,y=2.25;if(a(y)!=1.5||b(x)!=cbrt(x))return 3;}puts("native extdep OK");return dlclose(h);}\n')
+        for cc in hosts:
+            executable = out / f"native-extdep-host-{cc}"
+            compiled = report.tool(f"native.extdep.compile.{cc}", [cc, "-o", executable, source, "-ldl", "-lm"])
+            for label, env in (("", None), (" with LD_BIND_NOW=1", dict(os.environ, LD_BIND_NOW="1"))):
+                process = report.tool(f"native.extdep.run.{cc}{label}", [executable, native_ext], env=env) if executable.is_file() else None
+                report.expect(f"native linker: C host ({cc}) calls Mio -> libm through the PLT 100,000 times{label}", process,
+                              compiled is not None and compiled.returncode == 0 and process is not None and process.returncode == 0 and b"native extdep OK" in process.stdout)
+    if Path(ZLIB).is_file():
+        for order, link_args in (("libm, libz", ["-lm", "--link", ZLIB]), ("libz, libm", ["--link", ZLIB, "-lm"])):
+            target = native_libs / ("libmio_extdep2-%s.so" % order.replace(", ", "-"))
+            process = report.tool(f"native.extdep2.{order}", [mio, "build", MODULES / "mio_extdep2", "--shared", "--linker", "native", *link_args, "-o", target, *base], env=native_env)
+            dynamic = report.tool(f"native.extdep2.readelf.{order}", ["readelf", "-d", target]) if target.is_file() else None
+            found = [n.decode() for n in re.findall(rb"\(NEEDED\)\s+Shared library: \[([^\]]+)\]", dynamic.stdout)] if dynamic else []
+            expected = ["libm.so.6", "libz.so.1"] if order == "libm, libz" else ["libz.so.1", "libm.so.6"]
+            report.expect(f"native linker: DT_NEEDED follows the declaration order ({order})", process, process is not None and process.returncode == 0 and found == expected, detail=found)
+            if target.is_file() and hosts:
+                source = out / "native-extdep2.c"
+                source.write_text('#include <dlfcn.h>\n#include <stdio.h>\n#include <stdint.h>\nint main(int c,char**v){void*h=dlopen(v[1],RTLD_NOW|RTLD_LOCAL);if(!h){puts(dlerror());return 1;}'
+                                  'double(*f)(double,double)=dlsym(h,"mio_extdep2_hypot");uint64_t(*g)(void)=dlsym(h,"mio_extdep2_adler_seed");if(!f||!g)return 2;'
+                                  'if(f(3.0,4.0)!=5.0||g()!=1)return 3;puts("native extdep2 OK");return dlclose(h);}\n')
+                cc = next(iter(hosts))
+                executable = out / "native-extdep2-host"
+                report.tool("native.extdep2.compile", [cc, "-o", executable, source, "-ldl"])
+                process = report.tool(f"native.extdep2.run.{order}", [executable, target]) if executable.is_file() else None
+                report.expect(f"native linker: C host calls into libm and zlib through the Mio library ({order})", process,
+                              process is not None and process.returncode == 0 and b"native extdep2 OK" in process.stdout)
+    else:
+        report.record("native linker: two declared libraries (libm, zlib)", "NOT_RUN", reason=f"{ZLIB} is not installed")
+    report.record("native linker: dependency links ran no linker or C driver", "FAIL" if marker.exists() else "PASS")
+
     # ---- declared external dependency (libm): honest DT_NEEDED, and a link failure without the declaration
     extdep = MODULES / "mio_extdep"
     without = report.tool("extdep.without-lm", [mio, "build", extdep, "--shared", "-o", out / "no_lm.so", *base])
@@ -400,10 +450,22 @@ def main():
     negative("duplicate_in_module", [NEGATIVE / "duplicate_in_module"], "duplicate exported symbol same_symbol", "duplicate exported symbols in one module are rejected")
     negative("duplicate_across", [NEGATIVE / "duplicate_across" / "a", NEGATIVE / "duplicate_across" / "b"], "duplicate exported symbol dup_symbol", "duplicate exported symbols across aggregated modules are rejected")
     negative("no_export", [NEGATIVE / "no_export"], "E_SHARED_EXPORT no exported function", "a module without any export is rejected")
-    negative("native_external", [MODULES / "mio_extdep", "--linker", "native"], "E_SHARED_LINKER the Mio native linker does not link external C symbols yet",
-             "--linker native refuses a module that calls an external C symbol instead of falling back", env=native_env)
-    negative("native_link_options", [MODULES / "mio_math", "--linker", "native", "-lm"], "E_SHARED_LINKER the Mio native linker links self-contained modules only",
-             "--linker native refuses library options instead of falling back", env=native_env)
+    negative("native_undefined", [MODULES / "mio_extdep", "--linker", "native"], "E_SHARED_LINKER undefined symbol sqrt: not defined by the declared libraries (none)",
+             "--linker native reports an undeclared external C symbol instead of falling back", env=native_env)
+    negative("native_wrong_library", [MODULES / "mio_extdep", "--linker", "native", "--link", ZLIB], "E_SHARED_LINKER undefined symbol sqrt: not defined by the declared libraries (libz.so.1)",
+             "--linker native reports a symbol the declared library does not define", env=native_env)
+    negative("native_missing_library", [MODULES / "mio_extdep", "--linker", "native", "-lmio_no_such_library"], "E_SHARED_LINKER cannot find libmio_no_such_library.so",
+             "--linker native reports a missing -l library", env=native_env)
+    bad_inputs = {"object": (out / "native-input.o", b"\x7fELF"), "text": (out / "libnative-text.so", b"this is not ELF and not a linker script\n"),
+                  "truncated": (out / "libnative-truncated.so", Path(ZLIB).read_bytes()[:200] if Path(ZLIB).is_file() else b"\x7fELF")}
+    for name, (path, data) in bad_inputs.items():
+        path.write_bytes(data)
+    negative("native_object_input", [MODULES / "mio_extdep", "--linker", "native", "--link", bad_inputs["object"][0]], "E_SHARED_LINKER the native linker links shared libraries only",
+             "--linker native refuses object files", env=native_env)
+    negative("native_text_input", [MODULES / "mio_extdep", "--linker", "native", "--link", bad_inputs["text"][0]], "is neither an ELF shared object nor a supported linker script",
+             "--linker native refuses a file that is neither ELF nor a supported linker script", env=native_env)
+    negative("native_truncated_input", [MODULES / "mio_extdep", "--linker", "native", "--link", bad_inputs["truncated"][0]], "is not a usable x86-64 shared object",
+             "--linker native refuses a truncated shared object", env=native_env)
     report.record("native linker negatives: no linker or C driver was executed", "FAIL" if marker.exists() else "PASS")
     negative("missing_linker_path", [MODULES / "mio_math", "--linker", "/nonexistent/bin/ld"], "E_SHARED_LINKER linker not found: /nonexistent/bin/ld", "an explicit but missing linker is a clear error")
     empty = out / "empty-path"
