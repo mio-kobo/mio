@@ -1041,8 +1041,30 @@ waza type_array_link(arena: TypeArena, receiver: int64, value: int64, write: boo
 // Conservative inter-function reachability: static calls and every function
 // value/closure retain their targets, including mutually recursive closures.
 koukai waza reachable_functions(file: mochi.File) -> []bool {
+    kaesu reachable_from(file, empty_scalar_exports());
+}
+
+koukai kata ScalarExport { id: int64; signature: cabi.Signature; }
+
+// Stage A uses untyped Mochi. Materialize one element so its analysis
+// learns the nested signature shape even in compilers without dylib support.
+waza empty_scalar_exports() -> []ScalarExport {
+    kaku prototype = cabi.Signature { symbol: "", result: 0, parameters: [0], valid: iie, indirect: iie };
+    kaku exports = [ScalarExport { id: -1, signature: prototype }];
+    array.truncate(exports, 0);
+    kaesu exports;
+}
+
+koukai waza reachable_from(file: mochi.File, exports: []ScalarExport) -> []bool {
     kaku reached = array.make[bool](len(file.functions), iie);
     kaku queue: []int64 = [-1];
+    kaku root = 0;
+    aida (root < len(exports)) {
+        kaku id = exports[root].id;
+        reached[id] = hai;
+        array.push(queue, id);
+        root = root + 1;
+    }
     kaku next = 0;
     aida (next < len(queue)) {
         kaku id = queue[next];
@@ -1140,9 +1162,17 @@ koukai waza analyze_types(file: mochi.File) -> TypeAnalysis {
 // Optional provenance records: [instruction detail, value node, peer node,
 // reason (1: nullable propagation, 2: nil alternative, 3: explicit nullable)].
 koukai waza analyze_types_traced(file: mochi.File, trace: bool) -> TypeAnalysis {
+    kaesu analyze_types_from(file, trace, empty_scalar_exports());
+}
+
+koukai waza analyze_export_types(file: mochi.File, exports: []ScalarExport) -> TypeAnalysis {
+    kaesu analyze_types_from(file, iie, exports);
+}
+
+waza analyze_types_from(file: mochi.File, trace: bool, exports: []ScalarExport) -> TypeAnalysis {
     kaku arena = type_arena();
     arena.trace[0] = trace;
-    kaku function_reachable = reachable_functions(file);
+    kaku function_reachable = reachable_from(file, exports);
     kaku globals: []int64 = [];
     kaku index = 0;
     aida (index < file.global_count) {
@@ -1269,6 +1299,17 @@ koukai waza analyze_types_traced(file: mochi.File, trace: bool) -> TypeAnalysis 
         index = index + 1;
     }
     kaku hints = call_hints(file);
+    kaku root = 0;
+    aida (root < len(exports)) {
+        kaku entry = exports[root];
+        kaku parameter = 0;
+        aida (parameter < len(entry.signature.parameters)) {
+            constrain_c_scalar(arena, locals[entry.id][parameter], entry.signature.parameters[parameter]);
+            parameter = parameter + 1;
+        }
+        constrain_c_scalar(arena, returns[entry.id], entry.signature.result);
+        root = root + 1;
+    }
     kaku blocks: []TypeBlock = [];
     kaku block_index = -1;
     aida (block_index < len(file.functions)) {

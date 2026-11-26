@@ -59,6 +59,30 @@ waza analysis_root(state: Session, file: string) -> string {
     }
     kaesu selected;
 }
+waza document_overlays(state: Session) -> []frontend.SourceOverlay {
+    kaku overlays: []frontend.SourceOverlay = [];
+    kaku seen = Map[string, bool]();
+    kaku at = len(state.documents.documents) - 1;
+    aida (at >= 0) {
+        kaku current = state.documents.documents[at];
+        kaku file = analysis_path(state, current.uri);
+        moshi (file != "" && seen[file] == mu) {
+            seen[file] = hai;
+            array.push(overlays, frontend.SourceOverlay { path: file, bytes: string.to_bytes(current.text) });
+        }
+        at = at - 1;
+    }
+    kaesu overlays;
+}
+waza analyze_overlays(state: Session, selected: string, overlays: []frontend.SourceOverlay) -> lsp.SemanticIndex {
+    kaku entry = path.dir(selected);
+    moshi (string.has_prefix(selected, "<embedded>/")) {
+        entry = embedded_package(selected);
+    }
+    kaku analyzed = frontend.analyze_source_with_progress(analysis_root(state, selected), entry, state.bunko[0],
+        overlays, string.has_suffix(selected, "_test.mio"), state.work);
+    kaesu lsp.semantic_index_with_progress(analyzed, state.work);
+}
 waza analyze_document(state: Session, uri: string) -> DocumentAnalysis? {
     kaku document = lsp.snapshot(state.documents, uri);
     kaku selected = analysis_path(state, uri);
@@ -90,36 +114,24 @@ waza analyze_document(state: Session, uri: string) -> DocumentAnalysis? {
         }
         kaesu cached;
     }
-    kaku overlays: []frontend.SourceOverlay = [];
-    kaku preferred: []SourceURI = [];
-    kaku at = 0;
-    kaku found = iie;
-    aida (at<len(state.documents.documents)) {
+    kaku overlays = document_overlays(state);
+    kaku preferred: []SourceURI = [SourceURI {path: selected, uri: uri}];
+    kaku at = len(state.documents.documents) - 1;
+    aida (at >= 0) {
         kaku current = state.documents.documents[at];
         kaku file = analysis_path(state, current.uri);
-        moshi (file != "") {
-            array.push(overlays, frontend.SourceOverlay { path: file, bytes: string.to_bytes(current.text) });
-            array.push(preferred, SourceURI {
-                    path: file, uri: current.uri });
-            moshi (current.uri == uri) {
-                found = hai;
-            }
-        } at = at + 1;
+        moshi (file != "" && file != selected) { array.push(preferred, SourceURI {path: file, uri: current.uri}); }
+        at = at - 1;
     }
-    moshi (!found) {
-        array.push(overlays, frontend.SourceOverlay {
-                path: selected, bytes: string.to_bytes(document.text) });
-        array.push(preferred, SourceURI {
-                path: selected, uri: uri });
-    }
-    kaku entry = path.dir(selected);
-    moshi (string.has_prefix(selected, "<embedded>/")) {
-        entry = embedded_package(selected);
-    }
-    kaku analyzed = frontend.analyze_source_with_progress(analysis_root(state, selected), entry, state.bunko[0], overlays, string.has_suffix(selected, "_test.mio"), state.work);
+    at = 0;
+    aida (at < len(overlays) && overlays[at].path != selected) { at = at + 1; }
+    kaku selected_overlay = frontend.SourceOverlay {path: selected, bytes: string.to_bytes(document.text)};
+    moshi (at == len(overlays)) { array.push(overlays, selected_overlay); }
+    sore { overlays[at] = selected_overlay; }
+    kaku index = analyze_overlays(state, selected, overlays);
     moshi (progress.cancelled(state.work)) { kaesu mu; }
     kaku result = DocumentAnalysis {
-        index: lsp.semantic_index_with_progress(analyzed, state.work), path: selected, uri: uri, version: document.version, preferred: preferred };
+        index: index, path: selected, uri: uri, version: document.version, preferred: preferred };
     materialize_sources(state, result);
     moshi (progress.cancelled(state.work)) {
         kaesu mu;

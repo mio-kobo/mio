@@ -283,7 +283,12 @@ def cli_checks(report, cli, target, work):
     check("no-color", ["--color=never", "help"], absent=(ansi,), env={"NO_COLOR": None, "CI": None})
     check("auto-no-color", ["help"], absent=(ansi,), env={"NO_COLOR": "1", "CI": None})
     check("unknown-command", ["--lang", "zh-CN", "help", "missing-command"], code=2, contains=("E_COMMAND", "未知命令"))
-    check("version", ["--lang", "en-US", "--version"], contains=("mio v2.1.2",))
+    distribution = report.data.get("distribution_input")
+    if distribution is None:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() + "-dev"
+    else:
+        version = distribution["version"]
+    check("version", ["--lang", "en-US", "--version"], contains=(f"mio v{version} (",))
     bad = work / "i18n-machine-bad.mio"
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
@@ -1004,6 +1009,16 @@ def darwin_thread_observe(report, cli, work):
     report.check("darwin-thread-observe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
 
 
+def darwin_dylib(report, cli):
+    output = report.logs / "dylib"
+    code, out, err, seconds = run(
+        report, "darwin-dylib-run",
+        [sys.executable, ROOT / "tests/ffi/dylib/run.py", "--mio", cli, "--output", output],
+        timeout=900,
+    )
+    report.check("darwin-dylib", "PASS" if code == 0 else "FAIL", "native", brief(out + err, 300))
+
+
 def darwin_c_abi(report, cli, work):
     """Darwin ARM64 C ABI acceptance (docs/darwin-arm64-c-ffi.md), non-required until it has a CI history. tests/ffi/darwin-arm64/run.py builds Clang
     objects, an archive and a dylib, links them into signed Mio programs with the compiler built from this source, runs them, and checks the rejections
@@ -1535,6 +1550,7 @@ def follower(args, target):
             darwin_thread_phases(report, cli, work / "thread-phases")
             darwin_thread_observe(report, cli, work / "thread-observe")
             darwin_c_abi(report, cli, work / "c-abi")
+            darwin_dylib(report, cli)
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
@@ -1669,6 +1685,26 @@ def finish(report, cli=None):
 
 # ---------------------------------------------------------------------------------------------------- summary
 
+def select_reports(args):
+    """Keep one complete artifact directory per target, even on a partial rerun."""
+    reports = Path(args.reports)
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    for target in TARGETS.values():
+        prefix = f"native-report-{target}-{args.run_id}-"
+        candidates = [
+            (int(attempt), path)
+            for path in reports.glob(prefix + "*")
+            if path.is_dir() and re.fullmatch(r"[1-9][0-9]*", attempt := path.name[len(prefix):])
+        ]
+        if candidates:
+            # Required checks and matrix evidence must both come from this attempt.
+            # If its report is missing or invalid, the gate will fail for that target.
+            _, newest = max(candidates)
+            newest.rename(output / f"native-report-{target}")
+    return 0
+
+
 def summary(args):
     rows, overall, combined = [], "PASS", {}
     found = {}
@@ -1749,6 +1785,10 @@ def main():
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--targets", default="", help="comma-separated targets that must all have a report (default: the three release targets)")
+    p = sub.add_parser("select-reports")
+    p.add_argument("--reports", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--run-id", required=True, type=int)
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
@@ -1762,6 +1802,8 @@ def main():
         return linux(args, "windows-arm64")
     if args.command == "summary":
         return summary(args)
+    if args.command == "select-reports":
+        return select_reports(args)
     return follower(args, TARGETS[args.command])
 
 

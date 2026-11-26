@@ -1,0 +1,9 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/testing";
+
+waza test_open_rejects_invalid_paths() -> unit {
+    kaku empty = darwin.open("");
+    testing.expect(empty.library == mu && empty.error != "", "empty path is rejected before dyld");
+    kaku missing = darwin.open("/mio-dylib-test/nonexistent/libmissing.dylib");
+    testing.expect(missing.library == mu && missing.error != "", "dyld failure returns a diagnostic");
+}

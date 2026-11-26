@@ -22,10 +22,11 @@ koukai kata Session {
     library: []SourceURI;
     import_indexes: []imports.Index;
     language: []string;
+    workspace: Workspace;
 }
 koukai kata Reply { messages: []string; stop: bool; status: int64; }
 koukai waza session(root: string, bunko: string) -> Session {
-    kaesu Session {work:progress.context(),documents:lsp.store(),flags:[iie,iie,iie,hai,hai,iie],roots:[root],bunko:[bunko],cancelled:[],dirty:[],cache:[],schedule:[150,0,0],library_root:[""],library:[],import_indexes:[],language:["en-US"]};
+    kaesu Session {work:progress.context(),documents:lsp.store(),flags:[iie,iie,iie,hai,hai,iie,iie],roots:[root],bunko:[bunko],cancelled:[],dirty:[],cache:[],schedule:[150,0,0],library_root:[""],library:[],import_indexes:[],language:["en-US"],workspace:workspace()};
 }
 waza response(id: string, value: string) -> string {
     kaesu string.concat("{\"jsonrpc\":\"2.0\",\"id\":",string.concat(id,string.concat(",\"result\":",string.concat(value,"}"))));
@@ -80,10 +81,11 @@ waza initialize(state: Session, document: json.Document, params: int64, id: stri
     }
     kaku completion=json.member(document,text_document,"completion");kaku item=json.member(document,completion,"completionItem");
     kaku snippets=boolean_field(document,item,"snippetSupport");moshi(snippets!=mu){state.flags[5]=snippets;}
+    kaku workspace_caps=json.member(document,capabilities,"workspace");
+    kaku watched=json.member(document,workspace_caps,"didChangeWatchedFiles");
+    state.flags[6]=enabled_option(document,watched,"dynamicRegistration");
     state.flags[0]=hai;
-    // These providers share the native frontend and are exercised by the RPC
-    // suite. Unsupported rename/formatting/token providers are not advertised.
-    kaesu response(id,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.organizeImports\"]},\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"],\"retriggerCharacters\":[\",\"]}},\"serverInfo\":{\"name\":\"MioCore\",\"version\":\"2.0.0-dev\"}}");
+    kaesu response(id,"{\"capabilities\":{\"positionEncoding\":\"utf-16\",\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"documentSymbolProvider\":true,\"documentHighlightProvider\":true,\"workspaceSymbolProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"documentFormattingProvider\":true,\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.organizeImports\"]},\"completionProvider\":{\"triggerCharacters\":[\".\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"],\"retriggerCharacters\":[\",\"]}},\"serverInfo\":{\"name\":\"MioCore\",\"version\":\"2.0.0-dev\"}}");
 }
 
 koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
@@ -94,8 +96,8 @@ koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
     kaku method_node=json.member(document,root,"method");kaku id_node=json.member(document,root,"id");
     kaku method=json.text(document,method_node);kaku id=json.render(document,id_node);
     kaku requested=id_node>=0 && document.values[id_node].kind!=0;
-    // Client responses carry an ID but no method. No server-originated request
-    // is outstanding in this implementation, so these are intentionally ignored.
+    // Registration replies need no result processing. Client responses carry
+    // an ID and no method.
     moshi(method_node<0 && id_node>=0){kaesu Reply {messages:messages,stop:iie,status:0};}
     moshi(method_node<0 || document.values[method_node].kind!=3 || method=="" ||
         (requested && document.values[id_node].kind!=2 && document.values[id_node].kind!=3)){
@@ -110,8 +112,13 @@ koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
         }
         moshi(method=="initialized"){
             array.push(messages,notification("window/logMessage","{\"type\":3,\"message\":\"MioCore language server ready.\"}"));
+            moshi(state.flags[6]){
+                state.flags[6]=iie;
+                array.push(messages,"{\"jsonrpc\":\"2.0\",\"id\":\"mio-watch-files\",\"method\":\"client/registerCapability\",\"params\":{\"registrations\":[{\"id\":\"mio-source-files\",\"method\":\"workspace/didChangeWatchedFiles\",\"registerOptions\":{\"watchers\":[{\"globPattern\":\"**/*.mio\",\"kind\":7}]}}]}}");
+            }
         }
         document_notification(state,document,params,method,messages);
+        moshi(method=="workspace/didChangeWatchedFiles"){watched_workspace_files(state,document,params);}
         moshi(method=="textDocument/didSave" || method=="workspace/didChangeWatchedFiles"){invalidate_imports(state);}
         moshi(method=="workspace/didChangeConfiguration"){configuration_notification(state,document,params,messages);}
         kaesu Reply {messages:messages,stop:iie,status:0};
@@ -125,10 +132,13 @@ koukai waza dispatch(state: Session, payload: []uint8) -> Reply {
         aida(at<len(state.documents.documents)){array.push(messages,clear_diagnostics(state.documents.documents[at].uri));at=at+1;}
         moshi(cancelled){array.push(messages,error_response(id,-32800,"Request cancelled"));}
         sore{array.push(messages,response(id,"null"));}
+    }sore{ moshi(method=="workspace/symbol"){
+        moshi(cancelled){array.push(messages,error_response(id,-32800,"Request cancelled"));}
+        sore{array.push(messages,workspace_symbols_request(state,document,params,id));}
     }sore{
         kaku navigation=navigation_request(state,document,params,method,id,cancelled);
         moshi(navigation!=mu){array.push(messages,navigation);}
         sore{array.push(messages,error_response(id,-32601,string.concat("Method not found: ",method)));}
-    }
+    } }
     kaesu Reply {messages:messages,stop:iie,status:0};
 }

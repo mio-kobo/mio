@@ -1,0 +1,63 @@
+yobu "kiso/convert";
+yobu "kiso/encoding/json";
+yobu "kiso/string";
+yobu "selfhost/format";
+yobu "selfhost/imports";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+waza highlights(state: Session, analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol, buffer: lsp.TextBuffer) -> string {
+    kaku matches = lsp.references(analysis.index, symbol.key, hai);
+    kaku output = string.new_builder();
+    string.write_string(output, "[");
+    kaku first = hai;
+    kaku at = 0;
+    aida (at < len(matches)) {
+        moshi (!progress.checkpoint(state.work)) { kaesu "[]"; }
+        kaku site = matches[at];
+        moshi (site.path == analysis.path) {
+            kaku kind = 1;
+            moshi (symbol.kind >= 0 && symbol.kind <= 3 || symbol.kind == 13) {
+                kind = 2;
+                moshi (site.write) { kind = 3; }
+            }
+            moshi (!first) { string.write_string(output, ","); }
+            first = iie;
+            string.write_string(output, "{\"range\":");
+            string.write_string(output, range_json(buffer, site.start, site.end));
+            string.write_string(output, ",\"kind\":");
+            string.write_string(output, convert.format_int(kind));
+            string.write_string(output, "}");
+        }
+        at = at + 1;
+    }
+    string.write_string(output, "]");
+    kaesu string.builder_string(output);
+}
+
+waza enabled_option(request: json.Document, object: int64, name: string) -> bool {
+    kaku flag = boolean_field(request, object, name);
+    moshi (flag == mu) { kaesu iie; }
+    kaesu flag;
+}
+
+waza formatting_request(state: Session, request: json.Document, params: int64, uri: string, id: string) -> string {
+    kaku options = json.member(request, params, "options");
+    kaku size = json.integer(request, json.member(request, options, "tabSize"));
+    kaku spaces = boolean_field(request, options, "insertSpaces");
+    moshi (size == mu) { kaesu error_response(id, -32602, "Missing tabSize"); }
+    moshi (spaces == mu) { kaesu error_response(id, -32602, "Missing insertSpaces"); }
+    moshi (size < 1 || size > 256) { kaesu error_response(id, -32602, "tabSize must be from 1 to 256"); }
+    kaku insert_final = enabled_option(request, options, "insertFinalNewline");
+    kaku trim_final = enabled_option(request, options, "trimFinalNewlines");
+    kaku doc = lsp.snapshot(state.documents, uri);
+    moshi (doc == mu) { kaesu response(id, "[]"); }
+    kaku buffer = lsp.text_buffer(doc.text);
+    kaku result = format.document(buffer.data, size, spaces, insert_final, trim_final);
+    moshi (result.error != "") { kaesu error_response(id, -32803, result.error); }
+    kaku text = string.from_utf8(result.data);
+    moshi (text == mu) { kaesu error_response(id, -32803, "Formatter produced invalid UTF-8"); }
+    moshi (text == doc.text) { kaesu response(id, "[]"); }
+    kaku edit = text_edit(buffer, imports.Edit { start: 0, end: len(buffer.data), text: text });
+    kaesu response(id, string.concat("[", string.concat(edit, "]")));
+}
