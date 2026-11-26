@@ -1,0 +1,158 @@
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/testing";
+
+waza hex(bytes: []uint8) -> string {
+    kaku digits = string.to_bytes("0123456789abcdef");
+    kaku out: []uint8 = [];
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        kaku v = int64(bytes[at]);
+        kaku high = v / 16;
+        kaku low = v - high * 16;
+        array.push(out, digits[high]);
+        array.push(out, digits[low]);
+        at = at + 1;
+    }
+    kaku text = string.from_utf8(out);
+    moshi (text == mu) { kaesu ""; }
+    kaesu text;
+}
+
+waza test_ownership_and_lifetimes() -> unit {
+    kaku before = buffers_owned();
+    kaku b = alloc(16);
+    testing.expect(buffer_live(b) && buffer_owned(b) && buffer_writable(b) && buffer_length(b) == 16 && buffers_owned() == before + 1, "alloc");
+    kaku view = slice(b, 4, 8);
+    kaku ro = read_only(b);
+    testing.expect(buffer_length(view) == 8 && !buffer_owned(view) && !buffer_writable(ro), "views");
+    testing.expect(string.has_prefix(free(view), "E_FFI_NOT_OWNER"), "a view cannot be freed");
+    testing.expect(string.has_prefix(release_buffer(b), "E_FFI_OWNER"), "an owned buffer is not released");
+    testing.expect(free(b) == "" && !buffer_live(b) && !buffer_live(view) && !buffer_live(ro) && buffers_owned() == before, "free kills the buffer and its views");
+    testing.expect(string.has_prefix(free(b), "E_FFI_STALE"), "double free is detected");
+    testing.expect(len(read(view, 0, 1)) == 0 && string.has_prefix(last_error(), "E_FFI_STALE"), "stale view refused");
+    // slot reuse never revives a stale handle
+    kaku c = alloc(16);
+    testing.expect(c.ticket.slot == b.ticket.slot && !buffer_live(b) && buffer_live(c), "slot reuse");
+    kaku grown = resize(c, 64);
+    testing.expect(buffer_live(grown) && buffer_length(grown) == 64 && !buffer_live(c), "resize replaces the handle");
+    testing.expect(free(grown) == "", "free resized");
+}
+
+waza test_bounds_and_sizes() -> unit {
+    testing.expect(string.has_prefix(buffer_error(alloc(-1)), "E_FFI_SIZE") && buffer_error(alloc_zeroed(1)) == "", "buffer_error");
+    testing.expect(string.has_prefix(alloc(-1).error, "E_FFI_SIZE") && string.has_prefix(alloc(1099511627777).error, "E_FFI_SIZE"), "invalid sizes");
+    testing.expect(string.has_prefix(alloc(1099511627776).error, "E_FFI_NOMEM"), "an impossible allocation fails cleanly");
+    kaku empty = alloc(0);
+    testing.expect(buffer_live(empty) && buffer_length(empty) == 0 && len(read(empty, 0, 0)) == 0 && last_call_ok(), "zero-sized buffer");
+    testing.expect(string.has_prefix(write(empty, 0, [uint8(1)]), "E_FFI_BOUNDS"), "no byte fits in an empty buffer");
+    free(empty);
+    kaku b = alloc_zeroed(8);
+    testing.expect(hex(read(b, 0, 8)) == "0000000000000000", "alloc_zeroed");
+    testing.expect(string.has_prefix(write(b, 7, [uint8(1), uint8(2)]), "E_FFI_BOUNDS") && hex(read(b, 0, 8)) == "0000000000000000", "partial out-of-bounds write is refused whole");
+    testing.expect(len(read(b, -1, 2)) == 0 && len(read(b, 4, 9223372036854775807)) == 0 && len(read(b, 9223372036854775807, 1)) == 0, "negative and overflowing ranges");
+    testing.expect(string.has_prefix(slice(b, 6, 3).error, "E_FFI_BOUNDS"), "slice out of bounds");
+    testing.expect(string.has_prefix(set_int32(read_only(b), 0, int32(1)), "E_FFI_READONLY") && get_int32(b, 0) == int32(0), "read-only views refuse writes");
+    kaku a = alloc_aligned(100, 4096);
+    testing.expect(buffer_live(a), "aligned allocation");
+    testing.expect(string.has_prefix(alloc_aligned(8, 3).error, "E_FFI_ALIGNMENT") && string.has_prefix(alloc_aligned(8, 4).error, "E_FFI_ALIGNMENT"), "invalid alignments");
+    free(a);
+    free(b);
+}
+
+waza test_bytes_and_copies() -> unit {
+    kaku b = alloc(16);
+    testing.expect(fill(b, 0, 16, uint8(170)) == "" && hex(read(b, 14, 2)) == "aaaa", "fill");
+    testing.expect(write(b, 2, [uint8(1), uint8(2), uint8(3), uint8(4)]) == "" && hex(read(b, 0, 7)) == "aaaa01020304aa", "write and read");
+    // overlapping copy inside one buffer behaves like memmove
+    testing.expect(copy(b, 3, b, 2, 4) == "" && hex(read(b, 0, 8)) == "aaaa0101020304aa", "overlapping copy");
+    kaku other = alloc(4);
+    testing.expect(copy(other, 0, b, 4, 4) == "" && hex(read(other, 0, 4)) == "020304aa", "copy between buffers");
+    testing.expect(string.has_prefix(copy(other, 1, b, 0, 4), "E_FFI_BOUNDS"), "copy past the destination");
+    free(other);
+    free(b);
+}
+
+// Independent oracle: the little-endian bit patterns below were produced by Python's struct.pack.
+waza test_scalars_against_ieee_oracle() -> unit {
+    kaku b = alloc(16);
+    set_float64(b, 0, 1.0);
+    testing.expect(hex(read(b, 0, 8)) == "000000000000f03f" && get_float64(b, 0) == 1.0, "1.0");
+    set_float64(b, 0, -2.5);
+    testing.expect(hex(read(b, 0, 8)) == "00000000000004c0" && get_float64(b, 0) == -2.5, "-2.5");
+    set_float64(b, 0, 0.1);
+    testing.expect(hex(read(b, 0, 8)) == "9a9999999999b93f" && get_float64(b, 0) == 0.1, "0.1");
+    write(b, 0, [uint8(1), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0), uint8(0)]);
+    kaku tiny = get_float64(b, 0);
+    testing.expect(tiny > 0.0 && tiny / 2.0 == 0.0, "smallest subnormal decodes");
+    set_float64(b, 0, tiny);
+    testing.expect(hex(read(b, 0, 8)) == "0100000000000000", "smallest subnormal encodes");
+    set_float64(b, 0, 1.7976931348623157e308);
+    testing.expect(hex(read(b, 0, 8)) == "ffffffffffffef7f", "largest finite");
+    kaku zero = 0.0;
+    set_float64(b, 0, -zero);
+    testing.expect(hex(read(b, 0, 8)) == "0000000000000080", "negative zero");
+    set_float64(b, 0, 1.0 / zero);
+    testing.expect(hex(read(b, 0, 8)) == "000000000000f07f" && get_float64(b, 0) > 1.0e308, "infinity");
+    set_float64(b, 0, zero / zero);
+    kaku nan = get_float64(b, 0);
+    testing.expect(nan != nan, "NaN");
+    set_float32(b, 8, float32(1.5));
+    testing.expect(hex(read(b, 8, 4)) == "0000c03f" && get_float32(b, 8) == float32(1.5), "float32 1.5");
+    set_float32(b, 8, float32(-0.375));
+    testing.expect(hex(read(b, 8, 4)) == "0000c0be", "float32 -0.375");
+    write(b, 8, [uint8(255), uint8(255), uint8(127), uint8(127)]);
+    testing.expect(get_float64(b, 0) != get_float64(b, 0) && float64(get_float32(b, 8)) == 3.4028234663852886e38, "float32 max");
+    set_int64(b, 0, -2);
+    testing.expect(hex(read(b, 0, 8)) == "feffffffffffffff" && get_int64(b, 0) == -2 && get_int32(b, 0) == int32(-2) && get_uint32(b, 0) == uint32(4294967294), "int64 -2");
+    set_uint32(b, 0, uint32(4294967295));
+    testing.expect(get_int32(b, 0) == int32(-1) && hex(read(b, 0, 4)) == "ffffffff", "uint32 max");
+    set_uint16(b, 0, uint16(65535));
+    testing.expect(get_int16(b, 0) == int16(-1), "uint16 max");
+    set_int16(b, 0, int16(-300));
+    testing.expect(get_int16(b, 0) == int16(-300) && get_uint16(b, 0) == uint16(65236), "int16");
+    set_int8(b, 0, int8(-1));
+    testing.expect(get_uint8(b, 0) == uint8(255) && get_int8(b, 0) == int8(-1), "int8");
+    set_uint64(b, 8, uint64(-1));
+    testing.expect(get_int64(b, 8) == -1 && get_uint64(b, 8) == uint64(-1), "uint64 max");
+    set_pointer(b, 0, pointer(b));
+    testing.expect(get_pointer(b, 0) == pointer(b), "pointer round trip");
+    testing.expect(get_int32(b, 13) == int32(0) && !last_call_ok(), "an out-of-bounds scalar read is refused");
+    free(b);
+}
+
+waza same(value: string?, expected: string) -> bool {
+    moshi (value == mu) { kaesu iie; }
+    kaesu value == expected;
+}
+
+waza test_c_strings() -> unit {
+    kaku s = c_string_buffer("澪 mio");
+    testing.expect(buffer_length(s) == 8 && get_uint8(s, 7) == uint8(0), "UTF-8 bytes plus NUL");
+    kaku text = c_string(s, 0);
+    testing.expect(same(text, "澪 mio"), "read back");
+    kaku tail = c_string(s, 4);
+    testing.expect(same(tail, "mio"), "from an offset");
+    kaku with_nul = string.from_utf8([uint8(97), uint8(0), uint8(98)]);
+    moshi (with_nul != mu) { testing.expect(string.has_prefix(c_string_buffer(with_nul).error, "E_FFI_NUL"), "embedded NUL refused"); }
+    kaku raw = alloc(3);
+    write(raw, 0, [uint8(97), uint8(98), uint8(99)]);
+    testing.expect(c_string(raw, 0) == mu && string.has_prefix(last_error(), "E_FFI_BOUNDS"), "no terminator inside the buffer");
+    write(raw, 0, [uint8(255), uint8(0)]);
+    testing.expect(c_string(raw, 0) == mu && string.has_prefix(last_error(), "E_FFI_UTF8"), "invalid UTF-8");
+    free(raw);
+    free(s);
+}
+
+waza test_borrowed_memory() -> unit {
+    kaku owner = alloc(8);
+    write(owner, 0, [uint8(7), uint8(0)]);
+    kaku borrowed = unsafe_borrow(pointer(owner), 8, iie);
+    testing.expect(buffer_live(borrowed) && !buffer_owned(borrowed) && get_uint8(borrowed, 0) == uint8(7), "borrow foreign memory");
+    testing.expect(string.has_prefix(free(borrowed), "E_FFI_BORROWED") && buffer_live(borrowed), "borrowed memory is never freed here");
+    testing.expect(string.has_prefix(set_uint8(borrowed, 0, uint8(1)), "E_FFI_READONLY"), "a read-only borrow refuses writes");
+    testing.expect(string.has_prefix(unsafe_borrow(cptr(0), 1, hai).error, "E_FFI_NULL"), "null borrow");
+    kaku view = slice(borrowed, 0, 2);
+    testing.expect(release_buffer(borrowed) == "" && !buffer_live(borrowed) && !buffer_live(view), "release takes the views");
+    free(owner);
+}

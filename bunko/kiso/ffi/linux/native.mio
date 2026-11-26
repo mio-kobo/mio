@@ -19,6 +19,14 @@ waza n_copy_out(f: cptr, destination: []uint8, source: cptr, size: uint64) -> cp
 waza n_strnlen(f: cptr, text: cptr, limit: uint64) -> uint64 = c "mio_ffi_indirect";
 waza n_dladdr(f: cptr, address: cptr, info: []uint8) -> int32 = c "mio_ffi_indirect";
 waza n_dladdr1(f: cptr, address: cptr, info: []uint8, extra: []uint8, flags: int32) -> int32 = c "mio_ffi_indirect";
+waza n_copy_in(f: cptr, destination: cptr, source: []uint8, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_move(f: cptr, destination: cptr, source: cptr, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_fill(f: cptr, destination: cptr, value: int32, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_malloc(f: cptr, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_calloc(f: cptr, count: uint64, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_realloc(f: cptr, pointer: cptr, size: uint64) -> cptr = c "mio_ffi_indirect";
+waza n_free(f: cptr, pointer: cptr) -> unit = c "mio_ffi_indirect";
+waza n_memalign(f: cptr, out: []uint8, alignment: uint64, size: uint64) -> int32 = c "mio_ffi_indirect";
 
 kaku native_state: int64 = 0;   // 0 not resolved, 1 ready, -1 unavailable
 kaku p_memset: cptr = cptr(0);
@@ -26,6 +34,12 @@ kaku p_memcpy: cptr = cptr(0);
 kaku p_strnlen: cptr = cptr(0);
 kaku p_dladdr: cptr = cptr(0);
 kaku p_dladdr1: cptr = cptr(0);
+kaku p_memmove: cptr = cptr(0);
+kaku p_malloc: cptr = cptr(0);
+kaku p_calloc: cptr = cptr(0);
+kaku p_realloc: cptr = cptr(0);
+kaku p_free: cptr = cptr(0);
+kaku p_memalign: cptr = cptr(0);
 
 kata MapRange { start: int64; end: int64; readable: bool; executable: bool; }
 kaku map_ranges: []MapRange = [];
@@ -44,8 +58,15 @@ waza native_ready() -> bool {
         p_dladdr = default_symbol("dladdr");
         // dladdr1 is a glibc extension; without it the ELF symbol-type check is skipped (see code_check).
         p_dladdr1 = default_symbol("dladdr1");
+        p_memmove = default_symbol("memmove");
+        p_malloc = default_symbol("malloc");
+        p_calloc = default_symbol("calloc");
+        p_realloc = default_symbol("realloc");
+        p_free = default_symbol("free");
+        p_memalign = default_symbol("posix_memalign");
         native_state = -1;
-        moshi (p_memset != cptr(0) && p_memcpy != cptr(0) && p_strnlen != cptr(0) && p_dladdr != cptr(0)) { native_state = 1; }
+        moshi (p_memset != cptr(0) && p_memcpy != cptr(0) && p_strnlen != cptr(0) && p_dladdr != cptr(0) && p_memmove != cptr(0) &&
+            p_malloc != cptr(0) && p_calloc != cptr(0) && p_realloc != cptr(0) && p_free != cptr(0) && p_memalign != cptr(0)) { native_state = 1; }
     }
     kaesu native_state == 1;
 }
@@ -61,6 +82,20 @@ waza read_native(pointer: cptr, size: int64) -> []uint8 {
     kaku copy: []uint8 = array.make[uint8](size, uint8(0));
     moshi (size > 0) { n_copy_out(p_memcpy, copy, pointer, uint64(size)); }
     kaesu copy;
+}
+
+// Raw memory primitives for memory.mio. Callers validate every range first.
+waza native_write(pointer: cptr, data: []uint8, size: int64) -> unit { moshi (size > 0) { n_copy_in(p_memcpy, pointer, data, uint64(size)); } }
+waza native_move(destination: cptr, source: cptr, size: int64) -> unit { moshi (size > 0) { n_move(p_memmove, destination, source, uint64(size)); } }
+waza native_fill(destination: cptr, value: int64, size: int64) -> unit { moshi (size > 0) { n_fill(p_memset, destination, int32(value), uint64(size)); } }
+waza native_malloc(size: int64) -> cptr { kaesu n_malloc(p_malloc, uint64(size)); }
+waza native_calloc(size: int64) -> cptr { kaesu n_calloc(p_calloc, uint64(1), uint64(size)); }
+waza native_realloc(pointer: cptr, size: int64) -> cptr { kaesu n_realloc(p_realloc, pointer, uint64(size)); }
+waza native_free(pointer: cptr) -> unit { n_free(p_free, pointer); }
+waza native_aligned(alignment: int64, size: int64) -> cptr {
+    kaku out: []uint8 = array.make[uint8](8, uint8(0));
+    moshi (n_memalign(p_memalign, out, uint64(alignment), uint64(size)) != int32(0)) { kaesu cptr(0); }
+    kaesu pointer_at(word_le(out, 0, 8));
 }
 
 waza native_strnlen(text: cptr, limit: int64) -> int64 { kaesu int64(n_strnlen(p_strnlen, text, uint64(limit))); }

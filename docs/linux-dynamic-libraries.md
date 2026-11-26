@@ -144,6 +144,48 @@ chant(raw_scale(linux.unsafe_address(scale, "p:"), 3, float32(1.5)));
 
 Limits: an executable address is not proof that the declared prototype is right. GNU indirect functions (`STT_GNU_IFUNC`, for example glibc's `strlen`) resolve to an implementation chosen by the loader; that address is checked only for being executable. Symbol interposition (`LD_PRELOAD`, earlier libraries) is the loader's normal behaviour and is not detected. Without `dladdr1` (musl) only the mapping check applies. Code in anonymous executable mappings (JIT) is refused because it is not part of a loaded image.
 
+## Native memory
+
+`kiso/ffi/linux` also manages C memory through `Buffer` handles: opaque, generation-checked like `Library` and
+`Function`, with every access bounds-checked. Mio arrays are never handed to C as retained memory; bytes are copied in
+and out, so a foreign library that keeps a pointer keeps a pointer to C memory with an explicit owner.
+
+| Category | Created by | Released by | Notes |
+| --- | --- | --- | --- |
+| owned | `alloc(size)`, `alloc_zeroed(size)`, `alloc_aligned(size, alignment)`, `c_string_buffer(text)` | `free`, or `resize` (which returns the replacement) | C `malloc`/`calloc`/`posix_memalign`/`realloc`/`free` of the process; alignment is a power of two from 8 to 1 MiB |
+| view | `slice(buffer, offset, length)`, `read_only(buffer)` | `release_buffer` | borrows its root; dies when the root is freed, resized or released |
+| borrowed | `unsafe_borrow(pointer, length, writable)` | `release_buffer` | **unsafe**: the caller asserts the foreign range is valid while used; `free` is refused (`E_FFI_BORROWED`), the owning library's destructor releases it |
+
+| Operation | Behaviour |
+| --- | --- |
+| `read(buffer, offset, length) -> []uint8`, `write(buffer, offset, data)`, `fill(buffer, offset, length, byte)`, `copy(dst, dst_offset, src, src_offset, length)` | byte transfers; `copy` handles overlap like `memmove` |
+| `get_/set_` `int8 uint8 int16 uint16 int32 uint32 int64 uint64 float32 float64 pointer` | little endian, any alignment; floats are converted from and to their exact IEEE-754 bit patterns (subnormals, signed zero, infinities, NaN) |
+| `c_string(buffer, offset) -> string?` | the NUL must lie inside the buffer; invalid UTF-8 or a missing NUL gives `mu` and `last_error` |
+| `c_string_buffer(text)` | UTF-8 bytes plus NUL; text containing NUL is refused (`E_FFI_NUL`) |
+| `pointer(buffer) -> cptr` | the address to pass for a `p` parameter; borrowed, valid until `free`/`resize` |
+| `buffer_live`, `buffer_length`, `buffer_writable`, `buffer_owned`, `buffers_owned`, `buffer_error` | inspection and leak checks |
+
+Checks before any memory is touched: the handle and its root must be live (`E_FFI_STALE`, so a double free is
+detected and does nothing), `0 <= offset <= length` and `0 <= size <= length - offset` (`E_FFI_BOUNDS`; no addition
+that could overflow), writes through read-only views are refused (`E_FFI_READONLY`), sizes are limited to 1 TiB
+(`E_FFI_SIZE`) and a failed allocation is `E_FFI_NOMEM`. Value-returning operations report refusals through
+`last_error()`/`last_call_ok()`.
+
+What stays unsafe: `unsafe_borrow` lengths and lifetimes, `unsafe_address` prototypes, and what foreign code does with
+a pointer it is given (it may keep it past `free`; prefer owned buffers whose lifetime you control when a library
+retains memory asynchronously). The checks protect Mio code from out-of-range access through this API; they do not
+instrument the foreign library.
+
+The memory functions are resolved with `dlsym(RTLD_DEFAULT)` and called through the indirect bridge (see Memory
+ownership), and pointer arithmetic is done on address bits inside the package: no compiler or runtime change.
+`tests/ffi/linux-amd64-dynamic/cases/test_ffi_memory.mio` uses zlib's in/out length cell, OpenSSL `SHA256` into an owned
+digest buffer, a borrowed SQLite C string, a 4 MiB round trip and 20,000 allocation cycles (normal and `--gc-stress`);
+the package tests compare float encodings with bit patterns produced independently by Python's `struct`. Example:
+[examples/linux-amd64/ffi_memory.mio](../examples/linux-amd64/ffi_memory.mio).
+
+Measured with `benchmarks/ffi/linux_ffi_bench.mio` (3 runs, same host as above): `alloc(64)` + `set_int64` + `get_int64` +
+`free` 0.85-0.90 us per cycle; 4 MiB written and read back 4.9-5.9 ms per round.
+
 ## Memory ownership
 
 * Mio owns every `[]uint8`. C may read or write it during the call; C must not keep the pointer. After the call it is an ordinary Mio array again.
