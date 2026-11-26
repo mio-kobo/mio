@@ -65,4 +65,6 @@ Full CI requires both TCP examples to pass on all three native targets.
 
 The [Windows PE generator](windows-amd64/hello.mio) writes `hello-windows.exe` in its working directory. The suite runs the generator and validates its output on all three platforms. On Windows it also executes the generated PE and checks its stdout and exit status.
 
+The [Linux AMD64 FFI example](linux-amd64/ffi_libc.mio) loads `libc.so.6` and `libm.so.6` at run time with `kiso/ffi/linux`, calls `abs`, `strnlen` and `pow` through checked handles, shows a refused mismatched call and a refused call after `close`. It needs Linux AMD64 with glibc (and the system C driver that `mio build` uses for programs with C declarations); on the other targets the suite records it as NOT_APPLICABLE with the reason from `scripts/ci/bunko_matrix_coverage.json`. See [docs/linux-dynamic-libraries.md](../docs/linux-dynamic-libraries.md).
+
 Historical AOT M0–M7, M11A and M17 compiler experiments have been removed from this user-facing directory. They remain recoverable through Git history. Current compiler correctness tests live under `tests/` and Bunko's package test suites.

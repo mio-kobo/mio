@@ -1,47 +1,49 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
 kaku run = support.begin("test_ffi_missing_symbol");
-kaku lib = ffi.open(support.absolute("libmio_math.so"));
-support.expect(run, "open", !ffi.failed(lib));
+kaku lib = linux.open(support.absolute("libmio_math.so"));
+support.expect(run, "open", !linux.failed(lib));
 
-kaku missing = ffi.symbol(lib, "mio_does_not_exist", "i:ii");
-support.expect(run, "missing symbol reports an error", ffi.error(missing) != "");
-support.expect(run, "error is classified", string.has_prefix(ffi.error(missing), "E_FFI_SYMBOL"));
-support.expect(run, "error names the symbol", string.contains(ffi.error(missing), "mio_does_not_exist"));
-support.expect(run, "calling a missing symbol makes no native call", ffi.call_i_ii(missing, int32(1), int32(2)) == int32(0));
-support.expect(run, "call is refused", string.has_prefix(ffi.error(missing), "E_FFI_STATE"));
+kaku missing = linux.symbol(lib, "mio_does_not_exist", "i:ii");
+support.expect(run, "missing symbol reports an error", linux.error(missing) != "");
+support.expect(run, "error is classified", string.has_prefix(linux.error(missing), "E_FFI_SYMBOL"));
+support.expect(run, "error names the symbol", string.contains(linux.error(missing), "mio_does_not_exist"));
+support.expect(run, "calling a missing symbol makes no native call", linux.call_i_ii(missing, int32(1), int32(2)) == int32(0));
+support.expect(run, "call is refused", string.has_prefix(linux.last_error(), "E_FFI_STATE"));
+support.expect(run, "resolution error is kept", string.has_prefix(linux.error(missing), "E_FFI_SYMBOL"));
 
 // illegal symbol names
-support.expect(run, "empty name", string.has_prefix(ffi.error(ffi.symbol(lib, "", "i:ii")), "E_FFI_SYMBOL"));
+support.expect(run, "empty name", string.has_prefix(linux.error(linux.symbol(lib, "", "i:ii")), "E_FFI_SYMBOL"));
 kaku with_nul = support.text([uint8(109), uint8(0), uint8(97)]);
-support.expect(run, "name with NUL", string.has_prefix(ffi.error(ffi.symbol(lib, with_nul, "i:ii")), "E_FFI_SYMBOL"));
-support.expect(run, "name with space", ffi.error(ffi.symbol(lib, "mio add", "i:ii")) != "");
-support.expect(run, "name with path", ffi.error(ffi.symbol(lib, "../mio_add", "i:ii")) != "");
+support.expect(run, "name with NUL", string.has_prefix(linux.error(linux.symbol(lib, with_nul, "i:ii")), "E_FFI_SYMBOL"));
+support.expect(run, "name with space", linux.error(linux.symbol(lib, "mio add", "i:ii")) != "");
+support.expect(run, "name with path", linux.error(linux.symbol(lib, "../mio_add", "i:ii")) != "");
 kaku long_bytes: []uint8 = array.make[uint8](100000, uint8(97));
 kaku long_name = support.text(long_bytes);
-support.expect(run, "very long name", ffi.error(ffi.symbol(lib, long_name, "i:ii")) != "");
-support.expect(run, "case sensitive", ffi.error(ffi.symbol(lib, "MIO_ADD", "i:ii")) != "");
-support.expect(run, "UTF-8 name", ffi.error(ffi.symbol(lib, "mio_加", "i:ii")) != "");
+support.expect(run, "very long name", linux.error(linux.symbol(lib, long_name, "i:ii")) != "");
+support.expect(run, "case sensitive", linux.error(linux.symbol(lib, "MIO_ADD", "i:ii")) != "");
+support.expect(run, "UTF-8 name", linux.error(linux.symbol(lib, "mio_加", "i:ii")) != "");
 
 // illegal signatures
-support.expect(run, "bad signature letter", string.has_prefix(ffi.error(ffi.symbol(lib, "mio_add", "x:ii")), "E_FFI_SIGNATURE"));
-support.expect(run, "missing colon", string.has_prefix(ffi.error(ffi.symbol(lib, "mio_add", "iii")), "E_FFI_SIGNATURE"));
-support.expect(run, "signature longer than 16 letters", string.has_prefix(ffi.error(ffi.symbol(lib, "mio_add", "i:iiiiiiiiiiiiiiiiii")), "E_FFI_SIGNATURE"));
-support.expect(run, "void parameter", string.has_prefix(ffi.error(ffi.symbol(lib, "mio_add", "i:vi")), "E_FFI_SIGNATURE"));
+support.expect(run, "bad signature letter", string.has_prefix(linux.error(linux.symbol(lib, "mio_add", "x:ii")), "E_FFI_SIGNATURE"));
+support.expect(run, "missing colon", string.has_prefix(linux.error(linux.symbol(lib, "mio_add", "iii")), "E_FFI_SIGNATURE"));
+support.expect(run, "signature longer than 16 letters", string.has_prefix(linux.error(linux.symbol(lib, "mio_add", "i:iiiiiiiiiiiiiiiiii")), "E_FFI_SIGNATURE"));
+support.expect(run, "void parameter", string.has_prefix(linux.error(linux.symbol(lib, "mio_add", "i:vi")), "E_FFI_SIGNATURE"));
 
 // a symbol resolved with one signature cannot be called through another prototype
-kaku add = ffi.symbol(lib, "mio_add", "i:ii");
-support.expect(run, "resolves", ffi.error(add) == "");
-support.expect(run, "wrong shape is refused", ffi.call_d_dd(add, 1.0, 2.0) == 0.0);
-support.expect(run, "wrong shape error", string.has_prefix(ffi.error(add), "E_FFI_SIGNATURE"));
-support.expect(run, "right shape still works", ffi.call_i_ii(add, int32(2), int32(3)) == int32(5));
-support.expect(run, "error cleared", ffi.error(add) == "");
+kaku add = linux.symbol(lib, "mio_add", "i:ii");
+support.expect(run, "resolves", linux.error(add) == "");
+support.expect(run, "wrong shape is refused", linux.call_d_dd(add, 1.0, 2.0) == 0.0);
+support.expect(run, "wrong shape error", string.has_prefix(linux.last_error(), "E_FFI_SIGNATURE"));
+support.expect(run, "check reports the mismatch", string.has_prefix(linux.check(add, "d:dd"), "E_FFI_SIGNATURE") && linux.check(add, "i:ii") == "");
+support.expect(run, "right shape still works", linux.call_i_ii(add, int32(2), int32(3)) == int32(5));
+support.expect(run, "error cleared", linux.last_error() == "" && linux.error(add) == "");
 
 // the library is unaffected by failed lookups
-kaku again = ffi.symbol(lib, "mio_add", "i:ii");
-support.expect(run, "lookup after failures", ffi.call_i_ii(again, int32(20), int32(22)) == int32(42));
-support.expect(run, "close", ffi.close(lib) == "");
+kaku again = linux.symbol(lib, "mio_add", "i:ii");
+support.expect(run, "lookup after failures", linux.call_i_ii(again, int32(20), int32(22)) == int32(42));
+support.expect(run, "close", linux.close(lib) == "");
 support.finish(run);

@@ -1,5 +1,5 @@
-yobu "../../tests/ffi/linux-amd64-dynamic/ffi";
 yobu "kiso/convert";
+yobu "kiso/ffi/linux";
 yobu "kiso/os";
 yobu "kiso/string";
 
@@ -36,13 +36,13 @@ kaku cold_path = os.getenv("MIO_FFI_COLD_LIB");
 
 // 1. first load (cold: the file is mapped and relocated for the first time in this process)
 kaku t0 = now_ns(spec);
-kaku lib = ffi.open(cold_path);
+kaku lib = linux.open(cold_path);
 kaku t1 = now_ns(spec);
 report("first_load", t1 - t0, 1);
 
 // 2. first symbol resolution
 t0 = now_ns(spec);
-kaku add = ffi.symbol(lib, "mio_add", "i:ii");
+kaku add = linux.symbol(lib, "mio_add", "i:ii");
 t1 = now_ns(spec);
 report("first_symbol_resolution", t1 - t0, 1);
 
@@ -50,7 +50,7 @@ report("first_symbol_resolution", t1 - t0, 1);
 kaku n = 100000;
 kaku i = 0;
 t0 = now_ns(spec);
-aida (i < n) { ffi.symbol(lib, "mio_add", "i:ii"); i = i + 1; }
+aida (i < n) { linux.symbol(lib, "mio_add", "i:ii"); i = i + 1; }
 t1 = now_ns(spec);
 report("repeated_symbol_resolution", t1 - t0, n);
 
@@ -58,22 +58,22 @@ report("repeated_symbol_resolution", t1 - t0, n);
 n = 1000;
 i = 0;
 t0 = now_ns(spec);
-aida (i < n) { kaku c = ffi.open(cold_path); ffi.close(c); i = i + 1; }
+aida (i < n) { kaku c = linux.open(cold_path); linux.close(c); i = i + 1; }
 t1 = now_ns(spec);
 report("warm_load_unload_cycle", t1 - t0, n);
-ffi.close(lib);
+linux.close(lib);
 
 // 5. cold load + unload cycle (nothing else holds the file, so every close really unloads it)
 n = 1000;
 i = 0;
 t0 = now_ns(spec);
-aida (i < n) { kaku c = ffi.open(cold_path); ffi.close(c); i = i + 1; }
+aida (i < n) { kaku c = linux.open(cold_path); linux.close(c); i = i + 1; }
 t1 = now_ns(spec);
 report("cold_load_unload_cycle", t1 - t0, n);
 
 // 6. hot path: 10,000,000 calls each; the sum keeps the calls live and is checked
-lib = ffi.open(path);
-add = ffi.symbol(lib, "mio_add", "i:ii");
+lib = linux.open(path);
+add = linux.symbol(lib, "mio_add", "i:ii");
 n = 10000000;
 kaku sum = 0;
 t0 = now_ns(spec);
@@ -92,7 +92,7 @@ report("hot_c_call_link_time_plt", t1 - t0, n);
 moshi (sum != expected) { chant("MISMATCH direct"); os.exit(1); }
 
 sum = 0;
-kaku address = add.address;
+kaku address = linux.address(add, "i:ii");
 t0 = now_ns(spec);
 i = 0;
 aida (i < n) { sum = sum + int64(raw_add(address, int32(i), int32(1))); i = i + 1; }
@@ -103,9 +103,9 @@ moshi (sum != expected) { chant("MISMATCH indirect"); os.exit(1); }
 sum = 0;
 t0 = now_ns(spec);
 i = 0;
-aida (i < n) { sum = sum + int64(ffi.call_i_ii(add, int32(i), int32(1))); i = i + 1; }
+aida (i < n) { sum = sum + int64(linux.call_i_ii(add, int32(i), int32(1))); i = i + 1; }
 t1 = now_ns(spec);
 report("hot_ffi_gated_call", t1 - t0, n);
 moshi (sum != expected) { chant("MISMATCH gated"); os.exit(1); }
-ffi.close(lib);
+linux.close(lib);
 chant("DONE");

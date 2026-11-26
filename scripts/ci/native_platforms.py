@@ -65,7 +65,7 @@ TCP_PACKAGE = "bunko/kiso/net/tcp"
 # Packages whose native primitives exist only on some targets (the other targets reject the program at build time or
 # report the operation unsupported). On every other target the package is reported NOT_RUN -- never PASS -- and is not a
 # required check; it becomes required there only when that target's backend lands (see docs/async-networking.md).
-TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",)}
+TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",), "bunko/kiso/ffi/linux": ("linux-amd64",)}
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
@@ -427,6 +427,48 @@ chant(len(tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),0).octets));
     ok = code != 0 and "kiso/not/a/package" in out + err
     report.check("invalid-module-diagnostic", "PASS" if ok else "FAIL", "native",
                  "" if ok else "missing module was accepted", output=brief(err or out))
+
+
+LINUX_FFI_EMBEDDED = """yobu "kiso/ffi/linux";
+kaku libc = linux.open_system("libc.so.6");
+kaku abs = linux.symbol(libc, "abs", "i:i");
+chant(linux.call_i_i(abs, int32(-42)));
+chant(linux.call_i_ii(abs, int32(1), int32(2)));
+chant(linux.last_error());
+chant(linux.close(libc));
+chant(linux.call_i_i(abs, int32(-7)));
+chant(linux.last_error());
+"""
+
+
+def linux_ffi_embedded(report, full, core, work):
+    """kiso/ffi/linux from the Full compiler's embedded Bunko only: an isolated copy of the Full CLI, no MIO_BUNKO and no adjacent tree,
+    builds and runs a program that loads libc by name, makes a gated call, is refused a mismatched call and a call after close. Core, which
+    embeds nothing, must report the package as missing instead of resolving it."""
+    base = work / "linux-ffi-embedded"
+    if base.exists():
+        shutil.rmtree(base)
+    (base / "bin").mkdir(parents=True)
+    cli = base / "bin" / "mio"
+    shutil.copyfile(full, cli)
+    cli.chmod(0o755)
+    source = base / "ffi.mio"
+    source.write_text(LINUX_FFI_EMBEDDED, encoding="utf-8")
+    image = base / "ffi"
+    code, out, err, _ = run(report, "linux-ffi-embedded-build", [cli, "build", source, "-o", image], cwd=base, env={"MIO_BUNKO": None})
+    executed = ""
+    if code == 0 and image.is_file():
+        image.chmod(0o755)
+        code, executed, run_err, _ = run(report, "linux-ffi-embedded-run", [image], cwd=base, env={"MIO_BUNKO": None})
+        err += run_err
+    expected = ["42", "0", "E_FFI_SIGNATURE the call does not match the resolved signature", "", "0", "E_FFI_CLOSED the library was closed"]
+    lines = [line.strip() for line in executed.splitlines()]
+    report.check("linux-ffi-embedded", "PASS" if code == 0 and lines == expected else "FAIL", "native",
+                 "" if code == 0 and lines == expected else "exit %s: %s | %s" % (code, brief(executed), brief(err or out)), output=executed)
+    code, out, err, _ = run(report, "linux-ffi-core-no-embedded", [core, "check", source], cwd=base, env={"MIO_BUNKO": None})
+    ok = code != 0 and "E_BUNKO_MISSING" in out + err
+    report.check("linux-ffi-core-no-embedded", "PASS" if ok else "FAIL", "native",
+                 "" if ok else "Core resolved kiso/ffi/linux without a Bunko tree" if code == 0 else brief(err or out))
 
 
 def smoke(report, cli, target, work, label_prefix=""):
@@ -1102,8 +1144,9 @@ def linux_shared(report, cli, work):
 
 
 def linux_dynamic_libraries(report, cli, work):
-    """Linux AMD64 shared-library loading (docs/linux-dynamic-libraries.md), non-required until it has a CI history. tests/ffi/linux-amd64-dynamic/run.py
-    builds the six native modules (math, buffer, state, zlib, SQLite, OpenSSL) and a dependency pair with `cc -fPIC -shared`, inspects them with readelf/nm/ldd,
+    """Linux AMD64 shared-library loading through the production Bunko package kiso/ffi/linux (docs/linux-dynamic-libraries.md). Required: it
+    has passed on every Linux AMD64 native run since the loader landed, and it is the only native test of several kiso/ffi/linux wrappers
+    (scripts/ci/bunko_matrix_coverage.json). tests/ffi/linux-amd64-dynamic/run.py builds the six native modules (math, buffer, state, zlib, SQLite, OpenSSL) and a dependency pair with `cc -fPIC -shared`, inspects them with readelf/nm/ldd,
     compiles the Mio end-to-end cases with the compiler built from this source (also with --gc-stress), runs them, and checks the static and dynamic ELF layouts
     and the benchmark. It needs the zlib, SQLite3 and OpenSSL development packages; without them the module build fails and this check FAILs (never skips).
     Raw logs, report.json and bench.txt land under logs/linux-dynamic-libraries."""
@@ -1114,7 +1157,7 @@ def linux_dynamic_libraries(report, cli, work):
     try:
         results = json.loads((output / "report.json").read_text(encoding="utf-8"))["results"]
     except (OSError, ValueError, KeyError) as problem:
-        report.check("linux-dynamic-libraries", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)), required=False)
+        report.check("linux-dynamic-libraries", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)))
         return
     failed = [item["name"] for item in results if item.get("status") != "PASS"]
     passed = [item["name"] for item in results if item.get("status") == "PASS"]
@@ -1125,7 +1168,7 @@ def linux_dynamic_libraries(report, cli, work):
         problems.append("FAIL: %s" % ", ".join(failed))
     if not passed:
         problems.append("no check passed")
-    report.check("linux-dynamic-libraries", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + "%d PASS, %d FAIL" % (len(passed), len(failed)), required=False)
+    report.check("linux-dynamic-libraries", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + "%d PASS, %d FAIL" % (len(passed), len(failed)))
 
 
 def linux_c_abi(report, cli, work):
@@ -1463,6 +1506,8 @@ def linux(args, target="linux-amd64"):
     if core is None:
         return finish(report)
     embedded_checks(report, cli, core, target, work)
+    if target == "linux-amd64":
+        linux_ffi_embedded(report, cli, core, work)
     smoke(report, cli, target, work)
     mio_run_protocol(report, cli, work)
     os_process_protocol(report, cli, work)
