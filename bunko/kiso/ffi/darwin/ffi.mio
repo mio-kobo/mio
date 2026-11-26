@@ -57,6 +57,7 @@ kata FunctionEntry {
     owner: int64;
     address: cptr;
     signature: string;
+    variadic: bool;
     layout: cabi.DarwinLayout;
 }
 kaku libraries: []LibraryEntry = [];
@@ -232,7 +233,7 @@ waza validate_mio_abi(entry: LibraryEntry) -> string {
     kaesu "";
 }
 
-waza resolve_function(entry: LibraryEntry, name: string, signature: string, mio: bool) -> SymbolResult {
+waza resolve_function(entry: LibraryEntry, name: string, signature: string, mio: bool, variadic: bool) -> SymbolResult {
     kaku image = entry.address;
     kaku found = lookup(image, name);
     moshi (found.error != "") { kaesu SymbolResult { function: mu, error: found.error }; }
@@ -259,13 +260,13 @@ waza resolve_function(entry: LibraryEntry, name: string, signature: string, mio:
     kaku id = take_id();
     moshi (id == 0) { registry_unlock(); kaesu SymbolResult { function: mu, error: "FFI ticket space exhausted" }; }
     array.push(functions, FunctionEntry {
-        id: id, owner: entry.id, address: found.address, signature: signature, layout: layout
+        id: id, owner: entry.id, address: found.address, signature: signature, variadic: variadic, layout: layout
     });
     registry_unlock();
     kaesu SymbolResult { function: Function { ticket: Ticket { id: id } }, error: "" };
 }
 
-waza bind_function(library: Library, name: string, signature: string, mio: bool) -> SymbolResult {
+waza bind_function(library: Library, name: string, signature: string, mio: bool, variadic: bool) -> SymbolResult {
     moshi (mio && (!cabi.valid_symbol(name) || !string.has_prefix(name, "mio_"))) {
         kaesu SymbolResult { function: mu, error: "invalid Mio FFI symbol" };
     }
@@ -274,13 +275,13 @@ waza bind_function(library: Library, name: string, signature: string, mio: bool)
     }
     kaku entry = pin_library(library);
     moshi (entry == mu) { kaesu SymbolResult { function: mu, error: "library is closed or closing" }; }
-    kaku result = resolve_function(entry, name, signature, mio);
+    kaku result = resolve_function(entry, name, signature, mio, variadic);
     unpin_library(entry.id);
     kaesu result;
 }
 
 koukai waza symbol(library: Library, name: string, prototype: Prototype) -> SymbolResult {
-    kaesu bind_function(library, name, prototype_code(prototype), hai);
+    kaesu bind_function(library, name, prototype_code(prototype), hai, iie);
 }
 
 koukai waza close(library: Library) -> string {
@@ -329,12 +330,14 @@ waza function_slot(function: Function) -> int64 {
     kaesu -1;
 }
 
-waza pin_function(function: Function, signature: string) -> FunctionEntry? {
+waza pin_function(function: Function, signature: string, variadic: bool) -> FunctionEntry? {
     registry_lock();
     kaku slot = function_slot(function);
     moshi (slot < 0) { registry_unlock(); kaesu mu; }
     kaku entry = functions[slot];
-    moshi (signature != "" && entry.signature != signature) { registry_unlock(); kaesu mu; }
+    moshi (entry.variadic != variadic || (signature != "" && entry.signature != signature)) {
+        registry_unlock(); kaesu mu;
+    }
     kaku owner = library_slot(entry.owner);
     moshi (owner < 0 || libraries[owner].state[close_in_progress] != 0) { registry_unlock(); kaesu mu; }
     kaku library = libraries[owner];
@@ -354,7 +357,7 @@ koukai waza release(function: Function) -> string {
 }
 
 koukai waza invoke_int64(function: Function) -> IntResult {
-    kaku entry = pin_function(function, "g");
+    kaku entry = pin_function(function, "g", iie);
     moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
     kaku value = call_g(entry.address);
     unpin_library(entry.owner);
@@ -362,7 +365,7 @@ koukai waza invoke_int64(function: Function) -> IntResult {
 }
 
 koukai waza invoke_int64_1(function: Function, a: int64) -> IntResult {
-    kaku entry = pin_function(function, "gg");
+    kaku entry = pin_function(function, "gg", iie);
     moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
     kaku value = call_gg(entry.address, a);
     unpin_library(entry.owner);
@@ -370,7 +373,7 @@ koukai waza invoke_int64_1(function: Function, a: int64) -> IntResult {
 }
 
 koukai waza invoke_int64_2(function: Function, a: int64, b: int64) -> IntResult {
-    kaku entry = pin_function(function, "ggg");
+    kaku entry = pin_function(function, "ggg", iie);
     moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
     kaku value = call_ggg(entry.address, a, b);
     unpin_library(entry.owner);
@@ -378,7 +381,7 @@ koukai waza invoke_int64_2(function: Function, a: int64, b: int64) -> IntResult 
 }
 
 koukai waza invoke_float64(function: Function, a: float64) -> FloatResult {
-    kaku entry = pin_function(function, "jj");
+    kaku entry = pin_function(function, "jj", iie);
     moshi (entry == mu) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
     kaku value = call_jj(entry.address, a);
     unpin_library(entry.owner);
@@ -386,7 +389,7 @@ koukai waza invoke_float64(function: Function, a: float64) -> FloatResult {
 }
 
 koukai waza invoke_float64_from_ints(function: Function, a: int64, b: int64) -> FloatResult {
-    kaku entry = pin_function(function, "jgg");
+    kaku entry = pin_function(function, "jgg", iie);
     moshi (entry == mu) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
     kaku value = call_jgg(entry.address, a, b);
     unpin_library(entry.owner);
@@ -394,7 +397,7 @@ koukai waza invoke_float64_from_ints(function: Function, a: int64, b: int64) -> 
 }
 
 koukai waza invoke_bool(function: Function, a: int64) -> BoolResult {
-    kaku entry = pin_function(function, "lg");
+    kaku entry = pin_function(function, "lg", iie);
     moshi (entry == mu) { kaesu BoolResult { value: iie, error: "invalid function or signature" }; }
     kaku value = call_lg(entry.address, a);
     unpin_library(entry.owner);

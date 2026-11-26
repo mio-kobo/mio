@@ -100,7 +100,8 @@ def main():
                  "dependencies-commands", "dependencies-loads", "dependencies-imports", "dependencies-fixups",
                  "dependencies-missing-leaf", "dependencies-undefined-symbol",
                  "threaded-build", "threaded-run", "threaded-gc-build", "threaded-gc-run", "threaded-sign",
-                 "threaded-c-build", "threaded-c-run"):
+                 "threaded-c-build", "threaded-c-run", "variadic-build", "variadic-run",
+                 "variadic-gc-build", "variadic-gc-run"):
         record(name, "NOT_RUN")
 
     try:
@@ -255,6 +256,12 @@ def main():
                                  "-Wall", "-Wextra", "-Werror", HERE / "threaded_oracle.c",
                                  libraries[0], libraries[3], "-Wl,-rpath,@loader_path", "-o", threaded_c])
         run("threaded-c-run", [threaded_c], empty_path=True)
+
+        for suffix, flags in (("", []), ("-gc", ["--gc-stress"])):
+            program = artifacts / f"variadic{suffix}"
+            run(f"variadic{suffix}-build", [mio, "build", HERE / "variadic.mio", *flags,
+                                            "--bunko-root", BUNKO, "-o", program], empty_path=True)
+            run(f"variadic{suffix}-run", [program, foreign], empty_path=True, contains="Darwin variadic FFI: ok")
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]

@@ -1,5 +1,8 @@
+#include <stdarg.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 
 const uint64_t fixture_read_only = UINT64_C(0xfedcba9876543210);
 uint64_t fixture_data;
@@ -57,9 +60,6 @@ bool foreign_aligned(const void *pointer, uint64_t alignment) {
     return pointer != 0 && (uintptr_t)pointer % alignment == 0;
 }
 
-#include <stdatomic.h>
-#include <time.h>
-
 static _Atomic int64_t waiting;
 static _Atomic bool resume;
 
@@ -84,4 +84,37 @@ int64_t foreign_hold(int64_t value) {
     }
     atomic_fetch_sub(&waiting, 1);
     return -1;
+}
+
+double foreign_variadic(int32_t flag, double named, ...) {
+    va_list arguments;
+    va_start(arguments, named);
+    int narrow = va_arg(arguments, int);
+    int unsigned_narrow = va_arg(arguments, int);
+    int boolean = va_arg(arguments, int);
+    double promoted = va_arg(arguments, double);
+    const uint64_t *pointer = va_arg(arguments, const uint64_t *);
+    uint64_t full_width = va_arg(arguments, uint64_t);
+    va_end(arguments);
+    if (flag != 17 || named != 2.5 || narrow != -111 || unsigned_narrow != 65001 ||
+        boolean != 1 || promoted != 1.75 || pointer != &fixture_read_only ||
+        full_width != UINT64_C(0xfedcba9876543210)) {
+        return -1.0;
+    }
+    return 42.25;
+}
+
+int64_t foreign_variadic_spilled(int64_t a0, int64_t a1, int64_t a2, int64_t a3,
+                                int64_t a4, int64_t a5, int64_t a6, int64_t a7,
+                                int32_t named_stack, ...) {
+    va_list arguments;
+    va_start(arguments, named_stack);
+    int trailing = va_arg(arguments, int);
+    double floating = va_arg(arguments, double);
+    va_end(arguments);
+    if (a0 != 10 || a1 != 11 || a2 != 12 || a3 != 13 || a4 != 14 || a5 != 15 ||
+        a6 != 16 || a7 != 17 || named_stack != 18 || trailing != 220 || floating != 6.5) {
+        return -1;
+    }
+    return 42;
 }

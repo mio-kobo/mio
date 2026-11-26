@@ -1,0 +1,101 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+
+waza require(condition: bool, detail: string) -> unit {
+    moshi (!condition) { chant(detail); os.exit(1); }
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku opened = darwin.open(path);
+    kaku library = opened.library;
+    moshi (library != mu) { kaesu library; }
+    chant(opened.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bind(library: darwin.Library, name: string, signature: darwin.CPrototype) -> darwin.VariadicFunction {
+    kaku result = darwin.bind_variadic_c(library, name, signature);
+    kaku function = result.function;
+    moshi (function != mu) { kaesu function; }
+    chant(result.error);
+    os.exit(1);
+    kaesu bind(library, name, signature);
+}
+
+waza verify(result: darwin.CallResult, expected: int64) -> bool {
+    kaku value = result.value;
+    moshi (value == mu) { chant(result.error); kaesu iie; }
+    awase (value) {
+        baai F64(x) { kaesu x == 42.25 && expected == 0; }
+        baai I64(x) { kaesu x == expected; }
+        baai Void { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { }
+        baai U32(x) { }
+        baai U64(x) { }
+        baai F32(x) { }
+        baai Ptr(x) { }
+        baai Bool(x) { }
+    }
+    kaesu iie;
+}
+
+waza fixture_pointer(library: darwin.Library) -> cptr {
+    kaku bound = darwin.bind_c(library, "foreign_pointer", darwin.CPrototype {
+        result: darwin.Scalar.Ptr(), parameters: []
+    });
+    kaku function = bound.function;
+    moshi (function == mu) { require(iie, bound.error); kaesu cptr(0); }
+    kaku result = darwin.invoke(function, []);
+    require(darwin.release(function) == "", "release pointer getter");
+    kaku value = result.value;
+    moshi (value == mu) { require(iie, result.error); kaesu cptr(0); }
+    awase (value) {
+        baai Ptr(x) { kaesu x; }
+        baai Void { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { }
+        baai U32(x) { }
+        baai I64(x) { }
+        baai U64(x) { }
+        baai F32(x) { }
+        baai F64(x) { }
+        baai Bool(x) { }
+    }
+    kaesu cptr(0);
+}
+
+kaku args = os.arguments();
+require(len(args) == 2, "expected C variadic fixture path");
+kaku library = open(args[1]);
+kaku i32 = darwin.Scalar.I32();
+kaku i64 = darwin.Scalar.I64();
+kaku f64 = darwin.Scalar.F64();
+kaku pointer = fixture_pointer(library);
+kaku function = bind(library, "foreign_variadic", darwin.CPrototype { result: f64, parameters: [i32, f64] });
+kaku fixed = [darwin.Value.I32(int32(17)), darwin.Value.F64(2.5)];
+kaku trailing = [darwin.Value.I8(int8(-111)), darwin.Value.U16(uint16(65001)), darwin.Value.Bool(hai),
+    darwin.Value.F32(float32(1.75)), darwin.Value.Ptr(pointer), darwin.Value.U64(uint64(-81985529216486896))];
+require(verify(darwin.invoke_variadic(function, fixed, trailing), 0), "default promotions and mixed variadic stack");
+require(darwin.invoke_variadic(function, [], trailing).error != "", "wrong fixed arity");
+require(darwin.invoke_variadic(function, fixed, [darwin.Value.Void()]).error != "", "void variadic parameter rejected");
+require(darwin.invoke(function.binding, fixed).error != "", "fixed bridge rejects variadic function");
+require(darwin.release_variadic(function) == "", "release variadic function");
+require(darwin.invoke_variadic(function, fixed, trailing).error != "", "stale variadic binding");
+
+kaku spill = bind(library, "foreign_variadic_spilled", darwin.CPrototype {
+    result: i64, parameters: [i64, i64, i64, i64, i64, i64, i64, i64, i32]
+});
+require(verify(darwin.invoke_variadic(spill,
+    [darwin.Value.I64(10), darwin.Value.I64(11), darwin.Value.I64(12), darwin.Value.I64(13),
+     darwin.Value.I64(14), darwin.Value.I64(15), darwin.Value.I64(16), darwin.Value.I64(17), darwin.Value.I32(int32(18))],
+    [darwin.Value.U8(uint8(220)), darwin.Value.F64(6.5)]), 42), "variadic stack follows compact fixed spill");
+require(darwin.close(library) == "", "close variadic library");
+chant("Darwin variadic FFI: ok");
