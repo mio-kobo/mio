@@ -1,54 +1,54 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
-waza cs(text: string) -> []uint8 { kaesu ffi.cstring(text); }
+waza cs(text: string) -> []uint8 { kaesu linux.cstring(text); }
 
 kaku run = support.begin("test_ffi_sqlite");
-kaku lib = ffi.open(support.absolute("libmio_sqlite.so"));
-support.expect(run, "open", !ffi.failed(lib));
-kaku open_memory = ffi.symbol(lib, "mio_sqlite_open_memory", "p:");
-kaku exec = ffi.symbol(lib, "mio_sqlite_exec", "i:pn");
-kaku query_int = ffi.symbol(lib, "mio_sqlite_query_int", "l:pn");
-kaku query_text = ffi.symbol(lib, "mio_sqlite_query_text", "l:pnnz");
-kaku close_db = ffi.symbol(lib, "mio_sqlite_close", "v:p");
+kaku lib = linux.open(support.absolute("libmio_sqlite.so"));
+support.expect(run, "open", !linux.failed(lib));
+kaku open_memory = linux.symbol(lib, "mio_sqlite_open_memory", "p:");
+kaku exec = linux.symbol(lib, "mio_sqlite_exec", "i:pn");
+kaku query_int = linux.symbol(lib, "mio_sqlite_query_int", "l:pn");
+kaku query_text = linux.symbol(lib, "mio_sqlite_query_text", "l:pnnz");
+kaku close_db = linux.symbol(lib, "mio_sqlite_close", "v:p");
 
-kaku db = ffi.call_p_(open_memory);
+kaku db = linux.call_p_(open_memory);
 support.expect(run, "in-memory database", db != cptr(0));
-support.expect(run, "create table", ffi.call_i_pn(exec, db, cs("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")) == int32(0));
-support.expect(run, "insert alice", ffi.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('Alice', 30)")) == int32(0));
-support.expect(run, "insert bob", ffi.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('Bob', 25)")) == int32(0));
-support.expect(run, "insert utf-8", ffi.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('美久', 17)")) == int32(0));
-support.expect(run, "count", ffi.call_l_pn(query_int, db, cs("SELECT COUNT(*) FROM people")) == 3);
-support.expect(run, "sum of ages", ffi.call_l_pn(query_int, db, cs("SELECT SUM(age) FROM people")) == 72);
-support.expect(run, "filtered query", ffi.call_l_pn(query_int, db, cs("SELECT age FROM people WHERE name = 'Bob'")) == 25);
+support.expect(run, "create table", linux.call_i_pn(exec, db, cs("CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, age INTEGER)")) == int32(0));
+support.expect(run, "insert alice", linux.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('Alice', 30)")) == int32(0));
+support.expect(run, "insert bob", linux.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('Bob', 25)")) == int32(0));
+support.expect(run, "insert utf-8", linux.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES ('美久', 17)")) == int32(0));
+support.expect(run, "count", linux.call_l_pn(query_int, db, cs("SELECT COUNT(*) FROM people")) == 3);
+support.expect(run, "sum of ages", linux.call_l_pn(query_int, db, cs("SELECT SUM(age) FROM people")) == 72);
+support.expect(run, "filtered query", linux.call_l_pn(query_int, db, cs("SELECT age FROM people WHERE name = 'Bob'")) == 25);
 
 kaku out: []uint8 = array.make[uint8](64, uint8(0));
-kaku n = ffi.call_l_pnnz(query_text, db, cs("SELECT name FROM people ORDER BY age DESC LIMIT 1"), out);
+kaku n = linux.call_l_pnnz(query_text, db, cs("SELECT name FROM people ORDER BY age DESC LIMIT 1"), out);
 support.expect(run, "text length", n == 5);
 kaku name_bytes: []uint8 = [];
 kaku at = 0;
 aida (at < n) { array.push(name_bytes, out[at]); at = at + 1; }
 support.expect(run, "text value", support.text(name_bytes) == "Alice");
-n = ffi.call_l_pnnz(query_text, db, cs("SELECT name FROM people WHERE age = 17"), out);
+n = linux.call_l_pnnz(query_text, db, cs("SELECT name FROM people WHERE age = 17"), out);
 name_bytes = [];
 at = 0;
 aida (at < n) { array.push(name_bytes, out[at]); at = at + 1; }
 support.expect(run, "utf-8 text value", support.text(name_bytes) == "美久");
 
 // error codes, not crashes
-support.expect(run, "syntax error code", ffi.call_i_pn(exec, db, cs("CREATE TABEL broken")) == int32(1));
-support.expect(run, "unknown table", ffi.call_l_pn(query_int, db, cs("SELECT * FROM nothing")) == -1000000001);
-support.expect(run, "constraint violation", ffi.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES (NULL, 1)")) == int32(19));
-support.expect(run, "null database code", ffi.call_i_pn(exec, cptr(0), cs("SELECT 1")) == int32(-1));
-support.expect(run, "rows unchanged by failures", ffi.call_l_pn(query_int, db, cs("SELECT COUNT(*) FROM people")) == 3);
-ffi.call_v_p(close_db, db);
+support.expect(run, "syntax error code", linux.call_i_pn(exec, db, cs("CREATE TABEL broken")) == int32(1));
+support.expect(run, "unknown table", linux.call_l_pn(query_int, db, cs("SELECT * FROM nothing")) == -1000000001);
+support.expect(run, "constraint violation", linux.call_i_pn(exec, db, cs("INSERT INTO people (name, age) VALUES (NULL, 1)")) == int32(19));
+support.expect(run, "null database code", linux.call_i_pn(exec, cptr(0), cs("SELECT 1")) == int32(-1));
+support.expect(run, "rows unchanged by failures", linux.call_l_pn(query_int, db, cs("SELECT COUNT(*) FROM people")) == 3);
+linux.call_v_p(close_db, db);
 
 // a second database is independent
-kaku other = ffi.call_p_(open_memory);
-support.expect(run, "fresh database is empty", ffi.call_i_pn(exec, other, cs("SELECT * FROM people")) != int32(0));
-ffi.call_v_p(close_db, other);
-support.expect(run, "no ffi error", ffi.error(exec) == "");
-support.expect(run, "close", ffi.close(lib) == "");
+kaku other = linux.call_p_(open_memory);
+support.expect(run, "fresh database is empty", linux.call_i_pn(exec, other, cs("SELECT * FROM people")) != int32(0));
+linux.call_v_p(close_db, other);
+support.expect(run, "no ffi error", linux.last_error() == "");
+support.expect(run, "close", linux.close(lib) == "");
 support.finish(run);

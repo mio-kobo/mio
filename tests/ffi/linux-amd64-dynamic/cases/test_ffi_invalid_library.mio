@@ -1,44 +1,44 @@
-yobu "../ffi";
 yobu "../support";
 yobu "kiso/array";
+yobu "kiso/ffi/linux";
 yobu "kiso/string";
 
 kaku run = support.begin("test_ffi_invalid_library");
 
-kaku missing = ffi.open(support.absolute("libmio_not_there.so"));
-support.expect(run, "missing file fails", ffi.failed(missing));
+kaku missing = linux.open(support.absolute("libmio_not_there.so"));
+support.expect(run, "missing file fails", linux.failed(missing));
 support.expect(run, "missing file is classified", string.has_prefix(missing.error, "E_FFI_LOAD"));
 support.expect(run, "missing file message", string.contains(missing.error, "cannot open shared object file"));
 
-kaku text = ffi.open(support.absolute("not_elf.so"));
-support.expect(run, "text file fails", ffi.failed(text));
+kaku text = linux.open(support.absolute("not_elf.so"));
+support.expect(run, "text file fails", linux.failed(text));
 support.expect(run, "text file message", string.contains(text.error, "file too short") || string.contains(text.error, "invalid ELF header"));
 
-kaku truncated = ffi.open(support.absolute("truncated.so"));
-support.expect(run, "truncated ELF fails", ffi.failed(truncated));
+kaku truncated = linux.open(support.absolute("truncated.so"));
+support.expect(run, "truncated ELF fails", linux.failed(truncated));
 
-kaku directory = ffi.open(support.libdir());
-support.expect(run, "directory fails", ffi.failed(directory));
+kaku directory = linux.open(support.libdir());
+support.expect(run, "directory fails", linux.failed(directory));
 
-kaku bare = ffi.open("libm.so.6");
+kaku bare = linux.open("libm.so.6");
 support.expect(run, "bare name is rejected, not searched", string.has_prefix(bare.error, "E_FFI_PATH"));
-support.expect(run, "empty path", string.has_prefix(ffi.open("").error, "E_FFI_PATH"));
+support.expect(run, "empty path", string.has_prefix(linux.open("").error, "E_FFI_PATH"));
 kaku with_nul = support.text([uint8(47), uint8(0), uint8(120)]);
-support.expect(run, "path with NUL", string.has_prefix(ffi.open(with_nul).error, "E_FFI_PATH"));
+support.expect(run, "path with NUL", string.has_prefix(linux.open(with_nul).error, "E_FFI_PATH"));
 kaku long_bytes: []uint8 = array.make[uint8](100000, uint8(120));
 kaku long_path = string.concat("/", support.text(long_bytes));
-support.expect(run, "very long path", ffi.failed(ffi.open(long_path)));
-support.expect(run, "path traversal to nothing", ffi.failed(ffi.open("../../../../nonexistent/libx.so")));
-support.expect(run, "UTF-8 path to nothing", ffi.failed(ffi.open("/tmp/库.so")));
+support.expect(run, "very long path", linux.failed(linux.open(long_path)));
+support.expect(run, "path traversal to nothing", linux.failed(linux.open("../../../../nonexistent/libx.so")));
+support.expect(run, "UTF-8 path to nothing", linux.failed(linux.open("/tmp/库.so")));
 
 // a failed library is inert: symbols and close report errors instead of crashing
-kaku symbol = ffi.symbol(missing, "mio_add", "i:ii");
-support.expect(run, "symbol of failed library", string.has_prefix(ffi.error(symbol), "E_FFI_STATE"));
-support.expect(run, "call on failed library is refused", ffi.call_i_ii(symbol, int32(1), int32(2)) == int32(0));
-support.expect(run, "close of failed library", string.has_prefix(ffi.close(missing), "E_FFI_STATE"));
+kaku symbol = linux.symbol(missing, "mio_add", "i:ii");
+support.expect(run, "symbol of failed library", string.has_prefix(linux.error(symbol), "E_FFI_STATE"));
+support.expect(run, "call on failed library is refused", linux.call_i_ii(symbol, int32(1), int32(2)) == int32(0));
+support.expect(run, "close of failed library", string.has_prefix(linux.close(missing), "E_FFI_STATE"));
 
 // an explicit relative path works
-kaku relative = ffi.open("./libmio_math.so");
-support.expect(run, "relative path (./) opens", !ffi.failed(relative));
-support.expect(run, "relative path closes", ffi.close(relative) == "");
+kaku relative = linux.open("./libmio_math.so");
+support.expect(run, "relative path (./) opens", !linux.failed(relative));
+support.expect(run, "relative path closes", linux.close(relative) == "");
 support.finish(run);

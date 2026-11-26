@@ -1,0 +1,24 @@
+yobu "kiso/ffi/linux";
+
+// Native memory with kiso/ffi/linux (Linux AMD64 only): an owned buffer, scalar fields, a C string handed to libc,
+// bounds checks and stale-handle detection.
+waza raw_strlen(f: cptr, text: cptr) -> uint64 = c "mio_ffi_indirect";
+
+kaku cell = linux.alloc_zeroed(16);
+linux.set_int32(cell, 0, int32(-7));
+linux.set_float64(cell, 8, 2.5);
+chant(linux.get_int32(cell, 0));
+chant(linux.get_float64(cell, 8) == 2.5);
+// every access is bounds-checked: nothing is written past the 16 bytes
+chant(linux.set_int64(cell, 12, 1));
+chant(linux.free(cell));
+chant(linux.free(cell));
+
+kaku libc = linux.open_system("libc.so.6");
+kaku strlen = linux.symbol(libc, "strlen", "z:p");
+kaku text = linux.c_string_buffer("Mio and Mochi");
+chant(raw_strlen(linux.unsafe_address(strlen, "z:p"), linux.pointer(text)) == uint64(13));
+kaku tail = linux.c_string(text, 8);
+moshi (tail != mu) { chant(tail); }
+linux.free(text);
+linux.close(libc);
