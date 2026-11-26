@@ -1,0 +1,180 @@
+yobu "kiso/aot/elfrel";
+yobu "kiso/array";
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) { value = value + int64(bytes[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+// lea rax, [rip + disp32]; ret  -- one PC32 reference to the data area at offset 8
+waza sample(relocations: []elfrel.Relocation) -> elfrel.ObjectSpec {
+    kaku code: []uint8 = [uint8(72), uint8(141), uint8(5), uint8(0), uint8(0), uint8(0), uint8(0), uint8(195)];
+    kaku exports: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "mio_sample", offset: 0, size: 8 }];
+    kaku locals: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "rt.helper", offset: 7, size: 1 }];
+    kaesu elfrel.ObjectSpec { code: code, bss_size: 64, exports: exports, locals: locals, relocations: relocations };
+}
+
+waza data_ref(at: int64, offset: int64) -> elfrel.Relocation {
+    kaesu elfrel.Relocation { at: at, kind: elfrel.r_x86_64_pc32, symbol: "", addend: offset - 4 };
+}
+
+// Independent oracle: dl_new_hash values computed outside Mio (h = h * 33 + c mod 2^32, h0 = 5381).
+waza test_gnu_hash() -> unit {
+    testing.expect(gnu_hash("") == 5381, "empty name");
+    testing.expect(gnu_hash("printf") == 359345080, "printf = 0x156b2bb8");
+    testing.expect(gnu_hash("exit") == 2090237503, "exit = 0x7c967e3f");
+    testing.expect(gnu_hash("syscall") == 3133280928, "syscall = 0xbac212a0");
+    testing.expect(gnu_hash("mio_math_add") == 3070853979, "mio_math_add = 0xb709835b");
+}
+
+waza test_layout() -> unit {
+    kaku linked = link(sample([data_ref(3, 8)]), "libsample.so");
+    testing.expect(linked.error == "", "self-contained module links");
+    kaku b = linked.bytes;
+    testing.expect(word(b, 0, 4) == 1179403647 && b[4] == uint8(2) && b[5] == uint8(1), "ELF64 little endian");
+    testing.expect(word(b, 16, 2) == 3 && word(b, 18, 2) == 62 && word(b, 24, 8) == 0, "ET_DYN, EM_X86_64, no entry");
+    testing.expect(word(b, 32, 8) == 64 && word(b, 54, 2) == 56 && word(b, 56, 2) == 6, "six program headers after the ELF header");
+    // PT_LOAD R, PT_LOAD R+X, PT_LOAD R+W, PT_DYNAMIC, PT_GNU_RELRO, PT_GNU_STACK
+    testing.expect(word(b, 64, 4) == 1 && word(b, 68, 4) == 4, "read-only segment");
+    testing.expect(word(b, 120, 4) == 1 && word(b, 124, 4) == 5 && word(b, 128, 8) == 4096, "text segment R+X at 0x1000");
+    testing.expect(word(b, 176, 4) == 1 && word(b, 180, 4) == 6 && word(b, 184, 8) == 8192, "data segment R+W at 0x2000");
+    testing.expect(word(b, 176 + 40, 8) == 4096 + 64, "data segment covers the page-aligned .bss");
+    testing.expect(word(b, 232, 4) == 2 && word(b, 288, 4) == 1685382482 && word(b, 288 + 40, 8) == 4096, "PT_DYNAMIC and page-sized PT_GNU_RELRO");
+    testing.expect(word(b, 344, 4) == 1685382481 && word(b, 348, 4) == 6, "non-executable PT_GNU_STACK");
+    // the PC32 field: S + A - P = 0x3000 + 4 - 0x1003 (data offset 8, addend 4)
+    testing.expect(word(b, 4096 + 3, 4) == 12288 + 4 - 4099, "PC32 resolved against the .bss address");
+    testing.expect(b[4096] == uint8(72) && b[4096 + 7] == uint8(195), "the rest of the code is copied unchanged");
+    kaku again = link(sample([data_ref(3, 8)]), "libsample.so");
+    kaku same = len(again.bytes) == len(b);
+    kaku at = 0;
+    aida (same && at < len(b)) { same = again.bytes[at] == b[at]; at = at + 1; }
+    testing.expect(same, "deterministic output");
+}
+
+waza test_dynamic_section() -> unit {
+    kaku b = link(sample([]), "libsample.so").bytes;
+    kaku dynamic = word(b, 232 + 8, 8);
+    testing.expect(word(b, dynamic, 8) == 14, "DT_SONAME first");
+    kaku tags: []int64 = [];
+    kaku at = 0;
+    aida (at < 10) { array_push(tags, word(b, dynamic + at * 16, 8)); at = at + 1; }
+    testing.expect(tags[1] == 1879047925 && tags[2] == 5 && tags[3] == 6 && tags[4] == 10 && tags[5] == 11, "GNU_HASH, STRTAB, SYMTAB, STRSZ, SYMENT");
+    testing.expect(tags[6] == 30 && word(b, dynamic + 6 * 16 + 8, 8) == 8, "DT_FLAGS = DF_BIND_NOW");
+    testing.expect(tags[7] == 1879048187 && word(b, dynamic + 7 * 16 + 8, 8) == 1, "DT_FLAGS_1 = DF_1_NOW");
+    testing.expect(tags[8] == 0, "DT_NULL terminates");
+    kaku none = 0;
+    at = 0;
+    aida (at < 10) { moshi (tags[at] == 1 || tags[at] == 22 || tags[at] == 7 || tags[at] == 23) { none = none + 1; } at = at + 1; }
+    testing.expect(none == 0, "no DT_NEEDED, DT_TEXTREL, DT_RELA or DT_JMPREL");
+}
+
+waza array_push(values: []int64, value: int64) -> unit { array.push(values, value); }
+
+waza test_rejections() -> unit {
+    kaku external: []elfrel.Relocation = [elfrel.Relocation { at: 3, kind: elfrel.r_x86_64_plt32, symbol: "sqrt", addend: -4 }];
+    testing.expect(link(sample(external), "libx.so").error == "UNSUPPORTED_EXTERNAL sqrt", "external C symbols are not linked yet");
+    kaku absolute: []elfrel.Relocation = [elfrel.Relocation { at: 3, kind: 10, symbol: "", addend: 0 }];
+    testing.expect(link(sample(absolute), "libx.so").error == "UNSUPPORTED_RELOCATION type 10", "R_X86_64_32 is rejected");
+    kaku gotpcrel: []elfrel.Relocation = [elfrel.Relocation { at: 3, kind: 9, symbol: "x", addend: -4 }];
+    testing.expect(link(sample(gotpcrel), "libx.so").error == "UNSUPPORTED_RELOCATION type 9", "GOTPCREL is rejected");
+    testing.expect(link(sample([data_ref(5, 8)]), "libx.so").error == "INVALID_RELOCATION_OFFSET", "a rel32 past the end of .text");
+    testing.expect(link(sample([data_ref(3, 65)]), "libx.so").error == "INVALID_RELOCATION_ADDEND" && link(sample([data_ref(3, 64)]), "libx.so").error == "", "a reference past the data area (one past the end is the ET_REL writer's limit too)");
+    testing.expect(link(sample([data_ref(3, 8), data_ref(1, 8)]), "libx.so").error == "OVERLAPPING_RELOCATIONS", "overlapping rel32 fields");
+    testing.expect(link(sample([]), "lib/x.so").error == "INVALID_SONAME" && link(sample([]), "").error == "INVALID_SONAME", "SONAME is a file name");
+    kaku spec = sample([]);
+    kaku twice: []elfrel.ObjectExport = [spec.exports[0], spec.exports[0]];
+    testing.expect(link(elfrel.ObjectSpec { code: spec.code, bss_size: 64, exports: twice, locals: [], relocations: [] }, "libx.so").error == "DUPLICATE_EXPORT mio_sample", "duplicate exports");
+    kaku outside: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "f", offset: 4, size: 8 }];
+    testing.expect(link(elfrel.ObjectSpec { code: spec.code, bss_size: 64, exports: outside, locals: [], relocations: [] }, "libx.so").error == "INVALID_EXPORT", "an export outside .text");
+    testing.expect(link(elfrel.ObjectSpec { code: [], bss_size: 0, exports: [], locals: [], relocations: [] }, "libx.so").error == "EMPTY_TEXT", "empty module");
+}
+
+// The GNU hash table: every export is reachable through its bucket and chain.
+waza test_gnu_hash_table() -> unit {
+    kaku code: []uint8 = [];
+    kaku exports: []elfrel.ObjectExport = [];
+    kaku names: []string = ["mio_a", "mio_b", "mio_c", "mio_d", "mio_e"];
+    kaku at = 0;
+    aida (at < len(names)) {
+        array.push(code, uint8(195));
+        array.push(exports, elfrel.ObjectExport { symbol: names[at], offset: at, size: 1 });
+        at = at + 1;
+    }
+    kaku b = link(elfrel.ObjectSpec { code: code, bss_size: 0, exports: exports, locals: [], relocations: [] }, "libh.so").bytes;
+    kaku table = 64 + 6 * 56;
+    moshi (table - (table / 8) * 8 != 0) { table = table + 8 - (table - (table / 8) * 8); }
+    kaku nbuckets = word(b, table, 4);
+    testing.expect(nbuckets == 5 && word(b, table + 4, 4) == 1 && word(b, table + 8, 4) == 1, "header: 5 buckets, symoffset 1, one bloom word");
+    kaku buckets = table + 16 + 8;
+    kaku chains = buckets + nbuckets * 4;
+    kaku found = 0;
+    at = 0;
+    aida (at < len(names)) {
+        kaku h = gnu_hash(names[at]);
+        kaku index = word(b, buckets + (h - (h / nbuckets) * nbuckets) * 4, 4);
+        kaku hit = iie;
+        kaku guard = 0;
+        aida (index != 0 && !hit && guard < 8) {
+            kaku value = word(b, chains + (index - 1) * 4, 4);
+            moshi (value - (value - (value / 2) * 2) == h - (h - (h / 2) * 2)) { hit = hai; }
+            moshi (value - (value / 2) * 2 == 1) { index = 0; } sore { index = index + 1; }
+            guard = guard + 1;
+        }
+        moshi (hit) { found = found + 1; }
+        at = at + 1;
+    }
+    testing.expect(found == len(names), "every export is found through bucket and chain");
+}
+
+// An import of sqrt from libm.so.6 with a RUNPATH: PLT stub, GOT slot, JUMP_SLOT relocation, NEEDED and RUNPATH.
+waza imported() -> elfrel.ObjectSpec {
+    // call rel32; ret
+    kaku code: []uint8 = [uint8(232), uint8(0), uint8(0), uint8(0), uint8(0), uint8(195)];
+    kaku exports: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "mio_root", offset: 0, size: 6 }];
+    kaku relocations: []elfrel.Relocation = [elfrel.Relocation { at: 1, kind: elfrel.r_x86_64_plt32, symbol: "sqrt", addend: -4 }];
+    kaesu elfrel.ObjectSpec { code: code, bss_size: 0, exports: exports, locals: [], relocations: relocations };
+}
+
+waza dynamic_value(b: []uint8, tag: int64) -> int64 {
+    kaku dynamic = word(b, 232 + 8, 8);
+    kaku at = 0;
+    aida (word(b, dynamic + at * 16, 8) != 0) {
+        moshi (word(b, dynamic + at * 16, 8) == tag) { kaesu word(b, dynamic + at * 16 + 8, 8); }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+waza test_imports() -> unit {
+    kaku linked = link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "$ORIGIN/lib", symbols: ["sqrt"] });
+    testing.expect(linked.error == "", "a declared import links");
+    kaku b = linked.bytes;
+    testing.expect(dynamic_value(b, 1) > 0 && dynamic_value(b, 29) > 0, "DT_NEEDED and DT_RUNPATH");
+    kaku got = dynamic_value(b, 3);
+    kaku jmprel = dynamic_value(b, 23);
+    testing.expect(got > 0 && dynamic_value(b, 2) == 24 && dynamic_value(b, 20) == 7 && jmprel > 0, "PLTGOT, PLTRELSZ, PLTREL = RELA, JMPREL");
+    // the one JUMP_SLOT relocation targets GOT[3] and dynamic symbol 1 (sqrt)
+    testing.expect(word(b, jmprel, 8) == got + 24 && word(b, jmprel + 8, 8) == 4294967296 + 7, "R_X86_64_JUMP_SLOT on GOT[3] for sym 1");
+    // the call reaches the PLT stub, and the stub jumps through GOT[3]
+    kaku text = 4096;
+    kaku stub = text + 5 + word(b, text + 1, 4);
+    testing.expect(b[stub] == uint8(255) && b[stub + 1] == uint8(37), "call rel32 lands on a jmp *[rip+disp32] stub");
+    testing.expect(stub + 6 + word(b, stub + 2, 4) == got + 24, "the stub reads GOT[3]");
+    testing.expect(word(b, got, 8) == word(b, 232 + 8, 8), "GOT[0] holds _DYNAMIC");
+    kaku relro = 288;
+    testing.expect(word(b, relro + 16, 8) <= got && word(b, relro + 16, 8) + word(b, relro + 40, 8) >= got + 32, "PT_GNU_RELRO covers the GOT");
+    testing.expect(link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "", symbols: ["cbrt"] }).error == "UNRESOLVED_SYMBOL sqrt", "an unresolved import");
+    testing.expect(link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6", "libm.so.6"], runpath: "", symbols: ["sqrt"] }).error == "DUPLICATE_NEEDED libm.so.6", "duplicate DT_NEEDED");
+    kaku self: []elfrel.Relocation = [elfrel.Relocation { at: 1, kind: elfrel.r_x86_64_plt32, symbol: "mio_root", addend: -4 }];
+    kaku spec = imported();
+    testing.expect(link_with(elfrel.ObjectSpec { code: spec.code, bss_size: 0, exports: spec.exports, locals: [], relocations: self }, "libroot.so", Imports { needed: ["libm.so.6"], runpath: "", symbols: ["mio_root"] }).error == "UNSUPPORTED_SELF_REFERENCE mio_root", "a call to an own export through the PLT");
+    kaku again = link_with(imported(), "libroot.so", Imports { needed: ["libm.so.6"], runpath: "$ORIGIN/lib", symbols: ["sqrt"] }).bytes;
+    kaku same = len(again) == len(b);
+    kaku at = 0;
+    aida (same && at < len(b)) { same = again[at] == b[at]; at = at + 1; }
+    testing.expect(same, "deterministic output with imports");
+}
