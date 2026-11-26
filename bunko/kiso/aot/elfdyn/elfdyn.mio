@@ -1,0 +1,410 @@
+yobu "kiso/aot/elf";
+yobu "kiso/aot/elfrel";
+yobu "kiso/array";
+yobu "kiso/convert";
+yobu "kiso/string";
+
+// Pure Mio Linux x86-64 ELF64 shared-object (ET_DYN) linker for self-contained Mio modules: the
+// `mio build --shared --linker native` path. It links the lowered module (the same elfrel.ObjectSpec the ET_REL
+// writer receives) directly into a loadable shared object, without cc, ld or lld.
+//
+// Scope (milestone 1): a module whose only relocations are R_X86_64_PC32 references from .text to the module's own
+// data area. Those are resolved at link time (the distance between .text and .bss is fixed), so the output has no
+// dynamic relocations, no GOT, no PLT and no DT_NEEDED. A module that calls a declared external C symbol
+// (R_X86_64_PLT32) is rejected with UNSUPPORTED_EXTERNAL; any other relocation type with UNSUPPORTED_RELOCATION.
+// Nothing falls back to another linker.
+//
+// Layout (file offset == virtual address, base 0, 4 KiB pages):
+//   0x0000  ELF header, program headers, .gnu.hash, .dynsym, .dynstr         PT_LOAD R
+//   page    .text                                                            PT_LOAD R+X
+//   page    .dynamic (PT_DYNAMIC, PT_GNU_RELRO up to the page end), then     PT_LOAD R+W
+//   page    .bss (zero-filled, memory only)
+//   after   .symtab, .strtab, .shstrtab and the section headers (not loaded)
+// Program headers: the three PT_LOADs, PT_DYNAMIC, PT_GNU_RELRO and a non-executable PT_GNU_STACK.
+// Dynamic tags: DT_GNU_HASH, DT_STRTAB, DT_SYMTAB, DT_STRSZ, DT_SYMENT, DT_SONAME, DT_FLAGS = DF_BIND_NOW,
+// DT_FLAGS_1 = DF_1_NOW, DT_NULL. The dynamic symbol table holds exactly the exports (GLOBAL FUNC, default
+// visibility); the module's local functions are only in .symtab. The output is a pure function of the input.
+
+koukai kata LinkResult {
+    bytes: []uint8;
+    error: string;
+}
+
+teisu page = 4096;
+teisu header_size = 64;
+teisu program_header_size = 56;
+teisu program_headers = 6;
+teisu section_header_size = 64;
+teisu symbol_size = 24;
+teisu dynamic_entry_size = 16;
+teisu maximum_bss = 1073741824;
+teisu maximum_code = 1073741824;
+teisu bloom_shift = 26;
+
+// Section indexes of the output.
+teisu section_gnu_hash = 1;
+teisu section_dynsym = 2;
+teisu section_dynstr = 3;
+teisu section_text = 4;
+teisu section_dynamic = 5;
+teisu section_bss = 6;
+teisu section_symtab = 7;
+teisu section_strtab = 8;
+teisu section_shstrtab = 9;
+teisu section_count = 10;
+
+waza fail(message: string) -> LinkResult { kaesu LinkResult { bytes: [], error: message }; }
+
+waza add_name(table: []uint8, name: string) -> int64 {
+    kaku at = len(table);
+    array.append_all(table, string.to_bytes(name));
+    array.push(table, uint8(0));
+    kaesu at;
+}
+
+waza pad_to(out: []uint8, size: int64) -> unit {
+    aida (len(out) < size) { array.push(out, uint8(0)); }
+}
+
+// Overwrites 4 bytes at `at` with the two's-complement little-endian value.
+waza patch32(code: []uint8, at: int64, value: int64) -> unit {
+    kaku x = value;
+    moshi (x < 0) { x = x + 4294967296; }
+    kaku i = 0;
+    aida (i < 4) {
+        code[at + i] = uint8(x - (x / 256) * 256);
+        x = x / 256;
+        i = i + 1;
+    }
+}
+
+// The GNU hash of a symbol name (dl_new_hash): h = h * 33 + c over the bytes, modulo 2^32.
+koukai waza gnu_hash(name: string) -> int64 {
+    kaku bytes = string.to_bytes(name);
+    kaku h = 5381;
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        h = (h * 33 + int64(bytes[at])) - ((h * 33 + int64(bytes[at])) / 4294967296) * 4294967296;
+        at = at + 1;
+    }
+    kaesu h;
+}
+
+waza power_of_two(n: int64) -> int64 {
+    kaku value = 1;
+    kaku i = 0;
+    aida (i < n) { value = value * 2; i = i + 1; }
+    kaesu value;
+}
+
+// Sets bit `bit` (0..63) of the little-endian 64-bit word at bloom[word * 8].
+waza set_bloom_bit(bloom: []uint8, word: int64, bit: int64) -> unit {
+    kaku index = word * 8 + bit / 8;
+    kaku mask = power_of_two(bit - (bit / 8) * 8);
+    kaku current = int64(bloom[index]);
+    moshi ((current / mask) - ((current / mask) / 2) * 2 == 0) { bloom[index] = uint8(current + mask); }
+}
+
+waza section_header(out: []uint8, name: int64, kind: int64, flags: int64, address: int64, offset: int64, size: int64, link: int64, info: int64, alignment: int64, entry_size: int64) -> unit {
+    elf.put(out, name, 4);
+    elf.put(out, kind, 4);
+    elf.put(out, flags, 8);
+    elf.put(out, address, 8);
+    elf.put(out, offset, 8);
+    elf.put(out, size, 8);
+    elf.put(out, link, 4);
+    elf.put(out, info, 4);
+    elf.put(out, alignment, 8);
+    elf.put(out, entry_size, 8);
+}
+
+waza program_header(out: []uint8, kind: int64, flags: int64, offset: int64, address: int64, file_size: int64, memory_size: int64, alignment: int64) -> unit {
+    elf.put(out, kind, 4);
+    elf.put(out, flags, 4);
+    elf.put(out, offset, 8);
+    elf.put(out, address, 8);
+    elf.put(out, address, 8);
+    elf.put(out, file_size, 8);
+    elf.put(out, memory_size, 8);
+    elf.put(out, alignment, 8);
+}
+
+waza symbol(out: []uint8, name: int64, info: int64, section_index: int64, value: int64, size: int64) -> unit {
+    elf.put(out, name, 4);
+    elf.put(out, info, 1);
+    elf.put(out, 0, 1);
+    elf.put(out, section_index, 2);
+    elf.put(out, value, 8);
+    elf.put(out, size, 8);
+}
+
+waza dynamic(out: []uint8, tag: int64, value: int64) -> unit {
+    elf.put(out, tag, 8);
+    elf.put(out, value, 8);
+}
+
+// A SONAME is a file name: non-empty, no NUL, no "/", at most 255 bytes.
+koukai waza valid_soname(soname: string) -> bool {
+    kaku bytes = string.to_bytes(soname);
+    moshi (len(bytes) == 0 || len(bytes) > 255) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0) || bytes[at] == uint8(47)) { kaesu iie; }
+        at = at + 1;
+    }
+    kaesu hai;
+}
+
+waza validate(spec: elfrel.ObjectSpec, soname: string) -> string {
+    moshi (!valid_soname(soname)) { kaesu "INVALID_SONAME"; }
+    moshi (len(spec.code) == 0) { kaesu "EMPTY_TEXT"; }
+    moshi (len(spec.code) > maximum_code) { kaesu "TEXT_TOO_LARGE"; }
+    moshi (spec.bss_size < 0 || spec.bss_size > maximum_bss) { kaesu "INVALID_BSS"; }
+    kaku at = 0;
+    aida (at < len(spec.exports)) {
+        kaku entry = spec.exports[at];
+        moshi (!valid_symbol_name(entry.symbol) || entry.offset < 0 || entry.size < 0 || entry.offset > len(spec.code) - entry.size) { kaesu "INVALID_EXPORT"; }
+        kaku other = 0;
+        aida (other < at) {
+            moshi (spec.exports[other].symbol == entry.symbol) { kaesu string.concat("DUPLICATE_EXPORT ", entry.symbol); }
+            other = other + 1;
+        }
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(spec.locals)) {
+        kaku entry = spec.locals[at];
+        moshi (!valid_symbol_name(entry.symbol) || entry.offset < 0 || entry.size < 0 || entry.offset > len(spec.code) - entry.size) { kaesu "INVALID_LOCAL"; }
+        at = at + 1;
+    }
+    at = 0;
+    aida (at < len(spec.relocations)) {
+        kaku reloc = spec.relocations[at];
+        moshi (reloc.kind == elfrel.r_x86_64_plt32) {
+            kaesu string.concat("UNSUPPORTED_EXTERNAL ", reloc.symbol);
+        }
+        moshi (reloc.kind != elfrel.r_x86_64_pc32) { kaesu string.concat("UNSUPPORTED_RELOCATION type ", convert.format_int(reloc.kind)); }
+        moshi (reloc.at < 0 || reloc.at > len(spec.code) - 4) { kaesu "INVALID_RELOCATION_OFFSET"; }
+        moshi (reloc.symbol != "") { kaesu "INVALID_RELOCATION_SYMBOL"; }
+        moshi (reloc.addend < -4 || reloc.addend > spec.bss_size - 4) { kaesu "INVALID_RELOCATION_ADDEND"; }
+        kaku other = 0;
+        aida (other < at) {
+            kaku previous = spec.relocations[other].at;
+            moshi (previous > reloc.at - 4 && previous < reloc.at + 4) { kaesu "OVERLAPPING_RELOCATIONS"; }
+            other = other + 1;
+        }
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+waza valid_symbol_name(name: string) -> bool {
+    kaku bytes = string.to_bytes(name);
+    moshi (len(bytes) == 0) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0)) { kaesu iie; }
+        at = at + 1;
+    }
+    kaesu hai;
+}
+
+// link produces the ET_DYN image of a self-contained module. soname becomes DT_SONAME.
+koukai waza link(spec: elfrel.ObjectSpec, soname: string) -> LinkResult {
+    kaku problem = validate(spec, soname);
+    moshi (problem != "") { kaesu fail(problem); }
+    kaku exports = len(spec.exports);
+
+    // Dynamic symbols: [0] null, then the exports grouped by GNU hash bucket (stable within a bucket).
+    kaku buckets = exports;
+    moshi (buckets == 0) { buckets = 1; }
+    kaku hashes: []int64 = [];
+    kaku at = 0;
+    aida (at < exports) { array.push(hashes, gnu_hash(spec.exports[at].symbol)); at = at + 1; }
+    kaku order: []int64 = [];
+    kaku bucket = 0;
+    aida (bucket < buckets) {
+        at = 0;
+        aida (at < exports) {
+            moshi (hashes[at] - (hashes[at] / buckets) * buckets == bucket) { array.push(order, at); }
+            at = at + 1;
+        }
+        bucket = bucket + 1;
+    }
+
+    kaku dynstr: []uint8 = [uint8(0)];
+    kaku soname_name = add_name(dynstr, soname);
+    kaku dyn_names: []int64 = [];
+    at = 0;
+    aida (at < exports) { array.push(dyn_names, add_name(dynstr, spec.exports[order[at]].symbol)); at = at + 1; }
+
+    // .gnu.hash: header, one bloom word, buckets, chains.
+    kaku gnu_hash_table: []uint8 = [];
+    elf.put(gnu_hash_table, buckets, 4);
+    elf.put(gnu_hash_table, 1, 4);
+    elf.put(gnu_hash_table, 1, 4);
+    elf.put(gnu_hash_table, bloom_shift, 4);
+    kaku bloom: []uint8 = array.make[uint8](8, uint8(0));
+    at = 0;
+    aida (at < exports) {
+        kaku h = hashes[at];
+        set_bloom_bit(bloom, 0, h - (h / 64) * 64);
+        kaku shifted = h / power_of_two(bloom_shift);
+        set_bloom_bit(bloom, 0, shifted - (shifted / 64) * 64);
+        at = at + 1;
+    }
+    array.append_all(gnu_hash_table, bloom);
+    bucket = 0;
+    aida (bucket < buckets) {
+        kaku first = 0;
+        at = 0;
+        aida (at < exports && first == 0) {
+            kaku h = hashes[order[at]];
+            moshi (h - (h / buckets) * buckets == bucket) { first = at + 1; }
+            at = at + 1;
+        }
+        elf.put(gnu_hash_table, first, 4);
+        bucket = bucket + 1;
+    }
+    at = 0;
+    aida (at < exports) {
+        kaku h = hashes[order[at]];
+        kaku value = h - (h - (h / 2) * 2);
+        kaku last = at == exports - 1;
+        moshi (!last) {
+            kaku next = hashes[order[at + 1]];
+            last = next - (next / buckets) * buckets != h - (h / buckets) * buckets;
+        }
+        moshi (last) { value = value + 1; }
+        elf.put(gnu_hash_table, value, 4);
+        at = at + 1;
+    }
+
+    // Addresses.
+    kaku gnu_hash_offset = elf.align(header_size + program_headers * program_header_size, 8);
+    kaku dynsym_offset = elf.align(gnu_hash_offset + len(gnu_hash_table), 8);
+    kaku dynsym_size = (exports + 1) * symbol_size;
+    kaku dynstr_offset = dynsym_offset + dynsym_size;
+    kaku read_end = dynstr_offset + len(dynstr);
+    kaku text_offset = elf.align(read_end, page);
+    kaku text_end = text_offset + len(spec.code);
+    kaku dynamic_offset = elf.align(text_end, page);
+    kaku dynamic_count = 10;
+    kaku dynamic_size = dynamic_count * dynamic_entry_size;
+    kaku bss_address = dynamic_offset + elf.align(dynamic_size, page);
+    kaku file_loaded_end = dynamic_offset + dynamic_size;
+
+    // Resolve the PC32 references: S + A - P with S = .bss, P = the address of the rel32 field.
+    kaku code = array.clone(spec.code);
+    at = 0;
+    aida (at < len(spec.relocations)) {
+        kaku reloc = spec.relocations[at];
+        patch32(code, reloc.at, bss_address + reloc.addend - (text_offset + reloc.at));
+        at = at + 1;
+    }
+
+    kaku dynsym: []uint8 = [];
+    symbol(dynsym, 0, 0, 0, 0, 0);
+    at = 0;
+    aida (at < exports) {
+        kaku entry = spec.exports[order[at]];
+        // st_info = STB_GLOBAL << 4 | STT_FUNC
+        symbol(dynsym, dyn_names[at], 18, section_text, text_offset + entry.offset, entry.size);
+        at = at + 1;
+    }
+
+    kaku dynamic_table: []uint8 = [];
+    dynamic(dynamic_table, 14, soname_name);          // DT_SONAME
+    dynamic(dynamic_table, 1879047925, gnu_hash_offset); // DT_GNU_HASH
+    dynamic(dynamic_table, 5, dynstr_offset);         // DT_STRTAB
+    dynamic(dynamic_table, 6, dynsym_offset);         // DT_SYMTAB
+    dynamic(dynamic_table, 10, len(dynstr));          // DT_STRSZ
+    dynamic(dynamic_table, 11, symbol_size);          // DT_SYMENT
+    dynamic(dynamic_table, 30, 8);                    // DT_FLAGS = DF_BIND_NOW
+    dynamic(dynamic_table, 1879048187, 1);            // DT_FLAGS_1 = DF_1_NOW
+    dynamic(dynamic_table, 0, 0);                     // DT_NULL
+    dynamic(dynamic_table, 0, 0);                     // padding (DT_NULL)
+
+    // Non-loaded tables: .symtab (locals then exports), .strtab, .shstrtab.
+    kaku strtab: []uint8 = [uint8(0)];
+    kaku symtab: []uint8 = [];
+    symbol(symtab, 0, 0, 0, 0, 0);
+    at = 0;
+    aida (at < len(spec.locals)) {
+        // STB_LOCAL << 4 | STT_FUNC
+        symbol(symtab, add_name(strtab, spec.locals[at].symbol), 2, section_text, text_offset + spec.locals[at].offset, spec.locals[at].size);
+        at = at + 1;
+    }
+    kaku first_global = 1 + len(spec.locals);
+    at = 0;
+    aida (at < exports) {
+        kaku entry = spec.exports[order[at]];
+        symbol(symtab, add_name(strtab, entry.symbol), 18, section_text, text_offset + entry.offset, entry.size);
+        at = at + 1;
+    }
+    kaku shstrtab: []uint8 = [uint8(0)];
+    kaku n_gnu_hash = add_name(shstrtab, ".gnu.hash");
+    kaku n_dynsym = add_name(shstrtab, ".dynsym");
+    kaku n_dynstr = add_name(shstrtab, ".dynstr");
+    kaku n_text = add_name(shstrtab, ".text");
+    kaku n_dynamic = add_name(shstrtab, ".dynamic");
+    kaku n_bss = add_name(shstrtab, ".bss");
+    kaku n_symtab = add_name(shstrtab, ".symtab");
+    kaku n_strtab = add_name(shstrtab, ".strtab");
+    kaku n_shstrtab = add_name(shstrtab, ".shstrtab");
+    kaku symtab_offset = elf.align(file_loaded_end, 8);
+    kaku strtab_offset = symtab_offset + len(symtab);
+    kaku shstrtab_offset = strtab_offset + len(strtab);
+    kaku sections_offset = elf.align(shstrtab_offset + len(shstrtab), 8);
+
+    kaku out: []uint8 = array.with_capacity[uint8](sections_offset + section_count * section_header_size);
+    // ELF header
+    array.append_all(out, [uint8(127), uint8(69), uint8(76), uint8(70), uint8(2), uint8(1), uint8(1), uint8(0)]);
+    elf.put(out, 0, 8);
+    elf.put(out, 3, 2);                   // ET_DYN
+    elf.put(out, elf.machine_x86_64, 2);
+    elf.put(out, 1, 4);
+    elf.put(out, 0, 8);                   // no entry point
+    elf.put(out, header_size, 8);         // e_phoff
+    elf.put(out, sections_offset, 8);     // e_shoff
+    elf.put(out, 0, 4);
+    elf.put(out, header_size, 2);
+    elf.put(out, program_header_size, 2);
+    elf.put(out, program_headers, 2);
+    elf.put(out, section_header_size, 2);
+    elf.put(out, section_count, 2);
+    elf.put(out, section_shstrtab, 2);
+    // Program headers (PF_X = 1, PF_W = 2, PF_R = 4)
+    program_header(out, 1, 4, 0, 0, read_end, read_end, page);
+    program_header(out, 1, 5, text_offset, text_offset, len(spec.code), len(spec.code), page);
+    program_header(out, 1, 6, dynamic_offset, dynamic_offset, dynamic_size, bss_address + spec.bss_size - dynamic_offset, page);
+    program_header(out, 2, 6, dynamic_offset, dynamic_offset, dynamic_size, dynamic_size, 8);
+    program_header(out, 1685382482, 4, dynamic_offset, dynamic_offset, dynamic_size, bss_address - dynamic_offset, 1);
+    program_header(out, 1685382481, 6, 0, 0, 0, 0, 16);
+    pad_to(out, gnu_hash_offset);
+    array.append_all(out, gnu_hash_table);
+    pad_to(out, dynsym_offset);
+    array.append_all(out, dynsym);
+    array.append_all(out, dynstr);
+    pad_to(out, text_offset);
+    array.append_all(out, code);
+    pad_to(out, dynamic_offset);
+    array.append_all(out, dynamic_table);
+    pad_to(out, symtab_offset);
+    array.append_all(out, symtab);
+    array.append_all(out, strtab);
+    array.append_all(out, shstrtab);
+    pad_to(out, sections_offset);
+    // Section headers (SHF_WRITE = 1, SHF_ALLOC = 2, SHF_EXECINSTR = 4)
+    section_header(out, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    section_header(out, n_gnu_hash, 1879048182, 2, gnu_hash_offset, gnu_hash_offset, len(gnu_hash_table), section_dynsym, 0, 8, 0);
+    section_header(out, n_dynsym, 11, 2, dynsym_offset, dynsym_offset, dynsym_size, section_dynstr, 1, 8, symbol_size);
+    section_header(out, n_dynstr, 3, 2, dynstr_offset, dynstr_offset, len(dynstr), 0, 0, 1, 0);
+    section_header(out, n_text, 1, 6, text_offset, text_offset, len(spec.code), 0, 0, 16, 0);
+    section_header(out, n_dynamic, 6, 3, dynamic_offset, dynamic_offset, dynamic_size, section_dynstr, 0, 8, dynamic_entry_size);
+    section_header(out, n_bss, 8, 3, bss_address, file_loaded_end, spec.bss_size, 0, 0, page, 0);
+    section_header(out, n_symtab, 2, 0, 0, symtab_offset, len(symtab), section_strtab, first_global, 8, symbol_size);
+    section_header(out, n_strtab, 3, 0, 0, strtab_offset, len(strtab), 0, 0, 1, 0);
+    section_header(out, n_shstrtab, 3, 0, 0, shstrtab_offset, len(shstrtab), 0, 0, 1, 0);
+    kaesu LinkResult { bytes: out, error: "" };
+}
