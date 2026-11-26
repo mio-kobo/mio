@@ -277,6 +277,7 @@ type FunctionStatement struct {
 	CDLL        string
 	CSymbol     string
 	CABI        bool
+	CExport     string // C symbol of `koukai waza ... export "symbol"`; parsed and ignored by the Go reference compiler
 	Test        bool
 	Intrinsic   string
 	Range       Span

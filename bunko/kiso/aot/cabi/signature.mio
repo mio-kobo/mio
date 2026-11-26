@@ -27,6 +27,10 @@ koukai waza valid_symbol(name: string) -> bool {
     kaesu hai;
 }
 
+koukai waza valid_export_symbol(name: string) -> bool {
+    kaesu valid_symbol(name) && !string.has_prefix(name, "mio_ffi_v1_");
+}
+
 koukai waza type_code(name: string) -> string {
     moshi (name == "unit") { kaesu "v"; }
     moshi (name == "int8") { kaesu "a"; }
@@ -55,25 +59,42 @@ koukai kata Signature { symbol: string; result: int64; parameters: []int64; vali
 
 koukai waza signature(name: string, count: int64, returns_value: bool) -> Signature {
     kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
-    moshi (!is_external(name) || count < 0 || count > 256) { kaesu invalid; }
+    moshi (!is_external(name)) { kaesu invalid; }
+    kaesu parse_signature(name, count, returns_value, 7, hai);
+}
+
+// Functions that a Linux AMD64 shared library exports through the C ABI keep their Mio body and carry the same
+// fixed prototype in their name: "$export::<symbol>:<result><parameters>" (type codes as in type_code). Only
+// `koukai waza ... export "symbol"` declarations produce it; the name is a label, call sites use function ids.
+koukai teisu export_prefix = "$export::";
+koukai waza is_export(name: string) -> bool { kaesu string.has_prefix(name, export_prefix); }
+koukai waza export_signature(name: string, count: int64, returns_value: bool) -> Signature {
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
+    moshi (!is_export(name)) { kaesu invalid; }
+    kaesu parse_signature(name, count, returns_value, 9, iie);
+}
+
+waza parse_signature(name: string, count: int64, returns_value: bool, start: int64, external: bool) -> Signature {
+    kaku invalid = Signature { symbol: "", result: 0, parameters: [], valid: iie, indirect: iie };
+    moshi (count < 0 || count > 256) { kaesu invalid; }
     kaku bytes = string.to_bytes(name);
-    kaku at = 7;
+    kaku at = start;
     kaku symbol_bytes: []uint8 = [];
     aida (at < len(bytes) && bytes[at] != uint8(58)) { array.push(symbol_bytes, bytes[at]); at = at + 1; }
     kaku symbol = string.from_utf8(symbol_bytes);
     moshi (symbol == mu) { kaesu invalid; }
-    moshi (!valid_symbol(symbol) || len(bytes) != at + 2 + count || bytes[at] != uint8(58)) { kaesu invalid; }
+    moshi ((external && !valid_symbol(symbol)) || (!external && !valid_export_symbol(symbol)) || len(bytes) != at + 2 + count || bytes[at] != uint8(58)) { kaesu invalid; }
     kaku result = int64(bytes[at + 1]);
     moshi ((result != 118 && (result < 97 || result > 108)) || returns_value != (result != 118)) { kaesu invalid; }
     kaku parameters = array.with_capacity[int64](count);
     at = at + 2;
     aida (at < len(bytes)) {
         kaku parameter = int64(bytes[at]);
-        moshi (parameter < 97 || parameter > 109) { kaesu invalid; }
+        moshi (parameter < 97 || parameter > 109 || (parameter == 109 && !external)) { kaesu invalid; }
         array.push(parameters, parameter);
         at = at + 1;
     }
-    kaku indirect = symbol == indirect_symbol;
+    kaku indirect = external && symbol == indirect_symbol;
     moshi (indirect && (len(parameters) == 0 || parameters[0] != 107)) { kaesu invalid; }
     kaesu Signature { symbol: symbol, result: result, parameters: parameters, valid: hai, indirect: indirect };
 }

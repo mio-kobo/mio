@@ -22,6 +22,11 @@ func ValidSymbol(name string) bool {
 	return true
 }
 
+// ValidExportSymbol rejects the reserved runtime prefix on C exports.
+func ValidExportSymbol(name string) bool {
+	return ValidSymbol(name) && !strings.HasPrefix(name, "mio_ffi_v1_")
+}
+
 func TypeCode(name string) string {
 	switch name {
 	case "unit":

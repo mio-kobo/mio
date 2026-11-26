@@ -1472,3 +1472,37 @@ func TestParseTransferExpression(t *testing.T) {
 		t.Fatal("ordinary assignment must not parse as a transfer")
 	}
 }
+
+func TestExportAttributeParsesOnPublicFunctionsOnly(t *testing.T) {
+	good, errs := parseForExportTest(`koukai waza add(a: int32, b: int32) -> int32 export "mio_add" { kaesu a + b; }`)
+	if len(errs) != 0 || len(good.Statements) != 1 {
+		t.Fatalf("export declaration: %v", errs)
+	}
+	function, ok := good.Statements[0].(*ast.FunctionStatement)
+	if !ok || function.CExport != "mio_add" || !function.Exported || len(function.Body.Statements) != 1 {
+		t.Fatalf("export attribute not recorded: %#v", good.Statements[0])
+	}
+	for name, source := range map[string]string{
+		"private":   `waza hidden() -> int32 export "x" { kaesu 1; }`,
+		"generic":   `koukai waza g<T>(v: T) -> T export "x" { kaesu v; }`,
+		"symbol":    `koukai waza f() -> int32 export "not valid" { kaesu 1; }`,
+		"missing":   `koukai waza f() -> int32 export { kaesu 1; }`,
+		"prototype": `koukai waza f() export "x" { }`,
+		"reserved":  `koukai waza f() -> unit export "mio_ffi_v1_test" { }`,
+	} {
+		if _, errs := parseForExportTest(source); len(errs) == 0 {
+			t.Fatalf("%s: expected a parse error", name)
+		}
+	}
+	if _, errs := parseForExportTest(`koukai waza f() -> int32 { kaesu 1; }`); len(errs) != 0 {
+		t.Fatalf("an ordinary function still parses: %v", errs)
+	}
+}
+
+func parseForExportTest(source string) (*ast.Program, []error) {
+	program, err := New(lexer.New(source, token.CurrentVersion)).ParseProgram()
+	if err != nil {
+		return nil, []error{err}
+	}
+	return program, nil
+}

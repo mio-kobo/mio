@@ -629,7 +629,8 @@ def native_mio_test(report, cli, skips_allowed, target=""):
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
             failures.append(package)
             continue
-        code, out, err, seconds = run(report, label, [cli, "test", package], timeout=900)
+        # This check parses the human-readable summary, so pin its language.
+        code, out, err, seconds = run(report, label, [cli, "test", package, "--lang", "en-US"], timeout=900)
         text = out + err
         passed = count(r"Tests complete: (\d+) passed", text)
         failed = count(r"Tests complete: \d+ passed, (\d+) failed", text)
@@ -1067,6 +1068,39 @@ def darwin_c_abi(report, cli, work):
     report.check("darwin-c-abi", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
 
 
+def linux_shared(report, cli, work):
+    """Required Linux x86-64 shared-library generation check (docs/linux-amd64-shared-libraries.md).
+    tests/shared/linux-amd64/run.py builds four independent libraries and one aggregate from real Mio modules with the compiler built from this
+    source (`mio build --shared`), inspects every file with readelf/nm/objdump/ldd, loads them from a real C host (dlopen, dlsym, calls, dlclose,
+    several libraries at once, a collector stress), runs the negative checks and compares the static executables with the base compiler when one is
+    supplied. PASS requires no FAIL; NOT_RUN is limited to tools the host may lack (file, valgrind) and the optional base-compiler comparison, and is
+    named in the detail. Raw logs land under logs/linux-shared."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    output = report.logs / "linux-shared"
+    code, out, err, seconds = run(report, "linux-shared-run", [sys.executable, ROOT / "tests/shared/linux-amd64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
+    try:
+        checks = json.loads((output / "report.json").read_text(encoding="utf-8"))["checks"]
+    except (OSError, ValueError, KeyError) as problem:
+        report.check("linux-shared", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)))
+        return
+    count = lambda status: [item["name"] for item in checks if item.get("status") == status]
+    passed, failed, not_run = count("PASS"), count("FAIL"), count("NOT_RUN")
+    allowed = ("file(1) reports", "valgrind", "byte-identical to the base commit")
+    unexpected = [name for name in not_run if not any(item in name for item in allowed)]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if failed:
+        problems.append("FAIL: %s" % ", ".join(failed))
+    if unexpected:
+        problems.append("NOT_RUN: %s" % ", ".join(unexpected))
+    if not passed:
+        problems.append("no check passed")
+    detail = "%d PASS, %d FAIL, %d NOT_RUN%s" % (len(passed), len(failed), len(not_run), " (tools absent: %s)" % ", ".join(not_run) if not_run and not unexpected else "")
+    report.check("linux-shared", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail)
+
+
 def linux_dynamic_libraries(report, cli, work):
     """Linux AMD64 shared-library loading (docs/linux-dynamic-libraries.md), non-required until it has a CI history. tests/ffi/linux-amd64-dynamic/run.py
     builds the six native modules (math, buffer, state, zlib, SQLite, OpenSSL) and a dependency pair with `cc -fPIC -shared`, inspects them with readelf/nm/ldd,
@@ -1394,16 +1428,15 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / ("mio-A" + suffix)
-    if target == "linux-arm64":
-        # The small untyped bootstrap compiler exhausts its 1 GiB arena while
-        # analyzing the Full CLI's embedded source table. Bootstrap the existing
-        # Core variant first, then use its typed native frontend to build Full.
+    if target in ("linux-arm64", "windows-arm64"):
+        # These AArch64 bootstrap compilers have a 1 GiB arena. Build Core
+        # first so the typed native frontend handles the Full resource table.
         # Full self-build fixed points and every subsequent check still run.
         source = Path(tempfile.mkdtemp(prefix="bootstrap-core-source-", dir=work))
         shutil.copytree(ROOT / "selfhost", source / "selfhost")
         shutil.copytree(ROOT / "bunko", source / "bunko")
         (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
-        core_bootstrap = work / "mio-bootstrap-core"
+        core_bootstrap = work / ("mio-bootstrap-core" + suffix)
         code, out, err, seconds = run(report, "cli-core-bootstrap", [paths["B"]],
                                       stdin=("selfhost/cli\n%s\n" % core_bootstrap).encode(), cwd=source)
         ok = code == 0 and out == profile["tag"] + ": ok\n" and core_bootstrap.is_file()
@@ -1440,6 +1473,7 @@ def linux(args, target="linux-amd64"):
     if target == "linux-amd64":
         linux_c_abi(report, cli, work / "linux-c-abi")
         linux_dynamic_libraries(report, cli, work / "linux-dynamic-libraries")
+        linux_shared(report, cli, work / "linux-shared")
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")

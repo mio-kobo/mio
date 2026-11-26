@@ -1058,11 +1058,16 @@ waza empty_scalar_exports() -> []ScalarExport {
 koukai waza reachable_from(file: mochi.File, exports: []ScalarExport) -> []bool {
     kaku reached = array.make[bool](len(file.functions), iie);
     kaku queue: []int64 = [-1];
+    // Exported functions (`export "symbol"`, kiso/aot/cabi) are entry points of a shared library: roots like the main program.
     kaku root = 0;
+    aida (root < len(file.functions)) {
+        moshi (cabi.is_export(file.functions[root].name)) { reached[root] = hai; array.push(queue, root); }
+        root = root + 1;
+    }
+    root = 0;
     aida (root < len(exports)) {
         kaku id = exports[root].id;
-        reached[id] = hai;
-        array.push(queue, id);
+        moshi (!reached[id]) { reached[id] = hai; array.push(queue, id); }
         root = root + 1;
     }
     kaku next = 0;
@@ -1216,6 +1221,18 @@ waza analyze_types_from(file: mochi.File, trace: bool, exports: []ScalarExport) 
                 kaku parameter = 0;
                 aida (parameter < function.parameter_count) {
                     moshi (declaration.parameters[parameter] != 109) { constrain_c_scalar(arena, slots[parameter], declaration.parameters[parameter]); }
+                    parameter = parameter + 1;
+                }
+                moshi (function.returns_value) { constrain_c_scalar(arena, result, declaration.result); }
+            }
+        }
+        moshi (cabi.is_export(function.name)) {
+            // The prototype in the name fixes the exact scalar types, so an exported function that nothing calls still types fully.
+            kaku declaration = cabi.export_signature(function.name, function.parameter_count, function.returns_value);
+            moshi (declaration.valid && len(slots) >= function.parameter_count) {
+                kaku parameter = 0;
+                aida (parameter < function.parameter_count) {
+                    constrain_c_scalar(arena, slots[parameter], declaration.parameters[parameter]);
                     parameter = parameter + 1;
                 }
                 moshi (function.returns_value) { constrain_c_scalar(arena, result, declaration.result); }

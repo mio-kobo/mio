@@ -204,10 +204,11 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
                 moshi (child < len(node.children) - 1) { return_type = resolve_type_node(env, file_id, node.children[child], type_params); }
                 moshi (node.extra != "" && !win64c.is_external(node.extra)) {
                     kaku invalid = len(type_params) != 0 || node.operator > 256 || child >= len(node.children) - 1;
+                    kaku exporting = cabi.is_export(node.extra);
                     kaku pi = 0;
                     aida (pi < len(parameter_types)) {
                         kaku code = c_parameter_code(env.result, parameter_types[pi]);
-                        moshi (code == "" || code == "v") { invalid = hai; }
+                        moshi (code == "" || code == "v" || (exporting && code == "m")) { invalid = hai; }
                         moshi (pi == 0 && node.extra == cabi.indirect_symbol && code != "k") { invalid = hai; }
                         pi = pi + 1;
                     }

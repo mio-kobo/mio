@@ -276,6 +276,17 @@ waza parse_function_statement(state: ParserState, exported: bool, start: lexer.P
     }
     kaku symbol = "";
     kaku body = -1;
+    // `koukai waza name(...) -> type export "symbol" { ... }` publishes the function through the C ABI of a
+    // shared library. `export` is a contextual word: before it, only `=` or `{` could follow the signature.
+    moshi (current_kind(state) == 2 && current_token(state).literal == "export") {
+        advance(state);
+        moshi (!exported || current_kind(state) != 5 || !cabi.valid_export_symbol(current_token(state).literal) || len(type_parameters) != 0 || return_type < 0) {
+            add_parse_error(state, ParseErrorKind.InvalidCDeclaration(), -1); kaesu -1;
+        }
+        symbol = string.concat(cabi.export_prefix, current_token(state).literal);
+        advance(state);
+        moshi (current_kind(state) != 26) { add_parse_error(state, ParseErrorKind.ExpectedToken(), 26); kaesu -1; }
+    }
     moshi (current_kind(state) == 7) {
         advance(state);
         moshi (current_kind(state) != 2 || current_token(state).literal != "c") {

@@ -87,7 +87,7 @@ waza emit_fs_support(code: x86_64.Assembler) -> unit {
     x86_64.label(code, "rt.fs_alloc_dir");
     x86_64.mov_ri(code, x86_64.r10, directory_slots());
     x86_64.label(code, "rt.fs_alloc.start");
-    x86_64.mov_ri(code, x86_64.rcx, handle_table_base());
+    x86_64.mov_data(code, x86_64.rcx, handle_table_base());
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.label(code, "rt.fs_alloc.scan");
     x86_64.cmp_rr(code, x86_64.rdx, x86_64.r10);
@@ -125,7 +125,7 @@ waza emit_fs_support(code: x86_64.Assembler) -> unit {
     x86_64.jcc(code, x86_64.cc_ae, "rt.fs_lookup.none");
     x86_64.mov_ri(code, x86_64.r8, 24);
     x86_64.imul_rr(code, x86_64.rax, x86_64.r8);
-    x86_64.mov_ri(code, x86_64.rcx, handle_table_base());
+    x86_64.mov_data(code, x86_64.rcx, handle_table_base());
     x86_64.add_rr(code, x86_64.rax, x86_64.rcx);
     x86_64.mov_load(code, x86_64.rcx, x86_64.rax, 8);
     x86_64.test_rr(code, x86_64.rcx, x86_64.rcx);
@@ -553,7 +553,7 @@ waza emit_fs_dir_slot(code: x86_64.Assembler) -> unit {
     x86_64.mov_rr(code, x86_64.rcx, x86_64.rax);
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_e, "rt.fs_dir_slot.none");
-    x86_64.mov_ri(code, x86_64.rdx, handle_table_base());
+    x86_64.mov_data(code, x86_64.rdx, handle_table_base());
     x86_64.sub_rr(code, x86_64.rax, x86_64.rdx);
     x86_64.mov_ri(code, x86_64.r8, 24);
     x86_64.mov_ri(code, x86_64.rdx, 0);
@@ -562,7 +562,7 @@ waza emit_fs_dir_slot(code: x86_64.Assembler) -> unit {
     x86_64.cmp_ri(code, x86_64.rax, directory_slots());
     x86_64.jcc(code, x86_64.cc_ae, "rt.fs_dir_slot.beyond");
     x86_64.shl_ri(code, x86_64.rax, 5);
-    x86_64.mov_ri(code, x86_64.rdx, dir_table_base());
+    x86_64.mov_data(code, x86_64.rdx, dir_table_base());
     x86_64.add_rr(code, x86_64.rax, x86_64.rdx);
     x86_64.ret(code);
     x86_64.label(code, "rt.fs_dir_slot.beyond");
@@ -597,10 +597,10 @@ waza emit_fs_open_dir(code: x86_64.Assembler) -> unit {
     x86_64.call(code, "rt.fs_dir_slot");
     // slot i of the directory table owns the static buffer directory_buffers() + i * 32768
     x86_64.mov_rr(code, x86_64.rdx, x86_64.rax);
-    x86_64.mov_ri(code, x86_64.rcx, dir_table_base());
+    x86_64.mov_data(code, x86_64.rcx, dir_table_base());
     x86_64.sub_rr(code, x86_64.rdx, x86_64.rcx);
     x86_64.shl_ri(code, x86_64.rdx, 10);
-    x86_64.mov_ri(code, x86_64.rcx, directory_buffers());
+    x86_64.mov_data(code, x86_64.rcx, directory_buffers());
     x86_64.add_rr(code, x86_64.rdx, x86_64.rcx);
     x86_64.mov_store(code, x86_64.rax, 0, x86_64.rdx);
     x86_64.mov_ri(code, x86_64.rdx, 0);
