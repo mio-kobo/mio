@@ -1,4 +1,5 @@
 yobu "kiso/aot/cabi";
+yobu "kiso/aot/elfdyn";
 yobu "kiso/aot/elfrel";
 yobu "kiso/aot/lowerlinux";
 yobu "kiso/array";
@@ -16,13 +17,14 @@ yobu "selfhost/frontend";
 // (lowerlinux.compile_shared), the ET_REL object (kiso/aot/elfrel). The system linker performs only the final ET_DYN
 // link, with an argv vector (never a shell string); Mio then verifies the file it produced (verify_shared).
 // A pure Mio module links with the raw linker (`ld`/`ld.lld`) and no CRT or libc; libraries are linked only when they
-// are declared (`--link`, `-l`, `-L`, `--rpath`). The linker is reached through `link_shared`, the single seam where a
-// future Mio native linker (`--linker native`, reserved) replaces the system one.
+// are declared (`--link`, `-l`, `-L`, `--rpath`). The system linker is reached through `link_shared`. `--linker native`
+// selects the Mio ELF64 linker (kiso/aot/elfdyn, `link_native`) instead; it links self-contained modules and reports
+// anything else as an error. An explicit native request never falls back to a system linker.
 
 koukai kata SharedOptions {
     // DT_SONAME; empty = the base name of the output file.
     soname: string;
-    // Explicit linker program (path or name found on PATH); empty = detect. "native" is reserved.
+    // Explicit linker program (path or name found on PATH); empty = detect; "native" = the Mio linker (link_native).
     linker: string;
     // Driver-style library arguments from --link/-L/-l/--rpath, in the order given.
     link_options: []string;
@@ -53,15 +55,44 @@ koukai waza build_shared_mochi(data: []uint8, gc_stress: bool, options: SharedOp
         moshi (string.has_prefix(lowered.error, "E_")) { kaesu shared_error(lowered.error); }
         kaesu shared_error(string.concat("E_LOWER ", lowered.error));
     }
+    moshi (options.linker == "native" && !options.object_only) { kaesu link_native(shared_spec(lowered), options, output); }
     kaku object = shared_object(lowered);
     moshi (object.error != "") { kaesu shared_error(string.concat("E_ELF ", object.error)); }
     moshi (options.object_only) { kaesu NativeBuildResult { bytes: object.bytes, error: "" }; }
     kaesu link_shared(object.bytes, lowered.exports, options, output);
 }
 
+// `--linker native`: the Mio ELF64 ET_DYN linker. Self-contained modules only (no declared external C symbol, no
+// library options); everything else is an E_SHARED_LINKER error, never a fallback to the system linker.
+koukai waza link_native(spec: elfrel.ObjectSpec, options: SharedOptions, output: string) -> NativeBuildResult {
+    moshi (len(options.link_options) > 0) {
+        kaesu shared_error("E_SHARED_LINKER the Mio native linker links self-contained modules only and does not take --link, -l, -L or --rpath yet; omit --linker native to use the system linker");
+    }
+    kaku soname = options.soname;
+    moshi (soname == "") { soname = base_name(output); }
+    moshi (soname == "" || string.contains(soname, ",") || string.has_prefix(soname, "-") || !elfdyn.valid_soname(soname)) { kaesu shared_error("E_SHARED invalid SONAME"); }
+    kaku at = 0;
+    aida (at < len(spec.relocations)) {
+        moshi (spec.relocations[at].kind == elfrel.r_x86_64_plt32) {
+            kaesu shared_error(string.concat("E_SHARED_LINKER the Mio native linker does not link external C symbols yet (the module calls ",
+                string.concat(spec.relocations[at].symbol, "); omit --linker native to use the system linker")));
+        }
+        at = at + 1;
+    }
+    kaku linked = elfdyn.link(spec, soname);
+    moshi (linked.error != "") { kaesu shared_error(string.concat("E_SHARED_LINKER native link failed: ", linked.error)); }
+    kaku problem = verify_shared(linked.bytes, soname);
+    moshi (problem != "") { kaesu shared_error(problem); }
+    moshi (options.verbose) { write_log("mio: link: native (Mio ELF64 ET_DYN linker, no external tool)"); }
+    kaesu NativeBuildResult { bytes: linked.bytes, error: "" };
+}
+
 // The ET_REL object of a lowered shared module: PC32 relocations against .bss for every data-area reference and PLT32
 // against the undefined symbol for every declared external C call. Exports are the only global definitions.
-koukai waza shared_object(lowered: lowerlinux.SharedLowerResult) -> elfrel.ObjectResult {
+koukai waza shared_object(lowered: lowerlinux.SharedLowerResult) -> elfrel.ObjectResult { kaesu elfrel.object(shared_spec(lowered)); }
+
+// The linker input of a lowered module, shared by the ET_REL writer and the native linker.
+koukai waza shared_spec(lowered: lowerlinux.SharedLowerResult) -> elfrel.ObjectSpec {
     kaku exports: []elfrel.ObjectExport = [];
     kaku at = 0;
     aida (at < len(lowered.exports)) {
@@ -89,7 +120,7 @@ koukai waza shared_object(lowered: lowerlinux.SharedLowerResult) -> elfrel.Objec
         array.push(relocations, elfrel.Relocation { at: call.at, kind: elfrel.r_x86_64_plt32, symbol: call.symbol, addend: -4 });
         at = at + 1;
     }
-    kaesu elfrel.object(elfrel.ObjectSpec { code: lowered.bytes, bss_size: lowered.bss_size, exports: exports, locals: locals, relocations: relocations });
+    kaesu elfrel.ObjectSpec { code: lowered.bytes, bss_size: lowered.bss_size, exports: exports, locals: locals, relocations: relocations };
 }
 
 waza base_name(path: string) -> string {
@@ -195,10 +226,11 @@ waza write_log(text: string) -> unit {
     fs.close(file);
 }
 
-// The single linking seam: the system linker today; `--linker native` is reserved for a Mio linker.
+// The system-linker seam. `--linker native` never reaches it (build_shared_mochi calls link_native); refusing it here
+// keeps a native request from ever being handed to a system linker.
 koukai waza link_shared(object: []uint8, exports: []lowerlinux.SharedExport, options: SharedOptions, output: string) -> NativeBuildResult {
     moshi (options.linker == "native") {
-        kaesu shared_error("E_SHARED_LINKER the Mio native linker is reserved and not implemented yet; omit --linker to use the system linker");
+        kaesu shared_error("E_SHARED_LINKER the Mio native linker takes the lowered module, not an object file; this is an internal error");
     }
     kaku linker = find_shared_linker(options.linker, len(options.link_options) > 0);
     moshi (linker == "") {

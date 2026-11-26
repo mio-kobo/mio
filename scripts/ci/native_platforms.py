@@ -1073,8 +1073,10 @@ def linux_shared(report, cli, work):
     tests/shared/linux-amd64/run.py builds four independent libraries and one aggregate from real Mio modules with the compiler built from this
     source (`mio build --shared`), inspects every file with readelf/nm/objdump/ldd, loads them from a real C host (dlopen, dlsym, calls, dlclose,
     several libraries at once, a collector stress), runs the negative checks and compares the static executables with the base compiler when one is
-    supplied. PASS requires no FAIL; NOT_RUN is limited to tools the host may lack (file, valgrind) and the optional base-compiler comparison, and is
-    named in the detail. Raw logs land under logs/linux-shared."""
+    supplied. The same libraries are also linked by the Mio native linker (`--linker native`, kiso/aot/elfdyn) with only trap programs on PATH,
+    inspected and loaded by the same C host. PASS requires no FAIL; NOT_RUN is limited to tools the host may lack (file, valgrind, strace; the
+    trap-program check covers linker execution without strace) and the optional base-compiler comparison, and is named in the detail. Raw logs
+    land under logs/linux-shared."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
     output = report.logs / "linux-shared"
@@ -1086,7 +1088,7 @@ def linux_shared(report, cli, work):
         return
     count = lambda status: [item["name"] for item in checks if item.get("status") == status]
     passed, failed, not_run = count("PASS"), count("FAIL"), count("NOT_RUN")
-    allowed = ("file(1) reports", "valgrind", "byte-identical to the base commit")
+    allowed = ("file(1) reports", "valgrind", "strace execve trace", "byte-identical to the base commit")
     unexpected = [name for name in not_run if not any(item in name for item in allowed)]
     problems = []
     if code != 0:
