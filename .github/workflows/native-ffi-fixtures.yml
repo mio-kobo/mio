@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('native-ffi-fixtures-pr-{0}', github.event.pull_request.number) || format('native-ffi-fixtures-dispatch-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   darwin-fixtures:
     name: Mach-O C fixtures (C host)
