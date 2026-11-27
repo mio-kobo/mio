@@ -1,0 +1,62 @@
+yobu "kiso/aot/elfdyn";
+yobu "kiso/aot/elfrel";
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/testing";
+
+// A real shared object produced by the native linker: two exported functions and a SONAME.
+waza sample() -> []uint8 {
+    kaku code: []uint8 = [uint8(195), uint8(195)];
+    kaku exports: []elfrel.ObjectExport = [elfrel.ObjectExport { symbol: "mio_one", offset: 0, size: 1 }, elfrel.ObjectExport { symbol: "mio_two", offset: 1, size: 1 }];
+    kaesu elfdyn.link(elfrel.ObjectSpec { code: code, bss_size: 0, exports: exports, locals: [], relocations: [] }, "libsample.so.1").bytes;
+}
+
+waza test_reads_symbols_and_soname() -> unit {
+    kaku object = read_shared_object(sample());
+    testing.expect(object.error == "" && object.soname == "libsample.so.1", "SONAME");
+    testing.expect(find(object, "mio_one") == 2 && find(object, "mio_two") == 2, "exported functions are STT_FUNC");
+    testing.expect(find(object, "mio_three") == -1 && len(object.symbols) == 2, "nothing else is defined");
+}
+
+waza patched(data: []uint8, at: int64, value: uint8) -> []uint8 {
+    kaku copy = array.clone(data);
+    copy[at] = value;
+    kaesu copy;
+}
+
+waza truncated(data: []uint8, size: int64) -> []uint8 {
+    kaku out: []uint8 = [];
+    kaku at = 0;
+    aida (at < size) { array.push(out, data[at]); at = at + 1; }
+    kaesu out;
+}
+
+// Untrusted input: every malformed variant is an error, never a crash or a guess.
+waza test_rejects_malformed_objects() -> unit {
+    kaku good = sample();
+    testing.expect(read_shared_object([uint8(1), uint8(2)]).error == "NOT_ELF", "not ELF");
+    testing.expect(string.has_prefix(read_shared_object(patched(good, 4, uint8(1))).error, "UNSUPPORTED_ELF_CLASS"), "ELFCLASS32");
+    testing.expect(string.has_prefix(read_shared_object(patched(good, 16, uint8(2))).error, "NOT_SHARED_OBJECT"), "ET_EXEC");
+    testing.expect(string.has_prefix(read_shared_object(patched(good, 18, uint8(183))).error, "UNSUPPORTED_MACHINE"), "EM_AARCH64");
+    testing.expect(string.has_prefix(read_shared_object(truncated(good, 1000)).error, "INVALID_SECTION_HEADERS"), "truncated before the section headers");
+    testing.expect(string.has_prefix(read_shared_object(truncated(good, 63)).error, "NOT_ELF"), "truncated header");
+    // e_phnum = 0
+    testing.expect(string.has_prefix(read_shared_object(patched(patched(good, 56, uint8(0)), 57, uint8(0))).error, "INVALID_PROGRAM_HEADERS"), "no program headers");
+    // e_shoff far outside the file
+    testing.expect(string.has_prefix(read_shared_object(patched(good, 47, uint8(127))).error, "INVALID_SECTION_HEADERS"), "section headers outside the file");
+}
+
+waza test_linker_scripts() -> unit {
+    kaku libm = read_script(string.to_bytes("/* GNU ld script\n*/\nOUTPUT_FORMAT(elf64-x86-64)\nGROUP ( /lib/x86_64-linux-gnu/libm.so.6  AS_NEEDED ( /lib/x86_64-linux-gnu/libmvec.so.1 ) )\n"));
+    testing.expect(libm.error == "" && len(libm.inputs) == 2, "glibc libm.so script");
+    testing.expect(libm.inputs[0].path == "/lib/x86_64-linux-gnu/libm.so.6" && !libm.inputs[0].as_needed, "GROUP member");
+    testing.expect(libm.inputs[1].path == "/lib/x86_64-linux-gnu/libmvec.so.1" && libm.inputs[1].as_needed, "AS_NEEDED member");
+    kaku libc = read_script(string.to_bytes("GROUP ( /lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a  AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )"));
+    testing.expect(libc.error == "" && len(libc.inputs) == 3, "glibc libc.so script");
+    testing.expect(read_script(string.to_bytes("INPUT(/usr/lib/libz.so.1)")).inputs[0].path == "/usr/lib/libz.so.1", "INPUT");
+    testing.expect(string.has_prefix(read_script(string.to_bytes("SEARCH_DIR(/usr/lib) INPUT(libz.so)")).error, "UNSUPPORTED_SCRIPT command SEARCH_DIR"), "other commands");
+    testing.expect(string.has_prefix(read_script(string.to_bytes("INPUT(-lz)")).error, "UNSUPPORTED_SCRIPT input must be an absolute path"), "-l inside a script");
+    testing.expect(string.has_prefix(read_script(string.to_bytes("GROUP ( /a.so")).error, "UNSUPPORTED_SCRIPT unterminated"), "unterminated");
+    testing.expect(string.has_prefix(read_script(string.to_bytes("hello world")).error, "UNSUPPORTED_SCRIPT"), "random text");
+    testing.expect(string.has_prefix(read_script([]).error, "UNSUPPORTED_SCRIPT no input"), "empty file");
+}

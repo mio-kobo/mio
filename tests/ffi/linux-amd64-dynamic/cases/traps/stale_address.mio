@@ -1,0 +1,11 @@
+yobu "kiso/ffi/linux";
+// A hand-written indirect declaration called through linux.address of a closed library traps with a
+// nil-reference error; the stale address is never executed.
+waza raw_add(f: cptr, a: int32, b: int32) -> int32 = c "mio_ffi_indirect";
+kaku lib = linux.open("./libmio_math.so");
+kaku add = linux.symbol(lib, "mio_add", "i:ii");
+chant(raw_add(linux.address(add, "i:ii"), int32(20), int32(22)));
+linux.close(lib);
+chant("before");
+chant(raw_add(linux.address(add, "i:ii"), int32(1), int32(2)));
+chant("unreachable");

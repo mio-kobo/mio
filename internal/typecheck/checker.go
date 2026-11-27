@@ -387,11 +387,11 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 				return KindBool, nil
 
 			default:
-				return KindInvalid, fmt.Errorf(
-					"operator %s does not support %s operands",
-					n.Operator,
-					left,
-				)
+				cause := fmt.Errorf("operator %s does not support %s operands", n.Operator, left)
+				if left == KindNil || left == KindUnit || left.IsArray() {
+					return KindInvalid, typeDiagnostic("E0302", "这些操作数不支持相等比较", n.Span(), left.String(), right.String(), cause)
+				}
+				return KindInvalid, cause
 			}
 
 		// 逻辑运算
@@ -482,7 +482,8 @@ func (c *Checker) checkExpression(expr ast.Expression) (result Kind, err error) 
 		if n.Target == "cptr" {
 			zero, ok := n.Arguments[0].(*ast.IntegerLiteral)
 			if !ok || zero.Value != 0 || zero.Overflow {
-				return KindInvalid, fmt.Errorf("E_FFI_POINTER only cptr(0) constructs a native pointer")
+				return KindInvalid, diagnostic.NewError("E_FFI_POINTER", "cptr(0) constructs null; other C pointers must come from C",
+					diagnostic.FromPositions(n.Span().Start, n.Span().End))
 			}
 			n.Source = source.String()
 			return KindCPtr, nil

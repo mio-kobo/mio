@@ -16,7 +16,11 @@ waza transport(input: fs.File, output: fs.File) -> Transport {
     kaesu Transport {input:input,output:output,frames:lsp.frame_buffer(),chunk:array.make[uint8](4096,uint8(0)),pending:[],error:[""],ended:[iie],current_id:[""],current_method:[""],generation:[0],cancellation_scanned:[0]};
 }
 waza semantic_method(method: string) -> bool {
-    kaesu method=="textDocument/hover" || method=="textDocument/definition" || method=="textDocument/references" || method=="textDocument/documentSymbol" || method=="textDocument/completion" || method=="textDocument/signatureHelp" || method=="textDocument/codeAction";
+    kaesu navigation_method(method) || method=="workspace/symbol";
+}
+waza versioned_method(method: string) -> bool {
+    kaesu method=="textDocument/rename" || method=="textDocument/prepareRename" ||
+        method=="textDocument/formatting" || method=="textDocument/documentHighlight" || method=="workspace/symbol";
 }
 waza has_cancelled(state: Session, id: string) -> bool {
     kaku at=0;aida(at<len(state.cancelled)){moshi(state.cancelled[at]==id){kaesu hai;}at=at+1;}kaesu iie;
@@ -37,7 +41,7 @@ waza collect_frames(state: Session, io: Transport, service: bool) -> unit {
             kaku document=json.parse(frame.bytes);kaku root=document.root;
             kaku method=json.text(document,json.member(document,root,"method"));kaku id=json.member(document,root,"id");
             kaku notification=id<0;moshi(id>=0){notification=document.values[id].kind==0;}
-            moshi(document.error=="" && notification && (method=="$/cancelRequest" || (len(io.pending)==0 && (method=="textDocument/didOpen" || method=="textDocument/didChange" || method=="textDocument/didSave" || method=="textDocument/didClose" || method=="workspace/didChangeConfiguration")))){
+            moshi(document.error=="" && notification && (method=="$/cancelRequest" || (len(io.pending)==0 && (method=="textDocument/didOpen" || method=="textDocument/didChange" || method=="textDocument/didSave" || method=="textDocument/didClose" || method=="workspace/didChangeWatchedFiles" || method=="workspace/didChangeConfiguration")))){
                 kaku reply=dispatch(state,frame.bytes);send_messages(io,reply.messages);handled=hai;
             }
         }
@@ -63,6 +67,7 @@ waza service_pending_cancellations(state: Session, io: Transport) -> unit {
         kaku method=json.text(document,json.member(document,root,"method"));kaku id=json.member(document,root,"id");
         kaku notification=id<0;moshi(id>=0){notification=document.values[id].kind==0;}
         moshi(document.error=="" && notification && method=="$/cancelRequest"){
+            io.generation[0]=state.schedule[2];
             kaku reply=dispatch(state,payload);send_messages(io,reply.messages);
         }sore{io.pending[kept]=payload;kept=kept+1;}
         at=at+1;
@@ -82,7 +87,7 @@ waza pump_transport(state: Session, io: Transport) -> bool {
     }
     moshi(io.error[0]!=""){kaesu iie;}
     moshi(semantic_method(io.current_method[0]) && has_cancelled(state,io.current_id[0])){kaesu iie;}
-    moshi(io.current_method[0]=="$diagnostics" && io.generation[0]!=state.schedule[2]){kaesu iie;}
+    moshi((io.current_method[0]=="$diagnostics" || versioned_method(io.current_method[0])) && io.generation[0]!=state.schedule[2]){kaesu iie;}
     kaesu hai;
 }
 waza take_pending(io: Transport) -> []uint8 {
@@ -99,6 +104,7 @@ waza serve_cooperative(state: Session, io: Transport) -> ServeResult {
             kaku payload=take_pending(io);kaku document=json.parse(payload);
             io.current_id[0]=json.render(document,json.member(document,document.root,"id"));
             io.current_method[0]=json.text(document,json.member(document,document.root,"method"));
+            io.generation[0]=state.schedule[2];
             kaku reply=dispatch(state,payload);
             // Also observe cancellation arriving after the final compiler
             // checkpoint, before any semantic response is written.
@@ -106,6 +112,9 @@ waza serve_cooperative(state: Session, io: Transport) -> ServeResult {
             moshi(semantic_method(io.current_method[0]) && remove_cancelled(state,io.current_id[0])){
                 array.truncate(reply.messages,0);array.push(reply.messages,error_response(io.current_id[0],-32800,"Request cancelled"));
             }
+            sore { moshi(versioned_method(io.current_method[0]) && io.generation[0]!=state.schedule[2] && io.current_id[0]!="null"){
+                array.truncate(reply.messages,0);array.push(reply.messages,error_response(io.current_id[0],-32801,"Content modified during request"));
+            } }
             send_messages(io,reply.messages);
             moshi(io.error[0]!=""){kaesu ServeResult {status:1,error:io.error[0]};}
             moshi(reply.stop){kaesu ServeResult {status:reply.status,error:""};}

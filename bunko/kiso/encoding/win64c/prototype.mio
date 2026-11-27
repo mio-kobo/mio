@@ -56,7 +56,27 @@ koukai waza validate(name: string, count: int64, returns: bool) -> string {
     moshi (descriptor(p[3]) < 0 || (p[3] != "unit") != returns) { kaesu "E_FFI_TYPE unsupported C return type"; }
     kaku i = 4;
     aida (i < len(p)) { moshi (descriptor(p[i]) <= 0) { kaesu "E_FFI_TYPE unsupported C parameter type"; } i = i + 1; }
+    moshi (dll_identity(p[1]) == "mio.dynamic.dll") {
+        moshi (count < 1 || count > 13) { kaesu "E_FFI_PROTOTYPE dynamic calls require a uint64 function token and at most 12 native arguments"; }
+        moshi (p[4] != "uint64") { kaesu "E_FFI_PROTOTYPE dynamic calls require a uint64 function token and at most 12 native arguments"; }
+    }
     kaesu "";
+}
+
+// Exact (not hashed) fixed signature: return nibble, then up to 12 parameter
+// nibbles; argument count lives at bit 56. Distinct source types stay distinct.
+koukai waza native_tag(name: string) -> int64 {
+    kaku names: []string = ["unit", "int64", "uint64", "cptr", "float64", "float32", "int8", "uint8", "int16", "uint16", "int32", "uint32"];
+    kaku i = 0; aida (i < len(names)) { moshi (names[i] == name) { kaesu i; } i = i + 1; } kaesu -1;
+}
+koukai waza native_signature(result: string, parameters: []string) -> int64 {
+    kaku value = native_tag(result); moshi (value < 0 || len(parameters) > 12) { kaesu -1; }
+    kaku factor = 16; kaku i = 0;
+    aida (i < len(parameters)) {
+        kaku tag = native_tag(parameters[i]); moshi (tag <= 0) { kaesu -1; }
+        value = value + tag * factor; factor = factor * 16; i = i + 1;
+    }
+    kaesu value + len(parameters) * 72057594037927936;
 }
 koukai waza key(dll: string, symbol: string, result: string, parameters: []string) -> string {
     kaku name = string.concat(prefix, string.concat(dll, string.concat("|", string.concat(symbol, string.concat("|", result)))));

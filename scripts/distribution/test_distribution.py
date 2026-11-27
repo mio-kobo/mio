@@ -10,6 +10,7 @@ import sys
 import tempfile
 import tarfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from package import digest, extract, gate, inventory, package
@@ -134,6 +135,24 @@ class DistributionTests(unittest.TestCase):
                     continue
                 with self.assertRaises(ValueError):
                     gate(bad, self.compilers, self.inputs, 'linux-amd64')
+
+    def test_candidate_retries_require_explicit_same_run_producer_attempt(self):
+        with patch.dict(os.environ, GITHUB_RUN_ID="125", GITHUB_RUN_ATTEMPT="1"):
+            report = self.report()
+        self.inputs["version"] = "2.1.2-pr.aaaaaaaaaaaa"
+        with patch.dict(os.environ, GITHUB_RUN_ID="125", GITHUB_RUN_ATTEMPT="2"):
+            with self.assertRaisesRegex(ValueError, "another Actions run or attempt"):
+                gate(report, self.compilers, self.inputs, "linux-amd64")
+            gate(report, self.compilers, self.inputs, "linux-amd64", native_report_attempt="1")
+            with self.assertRaisesRegex(ValueError, "invalid native report attempt"):
+                gate(report, self.compilers, self.inputs, "linux-amd64", native_report_attempt="3")
+            self.inputs["version"] = "2.1.2"
+            with self.assertRaisesRegex(ValueError, "stable distribution requires"):
+                gate(report, self.compilers, self.inputs, "linux-amd64", native_report_attempt="1")
+        self.inputs["version"] = "2.1.2-pr.aaaaaaaaaaaa"
+        with patch.dict(os.environ, GITHUB_RUN_ID="126", GITHUB_RUN_ATTEMPT="2"):
+            with self.assertRaisesRegex(ValueError, "another Actions run or attempt"):
+                gate(report, self.compilers, self.inputs, "linux-amd64", native_report_attempt="1")
 
     def test_unsafe_archives_never_write_outside_destination(self):
         for names in (['../escape'], ['/escape'], ['C:/escape'], ['x\\escape'], ['pkg/a', 'pkg/a'],

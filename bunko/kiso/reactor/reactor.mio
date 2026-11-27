@@ -3,7 +3,7 @@ yobu "mio/sys/socket";
 
 // 跨平台就绪态事件反应器（Readiness Reactor）：
 // 提供 submit / update / poll / cancel / wake / close 五项核心契约。
-// 当前后端为 Linux AMD64 水平触发（Level-triggered）epoll + eventfd（参见 docs/async-networking.md）；
+// Linux 后端使用 epoll，Darwin 后端使用 kqueue，均为水平触发（参见 docs/async-networking.md）；
 // 其余未实现平台在 open() 时安全失败（返回 ReactorError.Unsupported）。
 // 每个 Operation 绑定唯一 id 与单调递增的 generation（slot 可复用，generation 永不回绕复用），
 // 从而在 poll/cancel 竞态下自动丢弃过期内核事件（计入 PollResult.stale），避免误投递。
@@ -195,7 +195,9 @@ waza control(reactor: Reactor, handle: resource, op: int64, interest: int64, tok
     kaesu error_from(status[0], message);
 }
 
-// submit watches a socket handle (a connection, a listener) for interest: readable = 1, writable = 2, or 3.
+// submit watches a socket handle for interest: readable = 1, writable = 2, or 3.
+// A reactor allows one live subscription per socket, with both interests on that operation.
+// A duplicate returns an error and leaves the existing operation and its interests intact.
 koukai waza submit(reactor: Reactor, handle: resource, interest: int64) -> SubmitResult {
     moshi (interest < 1 || interest > 3) {
         kaesu SubmitResult { operation: mu, error: ReactorError.InvalidArgument() };
@@ -213,13 +215,15 @@ koukai waza submit(reactor: Reactor, handle: resource, interest: int64) -> Submi
     kaesu SubmitResult { operation: operation, error: mu };
 }
 
+// Pass the handle originally submitted for this operation.
 koukai waza update(reactor: Reactor, operation: Operation, handle: resource, interest: int64) -> UnitResult {
     moshi (interest < 1 || interest > 3) { kaesu UnitResult { error: ReactorError.InvalidArgument() }; }
     moshi (!live(reactor, operation)) { kaesu UnitResult { error: ReactorError.Closed() }; }
     kaesu UnitResult { error: control(reactor, handle, 3, interest, token_of(operation)) };
 }
 
-// cancel releases the slot whatever happens to the kernel registration; a socket that was already closed is not an error.
+// Pass the handle originally submitted for this operation. A socket that was already closed is not an error.
+// cancel releases the slot whatever happens to the kernel registration.
 // A cancelled or stale Operation reports Closed and never affects the slot's new owner.
 koukai waza cancel(reactor: Reactor, operation: Operation, handle: resource) -> UnitResult {
     moshi (!live(reactor, operation)) { kaesu UnitResult { error: ReactorError.Closed() }; }

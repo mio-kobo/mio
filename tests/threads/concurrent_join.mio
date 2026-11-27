@@ -1,0 +1,47 @@
+yobu "kiso/thread";
+
+waza joiner(target: int64, release: thread.Channel<int64>) -> int64 {
+    kaku result = thread.join_checked(target);
+    moshi (result.ok) { kaesu result.value; }
+    // Only the rejected joiner can release the target. Two waiting joiners deadlock.
+    thread.send[int64](release, 1);
+    kaesu -1;
+}
+
+waza check_concurrent_join() -> unit {
+    kaku release = thread.channel_new[int64](1, 0);
+    kaku target = thread.start(waza () -> int64 {
+        thread.receive[int64](release);
+        kaesu 42;
+    });
+    kaku first = thread.start(waza () -> int64 { kaesu joiner(target, release); });
+    kaku second = thread.start(waza () -> int64 { kaesu joiner(target, release); });
+    kaku a = thread.join(first);
+    kaku b = thread.join(second);
+    chant((a == 42 && b == -1) || (a == -1 && b == 42));
+    chant(thread.join_checked(target).ok);
+    kaku fresh = thread.start(waza () -> int64 { kaesu 23; });
+    chant(thread.join_checked(target).ok);
+    chant(thread.join(fresh));
+    thread.destroy[int64](release);
+}
+
+waza check_self_join() -> unit {
+    kaku handles = thread.channel_new[int64](1, 0);
+    kaku results = thread.channel_new[int64](1, 0);
+    kaku handle = thread.start(waza () -> int64 {
+        kaku own = thread.receive[int64](handles).item;
+        thread.send[int64](results, thread.join(own));
+        kaesu 7;
+    });
+    // Wait for the result before trying to join in main so the worker attempts
+    // the self-join against a still-joinable handle.
+    thread.send[int64](handles, handle);
+    chant(thread.receive[int64](results).item);
+    chant(thread.join(handle));
+    thread.destroy[int64](handles);
+    thread.destroy[int64](results);
+}
+
+check_concurrent_join();
+check_self_join();

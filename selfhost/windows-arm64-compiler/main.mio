@@ -302,7 +302,7 @@ waza lower_to_pe(bytes: []uint8, output: string) -> bool {
     kaesu hai;
 }
 
-// Compile the package below the current directory to self-contained Mochi.
+// Keep the frontend package graph out of the lowering phase's GC roots.
 waza compile_mochi(entry: string) -> []uint8 {
     kaku state = PackageState { paths: [], resolved: [], checked: [], visiting: [], failed: [iie], diagnostic: [""] };
     load_package(state, ".", entry);
@@ -373,12 +373,10 @@ waza compile_mochi(entry: string) -> []uint8 {
     kaesu result.bytes;
 }
 
-// Return only encoded IR across the phase boundary. The frontend AST, type
-// graphs and codegen layout must become collectible before native lowering.
+// Compiles the package `entry` below the current directory to a Windows ARM64 PE32+ executable.
 waza compile(entry: string, output: string) -> bool {
     kaku bytes = compile_mochi(entry);
-    moshi (len(bytes) == 0) { kaesu iie; }
-    moshi (!lower_to_pe(bytes, output)) { kaesu iie; }
+    moshi (len(bytes) == 0 || !lower_to_pe(bytes, output)) { kaesu iie; }
     chant("windows-arm64-compiler: ok");
     kaesu hai;
 }

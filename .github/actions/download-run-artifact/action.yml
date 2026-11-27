@@ -1,0 +1,34 @@
+name: Download run artifacts
+description: Use the latest available attempt of each matching artifact in this workflow run.
+inputs:
+  artifact:
+    description: Artifact name or pattern before the run and attempt suffix.
+    required: true
+  path:
+    description: Destination for the selected artifact contents.
+    required: true
+  group:
+    description: Retain a named directory for each matching artifact.
+    default: 'false'
+  current_attempt_only:
+    description: Require the current attempt for stable release workflows.
+    default: 'false'
+outputs:
+  attempt:
+    description: Attempt of the selected artifact in single-artifact mode.
+    value: ${{ steps.select.outputs.attempt }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        pattern: ${{ inputs.artifact }}-${{ github.run_id }}-${{ inputs.current_attempt_only == 'true' && github.run_attempt || '*' }}
+        path: ${{ inputs.path }}-attempts
+    - name: Select latest available attempts
+      id: select
+      shell: bash
+      env:
+        ARTIFACT_PATTERN: ${{ inputs.artifact }}
+        ARTIFACT_DESTINATION: ${{ inputs.path }}
+        ARTIFACT_GROUP: ${{ inputs.group }}
+      run: python scripts/distribution/select_artifacts.py

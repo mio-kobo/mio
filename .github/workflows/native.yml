@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
   pull_request:
-    branches: ['Mio-[0-9]*']
+    branches: ['Mio-[0-9]*', 'EXP/windows-amd64-c-ffi']
   push:
     branches: ['runtime-abi/**']
 permissions:
@@ -31,6 +31,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       stage_a_ready: ${{ steps.native.outputs.stage_a_ready }}
+      stage_a_artifact: ${{ format('native-stage-a-{0}-{1}', github.run_id, github.run_attempt) }}
       darwin_arm64: ${{ steps.native.outputs.darwin_arm64 }}
       windows_amd64: ${{ steps.native.outputs.windows_amd64 }}
     permissions:
@@ -49,6 +50,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # Development packages for tests/ffi/linux-amd64-dynamic: the zlib, SQLite3 and OpenSSL shared-library modules.
+      # strace traces process execution for the `--linker native` check of tests/shared/linux-amd64.
+      - name: Install the native module build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zlib1g-dev libsqlite3-dev libssl-dev strace
       - name: Build the reference VM host (go-hosted Stage A and VM oracle only)
         run: go build -o build/native/refvm ./tests/windows-amd64/refvm
       - id: native
@@ -121,7 +128,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.linux.outputs.stage_a_artifact }}
           path: build/stage-a
       - name: Native B -> C -> D, mio test, Runtime ABI contract (no Go on this path)
         shell: bash
@@ -143,6 +150,9 @@ jobs:
             build/native/${{ matrix.target }}/native-differential/results.json
             build/native/${{ matrix.target }}/native-differential/*.std*
             build/native/${{ matrix.target }}/examples/
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.json
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.log
+            build/native/${{ matrix.target }}/windows-dynamic-ffi/*.mio
           if-no-files-found: error
           retention-days: 7
   windows-dll:
@@ -160,7 +170,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: native-stage-a-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.linux.outputs.stage_a_artifact }}
           path: build/stage-a
       - name: Verify Stage A and compile the native CLI from this checkout
         shell: pwsh
@@ -201,6 +211,49 @@ jobs:
     with:
       run_examples: ${{ inputs.run_examples || false }}
 
+  # Linux distribution and libc compatibility (tests/linux-compat): the CLI built by the linux-amd64 job runs inside
+  # each distribution container on the x86-64 host (native execution, no emulation). Static and dynamic executables,
+  # kiso/ffi/linux loading and native memory against the container's own libc, shared libraries loaded by a C host
+  # built there, and binaries built on the host run in the container. Non-required until it has a CI history.
+  linux-compat:
+    name: Linux compatibility / ${{ matrix.image }}
+    needs: linux
+    if: ${{ !cancelled() && needs.linux.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:12', 'debian:13', 'ubuntu:22.04', 'ubuntu:24.04', 'alpine:3.20']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-compilers-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/compat-compilers
+      - name: Build the cross-distribution binaries on the host (ubuntu-24.04)
+        run: |
+          set -o pipefail
+          chmod +x build/compat-compilers/mio-B
+          python3 tests/linux-compat/run.py --prebuild-only --mio build/compat-compilers/mio-B --output build/compat-prebuilt
+      - name: Run the compatibility checks in ${{ matrix.image }}
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -o pipefail
+          label=$(echo "$IMAGE" | tr ':/' '--')
+          docker run --rm --platform linux/amd64 -v "$PWD:/w" -w /w "$IMAGE" sh -c \
+            "sh tests/linux-compat/setup.sh && python3 tests/linux-compat/run.py --mio build/compat-compilers/mio-B --prebuilt build/compat-prebuilt --output build/compat/$label"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-compat-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/compat/
+          if-no-files-found: warn
+          retention-days: 7
+
   summary:
     name: Native / required
     if: always()
@@ -219,8 +272,12 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          pattern: native-report-*-${{ github.run_id }}-${{ github.run_attempt }}
-          path: build/native-reports
+          pattern: native-report-*-${{ github.run_id }}-*
+          path: build/native-report-artifacts
+      - name: Select the newest report for each platform across attempts
+        run: >-
+          python scripts/ci/native_platforms.py select-reports --reports build/native-report-artifacts
+          --output build/native-reports --run-id "${{ github.run_id }}"
       - name: Combine the platform reports (fails unless every required check is PASS)
         env:
           NATIVE_LINUX_JOB_RESULT: ${{ needs.linux.result }}

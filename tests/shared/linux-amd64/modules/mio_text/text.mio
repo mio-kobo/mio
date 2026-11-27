@@ -1,0 +1,84 @@
+yobu "kiso/string";
+yobu "kiso/array";
+
+// UTF-8 text values owned by the library, addressed by opaque int32 handles (> 0). Bytes go in one at a time (the C
+// side owns its own memory; nothing is shared). Negative results: -1 invalid handle, -3 not valid UTF-8.
+kaku texts: [][]uint8 = [];
+kaku live: []bool = [];
+
+waza slot_of(handle: int32) -> int64 { kaesu int64(handle) - 1; }
+waza valid(handle: int32) -> bool {
+    moshi (handle <= 0) { kaesu iie; }
+    kaku slot = int64(handle) - 1;
+    moshi (slot >= len(live)) { kaesu iie; }
+    kaesu live[slot];
+}
+waza as_string(handle: int32) -> string? { kaesu string.from_utf8(texts[slot_of(handle)]); }
+
+koukai waza new_text() -> int32 export "mio_text_new" {
+    kaku at = 0;
+    aida (at < len(live)) {
+        moshi (!live[at]) { texts[at] = []; live[at] = hai; kaesu int32(at + 1); }
+        at = at + 1;
+    }
+    array.push(texts, []);
+    array.push(live, hai);
+    kaesu int32(len(live));
+}
+koukai waza push_byte(handle: int32, value: uint8) -> int32 export "mio_text_push_byte" {
+    moshi (!valid(handle)) { kaesu -1; }
+    array.push(texts[slot_of(handle)], value);
+    kaesu int32(len(texts[slot_of(handle)]));
+}
+koukai waza byte_len(handle: int32) -> int64 export "mio_text_byte_len" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaesu len(texts[slot_of(handle)]);
+}
+koukai waza rune_count(handle: int32) -> int64 export "mio_text_rune_count" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaku value = as_string(handle);
+    moshi (value == mu) { kaesu -3; }
+    kaesu string.rune_count(value);
+}
+koukai waza is_utf8(handle: int32) -> bool export "mio_text_is_utf8" {
+    moshi (!valid(handle)) { kaesu iie; }
+    kaku value = as_string(handle);
+    kaesu value != mu;
+}
+koukai waza has_prefix(handle: int32, prefix: int32) -> int32 export "mio_text_has_prefix" {
+    moshi (!valid(handle) || !valid(prefix)) { kaesu -1; }
+    kaku a = as_string(handle);
+    kaku b = as_string(prefix);
+    moshi (a == mu) { kaesu -3; }
+    moshi (b == mu) { kaesu -3; }
+    moshi (string.has_prefix(a, b)) { kaesu 1; }
+    kaesu 0;
+}
+koukai waza index_of(handle: int32, pattern: int32) -> int64 export "mio_text_index" {
+    moshi (!valid(handle) || !valid(pattern)) { kaesu -1; }
+    kaku a = as_string(handle);
+    kaku b = as_string(pattern);
+    moshi (a == mu) { kaesu -3; }
+    moshi (b == mu) { kaesu -3; }
+    kaesu string.index(a, b);
+}
+// Number of ASCII letters a-z / A-Z that are vowels.
+koukai waza count_vowels(handle: int32) -> int64 export "mio_text_count_vowels" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaku data = texts[slot_of(handle)];
+    kaku count = 0;
+    kaku i = 0;
+    aida (i < len(data)) {
+        kaku c = int64(data[i]);
+        moshi (c >= 65 && c <= 90) { c = c + 32; }
+        moshi (c == 97 || c == 101 || c == 105 || c == 111 || c == 117) { count = count + 1; }
+        i = i + 1;
+    }
+    kaesu count;
+}
+koukai waza free_text(handle: int32) -> int32 export "mio_text_free" {
+    moshi (!valid(handle)) { kaesu -1; }
+    texts[slot_of(handle)] = [];
+    live[slot_of(handle)] = iie;
+    kaesu 0;
+}

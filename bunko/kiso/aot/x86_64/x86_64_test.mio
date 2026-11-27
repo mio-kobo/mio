@@ -400,3 +400,27 @@ waza test_syscall_is_rewritten_only_in_darwin_mode() -> unit {
     syscall_raw(darwin);
     testing.expect(same(bytes_of(darwin), [232, 251, 255, 255, 255, 15, 5]), "call darwin_syscall (rel32 = -5), raw SYSCALL kept");
 }
+
+// mov_data is mov_ri (and records nothing) unless the label "pic" exists; then it is a rip-relative lea whose rel32 is
+// recorded as an offset into the data area, so the image holds no absolute data address.
+waza test_mov_data_is_position_independent_only_in_pic_mode() -> unit {
+    kaku plain = assembler();
+    mov_data(plain, rcx, 268435456 + 3600);
+    kaku expected = assembler();
+    mov_ri(expected, rcx, 268435456 + 3600);
+    kaku plain_bytes = bytes_of(plain);
+    kaku expected_bytes = bytes_of(expected);
+    kaku identical = len(plain_bytes) == len(expected_bytes) && len(plain_bytes) == 10;
+    kaku at = 0;
+    aida (at < len(plain_bytes) && identical) { identical = plain_bytes[at] == expected_bytes[at]; at = at + 1; }
+    testing.expect(identical, "without pic mov_data is byte-identical to mov_ri");
+    testing.expect(len(plain.data_refs) == 0, "no data reference recorded");
+    kaku pic = assembler();
+    label(pic, "pic");
+    mov_data(pic, rcx, 268435456 + 3600);
+    mov_data(pic, r9, 268435456 + 16);
+    testing.expect(same(bytes_of(pic), [72, 141, 13, 0, 0, 0, 0, 76, 141, 13, 0, 0, 0, 0]), "lea rcx,[rip+0]; lea r9,[rip+0]");
+    testing.expect(len(pic.data_refs) == 2 && pic.data_refs[0].at == 3 && pic.data_refs[0].offset == 3600 && pic.data_refs[1].at == 10 && pic.data_refs[1].offset == 16, "rel32 positions and data offsets recorded");
+    kaku linked = assemble_linked(pic);
+    testing.expect(linked.error == "" && len(linked.data_refs) == 2, "assemble_linked hands the data references to the object writer");
+}

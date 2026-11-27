@@ -304,11 +304,25 @@ func (c *Checker) checkBlockWithNarrowing(block *ast.BlockStatement, symbol reso
 	return err
 }
 
-func (c *Checker) invalidateGlobalFacts() {
+func (c *Checker) invalidateCallFacts() {
 	for symbol := range c.globals {
 		delete(c.narrowings, symbol)
 		c.factVersions[symbol]++
 	}
+	if c.loopDepth == 0 {
+		return
+	}
+	for symbol := range c.narrowings {
+		if c.resolver.HasCapturedWrite(symbol) {
+			delete(c.narrowings, symbol)
+			c.factVersions[symbol]++
+		}
+	}
+}
+
+func (c *Checker) callCanChange(symbol resolver.Symbol) bool {
+	_, global := c.globals[symbol]
+	return global || c.resolver.HasCapturedWrite(symbol)
 }
 
 // invalidateAllFacts 清除可能被闭包修改的收窄事实
@@ -317,4 +331,52 @@ func (c *Checker) invalidateAllFacts() {
 		delete(c.narrowings, symbol)
 		c.factVersions[symbol]++
 	}
+}
+
+// Check the header with facts valid on both entry and the backedge. The
+// condition's own non-null guard can still establish a fresh fact in the body.
+func (c *Checker) invalidateLoopFacts(loop *ast.WhileStatement) {
+	if len(c.narrowings) == 0 {
+		return
+	}
+	assigned := make(map[resolver.Symbol]bool)
+	hasCall := false
+	walkStatements([]ast.Statement{loop}, func(expr ast.Expression) {
+		if call, ok := expr.(*ast.CallExpression); ok && c.callMayWrite(call.Function) {
+			hasCall = true
+		}
+	}, func(stmt ast.Statement) {
+		if assignment, ok := stmt.(*ast.AssignStatement); ok {
+			if symbol, ok := c.resolver.BindingOf(assignment.Name); ok {
+				assigned[symbol] = true
+			}
+		}
+	})
+	for symbol := range c.narrowings {
+		if assigned[symbol] || (hasCall && c.callCanChange(symbol)) {
+			delete(c.narrowings, symbol)
+			c.factVersions[symbol]++
+		}
+	}
+}
+
+func (c *Checker) callMayWrite(callee ast.Expression) bool {
+	if apply, ok := callee.(*ast.TypeApplyExpression); ok {
+		callee = apply.Function
+	}
+	if identifier, ok := groupedIdentifier(callee); ok {
+		symbol, resolved := c.resolver.BindingOf(identifier)
+		return !resolved || symbol.Kind != resolver.SymbolBuiltin
+	}
+	if field, ok := callee.(*ast.FieldExpression); ok {
+		owner := field.Left
+		if apply, ok := owner.(*ast.TypeApplyExpression); ok {
+			owner = apply.Function
+		}
+		if id, ok := groupedIdentifier(owner); ok {
+			symbol, resolved := c.resolver.BindingOf(id)
+			return !resolved || symbol.Kind != resolver.SymbolType
+		}
+	}
+	return true
 }

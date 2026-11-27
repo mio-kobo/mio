@@ -1,0 +1,39 @@
+yobu "../support";
+yobu "kiso/ffi/linux";
+
+kaku run = support.begin("test_ffi_state");
+kaku lib = linux.open(support.absolute("libmio_state.so"));
+support.expect(run, "open", !linux.failed(lib));
+kaku create = linux.symbol(lib, "mio_state_create", "p:");
+kaku increment = linux.symbol(lib, "mio_state_increment", "i:p");
+kaku get = linux.symbol(lib, "mio_state_get", "i:p");
+kaku destroy = linux.symbol(lib, "mio_state_destroy", "v:p");
+
+kaku a = linux.call_p_(create);
+kaku b = linux.call_p_(create);
+support.expect(run, "handles are non-null", a != cptr(0) && b != cptr(0));
+support.expect(run, "handles are distinct", a != b);
+support.expect(run, "initial value", linux.call_i_p(get, a) == int32(0));
+support.expect(run, "increment a", linux.call_i_p(increment, a) == int32(1));
+support.expect(run, "increment a again", linux.call_i_p(increment, a) == int32(2));
+support.expect(run, "increment b", linux.call_i_p(increment, b) == int32(1));
+support.expect(run, "state is per handle", linux.call_i_p(get, a) == int32(2) && linux.call_i_p(get, b) == int32(1));
+// error codes: null handle
+support.expect(run, "null handle code", linux.call_i_p(get, cptr(0)) == int32(-1));
+support.expect(run, "null handle increment code", linux.call_i_p(increment, cptr(0)) == int32(-1));
+// many handles, each owned by the C library until destroy
+kaku i = 0;
+kaku ok = hai;
+aida (i < 1000) {
+    kaku h = linux.call_p_(create);
+    moshi (linux.call_i_p(increment, h) != int32(1) || linux.call_i_p(get, h) != int32(1)) { ok = iie; }
+    linux.call_v_p(destroy, h);
+    i = i + 1;
+}
+support.expect(run, "1000 create/destroy cycles", ok);
+linux.call_v_p(destroy, a);
+linux.call_v_p(destroy, b);
+linux.call_v_p(destroy, cptr(0));
+support.expect(run, "destroy tolerates null", linux.last_error() == "");
+support.expect(run, "close", linux.close(lib) == "");
+support.finish(run);

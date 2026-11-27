@@ -59,3 +59,22 @@ waza test_integer_literal_preserves_exact_text() -> unit {
     testing.expect(magnitude.text == "9223372036854775808", "minimum magnitude text preserved");
     testing.expect(overflow.text == "9223372036854775809", "overflow text preserved");
 }
+
+// `koukai waza f(...) -> T export "symbol" { ... }` keeps its body and carries the symbol in the node's extra field;
+// anything that is not a public, non-generic function with an explicit symbol is a parse error.
+waza test_export_attribute() -> unit {
+    kaku result = parse(string.to_bytes("koukai waza add(a: int32, b: int32) -> int32 export \"mio_add\" { kaesu a + b; }"));
+    testing.expect(len(result.errors) == 0, "export errors");
+    kaku program = result.ast.nodes[result.root];
+    kaku function = result.ast.nodes[program.children[0]];
+    testing.expect(node_kind_code(function.kind) == 32 && function.text == "add", "function node");
+    testing.expect(function.extra == "$export::mio_add" && function.flag, "export symbol recorded on a public function");
+    testing.expect(node_kind_code(result.ast.nodes[function.children[len(function.children) - 1]].kind) != 0 && len(result.ast.nodes[function.children[len(function.children) - 1]].children) == 1, "the body is kept");
+    testing.expect(len(parse(string.to_bytes("waza hidden() -> int32 export \"x\" { kaesu 1; }")).errors) != 0, "private function rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza g<T>(v: T) -> T export \"x\" { kaesu v; }")).errors) != 0, "generic function rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza f() -> int32 export \"not valid\" { kaesu 1; }")).errors) != 0, "invalid C symbol rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza f() -> int32 export { kaesu 1; }")).errors) != 0, "missing symbol rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza f() -> unit export \"mio_ffi_v1_test\" { }")).errors) != 0, "runtime export name rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza f() export \"x\" { }")).errors) != 0, "missing prototype rejected");
+    testing.expect(len(parse(string.to_bytes("koukai waza f() -> int32 { kaesu 1; }")).errors) == 0, "an ordinary function still parses");
+}

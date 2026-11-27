@@ -1,0 +1,46 @@
+yobu "kiso/string";
+yobu "kiso/encoding/win64c";
+
+// Explicit native ownership. All handles are generation-checked uint64 tokens.
+koukai waza buffer_new(size: uint64) -> uint64 = c "mio_native_ffi.dll" "mio_ffi_buffer_new";
+koukai waza buffer_free(buffer: uint64) -> uint32 = c "mio_native_ffi.dll" "mio_ffi_buffer_free";
+koukai waza buffer_data(buffer: uint64) -> cptr = c "mio_native_ffi.dll" "mio_ffi_buffer_data";
+koukai waza buffer_pointer(buffer: uint64) -> cptr = c "mio_native_ffi.dll" "mio_ffi_buffer_pointer";
+koukai waza buffer_set(buffer: uint64, index: uint64, value: uint8) -> uint32 = c "mio_native_ffi.dll" "mio_ffi_buffer_set";
+koukai waza buffer_get(buffer: uint64, index: uint64) -> uint8 = c "mio_native_ffi.dll" "mio_ffi_buffer_get";
+waza open_native(path: uint64) -> uint64 = c "mio_native_ffi.dll" "mio_ffi_open";
+waza symbol_native(library: uint64, name: uint64, signature: uint64) -> uint64 = c "mio_native_ffi.dll" "mio_ffi_symbol";
+koukai waza close(library: uint64) -> uint32 = c "mio_native_ffi.dll" "mio_ffi_close";
+koukai waza release(function: uint64) -> uint32 = c "mio_native_ffi.dll" "mio_ffi_release";
+koukai waza check(function: uint64, signature: uint64) -> uint32 = c "mio_native_ffi.dll" "mio_ffi_check";
+koukai waza error() -> uint32 = c "mio_native_ffi.dll" "mio_ffi_error";
+koukai waza os_error() -> uint32 = c "mio_native_ffi.dll" "mio_ffi_os_error";
+koukai waza address(function: uint64) -> cptr = c "mio_native_ffi.dll" "mio_ffi_address";
+koukai waza resources() -> uint32 = c "mio_native_ffi.dll" "mio_ffi_resources";
+
+koukai kata Result { handle: uint64; error: uint32; os_error: uint32; }
+koukai waza signature(result: string, parameters: []string) -> uint64 {
+    kaesu uint64(win64c.native_signature(result, parameters));
+}
+koukai waza bytes(data: []uint8) -> uint64 {
+    kaku buffer = buffer_new(uint64(len(data)));
+    moshi (buffer == uint64(0)) { kaesu buffer; }
+    kaku i = 0; aida (i < len(data)) { buffer_set(buffer, uint64(i), data[i]); i = i + 1; }
+    kaesu buffer;
+}
+koukai waza open(path: string) -> Result {
+    kaku buffer = bytes(string.to_bytes(path));
+    moshi (buffer == uint64(0)) { kaesu Result { handle: uint64(0), error: error(), os_error: os_error() }; }
+    kaku handle = open_native(buffer);
+    kaku result = Result { handle: handle, error: error(), os_error: os_error() };
+    buffer_free(buffer); kaesu result;
+}
+koukai waza symbol(library: uint64, name: string, result: string, parameters: []string) -> Result {
+    kaku descriptor = win64c.native_signature(result, parameters);
+    moshi (descriptor < 0) { kaesu Result { handle: uint64(0), error: uint32(4), os_error: uint32(0) }; }
+    kaku buffer = bytes(string.to_bytes(name));
+    moshi (buffer == uint64(0)) { kaesu Result { handle: uint64(0), error: error(), os_error: os_error() }; }
+    kaku handle = symbol_native(library, buffer, uint64(descriptor));
+    kaku resolved = Result { handle: handle, error: error(), os_error: os_error() };
+    buffer_free(buffer); kaesu resolved;
+}

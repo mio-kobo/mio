@@ -19,6 +19,7 @@ kata TypeEnvironment {
     constraints: []TypeParameter;
     facts: []FlowFact;
     versions: []int64;
+    captured_writes: []bool;
     loop_depth: []int64;
     function_depth: []int64;
     constant_states: []int64;
@@ -69,6 +70,16 @@ waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: pro
     scalar_type(result, TypeKind.CPtr(), "cptr");
     scalar_type(result, TypeKind.Uint64(), "uint64");
     kaku versions = array.make[int64](len(resolved.symbols), 0);
+    kaku captured_writes = array.make[bool](len(resolved.symbols), iie);
+    kaku index = 0;
+    aida (index < len(resolved.bindings)) {
+        kaku binding = resolved.bindings[index];
+        moshi (binding.capture) {
+            kaku node = resolved.files[binding.reference.file_id].ast.nodes[binding.reference.node_id];
+            moshi (parser.node_kind_code(node.kind) == 15) { captured_writes[binding.symbol_id] = hai; }
+        }
+        index = index + 1;
+    }
     kaku bindings = resolver.build_binding_table(resolved);
     kaesu TypeEnvironment {
         work: work,
@@ -79,6 +90,7 @@ waza new_environment_with_progress(resolved: resolver.ResolvedPackage, work: pro
         constraints: array.with_capacity[TypeParameter](8),
         facts: array.with_capacity[FlowFact](16),
         versions: versions,
+        captured_writes: captured_writes,
         loop_depth: [0],
         function_depth: [0],
         constant_states: array.make[int64](len(resolved.symbols), 0),
@@ -280,11 +292,16 @@ waza restore_versions(env: TypeEnvironment, mark: int64) -> unit {
     array.truncate(env.version_log, mark);
 }
 
-waza invalidate_global_facts(env: TypeEnvironment) -> unit {
+waza call_can_change(env: TypeEnvironment, symbol_id: int64) -> bool {
+    kaesu env.captured_writes[symbol_id] || resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 2;
+}
+
+waza invalidate_call_facts(env: TypeEnvironment) -> unit {
     kaku index = 0;
     aida (index < len(env.facts)) {
         kaku symbol_id = env.facts[index].symbol_id;
-        moshi (resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 2) { invalidate_fact(env, symbol_id); }
+        kaku global = resolver.symbol_kind_code(env.resolved.symbols[symbol_id].kind) == 2;
+        moshi (global || (env.loop_depth[0] > 0 && env.captured_writes[symbol_id])) { invalidate_fact(env, symbol_id); }
         index = index + 1;
     }
 }
