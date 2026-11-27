@@ -1,0 +1,29 @@
+yobu "kiso/ffi/linux";
+yobu "kiso/string";
+
+// Load the C and math libraries at run time and call them through checked handles (Linux AMD64 only).
+kaku libc = linux.open_system("libc.so.6");
+kaku libm = linux.open_system("libm.so.6");
+moshi (linux.failed(libc) || linux.failed(libm)) {
+    chant(linux.library_error(libc));
+    chant(linux.library_error(libm));
+}
+
+// The signature records the C prototype: int abs(int), size_t strnlen(const char *, size_t), double pow(double, double).
+kaku abs = linux.symbol(libc, "abs", "i:i");
+kaku strnlen = linux.symbol(libc, "strnlen", "z:nz");
+kaku pow = linux.symbol(libm, "pow", "d:dd");
+chant(linux.call_i_i(abs, int32(-42)));
+chant(linux.call_z_nz(strnlen, string.to_bytes("Mio")) == uint64(3));
+chant(linux.call_d_dd(pow, 2.0, 10.0) == 1024.0);
+
+// A call through the wrong prototype is refused before native code runs.
+chant(linux.call_i_ii(abs, int32(1), int32(2)));
+chant(linux.last_error());
+
+// Closing a library invalidates every function resolved from it.
+chant(linux.close(libc));
+chant(linux.is_live(abs));
+chant(linux.call_i_i(abs, int32(-1)));
+chant(linux.last_error());
+chant(linux.close(libm));

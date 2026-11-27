@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	// Tests with English transcripts use a stable default. Locale tests set
+	// their own language on the command line or in the environment.
+	if err := os.Setenv("MIO_LANG", "en-US"); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
 // stressTestEnabled 判断是否启用专项压力测试
 func stressTestEnabled() bool {
 	return os.Getenv("MIO_STRESS_TEST") == "1"
@@ -135,7 +144,7 @@ age;
 
 // 测试版本命令
 func TestCLIVersion(t *testing.T) {
-	const want = "Mio 2.1.2-dev\n"
+	const want = "Mio 2.2.0-dev\n"
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -203,7 +212,7 @@ func TestCLIMissingArguments(t *testing.T) {
 
 func TestCLIReleaseVersionAlias(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := runCLI([]string{"--version"}, &stdout, &stderr); code != 0 || stdout.String() != "Mio 2.1.2-dev\n" || stderr.Len() != 0 {
+	if code := runCLI([]string{"--version"}, &stdout, &stderr); code != 0 || stdout.String() != "Mio 2.2.0-dev\n" || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

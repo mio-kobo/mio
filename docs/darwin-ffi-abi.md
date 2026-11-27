@@ -1,0 +1,83 @@
+# Mio FFI ABI v1 on Darwin ARM64
+
+Mio can build Apple Silicon Mach-O shared libraries from scalar source functions. A library has an install name of `@rpath/<output filename>` and an ad-hoc signature. The native Mio compiler writes the image, the export trie and symbol table, and the signature. Its only load dependency is macOS libSystem.
+
+## Build and link a library
+
+```sh
+mio build --kind dylib tests/ffi/dylib/math.mio \
+  --export add=mio_math_add --export root=mio_math_sqrt -o libmio_math.dylib
+```
+
+Each `--export source=symbol` entry selects a concrete function in the entry module and assigns a C symbol beginning with `mio_`. This list controls exports independently of Mio's `koukai` visibility. The implementation adds Mach-O's leading underscore. C declarations and `darwin.symbol` use the names without that underscore.
+
+Every library publishes `int64_t mio_module_abi_version(void)`. It returns `1`. The `mio_ffi_v1_` namespace is reserved for signature aliases. A name of the form `mio_ffi_v1_<result><parameters>_<symbol>` denotes a specific prototype and points at the same text entry as the corresponding C symbol. Codes use the fixed C ABI scalar table below in declaration order. These aliases are for runtime lookup.
+
+| Mio type | C type | Code |
+| --- | --- | --- |
+| `int32` | `int32_t` | `e` |
+| `uint32` | `uint32_t` | `f` |
+| `int64` | `int64_t` | `g` |
+| `float32` | `float` | `i` |
+| `float64` | `double` | `j` |
+| `bool` | `_Bool` (eight bits, canonical values 0 and 1) | `l` |
+
+Exports support up to eight fixed parameters and one scalar result. C reaches a thunk that collects the separate Darwin GP and FP argument banks into Mio's machine-word convention, including the eighth GP argument in `x7`. It uses a 16-byte-aligned stack, preserves the ABI's callee-saved registers and returns in `x0` or `v0`. The library code uses PC-relative intra-image branches. The writer also supports bounds-checked ADRP/ADD patches to image text, constants, and zero-initialized data.
+
+## Open, bind and call from Mio
+
+Import `kiso/ffi/darwin`. Check the `error` field of every result. An empty string denotes success. `darwin.open(path)` takes one dyld reference with `RTLD_NOW | RTLD_LOCAL | RTLD_FIRST`, so lookup is confined to the requested image. Each successful open has an independent ticket. `darwin.close(library)` returns a diagnostic string and invalidates that ticket and its bound functions on success. Close all owned tickets explicitly.
+
+Bind with `darwin.symbol(library, "mio_math_add", darwin.Prototype.Int64FromTwoInt64())`. The module copies `dlerror` messages, checks the matching signature alias, and verifies ABI version 1 before issuing a Mio function ticket. The symbol and its alias must resolve to the same ARM64 text address. A function ticket holds no public address. Calling a ticket with the wrong typed invocation function or after its library closes returns an error.
+
+| Prototype | Invocation |
+| --- | --- |
+| `Int64` | `invoke_int64(function)` |
+| `Int64FromInt64` | `invoke_int64_1(function, a)` |
+| `Int64FromTwoInt64` | `invoke_int64_2(function, a, b)` |
+| `Float64FromFloat64` | `invoke_float64(function, a)` |
+| `Float64FromTwoInt64` | `invoke_float64_from_ints(function, a, b)` |
+| `BoolFromInt64` | `invoke_bool(function, a)` |
+
+For fixed scalar prototypes, use `bind_c` for a C library or `bind_mio` for a Mio producer. The two functions share the same `open` and `close` API. Declare the exact C calling convention when using `bind_c`. dyld returns a symbol address, and the C prototype comes entirely from the caller. Functions must resolve to aligned addresses in the loaded image's ARM64 text section. The function API rejects data exports in other sections. A deliberately mislabeled symbol in a trusted library can still violate the declared contract.
+
+```mio
+yobu "kiso/ffi/darwin";
+
+kaku opened = darwin.open("/usr/lib/libSystem.B.dylib");
+kaku library = opened.library;
+moshi (library != mu) {
+    kaku binding = darwin.bind_c(library, "getpid", darwin.CPrototype {
+        result: darwin.Scalar.I32(), parameters: []
+    });
+    kaku function = binding.function;
+    moshi (function != mu) {
+        kaku result = darwin.invoke(function, []);
+        moshi (result.error != "") { chant(result.error); }
+        kaku released = darwin.release(function);
+        moshi (released != "") { chant(released); }
+    } sore { chant(binding.error); }
+    kaku closed = darwin.close(library);
+    moshi (closed != "") { chant(closed); }
+} sore { chant(opened.error); }
+```
+
+`CPrototype` takes up to 256 parameter types. `Scalar` supports `I8`, `U8`, `I16`, `U16`, `I32`, `U32`, `I64`, `U64`, `F32`, `F64`, `Ptr`, and `Bool`. Use `Void` for a function without a C result. The matching `Value` constructors accept Mio's corresponding scalar types. `invoke` checks the argument count and tags before entering C and returns a tagged `Value`. GP and FP register banks are independent and further arguments use the Darwin stack layout.
+
+`release(function)` invalidates that binding immediately. A successful `close` invalidates all bindings issued from that library ticket. A failed `dlclose` leaves that ticket available for a retry. Opening the same image twice gives independent dyld references. A released ticket or closed library ticket always returns an error when reused.
+
+Load libraries from trusted sources. dyld can execute initializers during `open`. The signature alias is a producer declaration checked for consistency by the loader.
+
+## Ownership and current limits
+
+The loader owns temporary C strings and frees them before returning. Mio pointers to managed objects stay inside their originating Mio runtime. Library bodies use scalar locals and calls and can run without a Mio heap, initializers, or runtime globals. Explicit errors reject managed values, nullable values, closures, indirect calls, recursive or over-deep call graphs, external calls from library bodies, and operations that can jump to a process-wide Mio runtime error, including integer division. The library entry has no GC work and preserves [Runtime ABI RA-1](runtime-abi.md) for its caller.
+
+The loader supports single-mutator Mio hosts. Mio-generated library exports use the subset in the export table. Native buffers, C aggregate values, variadic functions, callbacks, worker-enabled loader builds, and extra linker options remain outside the supported loader contract. A loader build uses the fixed libSystem imports through the native Darwin Mach-O writer. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+
+## Integration
+
+```sh
+python3 tests/ffi/dylib/run.py --mio /path/to/current/mio --output build/dylib
+```
+
+The driver builds and inspects the math, convert, and JSON libraries and runs a Mio loader and a separately Clang-linked C oracle. The JSON export tests the tokenizer's digit predicate. The convert export tests the decimal parser's binary scaling helper and assumes parser-sized exponents. The test driver records SHA-256 hashes, symbols, load results, ordinary and GC stress runs, and timing samples.

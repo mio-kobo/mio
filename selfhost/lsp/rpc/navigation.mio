@@ -37,26 +37,52 @@ waza document_symbols(analysis: DocumentAnalysis) -> string {
     }
     string.write_string(output,"]");kaesu string.builder_string(output);
 }
+waza navigation_method(method: string) -> bool {
+    kaesu method == "textDocument/hover" || method == "textDocument/definition" ||
+        method == "textDocument/references" || method == "textDocument/documentSymbol" ||
+        method == "textDocument/signatureHelp" || method == "textDocument/completion" ||
+        method == "textDocument/codeAction" || method == "textDocument/documentHighlight" ||
+        method == "textDocument/prepareRename" || method == "textDocument/rename" ||
+        method == "textDocument/formatting";
+}
 waza navigation_request(state: Session, document: json.Document, params: int64, method: string, id: string, cancelled: bool) -> string? {
-    moshi(method!="textDocument/hover" && method!="textDocument/definition" && method!="textDocument/references" && method!="textDocument/documentSymbol" && method!="textDocument/signatureHelp" && method!="textDocument/completion" && method!="textDocument/codeAction"){kaesu mu;}
+    moshi(!navigation_method(method)){kaesu mu;}
     moshi(cancelled){kaesu error_response(id,-32800,"Request cancelled");}
     kaku text_document=json.member(document,params,"textDocument");kaku uri_node=json.member(document,text_document,"uri");
     moshi(uri_node<0 || document.values[uri_node].kind!=3 || json.text(document,uri_node)==""){kaesu error_response(id,-32602,"missing textDocument.uri");}
-    kaku uri=json.text(document,uri_node);kaku position=lsp.Position {line:0,character:0};
+    kaku uri=json.text(document,uri_node);
+    moshi(method=="textDocument/formatting"){kaesu formatting_request(state,document,params,uri,id);}
+    kaku renaming=method=="textDocument/prepareRename" || method=="textDocument/rename";
+    kaku highlighting=method=="textDocument/documentHighlight";
+    kaku position=lsp.Position {line:0,character:0};
     moshi(method!="textDocument/documentSymbol"){
-        kaku node=json.member(document,params,"position");moshi(node>=0){kaku parsed=position_field(document,node);moshi(parsed==mu){kaesu error_response(id,-32602,"invalid position");}position=parsed;}
+        kaku node=json.member(document,params,"position");
+        moshi((renaming || highlighting) && (node<0 || json.integer(document,json.member(document,node,"line"))==mu || json.integer(document,json.member(document,node,"character"))==mu)){kaesu error_response(id,-32602,"missing position");}
+        moshi(node>=0){kaku parsed=position_field(document,node);moshi(parsed==mu){kaesu error_response(id,-32602,"invalid position");}position=parsed;}
     }
-    kaku empty="null";moshi(method=="textDocument/references" || method=="textDocument/documentSymbol" || method=="textDocument/codeAction"){empty="[]";}
+    kaku empty="null";moshi(method=="textDocument/references" || method=="textDocument/documentSymbol" || method=="textDocument/codeAction" || highlighting){empty="[]";}
     moshi(method=="textDocument/completion"){empty="{\"isIncomplete\":false,\"items\":[]}";}
-    kaku analyzed=analyze_document(state,uri);moshi(analyzed==mu){kaesu response(id,empty);}
+    moshi((renaming || highlighting) && (position.line<0 || position.character<0)){kaesu error_response(id,-32602,"invalid position");}
+    kaku analyzed=analyze_document(state,uri);
+    moshi(analyzed==mu){
+        moshi(renaming){kaesu error_response(id,-32803,"Document could not be analyzed");}
+        kaesu response(id,empty);
+    }
     moshi(method=="textDocument/codeAction"){kaesu response(id,code_actions(state,analyzed,document,params));}
     moshi(method=="textDocument/signatureHelp"){kaesu response(id,signature_result(analyzed,position));}
     moshi(method=="textDocument/completion"){kaesu response(id,completion_result(state,analyzed,position));}
     moshi(method=="textDocument/documentSymbol"){kaesu response(id,document_symbols(analyzed));}
     kaku buffer=source_buffer(analyzed,analyzed.path);moshi(buffer==mu){kaesu response(id,empty);}
-    kaku offset=lsp.offset_at(buffer,position);kaku symbol=lsp.symbol_at(analyzed.index,analyzed.path,offset);
+    kaku offset=lsp.offset_at(buffer,position);
+    moshi(renaming){
+        kaku actual=lsp.position_at(buffer,offset);
+        moshi(actual.line!=position.line || actual.character!=position.character){kaesu error_response(id,-32803,"No renameable symbol at this position");}
+        kaesu rename_request(state,analyzed,buffer,offset,document,params,method,id);
+    }
+    kaku symbol=lsp.symbol_at(analyzed.index,analyzed.path,offset);
     moshi(method=="textDocument/hover"){kaesu response(id,hover_result(analyzed,offset,symbol,state.flags[4]));}
     moshi(symbol==mu){kaesu response(id,empty);}
+    moshi(highlighting){kaesu response(id,highlights(state,analyzed,symbol,buffer));}
     moshi(method=="textDocument/definition"){
         kaku location=location_json(analyzed,symbol.path,symbol.selection.start.offset,symbol.selection.end.offset);moshi(location==mu){kaesu response(id,"null");}
         kaesu response(id,string.concat("[",string.concat(location,"]")));

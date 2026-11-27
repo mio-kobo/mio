@@ -1,0 +1,123 @@
+yobu "kiso/array";
+yobu "kiso/testing";
+
+waza word(bytes: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) {
+        value = value + int64(bytes[at + i]) * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
+    kaesu value;
+}
+
+// Signed 64-bit little-endian word.
+waza signed_word(bytes: []uint8, at: int64) -> int64 {
+    kaku negative = bytes[at + 7] >= uint8(128);
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < 7) {
+        kaku b = int64(bytes[at + i]);
+        moshi (negative) { b = 255 - b; }
+        value = value + b * scale;
+        scale = scale * 256;
+        i = i + 1;
+    }
+    kaku top = int64(bytes[at + 7]);
+    moshi (negative) { top = 255 - top; }
+    value = value + top * scale;
+    moshi (negative) { kaesu -value - 1; }
+    kaesu value;
+}
+
+// ret; ret; mov eax, 1 ... enough bytes for three entry points and two rel32 slots
+waza code() -> []uint8 {
+    kaku out: []uint8 = [];
+    kaku i = 0;
+    aida (i < 64) { array.push(out, uint8(144)); i = i + 1; }
+    kaesu out;
+}
+
+waza spec() -> ObjectSpec {
+    kaku exports = [ObjectExport { symbol: "mio_a", offset: 0, size: 16 }, ObjectExport { symbol: "mio_b", offset: 16, size: 16 }];
+    kaku locals = [ObjectExport { symbol: "helper", offset: 32, size: 32 }];
+    kaku relocations = [Relocation { at: 4, kind: r_x86_64_pc32, symbol: "", addend: 8188 },
+        Relocation { at: 20, kind: r_x86_64_plt32, symbol: "sqrt", addend: -4 },
+        Relocation { at: 40, kind: r_x86_64_pc32, symbol: "", addend: -4 }];
+    kaesu ObjectSpec { code: code(), bss_size: 8192, exports: exports, locals: locals, relocations: relocations };
+}
+
+waza test_header_and_sections() -> unit {
+    kaku result = object(spec());
+    testing.expect(result.error == "", "object built");
+    kaku b = result.bytes;
+    testing.expect(b[0] == uint8(127) && b[1] == uint8(69) && b[2] == uint8(76) && b[3] == uint8(70), "ELF magic");
+    testing.expect(b[4] == uint8(2) && b[5] == uint8(1) && b[6] == uint8(1), "ELF64 little endian version 1");
+    testing.expect(word(b, 16, 2) == 1 && word(b, 18, 2) == 62, "ET_REL EM_X86_64");
+    testing.expect(word(b, 24, 8) == 0 && word(b, 32, 8) == 0 && word(b, 54, 2) == 0 && word(b, 56, 2) == 0, "no entry, no program headers");
+    testing.expect(word(b, 60, 2) == 8 && word(b, 62, 2) == 7, "eight sections, .shstrtab last");
+    kaku sh = word(b, 40, 8);
+    // section 1 = .text: PROGBITS, AX; 3 = .bss: NOBITS, WA; 4 = .note.GNU-stack: no flags, empty
+    testing.expect(word(b, sh + 64 + 4, 4) == 1 && word(b, sh + 64 + 8, 8) == 6 && word(b, sh + 64 + 32, 8) == 64, ".text PROGBITS AX");
+    testing.expect(word(b, sh + 192 + 4, 4) == 8 && word(b, sh + 192 + 8, 8) == 3 && word(b, sh + 192 + 32, 8) == 8192, ".bss NOBITS WA");
+    testing.expect(word(b, sh + 256 + 4, 4) == 1 && word(b, sh + 256 + 8, 8) == 0 && word(b, sh + 256 + 32, 8) == 0, ".note.GNU-stack empty, not executable");
+    testing.expect(word(b, sh + 128 + 4, 4) == 4 && word(b, sh + 128 + 40, 4) == 5 && word(b, sh + 128 + 44, 4) == 1, ".rela.text links .symtab and applies to .text");
+}
+
+waza test_symbols_are_exported_by_declaration_only() -> unit {
+    kaku b = object(spec()).bytes;
+    kaku sh = word(b, 40, 8);
+    kaku symtab = word(b, sh + 320 + 24, 8);
+    kaku count = word(b, sh + 320 + 32, 8) / 24;
+    // null, .text, .bss, helper (local), mio_a, mio_b (global), sqrt (undefined global)
+    testing.expect(count == 7, "seven symbols");
+    testing.expect(word(b, sh + 320 + 44, 4) == 4, "sh_info = first global symbol");
+    // st_info at +4: STB_LOCAL|STT_FUNC = 2; STB_GLOBAL|STT_FUNC = 18; STB_GLOBAL|STT_NOTYPE = 16
+    testing.expect(int64(b[symtab + 3 * 24 + 4]) == 2, "helper is a local function");
+    testing.expect(int64(b[symtab + 4 * 24 + 4]) == 18 && word(b, symtab + 4 * 24 + 8, 8) == 0 && word(b, symtab + 4 * 24 + 16, 8) == 16, "mio_a is a global function at 0 of size 16");
+    testing.expect(int64(b[symtab + 5 * 24 + 4]) == 18 && word(b, symtab + 5 * 24 + 8, 8) == 16, "mio_b is a global function at 16");
+    testing.expect(int64(b[symtab + 6 * 24 + 4]) == 16 && word(b, symtab + 6 * 24 + 6, 2) == 0, "sqrt is an undefined global");
+    testing.expect(int64(b[symtab + 4 * 24 + 5]) == 0, "default visibility");
+}
+
+waza test_relocation_entries() -> unit {
+    kaku b = object(spec()).bytes;
+    kaku sh = word(b, 40, 8);
+    kaku rela = word(b, sh + 128 + 24, 8);
+    testing.expect(word(b, sh + 128 + 32, 8) == 72, "three RELA entries");
+    testing.expect(word(b, rela, 8) == 4 && word(b, rela + 8, 4) == 2 && word(b, rela + 12, 4) == 2 && signed_word(b, rela + 16) == 8188, "PC32 against the .bss section symbol");
+    testing.expect(word(b, rela + 24, 8) == 20 && word(b, rela + 32, 4) == 4 && word(b, rela + 36, 4) == 6 && signed_word(b, rela + 40) == -4, "PLT32 against sqrt (symbol index 6)");
+    testing.expect(signed_word(b, rela + 64) == -4, "negative addend is two's complement");
+}
+
+waza test_unsupported_relocation_types_fail_closed() -> unit {
+    kaku bad = spec();
+    // R_X86_64_32 (10) and R_X86_64_GOTPCREL (9) are never produced and never accepted
+    kaku relocations = [Relocation { at: 4, kind: 10, symbol: "", addend: 0 }];
+    testing.expect(object(ObjectSpec { code: bad.code, bss_size: 16, exports: bad.exports, locals: [], relocations: relocations }).error == "UNSUPPORTED_RELOCATION type 10", "R_X86_64_32 rejected");
+    relocations = [Relocation { at: 4, kind: 9, symbol: "foo", addend: -4 }];
+    testing.expect(object(ObjectSpec { code: bad.code, bss_size: 16, exports: bad.exports, locals: [], relocations: relocations }).error == "UNSUPPORTED_RELOCATION type 9", "GOTPCREL rejected");
+}
+
+waza test_invalid_specs_fail_closed() -> unit {
+    kaku ok = spec();
+    testing.expect(object(ObjectSpec { code: [], bss_size: 0, exports: [], locals: [], relocations: [] }).error == "EMPTY_TEXT", "empty text");
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: -1, exports: ok.exports, locals: [], relocations: [] }).error == "INVALID_BSS", "negative bss");
+    kaku outside = [ObjectExport { symbol: "x", offset: 60, size: 16 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: outside, locals: [], relocations: [] }).error == "INVALID_EXPORT", "export outside the code");
+    kaku duplicate = [ObjectExport { symbol: "x", offset: 0, size: 1 }, ObjectExport { symbol: "x", offset: 1, size: 1 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: duplicate, locals: [], relocations: [] }).error == "DUPLICATE_EXPORT x", "duplicate export");
+    kaku past_end = [Relocation { at: 62, kind: r_x86_64_pc32, symbol: "", addend: 0 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: past_end }).error == "INVALID_RELOCATION_OFFSET", "rel32 past the code");
+    kaku overflow = [Relocation { at: 9223372036854775807, kind: r_x86_64_pc32, symbol: "", addend: -4 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 16, exports: ok.exports, locals: [], relocations: overflow }).error == "INVALID_RELOCATION_OFFSET", "large offset fails before addition");
+    kaku outside_bss = [Relocation { at: 4, kind: r_x86_64_pc32, symbol: "", addend: 13 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 16, exports: ok.exports, locals: [], relocations: outside_bss }).error == "INVALID_RELOCATION_ADDEND", "PC32 must address the data area");
+    kaku wrong_call = [Relocation { at: 4, kind: r_x86_64_plt32, symbol: "sqrt", addend: 0 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: wrong_call }).error == "INVALID_RELOCATION_ADDEND", "PLT32 requires the rel32 addend");
+    kaku wrong_symbol = [Relocation { at: 4, kind: r_x86_64_plt32, symbol: "", addend: -4 }];
+    testing.expect(object(ObjectSpec { code: ok.code, bss_size: 0, exports: ok.exports, locals: [], relocations: wrong_symbol }).error == "INVALID_RELOCATION_SYMBOL", "PLT32 needs a symbol");
+}

@@ -108,7 +108,7 @@ choco install mio-core
 
 #### Prebuilt binaries & source
 
-Standalone archives for all six targets are on [GitHub Releases](https://github.com/mio-kobo/mio/releases). They require no Go, Python, or external toolchain.
+The stable distribution workflow packages macOS ARM64, Linux AMD64 and Windows AMD64. See the assets on GitHub Releases for the platforms available in each published version. The compiler archives require no Go, Python, or external toolchain. [GitHub Releases](https://github.com/mio-kobo/mio/releases)
 
 > **macOS note:** Pre-release builds on GitHub Releases are ad-hoc signed and not notarized. If Gatekeeper blocks the binary, allow it in System Settings. For building from source, see [Testing](docs/testing.md).
 
@@ -143,16 +143,16 @@ server supplies import completion and the standard Organize Imports action.
 
 ## Platform support
 
-Mio 2.2 validates compiler builds, self-hosting fixed points, Runtime ABI, GC, blocking/nonblocking TCP, and Bunko across all six native targets in CI.
+Mio 2.2 targets six platforms for native AOT. macOS ARM64 and Linux AMD64 are the primary runtime platforms. The table shows implemented features. The parity matrix records the native CI evidence for each target.
 
 | Target | Core AOT, GC & Bunko | Blocking & Nonblocking TCP | Reactor / Event Loop | Native Threads & Channels |
 | :--- | :---: | :---: | :---: | :---: |
-| `linux-amd64` | ✅ Validated | ✅ Validated | ✅ Validated | ✅ Validated |
-| `darwin-arm64` | ✅ Validated | ✅ Validated | ✅ Validated | ✅ Validated |
-| `linux-arm64` | ✅ Validated | ✅ Validated | ✅ Validated | 🚧 Planned |
-| `darwin-amd64` | ✅ Validated | ✅ Validated | ✅ Validated | 🚧 Planned |
-| `windows-amd64` | ✅ Validated | ✅ Validated | 🚧 Planned | 🚧 Planned |
-| `windows-arm64` | ✅ Validated | ✅ Validated | 🚧 Planned | 🚧 Planned |
+| `linux-amd64` | Available | Available | epoll | Available |
+| `darwin-arm64` | Available | Available | kqueue | Available |
+| `linux-arm64` | Available | Available | epoll | Unsupported |
+| `darwin-amd64` | Available | Available | kqueue | Unsupported |
+| `windows-amd64` | Available | Available | Unsupported | Unsupported |
+| `windows-arm64` | Available | Available | Unsupported | Unsupported |
 
 *Unsupported concurrency or reactor features fail closed at compile time or runtime rather than falling back to a single thread. See the [Six-Platform Parity Matrix](docs/parity/README.md) and [Bunko Test Matrix](tests/bunko-matrix/bunko-test-matrix.md) for the full 15-feature CI matrix.*
 

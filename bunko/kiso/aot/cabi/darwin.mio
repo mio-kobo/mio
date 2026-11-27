@@ -1,0 +1,48 @@
+yobu "kiso/array";
+
+koukai teisu darwin_gp = 0;
+koukai teisu darwin_fp = 1;
+koukai teisu darwin_stack = 2;
+
+koukai kata DarwinArgument { bank: int64; offset: int64; size: int64; }
+koukai kata DarwinLayout { arguments: []DarwinArgument; stack_bytes: int64; }
+
+koukai waza darwin_scalar_size(kind: int64) -> int64 {
+    moshi (kind == 97 || kind == 98 || kind == 108) { kaesu 1; }
+    moshi (kind == 99 || kind == 100) { kaesu 2; }
+    moshi (kind == 101 || kind == 102 || kind == 105) { kaesu 4; }
+    kaesu 8;
+}
+
+koukai waza darwin_floating(kind: int64) -> bool { kaesu kind == 105 || kind == 106; }
+
+waza darwin_align(value: int64, alignment: int64) -> int64 {
+    kaesu ((value + alignment - 1) / alignment) * alignment;
+}
+
+// Register banks fill independently. Spilled arguments keep their source
+// order and natural alignment in the Darwin stack argument area.
+koukai waza darwin_layout(parameters: []int64) -> DarwinLayout {
+    kaku arguments = array.with_capacity[DarwinArgument](len(parameters));
+    kaku gp = 0;
+    kaku fp = 0;
+    kaku stack = 0;
+    kaku at = 0;
+    aida (at < len(parameters)) {
+        kaku kind = parameters[at];
+        kaku size = darwin_scalar_size(kind);
+        moshi (darwin_floating(kind) && fp < 8) {
+            array.push(arguments, DarwinArgument { bank: darwin_fp, offset: fp, size: size });
+            fp = fp + 1;
+        } sore { moshi (!darwin_floating(kind) && gp < 8) {
+            array.push(arguments, DarwinArgument { bank: darwin_gp, offset: gp, size: size });
+            gp = gp + 1;
+        } sore {
+            stack = darwin_align(stack, size);
+            array.push(arguments, DarwinArgument { bank: darwin_stack, offset: stack, size: size });
+            stack = stack + size;
+        } }
+        at = at + 1;
+    }
+    kaesu DarwinLayout { arguments: arguments, stack_bytes: darwin_align(stack, 16) };
+}

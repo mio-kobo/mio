@@ -51,6 +51,7 @@ def main(mode):
                 data[784:788] != b"M\0io"):
             raise RuntimeError("independent encoder/writer golden bytes differ")
         run(["codesign", "--force", "--sign", "-", image])
+        image.chmod(0o755)
         run([image], b"", code=42, stderr=b"")
         main("core")
     elif mode == "core":

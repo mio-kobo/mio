@@ -12,6 +12,7 @@ koukai sentaku MachOError {
     InvalidPatch;
     EncodeFailure;
     WriteFailure;
+    InvalidExport;
 }
 
 koukai kata AddressTarget { kind: int64; }
@@ -172,7 +173,7 @@ waza segment(output: binary.BinaryWriter, name: []uint8, vm_high: int64, vm_low:
 }
 
 waza section(output: binary.BinaryWriter, section_name: []uint8, segment_name: []uint8,
-    vm_low: int64, size: int64, file_offset: int64, alignment: int64, flags: int64) -> MachOError? {
+    vm_high: int64, vm_low: int64, size: int64, file_offset: int64, alignment: int64, flags: int64) -> MachOError? {
     kaku failure = name16(output, section_name);
     moshi (failure != mu) {
         kaesu failure;
@@ -181,7 +182,7 @@ waza section(output: binary.BinaryWriter, section_name: []uint8, segment_name: [
     moshi (failure != mu) {
         kaesu failure;
     }
-    failure = put64(output, 1, vm_low);
+    failure = put64(output, vm_high, vm_low);
     moshi (failure != mu) {
         kaesu failure;
     }
@@ -366,16 +367,16 @@ waza executable_bounded(spec: ImageSpec, maximum_globals: int64) -> ImageResult 
     }
     failure = segment(output, [95, 95, 84, 69, 88, 84], 1, 0, 0, layout.text_size, 0, layout.text_size, 5, 5, text_sections, text_command_size);
     moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
-    failure = section(output, [95, 95, 116, 101, 120, 116], [95, 95, 84, 69, 88, 84], entry_offset, len(spec.words) * 4, entry_offset, 2, 2147484672);
+    failure = section(output, [95, 95, 116, 101, 120, 116], [95, 95, 84, 69, 88, 84], 1, entry_offset, len(spec.words) * 4, entry_offset, 2, 2147484672);
     moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
     moshi (has_const) {
-        failure = section(output, [95, 95, 99, 111, 110, 115, 116], [95, 95, 84, 69, 88, 84], layout.const_offset, len(spec.constants), layout.const_offset, 3, 0);
+        failure = section(output, [95, 95, 99, 111, 110, 115, 116], [95, 95, 84, 69, 88, 84], 1, layout.const_offset, len(spec.constants), layout.const_offset, 3, 0);
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
     }
     moshi (has_data) {
         failure = segment(output, [95, 95, 68, 65, 84, 65], 1, layout.data_offset, 0, layout.linkedit_offset - layout.data_offset, layout.data_offset, layout.linkedit_offset - layout.data_offset, 3, 3, 1, 152);
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
-        failure = section(output, [95, 95, 100, 97, 116, 97], [95, 95, 68, 65, 84, 65], layout.data_offset, spec.globals * 8, layout.data_offset, 3, 0);
+        failure = section(output, [95, 95, 100, 97, 116, 97], [95, 95, 68, 65, 84, 65], 1, layout.data_offset, spec.globals * 8, layout.data_offset, 3, 0);
         moshi (failure != mu) { kaesu ImageResult { bytes: [], layout: layout, error: failure }; }
     }
     failure = segment(output, [95, 95, 76, 73, 78, 75, 69, 68, 73, 84], 1, layout.linkedit_offset, 0, page_size, layout.linkedit_offset, 0, 1, 1, 0, 72);

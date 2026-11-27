@@ -1,6 +1,27 @@
 {
   "comment": "Coverage that is not a direct reference from a test source. protocols: runner checks of scripts/ci/native_platforms.py that exercise the function natively on every platform. unsupported: per-platform technical reason. not_testable: why no native test can call the function.",
   "protocols": {
+    "kiso/ffi/darwin.open": ["darwin-dylib"],
+    "kiso/ffi/darwin.symbol": ["darwin-dylib"],
+    "kiso/ffi/darwin.bind_c": ["darwin-dylib"],
+    "kiso/ffi/darwin.bind_mio": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke": ["darwin-dylib"],
+    "kiso/ffi/darwin.release": ["darwin-dylib"],
+    "kiso/ffi/darwin.close": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_int64": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_int64_1": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_int64_2": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_float64": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_float64_from_ints": ["darwin-dylib"],
+    "kiso/ffi/darwin.invoke_bool": ["darwin-dylib"],
+    "kiso/ffi/linux.call_b_i": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_l_ll": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_u_nz": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_l_pn": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_i_pn": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_i_nzn": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_l_pnnz": ["linux-dynamic-libraries"],
+    "kiso/ffi/linux.call_l_nznz": ["linux-dynamic-libraries"],
     "kiso/os.spawn": [
       "os-process-protocol",
       "mio-run-protocol"
@@ -35,41 +56,124 @@
       "os-process-protocol"
     ],
     "kiso/thread.start": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.join": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.channel_new": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
+    ],
+    "kiso/thread.channel_new_checked": [
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.send": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.receive": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.close": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.destroy": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
     ],
     "kiso/thread.join_checked": [
-      "linux-thread-gc"
+      "linux-thread-gc",
+      "darwin-thread-programs"
+    ],
+    "kiso/ffi.buffer_new": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.buffer_free": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.buffer_data": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.buffer_pointer": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.buffer_set": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.buffer_get": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.close": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.release": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.check": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.error": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.os_error": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.address": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.resources": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.signature": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.bytes": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.open": [
+      "windows-dynamic-ffi"
+    ],
+    "kiso/ffi.symbol": [
+      "windows-dynamic-ffi"
     ]
   },
   "unsupported": {
+    "kiso/ffi/linux.*": {
+      "darwin-arm64": "Run-time ELF loading through dlopen and the System V AMD64 indirect-call bridge are implemented for Linux AMD64 only; other targets reject mio_ffi_indirect and []uint8 C parameters at build time",
+      "darwin-amd64": "Run-time ELF loading through dlopen and the System V AMD64 indirect-call bridge are implemented for Linux AMD64 only; other targets reject mio_ffi_indirect and []uint8 C parameters at build time",
+      "linux-arm64": "Run-time ELF loading through dlopen and the System V AMD64 indirect-call bridge are implemented for Linux AMD64 only; other targets reject mio_ffi_indirect and []uint8 C parameters at build time",
+      "windows-amd64": "Run-time ELF loading through dlopen and the System V AMD64 indirect-call bridge are implemented for Linux AMD64 only; other targets reject mio_ffi_indirect and []uint8 C parameters at build time",
+      "windows-arm64": "Run-time ELF loading through dlopen and the System V AMD64 indirect-call bridge are implemented for Linux AMD64 only; other targets reject mio_ffi_indirect and []uint8 C parameters at build time"
+    },
+    "kiso/ffi/darwin.*": {
+      "darwin-amd64": "The typed dyld loader and its native call stubs require Darwin ARM64",
+      "linux-amd64": "The typed dyld loader and its native call stubs require Darwin ARM64",
+      "linux-arm64": "The typed dyld loader and its native call stubs require Darwin ARM64",
+      "windows-amd64": "The typed dyld loader and its native call stubs require Darwin ARM64",
+      "windows-arm64": "The typed dyld loader and its native call stubs require Darwin ARM64"
+    },
     "kiso/thread.*": {
-      "darwin-arm64": "OS threads and channels are implemented for Linux x86-64 only; this target rejects programs that use them (thread-natives-fail-closed)",
-      "windows-amd64": "OS threads and channels are implemented for Linux x86-64 only; this target rejects programs that use them (thread-natives-fail-closed)",
-      "linux-arm64": "OS threads and channels are implemented for Linux x86-64 only; this target rejects programs that use them (thread-natives-fail-closed)",
-      "darwin-amd64": "OS threads and channels are implemented for Linux x86-64 only; this target rejects programs that use them (thread-natives-fail-closed)",
-      "windows-arm64": "OS threads and channels are implemented for Linux x86-64 only; this target rejects programs that use them (thread-natives-fail-closed)"
+      "windows-amd64": "OS threads and channels are implemented for Linux AMD64 and Darwin ARM64; this target rejects programs that use them (thread-natives-fail-closed)",
+      "linux-arm64": "OS threads and channels are implemented for Linux AMD64 and Darwin ARM64; this target rejects programs that use them (thread-natives-fail-closed)",
+      "darwin-amd64": "OS threads and channels are implemented for Linux AMD64 and Darwin ARM64; this target rejects programs that use them (thread-natives-fail-closed)",
+      "windows-arm64": "OS threads and channels are implemented for Linux AMD64 and Darwin ARM64; this target rejects programs that use them (thread-natives-fail-closed)"
     },
     "kiso/reactor.*": {
-      "windows-amd64": "the reactor primitives (reactor_open, reactor_ctl, reactor_wait, reactor_signal, reactor_ack) are implemented for linux-amd64 only; the Windows backend is planned (docs/async-networking.md, phase D) and the primitives currently fail closed with an error",
-      "windows-arm64": "the reactor primitives (reactor_open, reactor_ctl, reactor_wait, reactor_signal, reactor_ack) are implemented for linux-amd64 only; the Windows ARM64 backend is planned (docs/async-networking.md, phase D) and the primitives currently fail closed with an error"
+      "windows-amd64": "the reactor primitives (reactor_open, reactor_ctl, reactor_wait, reactor_signal, reactor_ack) use epoll on Linux and kqueue on Darwin; the Windows backend is planned (docs/async-networking.md, phase D) and the primitives currently fail closed with an error",
+      "windows-arm64": "the reactor primitives (reactor_open, reactor_ctl, reactor_wait, reactor_signal, reactor_ack) use epoll on Linux and kqueue on Darwin; the Windows ARM64 backend is planned (docs/async-networking.md, phase D) and the primitives currently fail closed with an error"
+    },
+    "kiso/ffi.*": {
+      "darwin-arm64": "The checked runtime DLL/token API is implemented for Windows AMD64 only; other targets reject its Windows C declarations.",
+      "linux-amd64": "The checked runtime DLL/token API is implemented for Windows AMD64 only; other targets reject its Windows C declarations.",
+      "linux-arm64": "The checked runtime DLL/token API is implemented for Windows AMD64 only; other targets reject its Windows C declarations.",
+      "darwin-amd64": "The checked runtime DLL/token API is implemented for Windows AMD64 only; other targets reject its Windows C declarations.",
+      "windows-arm64": "The checked runtime DLL/token API is implemented for Windows AMD64 only; other targets reject its Windows C declarations."
     }
   },
   "not_testable": {}

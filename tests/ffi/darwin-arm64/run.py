@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import platform
 import shlex
 import subprocess
@@ -28,7 +29,8 @@ class Report:
     def run(self, name, command, status=0, stdout=None, diagnostic=None):
         argv = [str(part) for part in command]
         try:
-            process = subprocess.run(argv, cwd=ROOT, capture_output=True, timeout=120)
+            env = dict(os.environ, MIO_LANG="en-US", LC_ALL="C")
+            process = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, timeout=120)
         except (OSError, subprocess.TimeoutExpired) as error:
             log = self.output / (name + ".log")
             log.write_text(f"$ {shlex.join(argv)}\n{error}\n", encoding="utf-8")

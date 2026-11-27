@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native stress, load and signal tests for kiso/reactor on Linux x86-64 (real loopback sockets, real epoll).
+"""Stress, load and signal tests for kiso/reactor on Linux and Darwin (real loopback sockets, epoll or kqueue).
 
 The driver builds tests/reactor/tool.mio with the compiler under test (normal and --gc-stress) and runs it:
   * stress   repeated open/submit/poll/cancel/close rounds with garbage allocation while operations are pending, normal and
@@ -8,16 +8,19 @@ The driver builds tests/reactor/tool.mio with the compiler under test (normal an
              connection becomes readable once and each readiness must be reported exactly once;
   * eintr    a poll loop interrupted by SIGSTOP/SIGCONT (Linux returns EINTR from epoll_wait): early returns are counted and
              must never surface as errors.
+  * cancel-race  a separate TCP peer causes readiness while the reactor owner cancels or re-registers.
 Measured numbers (wall time, CPU time from wait4, connection counts, poll counts) are printed and written to results.json; nothing
 is estimated. On any other host the execution is printed as NOT_RUN and is not a pass.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import platform
 import resource
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -61,6 +64,30 @@ def numbers(text):
     return values
 
 
+def cancellation_race(exe, rounds):
+    def echo(listener):
+        with listener.accept()[0] as peer:
+            peer.settimeout(10)
+            for _ in range(rounds):
+                byte = peer.recv(1)
+                if not byte:
+                    raise OSError("Mio closed before all cancellation rounds completed")
+                peer.sendall(byte)
+
+    with socket.socket() as listener, ThreadPoolExecutor(max_workers=1) as pool:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(10)
+        echoed = pool.submit(echo, listener)
+        result = run([exe, "cancel-race", listener.getsockname()[1], rounds], timeout=45)
+        try:
+            echoed.result()
+        except OSError as err:
+            result["err"] += "\n" + str(err)
+            result["code"] = 1
+        return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mio", required=True, type=Path)
@@ -72,7 +99,7 @@ def main():
     args = parser.parse_args()
     host = (platform.system(), platform.machine())
     if host not in (("Linux", "x86_64"), ("Linux", "AMD64"), ("Linux", "aarch64"), ("Linux", "arm64"), ("Darwin", "arm64"), ("Darwin", "x86_64")):
-        print("execution: NOT_RUN (the reactor backend exists on Linux x86-64, Linux arm64 and Darwin arm64; host is %s %s)" % host)
+        print("execution: NOT_RUN (the reactor backend exists on Linux and Darwin x86-64/arm64; host is %s %s)" % host)
         return 0
     darwin = host[0] == "Darwin"
     args.output.mkdir(parents=True, exist_ok=True)
@@ -98,6 +125,13 @@ def main():
         if built["code"] != 0:
             print(json.dumps(results, indent=1))
             return 1
+
+    for name, exe in (("cancel-race", normal), ("cancel-race-gc", stressed)):
+        rounds = 100
+        outcome = cancellation_race(exe, rounds)
+        completed = numbers(outcome["out"]).get("cancel_rounds", 0)
+        record(name, outcome["code"] == 0 and completed == rounds and "OK" in outcome["out"], rounds=completed,
+               detail=(outcome["out"] + outcome["err"])[:300])
 
     # stress, normal and under --gc-stress, repeated
     for label, exe, rounds, pairs, repeats in (("stress", normal, 30, 16, args.repeats), ("stress-gc", stressed, 8, 8, args.gc_repeats)):

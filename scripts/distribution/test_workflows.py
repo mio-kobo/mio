@@ -5,9 +5,12 @@ The distribution and package-manager release workflows additionally run these
 checks in CI before any native artifact is accepted.
 """
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 import yaml
+
+from select_artifacts import select_artifacts
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / '.github/workflows'
@@ -57,6 +60,55 @@ class WorkflowYamlTests(unittest.TestCase):
         for path in sorted(WORKFLOWS.glob('*.yml')):
             with self.subTest(workflow=path.name):
                 self.assertNotIn('pull_request_target', path.read_text(encoding='utf-8'))
+
+
+class ArtifactRerunTests(unittest.TestCase):
+    def setUp(self):
+        work = TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        self.downloads = Path(work.name) / "downloads"
+        self.destination = Path(work.name) / "selected"
+
+    def artifact(self, name, filename, text):
+        artifact = self.downloads / name
+        artifact.mkdir(parents=True, exist_ok=True)
+        (artifact / filename).write_text(text, encoding="utf-8")
+
+    def test_candidate_retry_reuses_its_compiler_from_the_same_run(self):
+        name = "distribution-compiler-darwin-arm64"
+        self.artifact(f"{name}-125-1", "mio-B", "the successful producer")
+        self.artifact(f"{name}-126-2", "mio-B", "a different workflow run")
+        self.artifact("distribution-compiler-windows-amd64-125-2", "mio-B.exe", "a different target")
+        attempt = select_artifacts(self.downloads, self.destination, name, "125")
+        self.assertEqual(attempt, 1)
+        self.assertEqual((self.destination / "mio-B").read_text(encoding="utf-8"), "the successful producer")
+        self.assertEqual(len(list(self.destination.iterdir())), 1)
+        jobs = load("distribution-pr.yml")["jobs"]
+        self.assertTrue(any(
+            step.get("uses") == "./.github/actions/download-run-artifact"
+            and step["with"]["artifact"] == "distribution-compiler-${{ matrix.target }}"
+            for step in jobs["candidates"]["steps"]
+        ))
+
+    def test_summary_uses_latest_numeric_attempt_and_keeps_reused_reports(self):
+        self.artifact("native-report-linux-amd64-125-2", "report.json", "old")
+        self.artifact("native-report-linux-amd64-125-10", "report.json", "new")
+        self.artifact("native-report-darwin-arm64-125-1", "report.json", "reused")
+        self.artifact("native-report-windows-amd64-125-1", "report.json", "old")
+        self.artifact("native-report-windows-amd64-125-10", "build.log", "no report")
+        select_artifacts(self.downloads, self.destination, "native-report-*", "125", group=True)
+        self.assertEqual({entry.name for entry in self.destination.iterdir()}, {
+            "native-report-linux-amd64-125-10",
+            "native-report-darwin-arm64-125-1",
+            "native-report-windows-amd64-125-10",
+        })
+        self.assertFalse((self.destination / "native-report-windows-amd64-125-10" / "report.json").exists())
+
+    def test_required_artifact_from_a_different_run_is_rejected(self):
+        self.artifact("native-stage-a-126-2", "mio", "from another workflow run")
+        with self.assertRaisesRegex(ValueError, "No artifacts matching"):
+            select_artifacts(self.downloads, self.destination, "native-stage-a", "125")
+        self.assertFalse(self.destination.exists())
 
 
 class VersionBranchEligibilityTests(unittest.TestCase):

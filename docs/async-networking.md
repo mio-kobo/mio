@@ -1,9 +1,6 @@
 # Mio native asynchronous networking and M-task runtime — audit, contracts and phased plan
 
-Status: **Phase A (nonblocking TCP) and Phase B (epoll reactor) implemented on Linux AMD64; Phases C–E are plans.**
-Base: `Mio-2.2.0` at `4236836` (PRs #59 yuzuru ownership and #63 Linux thread primitives are merged in this base).
-Terminology used below: *Implemented* (in the tree), *Tested locally* (run on the stated host), *Validated by CI* (a green run of the
-named workflow), *Available on target X* (native execution evidence on X), *Experimental*, *Planned*.
+Mio 2.2 implements nonblocking IPv4 TCP on all six native targets and provides a readiness Reactor on Linux and macOS. Sections 1.6 and 3.4 describe the current platform matrix. The other audit sections record the original Phase A and B design from `4236836`. The task scheduler and Windows IOCP backend are future work.
 
 ## 1. Audit
 
@@ -59,18 +56,20 @@ named workflow), *Available on target X* (native execution evidence on X), *Expe
 * Phase C: a monotonic-clock wait with timeout (the reactor wait doubles as the sleep).
 * Phase E: managed thread registration, multi-mutator collector for the x86-64 heap, TLS roots (this belongs to the concurrency work stream, not this one).
 
-### 1.6 Platform limitations (as of this PR)
+### 1.6 Current platform support and limits
 
-| target | `tcp_async` | evidence |
-|---|---|---|
-| linux-amd64 | **Available**: nonblocking accept/connect/read/write, SO_ERROR completion; `kiso/reactor` (epoll) | native `mio test` of `bunko/kiso/net/tcp_async` (5 tests, real loopback sockets) run locally on linux-amd64 with a compiler built from this tree; CI result recorded in the PR |
-| darwin-arm64 / linux-arm64 / windows-arm64 | not available: the AArch64 lowering declares the two primitives as fail-closed stubs (`native_socket_set_nonblocking`/`native_socket_finish_connect`) that report an `Other` (ENOSYS) status, so existing programs (including `kiso/net/tcp`) build and run unchanged while `tcp_async` operations fail with an error — never silently succeed | **NOT_RUN** |
-| darwin-amd64 | not available: reuses the Linux lowering through the `darwin_syscall` adapter; the unmapped syscalls return `ENOSYS`, so operations report an `Other` error — fail closed | **NOT_RUN** |
-| windows-amd64 | not available: unknown socket functions lower to `rt.os_unsupported` | **NOT_RUN** |
+| Target | Blocking and nonblocking IPv4 TCP | Reactor | Native threads and Channels |
+|---|---|---|---|
+| Linux AMD64 | Available | epoll | Available |
+| macOS ARM64 | Available | kqueue | Available |
+| Linux ARM64 | Available | epoll | Unsupported |
+| macOS AMD64 | Available | kqueue | Unsupported |
+| Windows AMD64 | Available | Unsupported | Unsupported |
+| Windows ARM64 | Available | Unsupported | Unsupported |
 
-CI reports the package as `NOT_RUN` (not a required check, never PASS) on every target except linux-amd64
-(`TARGET_ONLY_PACKAGES` in `scripts/ci/native_platforms.py`), and the Bunko matrix records `UNSUPPORTED` with a reason for darwin-arm64 and
-windows-amd64 (`scripts/ci/bunko_matrix_coverage.json`).
+Native CI selects `bunko/kiso/net/tcp_async` on all six targets and runs the Reactor package and integration driver on Linux and Darwin. `bunko/kiso/reactor/threaded` is a Linux AMD64 test. A cross-built image needs execution evidence on its target for native validation. [Native test registry](../scripts/ci/native_platforms.py) · [Parity evidence](parity/README.md)
+
+On both primary platforms, a join on an invalid, stale, concurrently claimed or self handle reports `-22`. `thread.join_checked` distinguishes an error from a worker result of `-22`. On macOS ARM64 the Channel control-block pool has a cumulative limit of 16,384 allocations per process. Use `thread.channel_new_checked` to handle `-12` after exhaustion. Existing channels remain usable. Closing or destroying a channel leaves its control block reserved until process exit.
 
 ### 1.7 Dependency order and critical risks
 
@@ -93,7 +92,7 @@ Risks, in the order they bite:
 6. **Fixed-point coupling**: every new `mio/sys/socket` primitive touches seven compiler-driver layout lists, the typechecker, the
    embedded Bunko bundle (`selfhost/resources/bunko_data.mio`, regenerated with `selfhost/embed-bunko`) and the Go VM. Keep primitives few.
 
-## 2. Phase A — nonblocking TCP foundation (implemented on linux-amd64)
+## 2. Phase A — nonblocking TCP foundation
 
 ### 2.1 New primitives (`mio/sys/socket`)
 
@@ -142,7 +141,7 @@ signatures. The Go reference VM runs the same package (`go run ./cmd/mio test bu
 Not yet covered (Phase B/C needs a scheduler to be meaningful): hundreds/1000/10000 concurrent connections, slow readers, connection reset, timers, cancellation,
 fairness, long-duration stability, GC-under-suspension.
 
-## 3. Phase B — portable reactor (implemented on linux-amd64)
+## 3. Phase B — portable readiness Reactor
 
 Status legend used here: **Implemented** (in the tree), **Tested** (native execution on the stated target), **Unsupported** (fails closed with an explicit error), **Planned**.
 
@@ -167,6 +166,8 @@ close(reactor)                          -> UnitResult
 `Operation{id, slot, generation}` and `Event{operation, slot, generation, readable, writable, error, hangup}`. The portable operation set is submit / poll / cancel / wake / close; `update` exists because epoll can modify
 interest in place (an IOCP adapter would cancel and resubmit behind the same call).
 
+Each reactor allows one live subscription per socket, with readable and writable interest on the same operation. A second `submit` for that socket returns an error and preserves the first subscription. Use `update` to change its interests or `cancel` before submitting again. Pass the original socket handle to either operation. The Darwin backends reserve the descriptor with a disabled, udata-specific kqueue filter distinct from the readiness filters. Closing the socket or the kqueue releases that reservation.
+
 **Operation identity.** `id` is unique within a reactor and never reused. `slot` is recycled, `generation` is not: a slot's generation increases every time it is released. The kernel is only given the opaque token
 `generation * 1048576 + slot + 1`; token 0 is the internal wake-up descriptor. **Stale rejection.** `poll` drops (and counts in `stale`) every event whose token no longer matches a live operation: a cancelled operation, a
 slot that was released and reused, a kernel event still in flight. **Cancellation.** After `cancel` the operation is never delivered; an event already returned by an earlier `poll` can be re-validated with `current`.
@@ -187,20 +188,19 @@ EINTR makes `poll` return zero events early (never an error). Wakes coalesce int
 | `reactor_wait(reactor, events, max, timeout_ms, status)` | `epoll_wait`, 1..64 events as 16-byte `(token, mask)` records, mask 1 readable, 2 writable, 4 error, 8 hangup; EINTR reports zero events |
 | `reactor_signal` / `reactor_ack` | add to / reset the eventfd counter; EAGAIN is success (already signalled / nothing pending) |
 
-### 3.4 Platform matrix
+### 3.4 Reactor backends and CI checks
 
-| target | reactor | evidence |
+| Target | Reactor implementation | Integration check |
 |---|---|---|
-| linux-amd64 | **Implemented, Tested** | native `mio test bunko/kiso/reactor` (13 tests) and `tests/reactor/run.py` in CI (`linux-reactor` check) |
-| darwin-arm64 | **Implemented (kqueue)**; validation is the `darwin-reactor` CI check on the macOS ARM64 runner (see `docs/async-parity-ledger.json`) | see ledger |
-| darwin-amd64 | Unsupported (fail closed: `open` returns `Unsupported`); kqueue through the `darwin_syscall` adapter **Planned** | NOT_RUN |
-| windows-amd64, windows-arm64 | Unsupported (fail closed); IOCP **Planned** | NOT_RUN |
-| linux-arm64 | Unsupported (the AArch64 kqueue routines reach the Linux adapter and fail with ENOSYS, reported as `Unsupported`); epoll on ARM64 **Planned** | NOT_RUN |
+| Linux AMD64 | epoll and eventfd | `linux-reactor` |
+| Linux ARM64 | epoll and eventfd | `linux-arm64-reactor` |
+| macOS ARM64 | kqueue and an EVFILT_USER wake event | `darwin-reactor` |
+| macOS AMD64 | kqueue and an EVFILT_USER wake event | `darwin-amd64-reactor` |
+| Windows AMD64, Windows ARM64 | Unsupported, with an explicit error from `open` | NOT_RUN |
 
-Planned backends (not part of this phase): **kqueue** has the same readiness shape (`EVFILT_READ`/`EVFILT_WRITE`, `EVFILT_USER` for the wake-up) and maps onto submit/poll/cancel/wake directly. **IOCP** is completion based and must not be forced into
-the epoll shape: `submit` would start an overlapped operation whose `OVERLAPPED` and buffer are owned by the adapter until the completion packet has been dequeued, including after `CancelIoEx`; `poll` is `GetQueuedCompletionStatusEx`; `wake` is `PostQueuedCompletionStatus`.
+On Linux AMD64 a mutator publishes its frame chain and roots before blocking in TCP connect, read, write, accept or Reactor poll. The mutator rejoins the running threads before accessing the heap again. Blocking file or process I/O may still hold up collection. [Blocking call regression](../tests/threads/socket_gc_progress.mio)
 
-### 3.5 Tests and measured evidence (linux-amd64)
+### 3.5 Reactor tests
 
 `bunko/kiso/reactor/reactor_test.mio`, 13 native tests over real loopback sockets: lifecycle and argument validation; wake is prompt and coalesced; timeout really sleeps (>= 50 ms for a 60 ms timeout); read readiness, level-triggered
 persistence, writable interest, peer close as readable then EOF; **pending connect** completing as a writable event followed by `finish_connect`; **refused connect** reported through the reactor; **cancel before readiness**
@@ -208,13 +208,13 @@ persistence, writable interest, peer close as readable then EOF; **pending conne
 new generations; **backpressure** (a full send buffer produces no writable event until the reader drains, then writing resumes); generation rejection of an in-flight kernel event; 200 simultaneous connections each reported exactly once;
 **a wake from another OS thread ends `poll(-1)`**, and 20 consecutive wakes are all observed.
 
-`tests/reactor/run.py` (real epoll, measured, not estimated): repeated stress rounds with garbage allocation while operations are pending, normal and `--gc-stress`; a load test with 1000 loopback connections registered with one reactor
+`tests/reactor/run.py` (real epoll or kqueue): repeated stress rounds with garbage allocation while operations are pending, normal and `--gc-stress`; a load test with 1000 loopback connections registered with one reactor
 whose timed idle phase must cost almost no CPU (extra CPU for the idle period < 10% of its length, at most 3 polls, zero idle events) followed by one readiness per connection that must be reported exactly once; an EINTR test using SIGSTOP/SIGCONT.
 The numbers printed by the run (connections, wall and CPU seconds, poll counts) are recorded in the PR; see "Limitations".
 
 ### 3.6 Limitations of this phase
 
-* linux-amd64 only; nothing is claimed for other targets. The Go VM runs the primitives (probe-equivalent output) but not the reactor test package (no `kiso/os`, no threads there).
+* Windows builds report Reactor as unsupported. The Go VM covers compatible primitives, while the Reactor integration suite uses native loopback sockets.
 * Level-triggered only (edge-triggered and `EPOLLEXCLUSIVE` are not used). `poll` returns at most 64 events per call.
 * The largest measured load is 1000 simultaneous connections (2000 handles, one process); the 10000-connection stress test needs more handles than the 4096-slot Linux table and a raised `ulimit -n` and is not claimed.
 * The reactor is not thread-safe except `wake`; a reactor is meant to be owned by one OS thread (the future per-worker reactor of phase E).
@@ -241,10 +241,9 @@ every invalid transition. Fairness: a task runs until it returns `Yield`/`Wait`;
 GC: frames and queues are ordinary reachable heap objects; tested under `mio build --gc-stress` with tasks suspended across collections. `async waza`/`await` syntax is
 **not** part of this work: it is a separate proposal that needs owner approval (keyword reservation, state-machine lowering).
 
-## 5. Phases D and E (planned)
+## 5. Backend expansion and M:N scheduling
 
-D: the Darwin (kqueue; AArch64 + AMD64) and Windows (IOCP; AMD64 + ARM64) backends, plus the two Phase A primitives on those targets, each with native execution on that target; a
-target is "available" only with native execution evidence, never because cross-compilation succeeds.
+D: Darwin kqueue and the Phase A TCP primitives are implemented. The Windows IOCP backend remains planned.
 E: only after the concurrency stream delivers managed threads (mutator registration, multi-mutator collector on the x86-64 heap, TLS roots): N workers, per-worker
 ready queue and reactor, thread-safe cross-worker wake via the reactor's `wake()`, network-I/O tasks pinned to their worker, migration only for tasks whose captured
 state the compiler proves transferable, stealing only for such tasks.

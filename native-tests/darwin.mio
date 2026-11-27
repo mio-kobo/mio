@@ -1,0 +1,37 @@
+yobu "kiso/os";
+waza expect(ok: bool) -> unit { moshi (!ok) { chant("FAIL"); os.exit(1); } }
+waza add32(a: int32, b: int32) -> int32 = c "mio_add_i32";
+waza add64(a: int64, b: int64) -> int64 = c "mio_add_i64";
+waza addf(a: float64, b: float64) -> float64 = c "mio_add_f64";
+waza mulf(a: float64, b: float64) -> float64 = c "mio_multiply_f64";
+waza mixed(a: int32, b: float64, c: uint64, d: float32, e: int64, f: float64) -> float64 = c "mio_mixed";
+waza input() -> cptr = c "mio_utf8_data";
+waza length(data: cptr, size: uint64) -> uint64 = c "mio_utf8_length";
+waza output(data: cptr, capacity: uint64) -> uint64 = c "mio_utf8_output";
+waza allocate(size: uint64) -> cptr = c "mio_buffer_new";
+waza destroy(data: cptr) -> unit = c "mio_buffer_free";
+waza byte_at(data: cptr, index: uint64) -> uint8 = c "mio_buffer_byte";
+waza copy(out: cptr, capacity: uint64, data: cptr, size: uint64) -> uint64 = c "mio_buffer_copy";
+waza transform(data: cptr, size: uint64, mask: uint8) -> unit = c "mio_buffer_transform";
+waza create(value: int64) -> cptr = c "mio_state_new";
+waza get(state: cptr) -> int64 = c "mio_state_get";
+waza set_value(state: cptr, value: int64) -> unit = c "mio_state_set";
+waza free_state(state: cptr) -> unit = c "mio_state_free";
+waza live() -> uint32 = c "mio_state_live";
+waza version() -> uint32 = c "mio_ffi_abi_version";
+expect(add32(int32(19), int32(23)) == int32(42));
+expect(add64(4000000000, 42) == 4000000042);
+expect(addf(1.25, 2.5) == 3.75); expect(mulf(2.5, 4.0) == 10.0);
+expect(mixed(int32(1), 2.0, uint64(3), float32(4.0), 5, 6.0) == 91.0);
+expect(version() == uint32(1));
+kaku data = input(); expect(data != cptr(0)); expect(length(data, uint64(9)) == uint64(3));
+kaku out = allocate(uint64(16)); expect(out != cptr(0));
+expect(output(out, uint64(8)) == uint64(9)); expect(byte_at(out, uint64(0)) == uint8(0));
+expect(output(out, uint64(16)) == uint64(9));
+kaku i = 0; aida (i < 9) { expect(byte_at(out, uint64(i)) == byte_at(data, uint64(i))); i = i + 1; }
+expect(copy(out, uint64(16), data, uint64(9)) == uint64(9));
+expect(copy(cptr(0), uint64(0), cptr(0), uint64(0)) == uint64(0));
+transform(out, uint64(9), uint8(255)); expect(byte_at(out, uint64(0)) == uint8(25)); destroy(out);
+kaku object = create(41); expect(object != cptr(0)); expect(get(object) == 41);
+set_value(object, 42); expect(get(object) == 42); expect(live() == uint32(1));
+free_state(object); expect(live() == uint32(0)); chant("PASS");

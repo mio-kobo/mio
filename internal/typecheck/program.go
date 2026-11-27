@@ -353,7 +353,7 @@ func (c *Checker) checkStatement(stmt ast.Statement) error {
 		return nil
 
 	case *ast.WhileStatement:
-		c.invalidateLoopFacts(n.Condition, n.Body)
+		c.invalidateLoopFacts(n)
 		conditionType, err := c.checkExpression(n.Condition)
 		if err != nil {
 			return err

@@ -1,3 +1,4 @@
+yobu "kiso/aot/cabi";
 yobu "selfhost/progress";
 yobu "kiso/array";
 yobu "selfhost/parser";
@@ -40,7 +41,7 @@ waza check_function_statement(env: TypeEnvironment, file_id: int64, node_id: int
     kaku node = node_at(env, file_id, node_id);
     kaku symbol_id = binding_of(env, file_id, node_id);
     kaku signature_index = signature_of(env, symbol_id);
-    moshi (node.extra != "" || signature_index < 0) { kaesu; }
+    moshi ((node.extra != "" && !cabi.is_export(node.extra)) || signature_index < 0) { kaesu; }
     kaku saved_facts = array.clone(env.facts); kaku version_mark = len(env.version_log);
     array.truncate(env.facts, 0);
     kaku signature = env.result.signatures[signature_index];
@@ -148,11 +149,14 @@ waza check_statement(env: TypeEnvironment, file_id: int64, node_id: int64) -> un
         kaesu;
     }
     moshi (kind == 19) {
-        invalidate_loop_facts(env, file_id, node.children[0], node.children[1]);
+        invalidate_loop_facts(env, file_id, node_id);
         kaku condition_type = check_expression(env, file_id, node.children[0]);
         moshi (condition_type != builtin_type(env, "bool")) { add_type_error(env, TypeErrorKind.TypeMismatch(), "E0301", file_id, node.children[0], builtin_type(env, "bool"), condition_type, "while condition must be bool"); }
         kaku narrowing = condition_narrowing(env, file_id, node.children[0]);
-        env.loop_depth[0] = env.loop_depth[0] + 1; check_block_with_fact(env, file_id, node.children[1], narrowing, narrowing.true_non_nil); env.loop_depth[0] = env.loop_depth[0] - 1; kaesu;
+        env.loop_depth[0] = env.loop_depth[0] + 1;
+        check_block_with_fact(env, file_id, node.children[1], narrowing, narrowing.true_non_nil);
+        env.loop_depth[0] = env.loop_depth[0] - 1;
+        kaesu;
     }
     moshi (kind == 20 || kind == 21) { moshi (env.loop_depth[0] == 0) { add_type_error(env, TypeErrorKind.InvalidReturn(), "E0308", file_id, node_id, 0, 0, "loop control outside loop"); } kaesu; }
     moshi (kind == 31) {

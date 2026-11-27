@@ -1,0 +1,39 @@
+yobu "kiso/ffi/linux";
+yobu "kiso/os";
+yobu "kiso/string";
+
+// Run-time loading and native memory against the C library of this system. MIO_COMPAT_LIBC names it
+// (libc.so.6 on glibc, libc.musl-x86_64.so.1 on musl). Prints one line per check and "ffi compat PASS" at the end.
+kaku failures = 0;
+waza check(label: string, ok: bool) -> int64 {
+    moshi (ok) { chant(string.concat("ok ", label)); kaesu 0; }
+    chant(string.concat("FAIL ", label));
+    kaesu 1;
+}
+waza same(value: string?, expected: string) -> bool {
+    moshi (value == mu) { kaesu iie; }
+    kaesu value == expected;
+}
+waza raw_strlen(f: cptr, text: cptr) -> uint64 = c "mio_ffi_indirect";
+
+kaku name = os.getenv("MIO_COMPAT_LIBC");
+kaku libc = linux.open_system(name);
+failures = failures + check("open the C library by name", linux.is_open(libc));
+kaku abs = linux.symbol(libc, "abs", "i:i");
+failures = failures + check("abs", linux.call_i_i(abs, int32(-42)) == int32(42) && linux.last_call_ok());
+kaku strnlen = linux.symbol(libc, "strnlen", "z:nz");
+failures = failures + check("strnlen on a Mio buffer", linux.call_z_nz(strnlen, string.to_bytes("musl or glibc")) == uint64(13));
+failures = failures + check("a mismatched call is refused", linux.call_i_ii(abs, int32(1), int32(2)) == int32(0) && !linux.last_call_ok());
+failures = failures + check("data symbol environ is refused", string.has_prefix(linux.error(linux.symbol(libc, "environ", "p:")), "E_FFI_NOT_FUNCTION"));
+failures = failures + check("missing symbol", string.has_prefix(linux.error(linux.symbol(libc, "mio_compat_no_such_symbol", "i:")), "E_FFI_SYMBOL"));
+kaku buffer = linux.c_string_buffer("native memory");
+kaku strlen = linux.symbol(libc, "strlen", "z:p");
+failures = failures + check("strlen on a native buffer", raw_strlen(linux.unsafe_address(strlen, "z:p"), linux.pointer(buffer)) == uint64(13));
+failures = failures + check("c_string", same(linux.c_string(buffer, 7), "memory"));
+kaku cell = linux.alloc_zeroed(16);
+linux.set_float64(cell, 8, -2.5);
+failures = failures + check("float64 cell", linux.get_float64(cell, 8) == -2.5 && string.has_prefix(linux.set_int64(cell, 12, 1), "E_FFI_BOUNDS"));
+failures = failures + check("free and double free", linux.free(cell) == "" && string.has_prefix(linux.free(cell), "E_FFI_STALE"));
+linux.free(buffer);
+failures = failures + check("close", linux.close(libc) == "" && !linux.is_live(abs));
+moshi (failures == 0) { chant("ffi compat PASS"); } sore { chant("ffi compat FAILED"); }

@@ -15,6 +15,7 @@ Programs (expected output):
   reclaim      ~19 GiB of garbage through an 8 GiB heap from 5 threads: only finishes if concurrent collections reclaim memory
   channel_*    zero-copy channels (kiso/thread): producer/consumer, close and failed-send hand-back, shared sub-objects / cycles / deep and
                large graphs, 3 producers x 3 consumers; reject_*: compile-time rejection of use after send, live alias, double send
+  socket_gc_progress  GC runs while workers wait in TCP read/write/accept and indefinite Reactor poll
 """
 import argparse
 import os
@@ -37,11 +38,14 @@ PROGRAMS = {
     "channel_close": b"hai\n24\nhai\n33\niie\n11\nhai\n",
     "channel_graphs": b"99\n1\n2000\n399980000\nhai\n3\n",
     "channel_mpmc": b"600\n1379100\n",
+    "channel_concurrent_alloc": b"concurrent channel allocation: ok\n",
     "summary_copy": b"198\n5\n",
     "alloc_cache": b"83\n0\n4\nhai\n",
     # Stage one hardening (docs/threading-stages.md)
     "lifecycle_cycles": b"252000\n0\n126000\n",
     "invalid_handles": b"-22\n-22\n-22\niie\nhai\n7\niie\nhai\niie\n7\nhai\n-5\n",
+    "concurrent_join": b"hai\niie\niie\n23\n-22\n7\n",
+    "socket_gc_progress": b"20000\n107\nhai\n20000\nhai\nhai\n20000\n1\nhai\n20000\n1\nhai\n",
     "creation_limit": b"hai\nhai\nhai\nhai\n1\n",
     "shutdown_active": b"199990000\nhai\n",
     "channel_races": b"80\n",
@@ -60,7 +64,7 @@ PROGRAMS = {
 }
 # Programs whose process must be killed by a fault (the guard page of a thread stack): name -> (stdout before the fault, signal number)
 FAULTS = {"stack_overflow": (b"hai\n", 11)}
-HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active"}   # fewer repetitions
+HEAVY = {"lifecycle_cycles", "creation_limit", "shutdown_active", "socket_gc_progress"}   # fewer repetitions
 
 # Programs that must be REJECTED by the compiler, with the diagnostic code that must appear: ownership is checked at compile time.
 NEGATIVE = {"reject_use_after_send": "E0702", "reject_alias_send": "E0704", "reject_double_send": "E0703",

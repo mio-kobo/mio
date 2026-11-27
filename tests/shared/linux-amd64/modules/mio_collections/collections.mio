@@ -1,0 +1,73 @@
+yobu "kiso/array";
+
+// Growable int64 sequences owned by the library, addressed by opaque int32 handles (> 0). Negative results:
+// -1 invalid handle, -2 index out of range. Exercises the collector: every push may grow (reallocate) the array.
+kaku sequences: [][]int64 = [];
+kaku live: []bool = [];
+
+waza slot_of(handle: int32) -> int64 { kaesu int64(handle) - 1; }
+waza valid(handle: int32) -> bool {
+    moshi (handle <= 0) { kaesu iie; }
+    kaku slot = int64(handle) - 1;
+    moshi (slot >= len(live)) { kaesu iie; }
+    kaesu live[slot];
+}
+
+koukai waza new_sequence() -> int32 export "mio_collections_new" {
+    kaku at = 0;
+    aida (at < len(live)) {
+        moshi (!live[at]) { sequences[at] = []; live[at] = hai; kaesu int32(at + 1); }
+        at = at + 1;
+    }
+    array.push(sequences, []);
+    array.push(live, hai);
+    kaesu int32(len(live));
+}
+koukai waza push(handle: int32, value: int64) -> int64 export "mio_collections_push" {
+    moshi (!valid(handle)) { kaesu -1; }
+    array.push(sequences[slot_of(handle)], value);
+    kaesu len(sequences[slot_of(handle)]);
+}
+koukai waza length(handle: int32) -> int64 export "mio_collections_len" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaesu len(sequences[slot_of(handle)]);
+}
+koukai waza at(handle: int32, index: int64, fallback: int64) -> int64 export "mio_collections_get" {
+    moshi (!valid(handle) || index < 0 || index >= len(sequences[slot_of(handle)])) { kaesu fallback; }
+    kaesu sequences[slot_of(handle)][index];
+}
+koukai waza sum(handle: int32) -> int64 export "mio_collections_sum" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaku values = sequences[slot_of(handle)];
+    kaku total = 0;
+    kaku i = 0;
+    aida (i < len(values)) { total = total + values[i]; i = i + 1; }
+    kaesu total;
+}
+koukai waza contains(handle: int32, value: int64) -> bool export "mio_collections_contains" {
+    moshi (!valid(handle)) { kaesu iie; }
+    kaku values = sequences[slot_of(handle)];
+    kaku i = 0;
+    aida (i < len(values)) { moshi (values[i] == value) { kaesu hai; } i = i + 1; }
+    kaesu iie;
+}
+// In-place insertion sort, ascending.
+koukai waza sort(handle: int32) -> int32 export "mio_collections_sort" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaku values = sequences[slot_of(handle)];
+    kaku i = 1;
+    aida (i < len(values)) {
+        kaku key = values[i];
+        kaku j = i - 1;
+        aida (j >= 0 && values[j] > key) { values[j + 1] = values[j]; j = j - 1; }
+        values[j + 1] = key;
+        i = i + 1;
+    }
+    kaesu 0;
+}
+koukai waza free_sequence(handle: int32) -> int32 export "mio_collections_free" {
+    moshi (!valid(handle)) { kaesu -1; }
+    sequences[slot_of(handle)] = [];
+    live[slot_of(handle)] = iie;
+    kaesu 0;
+}

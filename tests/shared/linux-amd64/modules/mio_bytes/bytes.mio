@@ -1,0 +1,66 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+
+// Byte buffers owned by the library and addressed by opaque int32 handles (> 0). No GC object ever crosses the C
+// boundary; a failed call returns a negative status (-1 invalid handle, -2 out of range).
+kaku buffers: []bytes.ByteBuffer = [];
+kaku live: []bool = [];
+
+waza slot_of(handle: int32) -> int64 { kaesu int64(handle) - 1; }
+waza valid(handle: int32) -> bool {
+    moshi (handle <= 0) { kaesu iie; }
+    kaku slot = int64(handle) - 1;
+    moshi (slot >= len(live)) { kaesu iie; }
+    kaesu live[slot];
+}
+
+koukai waza new_buffer(capacity: int32) -> int32 export "mio_bytes_new" {
+    kaku buffer = bytes.buffer_with_capacity(int64(capacity));
+    kaku at = 0;
+    aida (at < len(live)) {
+        moshi (!live[at]) { buffers[at] = buffer; live[at] = hai; kaesu int32(at + 1); }
+        at = at + 1;
+    }
+    array.push(buffers, buffer);
+    array.push(live, hai);
+    kaesu int32(len(live));
+}
+koukai waza write_byte(handle: int32, value: uint8) -> int32 export "mio_bytes_write_byte" {
+    moshi (!valid(handle)) { kaesu -1; }
+    bytes.write_byte(buffers[slot_of(handle)], value);
+    kaesu int32(bytes.buffer_len(buffers[slot_of(handle)]));
+}
+koukai waza length(handle: int32) -> int64 export "mio_bytes_len" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaesu bytes.buffer_len(buffers[slot_of(handle)]);
+}
+koukai waza at(handle: int32, index: int64) -> int32 export "mio_bytes_get" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaku data = bytes.buffer_bytes(buffers[slot_of(handle)]);
+    moshi (index < 0 || index >= len(data)) { kaesu -2; }
+    kaesu int32(data[index]);
+}
+koukai waza index_of(handle: int32, target: uint8) -> int64 export "mio_bytes_index" {
+    moshi (!valid(handle)) { kaesu -1; }
+    kaesu bytes.index(bytes.buffer_bytes(buffers[slot_of(handle)]), target);
+}
+// Adler-32 of the buffer contents.
+koukai waza adler32(handle: int32) -> uint32 export "mio_bytes_adler32" {
+    moshi (!valid(handle)) { kaesu uint32(0); }
+    kaku data = bytes.buffer_bytes(buffers[slot_of(handle)]);
+    kaku a = 1;
+    kaku b = 0;
+    kaku i = 0;
+    aida (i < len(data)) {
+        a = (a + int64(data[i])) - ((a + int64(data[i])) / 65521) * 65521;
+        b = (b + a) - ((b + a) / 65521) * 65521;
+        i = i + 1;
+    }
+    kaesu uint32(b * 65536 + a);
+}
+koukai waza free_buffer(handle: int32) -> int32 export "mio_bytes_free" {
+    moshi (!valid(handle)) { kaesu -1; }
+    bytes.reset(buffers[slot_of(handle)]);
+    live[slot_of(handle)] = iie;
+    kaesu 0;
+}

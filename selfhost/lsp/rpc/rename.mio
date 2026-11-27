@@ -1,0 +1,309 @@
+yobu "kiso/array";
+yobu "kiso/bytes";
+yobu "kiso/encoding/json";
+yobu "kiso/path";
+yobu "kiso/string";
+yobu "selfhost/frontend";
+yobu "selfhost/imports";
+yobu "selfhost/lexer";
+yobu "selfhost/lsp";
+yobu "selfhost/progress";
+
+kata RenameFile {
+    path: string;
+    uri: string;
+    buffer: lsp.TextBuffer;
+    sites: []lsp.Occurrence;
+}
+
+waza plain_name(buffer: lsp.TextBuffer, site: lsp.Occurrence, spelling: []uint8) -> bool {
+    moshi (site.start < 0 || site.end > len(buffer.data) || site.end - site.start != len(spelling)) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(spelling)) {
+        moshi (buffer.data[site.start + at] != spelling[at]) { kaesu iie; }
+        at = at + 1;
+    }
+    kaesu hai;
+}
+
+waza renameable_file(state: Session, file: string) -> bool {
+    moshi (string.has_prefix(file, "<embedded>/")) { kaesu iie; }
+    kaku bunko = state.bunko[0];
+    moshi (bunko != "" && inside_root(file, frontend.source_identity(bunko))) { kaesu iie; }
+    kaku at = 0;
+    aida (at < len(state.documents.documents)) {
+        moshi (analysis_path(state, state.documents.documents[at].uri) == file) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu workspace_contains(state, file);
+}
+
+waza add_rename_sites(state: Session, analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol,
+    spelling: []uint8, files: []RenameFile) -> bool {
+    kaku sites = lsp.references(analysis.index, symbol.key, hai);
+    kaku at = 0;
+    aida (at < len(sites)) {
+        kaku site = sites[at];
+        kaku fi = 0;
+        aida (fi < len(files) && files[fi].path != site.path) { fi = fi + 1; }
+        moshi (fi == len(files)) {
+            kaku buffer = source_buffer(analysis, site.path);
+            kaku uri = source_uri(analysis, site.path);
+            moshi (buffer == mu) { kaesu iie; }
+            moshi (uri == "" || !renameable_file(state, site.path)) { kaesu iie; }
+            array.push(files, RenameFile { path: site.path, uri: uri, buffer: buffer, sites: [] });
+        }
+        kaku file = files[fi];
+        moshi (!plain_name(file.buffer, site, spelling)) { kaesu iie; }
+        kaku si = len(file.sites);
+        aida (si > 0 && file.sites[si - 1].start > site.start) { si = si - 1; }
+        moshi (si > 0 && file.sites[si - 1].start == site.start && file.sites[si - 1].end == site.end) {
+            at = at + 1;
+            tsuzuku;
+        }
+        moshi ((si > 0 && file.sites[si - 1].end > site.start) ||
+            (si < len(file.sites) && file.sites[si].start < site.end)) { kaesu iie; }
+        array.push(file.sites, site);
+        kaku move = len(file.sites) - 1;
+        aida (move > si) {
+            file.sites[move] = file.sites[move - 1];
+            move = move - 1;
+        }
+        file.sites[si] = site;
+        at = at + 1;
+    }
+    kaesu hai;
+}
+
+waza mark_rename_coverage(analysis: DocumentAnalysis, covered: Map<string, bool>) -> unit {
+    kaku at = 0;
+    aida (at < len(analysis.index.sources)) {
+        covered[analysis.index.sources[at].path] = hai;
+        at = at + 1;
+    }
+}
+
+waza rename_candidates(state: Session, analysis: DocumentAnalysis, symbol: lsp.SemanticSymbol,
+    replacement: string) -> ([]DocumentAnalysis)? {
+    kaku affected = [analysis];
+    moshi ((symbol.owner != "" && symbol.kind != 8 && symbol.kind != 13) || symbol.kind == 10) { kaesu affected; }
+    moshi (!workspace_inventory(state) || state.workspace.incomplete[0]) { kaesu mu; }
+    kaku covered = Map[string, bool]();
+    mark_rename_coverage(analysis, covered);
+    kaku files = workspace_files(state);
+    kaku at = 0;
+    aida (at < len(files)) {
+        moshi (!progress.checkpoint(state.work)) { kaesu mu; }
+        kaku file = files[at];
+        moshi (covered[file.path] == mu && (symbol.public || path.dir(file.path) == path.dir(symbol.path))) {
+            kaku summary = workspace_summary(state, file);
+            moshi (summary == mu) { kaesu mu; }
+            moshi (!summary.scanned) { kaesu mu; }
+            kaku ni = 0;
+            aida (ni < len(summary.names)) {
+                moshi (summary.names[ni] == symbol.name || summary.names[ni] == replacement) {
+                    kaku other = analyze_document(state, file.uri);
+                    moshi (other == mu) { kaesu mu; }
+                    mark_rename_coverage(other, covered);
+                    moshi (lsp.semantic_symbol(other.index, symbol.key) != mu) {
+                        // An incomplete dependent package can hide references.
+                        moshi (len(other.index.analysis.diagnostics) > 0 || other.index.analysis.error != "") { kaesu mu; }
+                        array.push(affected, other);
+                    }
+                    nukeru;
+                }
+                ni = ni + 1;
+            }
+        }
+        at = at + 1;
+    }
+    kaesu affected;
+}
+
+waza rename_overlays(state: Session, files: []RenameFile, replacement: []uint8) -> []frontend.SourceOverlay {
+    kaku overlays = document_overlays(state);
+    kaku at = 0;
+    aida (at < len(files)) {
+        kaku file = files[at];
+        kaku out = bytes.buffer_with_capacity(len(file.buffer.data));
+        kaku offset = 0;
+        kaku si = 0;
+        aida (si < len(file.sites)) {
+            kaku site = file.sites[si];
+            aida (offset < site.start) {
+                bytes.write_byte(out, file.buffer.data[offset]);
+                offset = offset + 1;
+            }
+            bytes.write(out, replacement);
+            offset = site.end;
+            si = si + 1;
+        }
+        aida (offset < len(file.buffer.data)) {
+            bytes.write_byte(out, file.buffer.data[offset]);
+            offset = offset + 1;
+        }
+        kaku overlay = frontend.SourceOverlay { path: file.path, bytes: bytes.buffer_bytes(out) };
+        kaku oi = 0;
+        aida (oi < len(overlays) && overlays[oi].path != file.path) { oi = oi + 1; }
+        moshi (oi == len(overlays)) { array.push(overlays, overlay); }
+        sore { overlays[oi] = overlay; }
+        at = at + 1;
+    }
+    kaesu overlays;
+}
+
+waza renamed_offset(files: []RenameFile, file: string, offset: int64, delta: int64) -> int64 {
+    kaku at = 0;
+    aida (at < len(files)) {
+        moshi (files[at].path == file) {
+            kaku low = 0;
+            kaku high = len(files[at].sites);
+            aida (low < high) {
+                kaku mid = low + (high - low) / 2;
+                moshi (files[at].sites[mid].start < offset) { low = mid + 1; }
+                sore { high = mid; }
+            }
+            kaesu offset + low * delta;
+        }
+        at = at + 1;
+    }
+    kaesu offset;
+}
+
+waza validate_rename(state: Session, affected: []DocumentAnalysis, files: []RenameFile,
+    target: lsp.SemanticSymbol, replacement: []uint8) -> bool {
+    kaku overlays = rename_overlays(state, files, replacement);
+    kaku delta = len(replacement) - string.byte_len(target.name);
+    kaku target_offset = renamed_offset(files, target.path, target.selection.start.offset, delta);
+    kaku at = 0;
+    aida (at < len(affected)) {
+        kaku before = affected[at];
+        kaku checked = analyze_overlays(state, before.path, overlays);
+        moshi (progress.cancelled(state.work) || checked.analysis.error != "" || len(checked.analysis.diagnostics) > 0) { kaesu iie; }
+        kaku renamed = lsp.occurrence_at(checked, target.path, target_offset);
+        moshi (renamed == mu) { kaesu iie; }
+        moshi (!renamed.declaration || renamed.start != target_offset ||
+            renamed.end != target_offset + len(replacement)) { kaesu iie; }
+        kaku si = 0;
+        aida (si < len(before.index.occurrences)) {
+            moshi (!progress.checkpoint(state.work)) { kaesu iie; }
+            kaku site = before.index.occurrences[si];
+            kaku expected = site.key;
+            kaku width = site.end - site.start;
+            moshi (site.key == target.key) {
+                expected = renamed.key;
+                width = len(replacement);
+            } sore { moshi (string.has_prefix(site.key, string.concat(target.key, "/field:"))) {
+                // Field identities contain their declaring type's key.
+                kaku field = lsp.semantic_symbol(before.index, site.key);
+                moshi (field == mu) { kaesu iie; }
+                expected = string.concat(renamed.key, string.concat("/field:", field.name));
+            } sore {
+                kaku buffer = source_buffer(before, site.path);
+                kaku relevant = iie;
+                moshi (buffer != mu) { relevant = plain_name(buffer, site, replacement); }
+                moshi (!relevant) {
+                    si = si + 1;
+                    tsuzuku;
+                }
+            }
+            }
+            kaku start = renamed_offset(files, site.path, site.start, delta);
+            kaku found = lsp.occurrence_at(checked, site.path, start);
+            moshi (found == mu) { kaesu iie; }
+            moshi (found.start != start || found.end != start + width || found.key != expected) { kaesu iie; }
+            si = si + 1;
+        }
+        at = at + 1;
+    }
+    kaesu hai;
+}
+
+waza rename_edit(files: []RenameFile, new_name: string) -> string {
+    kaku output = string.new_builder();
+    string.write_string(output, "{\"changes\":{");
+    kaku at = 0;
+    aida (at < len(files)) {
+        kaku file = files[at];
+        moshi (at > 0) { string.write_string(output, ","); }
+        string.write_string(output, json.quote(file.uri));
+        string.write_string(output, ":[");
+        kaku si = 0;
+        aida (si < len(file.sites)) {
+            moshi (si > 0) { string.write_string(output, ","); }
+            kaku site = file.sites[si];
+            string.write_string(output, text_edit(file.buffer, imports.Edit { start: site.start, end: site.end, text: new_name }));
+            si = si + 1;
+        }
+        string.write_string(output, "]");
+        at = at + 1;
+    }
+    string.write_string(output, "}}");
+    kaesu string.builder_string(output);
+}
+
+waza builtin_rename_conflict(index: lsp.SemanticIndex, name: string) -> bool {
+    moshi (len(index.analysis.resolved) == 0) { kaesu iie; }
+    kaku package = index.analysis.resolved[0];
+    moshi (len(package.scopes) == 0) { kaesu iie; }
+    kaku names = package.scopes[0].keys;
+    kaku at = 0;
+    aida (at < len(names)) {
+        moshi (names[at] == name) { kaesu hai; }
+        at = at + 1;
+    }
+    kaesu iie;
+}
+
+waza rename_request(state: Session, analysis: DocumentAnalysis, buffer: lsp.TextBuffer, offset: int64,
+    request: json.Document, params: int64, method: string, id: string) -> string {
+    kaku new_name = "";
+    kaku replacement: []uint8 = [];
+    moshi (method == "textDocument/rename") {
+        new_name = json.text(request, json.member(request, params, "newName"));
+        replacement = string.to_bytes(new_name);
+        kaku scanned = lexer.lex(replacement);
+        moshi (len(scanned.errors) > 0 || len(scanned.tokens) != 2 ||
+            lexer.token_kind_code(scanned.tokens[0].kind) != 2 || scanned.tokens[0].literal != new_name) {
+            kaesu error_response(id, -32602, "newName must be a Mio identifier");
+        }
+    }
+    kaku site = lsp.occurrence_at(analysis.index, analysis.path, offset);
+    moshi (site == mu) { kaesu error_response(id, -32803, "No renameable symbol at this position"); }
+    kaku symbol = lsp.semantic_symbol(analysis.index, site.key);
+    moshi (symbol == mu) { kaesu error_response(id, -32803, "No renameable symbol at this position"); }
+    moshi (symbol.kind == 10 || !renameable_file(state, symbol.path)) {
+        kaesu error_response(id, -32803, "No renameable symbol at this position");
+    }
+    kaku spelling = string.to_bytes(symbol.name);
+    moshi (!plain_name(buffer, site, spelling) ||
+        analysis.index.analysis.error != "" || len(analysis.index.analysis.diagnostics) > 0) {
+        kaesu error_response(id, -32803, "Rename requires a plain identifier in a valid document");
+    }
+    kaku files: []RenameFile = [];
+    moshi (!add_rename_sites(state, analysis, symbol, spelling, files) || len(files) == 0) {
+        kaesu error_response(id, -32803, "Some references cannot be safely edited");
+    }
+    moshi (method == "textDocument/prepareRename") {
+        kaesu response(id, string.concat("{\"range\":", string.concat(range_json(buffer, site.start, site.end),
+            string.concat(",\"placeholder\":", string.concat(json.quote(symbol.name), "}")))));
+    }
+    moshi (new_name == symbol.name) { kaesu response(id, "{\"changes\":{}}"); }
+    // Builtins have no source declaration to compare during rebinding.
+    moshi (symbol.kind != 8 && symbol.kind != 13 && builtin_rename_conflict(analysis.index, new_name)) {
+        kaesu error_response(id, -32803, "The new name conflicts with a builtin");
+    }
+    kaku affected = rename_candidates(state, analysis, symbol, new_name);
+    moshi (affected == mu) { kaesu error_response(id, -32803, "Workspace references could not be fully analyzed"); }
+    kaku at = 1;
+    aida (at < len(affected)) {
+        moshi (!add_rename_sites(state, affected[at], symbol, spelling, files)) {
+            kaesu error_response(id, -32803, "Some references cannot be safely edited");
+        }
+        at = at + 1;
+    }
+    moshi (!validate_rename(state, affected, files, symbol, replacement)) {
+        kaesu error_response(id, -32803, "The new name conflicts with an existing declaration or changes a binding");
+    }
+    kaesu response(id, rename_edit(files, new_name));
+}

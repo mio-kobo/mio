@@ -36,3 +36,11 @@ a reviewer aid and is not run by the Mio test runner or any workflow.
 (module IDs may not contain `_`). `bash bunko/kiso/aot/x86_64/test.sh macos-arm64 quick` runs the
 native Mio tests and then the objdump cross-check; the second layer is reported as NOT_RUN (exit 2)
 when no GNU objdump (`objdump`, Homebrew's `gobjdump`, or `$MIO_OBJDUMP`) is available.
+
+## Position-independent data addressing
+
+`mov_data(a, reg, address)` loads an address in the zero-filled data area (`elf.data_base + offset`). It is exactly
+`mov_ri` unless the label `pic` was defined, so static executables are byte-identical to what they always were. In PIC
+mode (Linux shared libraries, `kiso/aot/lowerlinux/shared.mio`) it emits `lea reg, [rip + rel32]` and records a
+`DataRef` (position of the rel32 and the offset into the data area); `assemble_linked` returns them and the ELF object
+writer (`kiso/aot/elfrel`) turns each into `R_X86_64_PC32` against `.bss` with addend `offset - 4`.

@@ -204,12 +204,15 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
                 moshi (child < len(node.children) - 1) { return_type = resolve_type_node(env, file_id, node.children[child], type_params); }
                 moshi (node.extra != "" && !win64c.is_external(node.extra)) {
                     kaku invalid = len(type_params) != 0 || node.operator > 256 || child >= len(node.children) - 1;
+                    kaku exporting = cabi.is_export(node.extra);
                     kaku pi = 0;
                     aida (pi < len(parameter_types)) {
-                        kaku code = cabi.type_code(env.result.types[parameter_types[pi]].name);
-                        moshi (code == "" || code == "v") { invalid = hai; }
+                        kaku code = c_parameter_code(env.result, parameter_types[pi]);
+                        moshi (code == "" || code == "v" || (exporting && code == "m")) { invalid = hai; }
+                        moshi (pi == 0 && node.extra == cabi.indirect_symbol && code != "k") { invalid = hai; }
                         pi = pi + 1;
                     }
+                    moshi (node.extra == cabi.indirect_symbol && len(parameter_types) == 0) { invalid = hai; }
                     moshi (invalid || cabi.type_code(env.result.types[return_type].name) == "") {
                         add_type_error(env, TypeErrorKind.InvalidCall(), "E_CABI", file_id, node_id, 0, 0,
                             "C ABI requires a fixed prototype with explicit scalar parameters and a scalar or unit result");
@@ -223,6 +226,16 @@ waza register_function_signatures(env: TypeEnvironment) -> unit {
         }
         file_id = file_id + 1;
     }
+}
+
+// C 参数类型代码：[]uint8 传递数据首地址（"m"），其余按标量表。
+koukai waza c_parameter_code(result: TypeCheckResult, id: int64) -> string {
+    kaku info = result.types[id];
+    moshi (type_kind_code(info.kind) == 15) {
+        kaku element = result.types[info.element];
+        kaesu cabi.param_code("[]", element.name);
+    }
+    kaesu cabi.type_code(info.name);
 }
 
 waza copy_type_from(env: TypeEnvironment, source: TypeCheckResult, id: int64) -> int64 {

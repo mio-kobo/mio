@@ -755,7 +755,28 @@ waza compile_function_body(state: CompilerState, reference: resolver.NodeRef, id
         moshi(context.emitter.failed[0]){add_error(state,CompileErrorKind.LimitExceeded(),reference.file_id,reference.node_id,context.emitter.detail[0]);}
 }
 
+waza is_reserved_ffi_symbol(symbol: string, package_path: string) -> bool {
+    moshi (string.has_prefix(symbol, "mio_ffi_v1_")) { kaesu hai; }
+    moshi (package_path == "kiso/ffi/darwin") { kaesu iie; }
+    kaesu string.has_prefix(symbol, "mio_ffi_darwin_")
+        || symbol == "mio_ffi_store_byte"
+        || symbol == "mio_ffi_load_byte"
+        || symbol == "mio_ffi_call_g"
+        || symbol == "mio_ffi_call_gg"
+        || symbol == "mio_ffi_call_ggg"
+        || symbol == "mio_ffi_call_jj"
+        || symbol == "mio_ffi_call_jgg"
+        || symbol == "mio_ffi_call_lg"
+        || symbol == "mio_ffi_load_pointer"
+        || symbol == "mio_ffi_pointer_offset"
+        || symbol == "mio_ffi_load_word";
+}
+
 waza compile_c_declaration(state: CompilerState, reference: resolver.NodeRef, node: parser.Node, id: int64) -> unit {
+    moshi (is_reserved_ffi_symbol(node.extra, state.resolved.package_path)) {
+        add_error(state, CompileErrorKind.UnsupportedNode(), reference.file_id, reference.node_id, "reserved Mio FFI runtime symbol");
+        kaesu;
+    }
     kaku symbol = binding_of(state, reference.file_id, reference.node_id);
     kaku at = 0;
     aida (at < len(state.checked.signatures) && state.checked.signatures[at].symbol_id != symbol) { at = at + 1; }
@@ -772,11 +793,35 @@ waza compile_c_declaration(state: CompilerState, reference: resolver.NodeRef, no
     kaku name = string.concat(cabi.prefix, string.concat(node.extra, string.concat(":", result)));
     at = 0;
     aida (at < len(signature.parameters)) {
-        name = string.concat(name, cabi.type_code(state.checked.types[signature.parameters[at]].name));
+        name = string.concat(name, typecheck.c_parameter_code(state.checked, signature.parameters[at]));
         at = at + 1;
     }
     state.layout.functions[id] = FunctionLayout { id: id, name: name, parameter_count: node.operator,
         local_count: node.operator, returns_value: result != "v", captures: [], instructions: [] };
+}
+
+// An exported function keeps its body; its name becomes the "$export::<symbol>:<result><parameters>" marker that the
+// Linux AMD64 shared-library backend turns into a System V entry point (kiso/aot/cabi). The prototype comes from the
+// checked signature, whose scalar-only shape the type checker has already enforced.
+waza compile_export_name(state: CompilerState, reference: resolver.NodeRef, node: parser.Node, id: int64) -> unit {
+    moshi (!cabi.is_export(node.extra)) { kaesu; }
+    kaku symbol = binding_of(state, reference.file_id, reference.node_id);
+    kaku at = 0;
+    aida (at < len(state.checked.signatures) && state.checked.signatures[at].symbol_id != symbol) { at = at + 1; }
+    moshi (at == len(state.checked.signatures)) {
+        add_error(state, CompileErrorKind.UnsupportedNode(), reference.file_id, reference.node_id, "missing C ABI signature"); kaesu;
+    }
+    kaku signature = state.checked.signatures[at];
+    kaku result = cabi.type_code(state.checked.types[signature.result].name);
+    kaku name = string.concat(node.extra, string.concat(":", result));
+    at = 0;
+    aida (at < len(signature.parameters)) {
+        name = string.concat(name, cabi.type_code(state.checked.types[signature.parameters[at]].name));
+        at = at + 1;
+    }
+    kaku fn = state.layout.functions[id];
+    state.layout.functions[id] = FunctionLayout { id: fn.id, name: name, parameter_count: fn.parameter_count, local_count: fn.local_count,
+        returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
 }
 
 waza compile_functions(state: CompilerState) -> unit {
@@ -784,8 +829,8 @@ waza compile_functions(state: CompilerState) -> unit {
     aida (local_index < len(state.function_nodes)) {
         kaku reference=state.function_nodes[local_index];kaku node=state.resolved.files[reference.file_id].ast.nodes[reference.node_id];
         kaku id = state.function_layout_ids[local_index];
-        moshi (node.extra != "") { compile_c_declaration(state, reference, node, id); }
-        sore { compile_function_body(state, reference, id, node.text, state.typed && node.integer > 0); }
+        moshi (node.extra != "" && !cabi.is_export(node.extra)) { compile_c_declaration(state, reference, node, id); }
+        sore { compile_function_body(state, reference, id, node.text, state.typed && node.integer > 0); compile_export_name(state, reference, node, id); }
         local_index = local_index + 1;
     }
 }
@@ -873,7 +918,7 @@ waza compile_modules_mode(packages: []resolver.ResolvedPackage, checked_packages
         aida (ri < len(registry_ids)) {
             kaku id = registry_ids[ri]; kaku fn = layout.functions[id];
             kaku name = string.concat(registry_packages[ri], string.concat("::", registry_names[ri]));
-            moshi (cabi.is_external(fn.name) || win64c.is_external(fn.name)) { name = fn.name; }
+            moshi (cabi.is_external(fn.name) || cabi.is_export(fn.name) || win64c.is_external(fn.name)) { name = fn.name; }
             layout.functions[id] = FunctionLayout { id: fn.id, name: name, parameter_count: fn.parameter_count,
                 local_count: fn.local_count, returns_value: fn.returns_value, captures: fn.captures, instructions: fn.instructions };
             ri = ri + 1;

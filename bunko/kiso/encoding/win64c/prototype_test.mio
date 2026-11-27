@@ -26,3 +26,14 @@ waza test_windows_c_prototype_boundaries() -> unit {
     aida (i<len(names)) { testing.expect(descriptor(names[i]) == expected[i], "explicit transport classification"); i = i + 1; }
     testing.expect(descriptor("bool") == -1 && descriptor("string") == -1, "unsupported types fail closed");
 }
+
+waza test_dynamic_native_signatures() -> unit {
+    testing.expect(native_tag("float64") == 4, "native tag classification");
+    testing.expect(validate(key("mio.dynamic.dll", "add", "int32", ["uint64", "int32", "int32"]), 3, hai) == "", "token followed by native arguments");
+    testing.expect(validate(key("MIO.DYNAMIC.DLL", "call", "unit", []), 0, iie) != "", "token required case insensitively");
+    testing.expect(validate(key("mio.dynamic.dll", "call", "unit", ["cptr"]), 1, iie) != "", "raw pointers are not callable tokens");
+    testing.expect(native_signature("int32", ["int32", "int32"]) == 144115188075858602, "stable exact descriptor");
+    testing.expect(native_signature("cptr", []) != native_signature("uint64", []), "pointer distinct from integer");
+    testing.expect(native_signature("unit", ["unit"]) == -1, "void arguments rejected");
+    testing.expect(native_signature("string", []) == -1, "managed return rejected");
+}

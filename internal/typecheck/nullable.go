@@ -304,11 +304,25 @@ func (c *Checker) checkBlockWithNarrowing(block *ast.BlockStatement, symbol reso
 	return err
 }
 
-func (c *Checker) invalidateGlobalFacts() {
+func (c *Checker) invalidateCallFacts() {
 	for symbol := range c.globals {
 		delete(c.narrowings, symbol)
 		c.factVersions[symbol]++
 	}
+	if c.loopDepth == 0 {
+		return
+	}
+	for symbol := range c.narrowings {
+		if c.resolver.HasCapturedWrite(symbol) {
+			delete(c.narrowings, symbol)
+			c.factVersions[symbol]++
+		}
+	}
+}
+
+func (c *Checker) callCanChange(symbol resolver.Symbol) bool {
+	_, global := c.globals[symbol]
+	return global || c.resolver.HasCapturedWrite(symbol)
 }
 
 // invalidateAllFacts 清除可能被闭包修改的收窄事实
@@ -319,119 +333,50 @@ func (c *Checker) invalidateAllFacts() {
 	}
 }
 
-// invalidateLoopFacts drops every narrowing fact that may not hold on the loop
-// backedge. A fact proven before the loop is only valid on later iterations if
-// nothing in the condition or body can mutate the symbol, so symbols assigned
-// anywhere in the loop (including nested branches and function bodies) lose
-// their fact, as do globals when the loop calls a function and all facts when
-// it calls a function value.
-func (c *Checker) invalidateLoopFacts(condition ast.Expression, body *ast.BlockStatement) {
-	assigned := make(map[resolver.Symbol]struct{})
-	callsFunction, callsValue := false, false
-	var expr func(e ast.Expression)
-	var block func(b *ast.BlockStatement)
-	var stmt func(s ast.Statement)
-	expr = func(e ast.Expression) {
-		if e == nil {
-			return
-		}
-		switch n := e.(type) {
-		case *ast.CallExpression:
-			function := n.Function
-			if apply, ok := function.(*ast.TypeApplyExpression); ok {
-				function = apply.Function
-			}
-			if identifier, ok := function.(*ast.Identifier); ok {
-				symbol, resolved := c.resolver.BindingOf(identifier)
-				switch {
-				case resolved && symbol.Kind == resolver.SymbolBuiltin:
-					// Builtins cannot mutate user variables.
-				case !resolved || symbol.Kind == resolver.SymbolFunction || symbol.Kind == resolver.SymbolType:
-					callsFunction = true
-				default:
-					callsValue = true
-				}
-			} else if c.isEnumConstructorCallee(function) {
-				// Enum constructors build values and cannot mutate variables.
-			} else {
-				callsValue = true
-			}
-		case *ast.FunctionLiteral:
-			block(n.Body)
-			return
-		}
-		forEachChild(e, expr)
+// Check the header with facts valid on both entry and the backedge. The
+// condition's own non-null guard can still establish a fresh fact in the body.
+func (c *Checker) invalidateLoopFacts(loop *ast.WhileStatement) {
+	if len(c.narrowings) == 0 {
+		return
 	}
-	block = func(b *ast.BlockStatement) {
-		if b == nil {
-			return
+	assigned := make(map[resolver.Symbol]bool)
+	hasCall := false
+	walkStatements([]ast.Statement{loop}, func(expr ast.Expression) {
+		if call, ok := expr.(*ast.CallExpression); ok && c.callMayWrite(call.Function) {
+			hasCall = true
 		}
-		for _, s := range b.Statements {
-			stmt(s)
-		}
-	}
-	stmt = func(s ast.Statement) {
-		switch n := s.(type) {
-		case *ast.LetStatement:
-			expr(n.Value)
-		case *ast.AssignStatement:
-			if symbol, ok := c.resolver.BindingOf(n.Name); ok {
-				assigned[symbol] = struct{}{}
+	}, func(stmt ast.Statement) {
+		if assignment, ok := stmt.(*ast.AssignStatement); ok {
+			if symbol, ok := c.resolver.BindingOf(assignment.Name); ok {
+				assigned[symbol] = true
 			}
-			expr(n.Value)
-		case *ast.IndexAssignStatement:
-			expr(n.Target)
-			expr(n.Value)
-		case *ast.ExpressionStatement:
-			expr(n.Expr)
-		case *ast.ReturnStatement:
-			expr(n.Value)
-		case *ast.ConstStatement:
-			expr(n.Value)
-		case *ast.BlockStatement:
-			block(n)
-		case *ast.IfStatement:
-			expr(n.Condition)
-			block(n.Consequence)
-			block(n.Alternative)
-		case *ast.WhileStatement:
-			expr(n.Condition)
-			block(n.Body)
-		case *ast.MatchStatement:
-			expr(n.Value)
-			for _, arm := range n.Arms {
-				block(arm.Body)
-			}
-		case *ast.FunctionStatement:
-			block(n.Body)
 		}
-	}
-	expr(condition)
-	block(body)
+	})
 	for symbol := range c.narrowings {
-		_, isAssigned := assigned[symbol]
-		_, isGlobal := c.globals[symbol]
-		if isAssigned || callsValue || (callsFunction && isGlobal) {
+		if assigned[symbol] || (hasCall && c.callCanChange(symbol)) {
 			delete(c.narrowings, symbol)
+			c.factVersions[symbol]++
 		}
 	}
 }
 
-// isEnumConstructorCallee reports whether callee has the form Type.Variant with
-// Type resolving to a type symbol.
-func (c *Checker) isEnumConstructorCallee(callee ast.Expression) bool {
-	field, ok := callee.(*ast.FieldExpression)
-	if !ok {
-		return false
+func (c *Checker) callMayWrite(callee ast.Expression) bool {
+	if apply, ok := callee.(*ast.TypeApplyExpression); ok {
+		callee = apply.Function
 	}
-	left := field.Left
-	if apply, ok := left.(*ast.TypeApplyExpression); ok {
-		left = apply.Function
+	if identifier, ok := groupedIdentifier(callee); ok {
+		symbol, resolved := c.resolver.BindingOf(identifier)
+		return !resolved || symbol.Kind != resolver.SymbolBuiltin
 	}
-	identifier, ok := left.(*ast.Identifier)
-	if !ok {
-		return false
+	if field, ok := callee.(*ast.FieldExpression); ok {
+		owner := field.Left
+		if apply, ok := owner.(*ast.TypeApplyExpression); ok {
+			owner = apply.Function
+		}
+		if id, ok := groupedIdentifier(owner); ok {
+			symbol, resolved := c.resolver.BindingOf(id)
+			return !resolved || symbol.Kind != resolver.SymbolType
+		}
 	}
-	symbol, resolved := c.resolver.BindingOf(identifier)
-	return resolved && symbol.Kind == resolver.SymbolType
+	return true
 }

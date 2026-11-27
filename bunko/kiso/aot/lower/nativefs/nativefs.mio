@@ -542,7 +542,38 @@ waza emit_file_entries(code: arm64.Assembler, empty_tagged: int64) -> unit {
     emit(code, arm64.movz_x(2, 438, 0));
     emit(code, arm64.movz_x(16, 5, 0));
     emit(code, arm64.svc(128));
+    moshi (arm64.assembler_label_word(code, "linux_abi") < 0 && arm64.assembler_label_word(code, "windows_abi") < 0) {
+        arm64.assembler_b_cond(code, 3, "nativefs_open_success");
+        // Seatbelt can deny reopening /dev/stderr while the inherited
+        // descriptor remains writable. Give the file handle its own fd.
+        emit(code, arm64.cmp_imm_x(0, 1, iie)); // EPERM
+        arm64.assembler_b_cond(code, 0, "nativefs_open_stderr");
+        emit(code, arm64.cmp_imm_x(0, 13, iie)); // EACCES
+        arm64.assembler_b_cond(code, 1, "nativefs_open_syserr");
+        arm64.assembler_label(code, "nativefs_open_stderr");
+        emit(code, arm64.ldr_x(9, 31, 0));
+        emit(code, arm64.cmp_imm_x(9, 1, iie)); // Write mode.
+        arm64.assembler_b_cond(code, 1, "nativefs_open_syserr");
+        kaku stderr_path = string.to_bytes("/dev/stderr");
+        emit(code, arm64.ldr_x(9, 31, 16));
+        emit(code, arm64.cmp_imm_x(9, len(stderr_path) + 1, iie));
+        arm64.assembler_b_cond(code, 1, "nativefs_open_syserr");
+        emit(code, arm64.ldr_x(9, 31, 8));
+        kaku index = 0;
+        aida (index < len(stderr_path)) {
+            emit(code, arm64.ldrb_w(10, 9, index));
+            emit(code, arm64.cmp_imm_x(10, int64(stderr_path[index]), iie));
+            arm64.assembler_b_cond(code, 1, "nativefs_open_syserr");
+            index = index + 1;
+        }
+        emit(code, arm64.movz_x(0, 2, 0));
+        emit(code, arm64.movz_x(1, 67, 0)); // F_DUPFD_CLOEXEC
+        emit(code, arm64.movz_x(2, 3, 0)); // Leave standard fd numbers untouched.
+        emit(code, arm64.movz_x(16, 92, 0)); // fcntl
+        emit(code, arm64.svc(128));
+    }
     arm64.assembler_b_cond(code, 2, "nativefs_open_syserr");
+    arm64.assembler_label(code, "nativefs_open_success");
     emit(code, arm64.str_x(0, 31, 24));
     emit(code, arm64.movz_x(9, 0, 0));
     emit(code, arm64.str_x(9, 31, 32));

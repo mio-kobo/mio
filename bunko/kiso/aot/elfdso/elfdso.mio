@@ -1,0 +1,252 @@
+yobu "kiso/array";
+yobu "kiso/string";
+
+// Pure Mio reader for the inputs of the native linker's external dependencies: Linux x86-64 ELF64 shared objects
+// and the bounded subset of GNU linker scripts that system libraries use in place of a .so (for example glibc's
+// libm.so: GROUP ( /lib/x86_64-linux-gnu/libm.so.6 AS_NEEDED ( /lib/x86_64-linux-gnu/libmvec.so.1 ) )).
+//
+// Every file is untrusted input: all offsets, sizes, counts and string indexes are bounds-checked, and anything
+// outside the supported subset is an error, never a guess.
+//
+// Shared object: ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ET_DYN, EM_X86_64, a section header table with one
+// SHT_DYNSYM whose sh_link is an SHT_STRTAB, and PT_DYNAMIC for DT_SONAME. Defined dynamic symbols are those with
+// st_shndx != SHN_UNDEF and binding STB_GLOBAL or STB_WEAK; STV_HIDDEN/STV_INTERNAL ones are not exported.
+// Linker script: comments, OUTPUT_FORMAT(...) (ignored), GROUP(...) and INPUT(...) with absolute paths and
+// AS_NEEDED(...) lists. Any other command, a relative path or -l inside a script is UNSUPPORTED_SCRIPT.
+
+koukai kata DynamicSymbol {
+    name: string;
+    // ELF st_info type: 0 NOTYPE, 1 OBJECT, 2 FUNC, 10 GNU_IFUNC, ...
+    kind: int64;
+}
+koukai kata SharedObject {
+    soname: string;
+    symbols: []DynamicSymbol;
+    error: string;
+}
+koukai kata ScriptInput {
+    path: string;
+    as_needed: bool;
+}
+koukai kata Script {
+    inputs: []ScriptInput;
+    error: string;
+}
+
+teisu header_size = 64;
+
+waza word(data: []uint8, at: int64, width: int64) -> int64 {
+    kaku value = 0;
+    kaku scale = 1;
+    kaku i = 0;
+    aida (i < width) { value = value + int64(data[at + i]) * scale; scale = scale * 256; i = i + 1; }
+    kaesu value;
+}
+
+// [offset, offset + size) inside data, with no overflow (sizes from the file are below 2^56 when checked first).
+waza within(data: []uint8, offset: int64, size: int64) -> bool {
+    kaesu offset >= 0 && size >= 0 && offset <= len(data) && size <= len(data) - offset;
+}
+
+waza failed_object(message: string) -> SharedObject { kaesu SharedObject { soname: "", symbols: [], error: message }; }
+
+// A NUL-terminated string at table_offset + index, bounded by the table.
+waza table_string(data: []uint8, table_offset: int64, table_size: int64, index: int64) -> string? {
+    moshi (index < 0 || index >= table_size) { kaesu mu; }
+    kaku start = table_offset + index;
+    kaku end = start;
+    aida (end < table_offset + table_size && data[end] != uint8(0)) { end = end + 1; }
+    moshi (end == table_offset + table_size) { kaesu mu; }
+    kaku bytes: []uint8 = array.make[uint8](end - start, uint8(0));
+    kaku at = 0;
+    aida (at < end - start) { bytes[at] = data[start + at]; at = at + 1; }
+    kaesu string.from_utf8(bytes);
+}
+
+koukai waza is_elf(data: []uint8) -> bool {
+    kaesu len(data) >= 4 && data[0] == uint8(127) && data[1] == uint8(69) && data[2] == uint8(76) && data[3] == uint8(70);
+}
+
+// read_shared_object parses an ELF64 x86-64 shared object's exported dynamic symbols and SONAME.
+koukai waza read_shared_object(data: []uint8) -> SharedObject {
+    moshi (len(data) < header_size || !is_elf(data)) { kaesu failed_object("NOT_ELF"); }
+    moshi (data[4] != uint8(2) || data[5] != uint8(1) || data[6] != uint8(1)) { kaesu failed_object("UNSUPPORTED_ELF_CLASS not ELFCLASS64 little-endian version 1"); }
+    moshi (word(data, 16, 2) != 3) { kaesu failed_object("NOT_SHARED_OBJECT not ET_DYN"); }
+    moshi (word(data, 18, 2) != 62) { kaesu failed_object("UNSUPPORTED_MACHINE not EM_X86_64"); }
+    kaku phoff = word(data, 32, 8);
+    kaku shoff = word(data, 40, 8);
+    kaku phentsize = word(data, 54, 2);
+    kaku phnum = word(data, 56, 2);
+    kaku shentsize = word(data, 58, 2);
+    kaku shnum = word(data, 60, 2);
+    moshi (phentsize != 56 || phnum == 0 || phnum > 4096 || !within(data, phoff, phnum * 56)) { kaesu failed_object("INVALID_PROGRAM_HEADERS"); }
+    moshi (shentsize != 64 || shnum == 0 || shnum > 65280 || !within(data, shoff, shnum * 64)) { kaesu failed_object("INVALID_SECTION_HEADERS (a section header table is required)"); }
+    // Dynamic symbol table and its string table.
+    kaku dynsym = -1;
+    kaku index = 0;
+    aida (index < shnum) {
+        moshi (word(data, shoff + index * 64 + 4, 4) == 11) {
+            moshi (dynsym >= 0) { kaesu failed_object("INVALID_SECTION_HEADERS more than one SHT_DYNSYM"); }
+            dynsym = index;
+        }
+        index = index + 1;
+    }
+    moshi (dynsym < 0) { kaesu failed_object("NO_DYNAMIC_SYMBOLS"); }
+    kaku header = shoff + dynsym * 64;
+    kaku sym_offset = word(data, header + 24, 8);
+    kaku sym_size = word(data, header + 32, 8);
+    kaku sym_link = word(data, header + 40, 4);
+    kaku sym_entsize = word(data, header + 56, 8);
+    moshi (sym_entsize != 24 || sym_size - (sym_size / 24) * 24 != 0 || !within(data, sym_offset, sym_size)) { kaesu failed_object("INVALID_DYNSYM"); }
+    moshi (sym_link <= 0 || sym_link >= shnum || word(data, shoff + sym_link * 64 + 4, 4) != 3) { kaesu failed_object("INVALID_DYNSTR"); }
+    kaku str_offset = word(data, shoff + sym_link * 64 + 24, 8);
+    kaku str_size = word(data, shoff + sym_link * 64 + 32, 8);
+    moshi (!within(data, str_offset, str_size) || str_size == 0) { kaesu failed_object("INVALID_DYNSTR"); }
+    kaku symbols: []DynamicSymbol = [];
+    kaku count = sym_size / 24;
+    index = 1;
+    aida (index < count) {
+        kaku entry = sym_offset + index * 24;
+        kaku info = int64(data[entry + 4]);
+        kaku binding = info / 16;
+        kaku kind = info - binding * 16;
+        kaku visibility = int64(data[entry + 5]) - (int64(data[entry + 5]) / 4) * 4;
+        kaku section = word(data, entry + 6, 2);
+        moshi (section != 0 && (binding == 1 || binding == 2) && (visibility == 0 || visibility == 3)) {
+            kaku name = table_string(data, str_offset, str_size, word(data, entry, 4));
+            moshi (name == mu) { kaesu failed_object("INVALID_SYMBOL_NAME"); }
+            moshi (name != "") { array.push(symbols, DynamicSymbol { name: name, kind: kind }); }
+        }
+        index = index + 1;
+    }
+    // DT_SONAME through PT_DYNAMIC (file-backed) and DT_STRTAB translated through the PT_LOAD segments.
+    kaku soname = "";
+    kaku dynamic_offset = -1;
+    kaku dynamic_size = 0;
+    index = 0;
+    aida (index < phnum) {
+        kaku ph = phoff + index * 56;
+        moshi (word(data, ph, 4) == 2) { dynamic_offset = word(data, ph + 8, 8); dynamic_size = word(data, ph + 32, 8); }
+        index = index + 1;
+    }
+    moshi (dynamic_offset < 0 || !within(data, dynamic_offset, dynamic_size)) { kaesu failed_object("INVALID_DYNAMIC"); }
+    kaku soname_index = -1;
+    kaku strtab_address = -1;
+    kaku at = 0;
+    aida (at + 16 <= dynamic_size) {
+        kaku tag = word(data, dynamic_offset + at, 8);
+        moshi (tag == 0) { nukeru; }
+        moshi (tag == 14) { soname_index = word(data, dynamic_offset + at + 8, 8); }
+        moshi (tag == 5) { strtab_address = word(data, dynamic_offset + at + 8, 8); }
+        at = at + 16;
+    }
+    moshi (soname_index >= 0) {
+        kaku file_offset = address_offset(data, phoff, phnum, strtab_address);
+        moshi (file_offset < 0) { kaesu failed_object("INVALID_DYNAMIC unmapped DT_STRTAB"); }
+        kaku name = table_string(data, file_offset, len(data) - file_offset, soname_index);
+        moshi (name == mu) { kaesu failed_object("INVALID_SONAME"); }
+        soname = name;
+    }
+    kaesu SharedObject { soname: soname, symbols: symbols, error: "" };
+}
+
+waza address_offset(data: []uint8, phoff: int64, phnum: int64, address: int64) -> int64 {
+    moshi (address < 0) { kaesu -1; }
+    kaku index = 0;
+    aida (index < phnum) {
+        kaku ph = phoff + index * 56;
+        moshi (word(data, ph, 4) == 1) {
+            kaku offset = word(data, ph + 8, 8);
+            kaku vaddr = word(data, ph + 16, 8);
+            kaku filesz = word(data, ph + 32, 8);
+            moshi (address >= vaddr && address - vaddr < filesz && within(data, offset, filesz)) { kaesu offset + (address - vaddr); }
+        }
+        index = index + 1;
+    }
+    kaesu -1;
+}
+
+// The kind of an exported symbol named name, or -1 when the object does not define it.
+koukai waza find(object: SharedObject, name: string) -> int64 {
+    kaku at = 0;
+    aida (at < len(object.symbols)) {
+        moshi (object.symbols[at].name == name) { kaesu object.symbols[at].kind; }
+        at = at + 1;
+    }
+    kaesu -1;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// GNU linker scripts (bounded subset)
+
+waza failed_script(message: string) -> Script { kaesu Script { inputs: [], error: message }; }
+
+waza is_space(b: int64) -> bool { kaesu b == 32 || b == 9 || b == 10 || b == 13; }
+
+// Tokens: "(", ")", "," and words; /* */ comments are skipped.
+waza tokens(data: []uint8) -> []string {
+    kaku out: []string = [];
+    kaku at = 0;
+    aida (at < len(data)) {
+        kaku b = int64(data[at]);
+        moshi (is_space(b) || b == 44) { at = at + 1; tsuzuku; }
+        moshi (b == 47 && at + 1 < len(data) && data[at + 1] == uint8(42)) {
+            at = at + 2;
+            aida (at + 1 < len(data) && !(data[at] == uint8(42) && data[at + 1] == uint8(47))) { at = at + 1; }
+            at = at + 2;
+            tsuzuku;
+        }
+        moshi (b == 40 || b == 41) {
+            moshi (b == 40) { array.push(out, "("); } sore { array.push(out, ")"); }
+            at = at + 1;
+            tsuzuku;
+        }
+        kaku start = at;
+        aida (at < len(data) && !is_space(int64(data[at])) && data[at] != uint8(40) && data[at] != uint8(41) && data[at] != uint8(44)) { at = at + 1; }
+        kaku bytes: []uint8 = array.make[uint8](at - start, uint8(0));
+        kaku i = 0;
+        aida (i < at - start) { bytes[i] = data[start + i]; i = i + 1; }
+        kaku word_text = string.from_utf8(bytes);
+        moshi (word_text == mu) { kaesu [""]; }
+        array.push(out, word_text);
+    }
+    kaesu out;
+}
+
+// read_script parses a GNU ld script that stands in for a shared library.
+koukai waza read_script(data: []uint8) -> Script {
+    moshi (len(data) > 65536) { kaesu failed_script("UNSUPPORTED_SCRIPT larger than 64 KiB"); }
+    kaku list = tokens(data);
+    kaku inputs: []ScriptInput = [];
+    kaku at = 0;
+    aida (at < len(list)) {
+        kaku command = list[at];
+        moshi (command == "") { kaesu failed_script("UNSUPPORTED_SCRIPT not UTF-8"); }
+        moshi (at + 1 >= len(list) || list[at + 1] != "(") { kaesu failed_script(string.concat("UNSUPPORTED_SCRIPT expected ( after ", command)); }
+        at = at + 2;
+        moshi (command == "OUTPUT_FORMAT") {
+            aida (at < len(list) && list[at] != ")") { at = at + 1; }
+            at = at + 1;
+            tsuzuku;
+        }
+        moshi (command != "GROUP" && command != "INPUT") { kaesu failed_script(string.concat("UNSUPPORTED_SCRIPT command ", command)); }
+        kaku as_needed = iie;
+        aida (at < len(list) && !(list[at] == ")" && !as_needed)) {
+            kaku item = list[at];
+            moshi (item == "AS_NEEDED") {
+                moshi (as_needed || at + 1 >= len(list) || list[at + 1] != "(") { kaesu failed_script("UNSUPPORTED_SCRIPT malformed AS_NEEDED"); }
+                as_needed = hai;
+                at = at + 2;
+                tsuzuku;
+            }
+            moshi (item == ")") { as_needed = iie; at = at + 1; tsuzuku; }
+            moshi (item == "(" || !string.has_prefix(item, "/")) { kaesu failed_script(string.concat("UNSUPPORTED_SCRIPT input must be an absolute path: ", item)); }
+            array.push(inputs, ScriptInput { path: item, as_needed: as_needed });
+            at = at + 1;
+        }
+        moshi (at >= len(list)) { kaesu failed_script("UNSUPPORTED_SCRIPT unterminated list"); }
+        at = at + 1;
+    }
+    moshi (len(inputs) == 0) { kaesu failed_script("UNSUPPORTED_SCRIPT no input"); }
+    kaesu Script { inputs: inputs, error: "" };
+}

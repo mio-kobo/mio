@@ -1,0 +1,174 @@
+yobu "kiso/aot/arm64";
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lower/types";
+yobu "kiso/aot/macho";
+yobu "kiso/array";
+yobu "kiso/encoding/mochi";
+yobu "kiso/string";
+
+koukai kata DylibCode {
+    words: []uint32;
+    exports: []macho.DylibExport;
+    error: string;
+}
+
+waza scalar_library_failure(error: string) -> DylibCode {
+    kaesu DylibCode { words: [], exports: [], error: error };
+}
+
+waza library_scalar(analysis: types.TypeAnalysis, node: int64) -> bool {
+    kaku kind = types.type_kind(analysis, node);
+    kaesu !types.type_nullable(analysis, node) && (kind == types.type_integer || kind == types.type_bool ||
+        kind == types.type_float32 || kind == types.type_float64);
+}
+
+waza scalar_library_body(analysis: types.TypeAnalysis, f: mochi.Function) -> bool {
+    moshi (len(f.captures) != 0 || len(f.instructions) == 0) { kaesu iie; }
+    kaku slots = analysis.locals[f.id];
+    kaku at = 0;
+    aida (at < len(slots)) {
+        moshi (!library_scalar(analysis, slots[at]) || analysis.cells[f.id][at]) { kaesu iie; }
+        at = at + 1;
+    }
+    moshi (f.returns_value && !library_scalar(analysis, analysis.returns[f.id])) { kaesu iie; }
+    kaku block = analysis.blocks[f.id + 1];
+    at = 0;
+    aida (at < len(f.instructions)) {
+        kaku op = int64(f.instructions[at]);
+        moshi (!block.reachable[at]) { kaesu iie; }
+        kaku entries = block.entry[at];
+        kaku pos = 0;
+        aida (pos < len(entries)) {
+            moshi (!library_scalar(analysis, entries[pos])) { kaesu iie; }
+            pos = pos + 1;
+        }
+        moshi (!((op >= 1 && op <= 18) || (op >= 23 && op <= 29) || (op >= 49 && op <= 55) || op == 66)) {
+            kaesu iie;
+        }
+        // Integer division can enter the process-wide runtime error path.
+        moshi (op == 6 && types.type_kind(analysis, entries[len(entries) - 1]) == types.type_integer) { kaesu iie; }
+        moshi (op == 54 && f.instructions[at + 1] == uint8(13)) { kaesu iie; }
+        at = at + width(op);
+    }
+    kaesu hai;
+}
+
+// Existing Mio function frames are roughly 6 KiB each. Cap the static
+// call chain so a host thread can call an export on a normal Darwin stack.
+waza bounded_library_calls(file: mochi.File, reachable: []bool) -> bool {
+    kaku depths = array.make[int64](len(file.functions), 0);
+    kaku pass = 1;
+    aida (pass <= 32) {
+        kaku pending = iie;
+        kaku id = 0;
+        aida (id < len(file.functions)) {
+            moshi (reachable[id] && depths[id] == 0) {
+                kaku ready = hai;
+                kaku data = file.functions[id].instructions;
+                kaku at = 0;
+                aida (at < len(data)) {
+                    kaku op = int64(data[at]);
+                    moshi (op == 25) {
+                        kaku depth = depths[operand_u16(data, at)];
+                        moshi (depth == 0 || depth >= pass) { ready = iie; nukeru; }
+                    }
+                    at = at + width(op);
+                }
+                moshi (ready) { depths[id] = pass; }
+                sore { pending = hai; }
+            }
+            id = id + 1;
+        }
+        moshi (!pending) { kaesu hai; }
+        pass = pass + 1;
+    }
+    kaesu iie;
+}
+
+waza emit_export_thunk(code: arm64.Assembler, entry: types.ScalarExport) -> unit {
+    kaku signature = entry.signature;
+    emit(code, arm64.stp_pre_x(29, 30, 31, -16));
+    emit(code, arm64.add_imm_x(29, 31, 0, iie));
+    // Stage incoming GP arguments before repacking the independent C register
+    // banks into Mio's sequential machine-word calling convention.
+    emit(code, arm64.sub_imm_x(31, 31, 64, iie));
+    kaku at = 0;
+    aida (at < len(signature.parameters)) { emit(code, arm64.str_x(at, 31, at * 8)); at = at + 1; }
+    kaku gp = 0; kaku fp = 0;
+    at = 0;
+    aida (at < len(signature.parameters)) {
+        kaku kind = signature.parameters[at];
+        moshi (cabi.darwin_floating(kind)) {
+            kaku fp_kind = types.type_float64; moshi (kind == 105) { fp_kind = types.type_float32; }
+            fp_to(code, fp_kind, at, fp);
+            fp = fp + 1;
+        } sore {
+            emit(code, arm64.ldr_x(at, 31, gp * 8));
+            c_normalize(code, kind, at, hai);
+            gp = gp + 1;
+        }
+        at = at + 1;
+    }
+    arm64.assembler_bl(code, function_label(entry.id));
+    moshi (signature.result == 105) { fp_from(code, types.type_float32, 0, 0); }
+    moshi (signature.result == 106) { fp_from(code, types.type_float64, 0, 0); }
+    emit(code, arm64.add_imm_x(31, 31, 64, iie));
+    emit(code, arm64.ldp_post_x(29, 30, 31, 16));
+    emit(code, arm64.ret());
+}
+
+koukai waza compile_dylib(file: mochi.File, exports: []types.ScalarExport) -> DylibCode {
+    moshi (len(exports) == 0 || len(exports) > 63 || file.global_count != 0 || len(file.instructions) != 0 ||
+        instruction_error(file) != mu) { kaesu scalar_library_failure("E_DYLIB expected an export list and a module without top-level execution"); }
+    kaku at = 0;
+    aida (at < len(exports)) {
+        kaku item = exports[at];
+        moshi (item.id < 0 || item.id >= len(file.functions) || !item.signature.valid ||
+            len(item.signature.parameters) > 8 || item.signature.result == 118 ||
+            file.functions[item.id].parameter_count != len(item.signature.parameters) ||
+            !file.functions[item.id].returns_value) { kaesu scalar_library_failure("E_DYLIB invalid export signature"); }
+        at = at + 1;
+    }
+    kaku analysis = types.analyze_export_types(file, exports);
+    moshi (analysis.error_detail != 0) { kaesu scalar_library_failure("E_DYLIB failed to analyze export bodies"); }
+    kaku reachable = types.reachable_from(file, exports);
+    moshi (!bounded_library_calls(file, reachable)) { kaesu scalar_library_failure("E_DYLIB recursive or too-deep export call chain"); }
+    kaku code = arm64.assembler();
+    kaku patches: []macho.AddressPatch = [];
+    kaku ids = string_ids(file.constants);
+    at = 0;
+    aida (at < len(file.functions)) {
+        moshi (reachable[at]) {
+            kaku f = file.functions[at];
+            moshi (!scalar_library_body(analysis, f)) {
+                kaesu scalar_library_failure(string.concat("E_DYLIB unsupported scalar body in ", f.name));
+            }
+            arm64.assembler_label(code, function_label(at));
+            moshi (emit_function_prologue(code, f) != mu ||
+                emit_block(code, patches, file, analysis, ids, f.instructions, string.concat(function_label(at), "_"), at, hai) != mu) {
+                kaesu scalar_library_failure(string.concat("E_DYLIB cannot lower ", f.name));
+            }
+            emit_function_epilogue(code, at);
+        }
+        at = at + 1;
+    }
+    kaku symbols: []macho.DylibExport = [
+        macho.DylibExport { name: "_mio_module_abi_version", word: len(code.words) },
+        macho.DylibExport { name: "_mio_ffi_v1_g_mio_module_abi_version", word: len(code.words) }
+    ];
+    emit(code, arm64.movz_x(0, 1, 0));
+    emit(code, arm64.ret());
+    at = 0;
+    aida (at < len(exports)) {
+        kaku item = exports[at];
+        array.push(symbols, macho.DylibExport { name: string.concat("_", item.signature.symbol), word: len(code.words) });
+        array.push(symbols, macho.DylibExport { name: string.concat("_", cabi.dylib_signature_marker(item.signature)), word: len(code.words) });
+        emit_export_thunk(code, item);
+        at = at + 1;
+    }
+    kaku assembled = arm64.assembler_assemble(code);
+    moshi (assembled.error != mu || len(patches) != 0) {
+        kaesu scalar_library_failure("E_DYLIB unresolved ARM64 fixup");
+    }
+    kaesu DylibCode { words: assembled.words, exports: symbols, error: "" };
+}

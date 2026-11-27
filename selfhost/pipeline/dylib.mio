@@ -1,0 +1,89 @@
+yobu "selfhost/codegen";
+yobu "selfhost/frontend";
+yobu "selfhost/typecheck";
+yobu "kiso/aot/cabi";
+yobu "kiso/aot/lower";
+yobu "kiso/aot/lower/types";
+yobu "kiso/aot/macho";
+yobu "kiso/aot/sign";
+yobu "kiso/array";
+yobu "kiso/encoding/mochi";
+yobu "kiso/path";
+yobu "kiso/string";
+
+waza dylib_build_error(message: string) -> NativeBuildResult { kaesu NativeBuildResult { bytes: [], error: message }; }
+
+waza dylib_type(name: string) -> string {
+    moshi (name == "int64" || name == "int32" || name == "uint32" ||
+        name == "float32" || name == "float64" || name == "bool") { kaesu cabi.type_code(name); }
+    kaesu "";
+}
+
+waza export_prototype(checked: typecheck.TypeCheckResult, source_name: string, c_name: string) -> string {
+    kaku index = 0;
+    aida (index < len(checked.signatures)) {
+        kaku fn = checked.signatures[index];
+        moshi (fn.name == source_name && fn.package_path == checked.package_path) {
+            moshi (len(fn.type_parameters) != 0 || len(fn.parameters) > 8) { kaesu ""; }
+            kaku result = dylib_type(checked.types[fn.result].name);
+            moshi (result == "") { kaesu ""; }
+            kaku prototype = string.concat(cabi.prefix, string.concat(c_name, string.concat(":", result)));
+            kaku at = 0;
+            aida (at < len(fn.parameters)) {
+                kaku parameter = dylib_type(checked.types[fn.parameters[at]].name);
+                moshi (parameter == "") { kaesu ""; }
+                prototype = string.concat(prototype, parameter);
+                at = at + 1;
+            }
+            kaesu prototype;
+        }
+        index = index + 1;
+    }
+    kaesu "";
+}
+
+koukai waza build_signed_dylib(root: string, entry: string, bunko_root: string, output: string,
+    source_names: []string, c_names: []string) -> NativeBuildResult {
+    kaku basename = path.base(output);
+    moshi (!string.has_suffix(basename, ".dylib") || len(source_names) == 0 || len(source_names) != len(c_names)) {
+        kaesu dylib_build_error("E_DYLIB expected a .dylib output and at least one --export source=symbol");
+    }
+    kaku analyzed = frontend.analyze_source(root, entry, bunko_root, [], iie);
+    moshi (analyzed.error != "") { kaesu dylib_build_error(analyzed.error); }
+    kaku package_index = len(analyzed.resolved) - 1;
+    moshi (package_index < 0) { kaesu dylib_build_error("E_DYLIB missing module"); }
+    kaku package_path = analyzed.resolved[package_index].package_path;
+    kaku checked = analyzed.checked[package_index];
+    kaku compiled = codegen.compile_native_modules(analyzed.resolved, analyzed.checked, [], hai);
+    moshi (!compiled.success) { kaesu dylib_build_error("E_DYLIB cannot generate module Mochi"); }
+    kaku decoded = mochi.decode(compiled.bytes);
+    kaku file = decoded.value;
+    moshi (file == mu) { kaesu dylib_build_error("E_DYLIB invalid module Mochi"); }
+    kaku exports: []types.ScalarExport = [];
+    kaku at = 0;
+    aida (at < len(source_names)) {
+        kaku name = c_names[at];
+        moshi (!cabi.valid_symbol(name) || !string.has_prefix(name, "mio_") || string.has_prefix(name, "mio_ffi_v1_") || name == "mio_module_abi_version") {
+            kaesu dylib_build_error(string.concat("E_DYLIB invalid C export name ", name));
+        }
+        kaku qualified = string.concat(package_path, string.concat("::", source_names[at]));
+        kaku id = 0;
+        aida (id < len(file.functions) && file.functions[id].name != qualified) { id = id + 1; }
+        kaku prototype = export_prototype(checked, source_names[at], name);
+        moshi (id == len(file.functions) || prototype == "") {
+            kaesu dylib_build_error(string.concat("E_DYLIB unsupported or unknown export ", source_names[at]));
+        }
+        kaku fn = file.functions[id];
+        array.push(exports, types.ScalarExport { id: id, signature: cabi.signature(prototype, fn.parameter_count, fn.returns_value) });
+        at = at + 1;
+    }
+    kaku lowered = lower.compile_dylib(file, exports);
+    moshi (lowered.error != "") { kaesu dylib_build_error(lowered.error); }
+    kaku image = macho.dylib(macho.DylibSpec {
+        image: macho.ImageSpec { words: lowered.words, constants: [], globals: 0, patches: [] },
+        install_name: string.concat("@rpath/", basename), exports: lowered.exports });
+    moshi (image.error != mu) { kaesu dylib_build_error("E_DYLIB cannot encode Mach-O library"); }
+    kaku signed = sign.adhoc_dylib(image.bytes);
+    moshi (signed.error != "") { kaesu dylib_build_error(string.concat("E_SIGN ", signed.error)); }
+    kaesu NativeBuildResult { bytes: signed.bytes, error: "" };
+}
