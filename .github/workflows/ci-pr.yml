@@ -39,7 +39,10 @@ jobs:
           cache: false
       - id: plan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # A validation push or manual run has no PR diff. An empty comparison selects complete Quick coverage.
+          BASE_SHA: >-
+            ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha ||
+            ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha) }}
           HEAD_SHA: ${{ github.sha }}
           # Native Verification stays deferred (NOT_RUN) unless the repository variable is exactly "enabled".
           MIO_NATIVE_VERIFICATION: ${{ vars.MIO_NATIVE_VERIFICATION }}
