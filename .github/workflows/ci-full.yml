@@ -1,5 +1,9 @@
 name: Mio CI V2 / Full
 on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+    branches: [Mio-2.2.0]
   push:
     branches: [Mio-2.1]
   workflow_dispatch:
@@ -26,10 +30,17 @@ jobs:
     steps:
       - name: Restrict Full native execution to trusted release branches
         env:
-          SOURCE_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.event.merge_group.base_ref || (github.base_ref && format('refs/heads/{0}', github.base_ref)) || github.ref }}
         run: |
-          case "$SOURCE_REF" in
-            refs/heads/Mio-2.1|refs/heads/Mio-2.2.0) ;;
+          case "$EVENT_NAME:$SOURCE_REF" in
+            pull_request:refs/heads/Mio-2.2.0|merge_group:refs/heads/Mio-2.2.0) ;;
+            workflow_dispatch:refs/heads/integration/mio-2.2.0-pr-batch) ;;
+            pull_request:*|merge_group:*)
+              echo 'NOT_RUN: Full group validation requires Mio-2.2.0'
+              exit 2
+              ;;
+            *:refs/heads/Mio-2.1|*:refs/heads/Mio-2.2.0) ;;
             *)
               echo 'NOT_RUN: Full native validation requires Mio-2.1 or Mio-2.2.0'
               exit 2
