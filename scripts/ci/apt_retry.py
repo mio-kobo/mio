@@ -5,6 +5,8 @@ Security and repository-verification failures (invalid signatures, NO_PUBKEY,
 EXPKEYSIG, missing/invalid Release metadata, authentication errors, checksum
 mismatches) and unrelated package errors are never retried and never bypassed.
 """
+from __future__ import annotations
+
 import argparse
 import re
 import subprocess
