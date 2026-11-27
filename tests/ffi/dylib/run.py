@@ -287,7 +287,8 @@ def main():
         hardened = artifacts / "hardened-host"
         run("hardened-build", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
                                 "-Wall", "-Wextra", "-Werror", HERE / "hardened.c", "-o", hardened])
-        run("hardened-sign", ["codesign", "--force", "--sign", "-", "--options", "runtime", hardened])
+        # Require library validation explicitly on the ad-hoc signed host.
+        run("hardened-sign", ["codesign", "--force", "--sign", "-", "--options", "runtime,library", hardened])
         run("hardened-verify", ["codesign", "--verify", "--strict", "--verbose=2", hardened])
         run("hardened-load", [hardened, libraries[0]], empty_path=True, contains="Darwin library validation: ok")
 
