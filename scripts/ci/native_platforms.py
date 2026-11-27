@@ -910,10 +910,97 @@ def darwin_thread_bench(report, cli, work):
 BASELINE_SHA = "ebff537c86f0b669794000ddcabd45e3cab92b1f"
 
 
+def resolve_git_root(start=ROOT):
+    """Locate the git repository root even when ROOT is a disposable non-git checkout."""
+    for candidate in (Path(start), Path.cwd()):
+        if not candidate.exists():
+            continue
+        proc = subprocess.run(["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return Path(proc.stdout.strip()).resolve()
+    return None
+
+
+def prepare_darwin_baseline(report, cli, work, baseline_sha=BASELINE_SHA, repo_root=None):
+    """Materialize, verify, and build the immutable historical baseline CLI.
+
+    Returns dict(ok=bool, status=str, cli=Path|None, reason=str, baseline_sha=str,
+                 archive_sha256=str, cli_sha256=str).
+    Never silently falls back to candidate-only benchmarking.
+    """
+    import tarfile
+    result = dict(ok=False, status="BASELINE_NOT_AVAILABLE", cli=None, reason="",
+                  baseline_sha=baseline_sha, archive_sha256="", cli_sha256="")
+    if not cli or not Path(cli).is_file():
+        result["reason"] = f"missing compiler executable: {cli}"
+        return result
+    root = Path(repo_root).resolve() if repo_root else resolve_git_root(ROOT)
+    if root is None or not (root / ".git").exists():
+        result["reason"] = "cannot resolve git repository root for baseline archive"
+        return result
+
+    base_dir = Path(work) / "baseline-src"
+    archive_path = Path(work) / "baseline-src.tar"
+    base_cli = Path(work) / "mio-baseline"
+    shutil.rmtree(base_dir, ignore_errors=True)
+    archive_path.unlink(missing_ok=True)
+    base_cli.unlink(missing_ok=True)
+    base_dir.mkdir(parents=True)
+
+    code, out, err, _ = run(report, "darwin-thread-phases-baseline-fetch",
+                            ["git", "-C", str(root), "fetch", "--depth=1", "origin", baseline_sha],
+                            cwd=root, timeout=300)
+    if code != 0:
+        result["reason"] = f"baseline fetch failed (exit {code}): {brief(err or out)}"
+        return result
+
+    code, rev_out, rev_err, _ = run(report, "darwin-thread-phases-baseline-rev",
+                                    ["git", "-C", str(root), "rev-parse", "--verify", f"{baseline_sha}^{{commit}}"],
+                                    cwd=root, timeout=60)
+    resolved_sha = rev_out.strip()
+    if code != 0 or resolved_sha != baseline_sha:
+        result["reason"] = f"baseline SHA mismatch: expected {baseline_sha}, got {resolved_sha or brief(rev_err)}"
+        return result
+
+    code, out, err, _ = run(report, "darwin-thread-phases-baseline-archive",
+                            ["git", "-C", str(root), "archive", "--format=tar", "--output", str(archive_path), baseline_sha],
+                            cwd=root, timeout=300)
+    if code != 0 or not archive_path.is_file():
+        result["reason"] = f"baseline git archive failed (exit {code}): {brief(err or out)}"
+        return result
+
+    result["archive_sha256"] = sha256(archive_path)
+    try:
+        with tarfile.open(archive_path, "r:") as tf:
+            tf.extractall(base_dir)
+    except (OSError, tarfile.TarError) as error:
+        result["reason"] = f"corrupt baseline source archive: {error}"
+        return result
+
+    required_paths = (base_dir / "bunko" / "kiso", base_dir / "selfhost" / "cli" / "main.mio")
+    missing = [str(p.relative_to(base_dir)) for p in required_paths if not p.exists()]
+    if missing:
+        result["reason"] = f"baseline tree missing required sources: {', '.join(missing)}"
+        return result
+
+    ok, reason, _ = cli_build(report, "darwin-thread-phases-baseline-build", cli, "selfhost/cli",
+                              "darwin-arm64", base_cli, extra=("--bunko-root", str(base_dir / "bunko")), cwd=base_dir)
+    if not ok or not base_cli.is_file():
+        result["reason"] = f"baseline compilation failed: {reason}"
+        return result
+
+    result["ok"] = True
+    result["status"] = "PASS"
+    result["cli"] = base_cli
+    result["cli_sha256"] = sha256(base_cli)
+    return result
+
+
 def darwin_thread_phases(report, cli, work):
     """Evidence only (non-required): every benchmark phase of benchmarks/threads/efficiency.mio built and run as its own process with its own budget
     (scripts/ci/thread_bench.py), plus the 10 s mpmc_probe that reports per-worker counts. Unlike darwin-thread-bench, an unfinished mpmc cannot hide
-    start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded)."""
+    start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded) and the baseline materialized."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
     # Weak scaling alloc_1/2/4 (2000000 iterations per thread), strong scaling alloc_s1/alloc_s4 (4000000 in total; alloc_2 is the 2-thread point),
@@ -923,19 +1010,20 @@ def darwin_thread_phases(report, cli, work):
     phases_dir = report.logs / "thread-phases"
     argv = [sys.executable, ROOT / "scripts/ci/thread_bench.py", "--mio", str(cli), "--target", "darwin-arm64", "--repeat", "4", "--budget", "120",
             "--sample-after", "25", "--symbols", "--output", str(phases_dir)]
-    # Baseline compiler: the previous head (BASELINE_SHA) built natively by the compiler under test,
-    # so baseline and candidate images run on the same runner in the same job. If it cannot be built the phases run for the candidate only.
-    base_dir = Path(work) / "baseline-src"
-    base_cli = Path(work) / "mio-baseline"
-    shutil.rmtree(base_dir, ignore_errors=True)
-    base_dir.mkdir(parents=True)
-    code, out, err, _ = run(report, "darwin-thread-phases-baseline-fetch", ["git", "fetch", "--depth=1", "origin", BASELINE_SHA], timeout=300)
-    if code == 0:
-        code, out, err, _ = run(report, "darwin-thread-phases-baseline-archive", ["sh", "-c", "git archive %s | tar -x -C %s" % (BASELINE_SHA, base_dir)], timeout=300)
-    if code == 0:
-        ok, reason, _ = cli_build(report, "darwin-thread-phases-baseline-build", cli, "selfhost/cli", "darwin-arm64", base_cli, extra=("--bunko-root", str(base_dir / "bunko")), cwd=base_dir)
-        if ok:
-            argv += ["--baseline-mio", str(base_cli)]
+    baseline = prepare_darwin_baseline(report, cli, work, BASELINE_SHA)
+    report.check("darwin-thread-phases-baseline", "PASS" if baseline["ok"] else "FAIL", "native",
+                 baseline["reason"] if not baseline["ok"] else f"sha={baseline['baseline_sha'][:12]} archive={baseline['archive_sha256'][:12]}",
+                 required=False, baseline_status=baseline["status"], baseline_sha=baseline["baseline_sha"],
+                 archive_sha256=baseline["archive_sha256"], baseline_cli_sha256=baseline["cli_sha256"])
+    if not baseline["ok"]:
+        report.check("darwin-thread-phases", "FAIL", "native",
+                     f"{baseline['status']}: {baseline['reason']}", required=False,
+                     baseline_status=baseline["status"], incomplete_evidence=True)
+        darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", None)
+        darwin_pthread_burst(report, Path(work) / "pthread-burst")
+        return
+    base_cli = baseline["cli"]
+    argv += ["--baseline-mio", str(base_cli)]
     for phase in phases:
         argv += ["--phase", phase]
     code, out, err, seconds = run(report, "darwin-thread-phases-run", argv, timeout=6600)
@@ -952,7 +1040,7 @@ def darwin_thread_phases(report, cli, work):
     except (OSError, ValueError, KeyError) as problem:
         lines.append("no report: %s" % problem)
     report.check("darwin-thread-phases", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
-    darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", base_cli if base_cli.is_file() else None)
+    darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", base_cli)
     darwin_pthread_burst(report, Path(work) / "pthread-burst")
 
 

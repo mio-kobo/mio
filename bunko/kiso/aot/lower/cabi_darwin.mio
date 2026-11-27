@@ -9,19 +9,6 @@ koukai waza c_call_label(id: int64) -> string {
     kaesu string.concat("cabi_call_", convert.format_int(id));
 }
 
-waza c_argument_size(kind: int64) -> int64 {
-    moshi (kind == 97 || kind == 98 || kind == 108) { kaesu 1; }
-    moshi (kind == 99 || kind == 100) { kaesu 2; }
-    moshi (kind == 101 || kind == 102 || kind == 105) { kaesu 4; }
-    kaesu 8;
-}
-
-waza c_floating(kind: int64) -> bool { kaesu kind == 105 || kind == 106; }
-
-waza c_align(value: int64, boundary: int64) -> int64 {
-    kaesu ((value + boundary - 1) / boundary) * boundary;
-}
-
 // Darwin 的窄整数寄存器参数由调用者扩展到 Wn。回到 Mio 时，
 // 有符号返回值扩展到整个 Xn，浮点返回值原样搬回整数寄存器。
 waza c_normalize(code: arm64.Assembler, kind: int64, reg: int64, returned: bool) -> unit {
@@ -29,10 +16,10 @@ waza c_normalize(code: arm64.Assembler, kind: int64, reg: int64, returned: bool)
     moshi (kind == 97) { word = 318767104 + 7 * 1024; }
     moshi (kind == 99) { word = 318767104 + 15 * 1024; }
     moshi (returned && (kind == 97 || kind == 99 || kind == 101)) {
-        word = 2470445056 + (c_argument_size(kind) * 8 - 1) * 1024;
+        word = 2470445056 + (cabi.darwin_scalar_size(kind) * 8 - 1) * 1024;
     }
     moshi (kind == 98 || kind == 100 || (returned && kind == 102)) {
-        word = 1392508928 + (c_argument_size(kind) * 8 - 1) * 1024;
+        word = 1392508928 + (cabi.darwin_scalar_size(kind) * 8 - 1) * 1024;
     }
     moshi (kind == 108) { word = 1392508928; }
     moshi (word != 0) { emit(code, arm64.Instruction { word: uint32(word + reg * 33), error: mu }); }
@@ -45,42 +32,29 @@ waza c_store_stack(code: arm64.Assembler, size: int64, offset: int64) -> unit {
     moshi (size == 8) { emit(code, arm64.str_x(9, 31, offset)); }
 }
 
-waza c_stack_bytes(signature: cabi.Signature) -> int64 {
-    kaku gp = 0; kaku fp = 0; kaku bytes = 0; kaku at = 0;
-    aida (at < len(signature.parameters)) {
-        kaku kind = signature.parameters[at]; kaku size = c_argument_size(kind);
-        moshi ((c_floating(kind) && fp >= 8) || (!c_floating(kind) && gp >= 8)) { bytes = c_align(bytes, size) + size; }
-        moshi (c_floating(kind)) { fp = fp + 1; } sore { gp = gp + 1; }
-        at = at + 1;
-    }
-    kaesu c_align(bytes, 16);
-}
-
 waza emit_c_body(code: arm64.Assembler, patches: []macho.AddressPatch, signature: cabi.Signature,
     id: int64, data_base: int64) -> unit {
     // Mio 的入口已经把参数保存在 x21 的机器字槽中。两组 C 参数寄存器
     // 独立耗尽；溢出参数按原型顺序、自然对齐紧凑放在 Darwin 栈上。
     kaku workers = worker_roots_enabled(code);
     moshi (workers) { wr_poll(code, patches, data_base, "gc_block_enter"); }
-    kaku frame = c_stack_bytes(signature);
+    kaku layout = cabi.darwin_layout(signature.parameters);
+    kaku frame = layout.stack_bytes;
     moshi (frame > 0) { emit(code, arm64.sub_imm_x(31, 31, frame, iie)); }
-    kaku gp = 0; kaku fp = 0; kaku offset = 0; kaku at = 0;
+    kaku at = 0;
     aida (at < len(signature.parameters)) {
-        kaku kind = signature.parameters[at]; kaku size = c_argument_size(kind);
-        moshi (c_floating(kind) && fp < 8) {
+        kaku kind = signature.parameters[at];
+        kaku argument = layout.arguments[at];
+        moshi (argument.bank == cabi.darwin_fp) {
             emit(code, arm64.ldr_x(9, 21, at * 8));
             kaku bits = 505872384; moshi (kind == 106) { bits = 2657550336; }
-            emit(code, arm64.Instruction { word: uint32(bits + 9 * 32 + fp), error: mu });
-            fp = fp + 1;
-        } sore { moshi (!c_floating(kind) && gp < 8) {
-            emit(code, arm64.ldr_x(gp, 21, at * 8));
-            c_normalize(code, kind, gp, iie);
-            gp = gp + 1;
+            emit(code, arm64.Instruction { word: uint32(bits + 9 * 32 + argument.offset), error: mu });
+        } sore { moshi (argument.bank == cabi.darwin_gp) {
+            emit(code, arm64.ldr_x(argument.offset, 21, at * 8));
+            c_normalize(code, kind, argument.offset, iie);
         } sore {
-            offset = c_align(offset, size);
             emit(code, arm64.ldr_x(9, 21, at * 8));
-            c_store_stack(code, size, offset);
-            offset = offset + size;
+            c_store_stack(code, argument.size, argument.offset);
         } }
         at = at + 1;
     }
