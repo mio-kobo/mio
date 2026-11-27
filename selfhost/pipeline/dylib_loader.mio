@@ -13,7 +13,7 @@ yobu "kiso/string";
 waza loader_system_symbols() -> []string {
     kaesu ["$cabi::dlopen:kke", "$cabi::dlsym:kkk", "$cabi::dlclose:ek",
         "$cabi::dlerror:k", "$cabi::malloc:kh", "$cabi::free:vk", "$cabi::dladdr:ekk",
-        "$cabi::getsectiondata:kkkkk"];
+        "$cabi::getsectiondata:kkkkk", "$cabi::calloc:khh"];
 }
 
 waza loader_intrinsics() -> []string {
@@ -21,7 +21,12 @@ waza loader_intrinsics() -> []string {
         "$cabi::mio_ffi_call_g:gk", "$cabi::mio_ffi_call_gg:gkg",
         "$cabi::mio_ffi_call_ggg:gkgg", "$cabi::mio_ffi_call_jj:jkj",
         "$cabi::mio_ffi_call_jgg:jkgg", "$cabi::mio_ffi_call_lg:lkg",
-        "$cabi::mio_ffi_load_pointer:kkh", "$cabi::mio_ffi_pointer_offset:gkk", "$cabi::mio_ffi_load_word:gk"];
+        "$cabi::mio_ffi_load_pointer:kkh", "$cabi::mio_ffi_pointer_offset:gkk", "$cabi::mio_ffi_load_word:gk",
+        "$cabi::mio_ffi_darwin_call:vkkh",
+        "$cabi::mio_ffi_darwin_store_u16:vkhd", "$cabi::mio_ffi_darwin_store_u32:vkhf",
+        "$cabi::mio_ffi_darwin_store_u64:vkhh", "$cabi::mio_ffi_darwin_store_pointer:vkhk",
+        "$cabi::mio_ffi_darwin_store_f32:vkhi", "$cabi::mio_ffi_darwin_store_f64:vkhj",
+        "$cabi::mio_ffi_darwin_load_f32:ikh", "$cabi::mio_ffi_darwin_load_f64:jkh"];
 }
 
 waza index_of_prototype(names: []string, value: string) -> int64 {
@@ -43,6 +48,48 @@ waza has_loader_calls(file: mochi.File) -> bool {
     kaesu iie;
 }
 
+// x0 is the checked target, x1 the native frame, x2 the aligned stack size.
+waza dynamic_call_words() -> arm64.AssembleResult {
+    kaku code = arm64.assembler();
+    arm64.assembler_emit(code, arm64.stp_pre_x(29, 30, 31, -16));
+    arm64.assembler_emit(code, arm64.add_imm_x(29, 31, 0, iie));
+    arm64.assembler_emit(code, arm64.stp_pre_x(19, 20, 31, -16));
+    arm64.assembler_emit(code, arm64.add_imm_x(19, 1, 0, iie));
+    arm64.assembler_emit(code, arm64.add_imm_x(20, 2, 0, iie));
+    arm64.assembler_emit(code, arm64.add_imm_x(16, 0, 0, iie));
+    arm64.assembler_cbz_x(code, 2, "registers");
+    arm64.assembler_emit(code, arm64.add_imm_x(9, 31, 0, iie));
+    arm64.assembler_emit(code, arm64.sub_x(9, 9, 2));
+    arm64.assembler_emit(code, arm64.add_imm_x(31, 9, 0, iie));
+    arm64.assembler_emit(code, arm64.add_imm_x(10, 1, 128, iie));
+    arm64.assembler_label(code, "copy_stack");
+    arm64.assembler_emit(code, arm64.ldp_post_x(11, 12, 10, 16));
+    arm64.assembler_emit(code, arm64.stp_x(11, 12, 9, 0));
+    arm64.assembler_emit(code, arm64.add_imm_x(9, 9, 16, iie));
+    arm64.assembler_emit(code, arm64.sub_imm_x(2, 2, 16, iie));
+    arm64.assembler_cbnz_x(code, 2, "copy_stack");
+    arm64.assembler_label(code, "registers");
+    kaku reg = 0;
+    aida (reg < 8) {
+        arm64.assembler_emit(code, arm64.ldr_x(reg, 19, reg * 8));
+        // LDR Dn, [x19, #64 + n * 8], preserving the low bits for float.
+        arm64.assembler_emit(code, arm64.Instruction {
+            word: uint32(4248829952 + (8 + reg) * 1024 + 19 * 32 + reg), error: mu });
+        reg = reg + 1;
+    }
+    arm64.assembler_emit(code, arm64.blr_x(16));
+    arm64.assembler_emit(code, arm64.str_x(0, 19, 0));
+    // STR D0, [x19, #64].
+    arm64.assembler_emit(code, arm64.Instruction { word: uint32(4244635648 + 8 * 1024 + 19 * 32), error: mu });
+    arm64.assembler_emit(code, arm64.add_imm_x(9, 31, 0, iie));
+    arm64.assembler_emit(code, arm64.add_x(9, 9, 20));
+    arm64.assembler_emit(code, arm64.add_imm_x(31, 9, 0, iie));
+    arm64.assembler_emit(code, arm64.ldp_post_x(19, 20, 31, 16));
+    arm64.assembler_emit(code, arm64.ldp_post_x(29, 30, 31, 16));
+    arm64.assembler_emit(code, arm64.ret());
+    kaesu arm64.assembler_assemble(code);
+}
+
 waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
     moshi (kind == 0 || kind == 1) {
         array.push(words, arm64.add_x(9, 0, 1).word);
@@ -60,6 +107,19 @@ waza append_loader_intrinsic(words: []uint32, kind: int64) -> unit {
     moshi (kind == 9 || kind == 10) {
         moshi (kind == 9) { array.push(words, arm64.sub_x(0, 0, 1).word); }
         sore { array.push(words, arm64.ldr_x(0, 0, 0).word); }
+        array.push(words, arm64.ret().word);
+        kaesu;
+    }
+    moshi (kind >= 12) {
+        array.push(words, arm64.add_x(9, 0, 1).word);
+        moshi (kind == 12) { array.push(words, arm64.strh_w(2, 9, 0).word); }
+        moshi (kind == 13) { array.push(words, arm64.str_w(2, 9, 0).word); }
+        moshi (kind == 14 || kind == 15) { array.push(words, arm64.str_x(2, 9, 0).word); }
+        // STR S0/D0 or LDR S0/D0, [x9].
+        moshi (kind == 16) { array.push(words, uint32(3170894112)); }
+        moshi (kind == 17) { array.push(words, uint32(4244635936)); }
+        moshi (kind == 18) { array.push(words, uint32(3175088416)); }
+        moshi (kind == 19) { array.push(words, uint32(4248830240)); }
         array.push(words, arm64.ret().word);
         kaesu;
     }
@@ -91,10 +151,14 @@ waza build_loader_image(file: mochi.File, lowered: lower.LowerResult, workers: b
     at = 0;
     aida (at < len(intrinsics)) {
         array.push(entries, len(words));
-        append_loader_intrinsic(words, at);
+        moshi (at == 11) {
+            kaku bridge = dynamic_call_words();
+            moshi (bridge.error != mu) { kaesu dylib_build_error("E_FFI cannot encode dynamic call bridge"); }
+            array.append_all(words, bridge.words);
+        } sore { append_loader_intrinsic(words, at); }
         at = at + 1;
     }
-    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata"];
+    kaku symbols: []string = ["_exit", "_dlopen", "_dlsym", "_dlclose", "_dlerror", "_malloc", "_free", "_dladdr", "_getsectiondata", "_calloc"];
     kaku stubs: []int64 = [];
     at = 0;
     aida (at < len(symbols)) {

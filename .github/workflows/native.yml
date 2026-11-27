@@ -28,6 +28,10 @@ on:
     branches: ['runtime-abi/**']
 permissions:
   contents: read
+concurrency:
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('native-pr-{0}', github.event.pull_request.number) || format('native-{0}-{1}-{2}', github.event_name, github.ref, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   linux:
     name: Native / linux-amd64
