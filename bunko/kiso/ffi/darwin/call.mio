@@ -1,0 +1,218 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/array";
+yobu "kiso/string";
+
+waza allocate_zeroed(count: uint64, size: uint64) -> cptr = c "calloc";
+waza call_frame(target: cptr, frame: cptr, stack_bytes: uint64) -> unit = c "mio_ffi_darwin_call";
+waza store_u16(base: cptr, offset: uint64, value: uint16) -> unit = c "mio_ffi_darwin_store_u16";
+waza store_u32(base: cptr, offset: uint64, value: uint32) -> unit = c "mio_ffi_darwin_store_u32";
+waza store_u64(base: cptr, offset: uint64, value: uint64) -> unit = c "mio_ffi_darwin_store_u64";
+waza store_pointer(base: cptr, offset: uint64, value: cptr) -> unit = c "mio_ffi_darwin_store_pointer";
+waza store_f32(base: cptr, offset: uint64, value: float32) -> unit = c "mio_ffi_darwin_store_f32";
+waza store_f64(base: cptr, offset: uint64, value: float64) -> unit = c "mio_ffi_darwin_store_f64";
+waza load_f32(base: cptr, offset: uint64) -> float32 = c "mio_ffi_darwin_load_f32";
+waza load_f64(base: cptr, offset: uint64) -> float64 = c "mio_ffi_darwin_load_f64";
+
+koukai sentaku Scalar {
+    Void;
+    I8;
+    U8;
+    I16;
+    U16;
+    I32;
+    U32;
+    I64;
+    U64;
+    F32;
+    F64;
+    Ptr;
+    Bool;
+}
+
+koukai sentaku Value {
+    Void;
+    I8(int8);
+    U8(uint8);
+    I16(int16);
+    U16(uint16);
+    I32(int32);
+    U32(uint32);
+    I64(int64);
+    U64(uint64);
+    F32(float32);
+    F64(float64);
+    Ptr(cptr);
+    Bool(bool);
+}
+
+koukai kata CPrototype { result: Scalar; parameters: []Scalar; }
+koukai kata CallResult { value: Value?; error: string; }
+
+teisu gp_bytes = 64;
+teisu register_bytes = 128;
+
+waza scalar_code(kind: Scalar) -> int64 {
+    awase (kind) {
+        baai Void { kaesu 118; }
+        baai I8 { kaesu 97; }
+        baai U8 { kaesu 98; }
+        baai I16 { kaesu 99; }
+        baai U16 { kaesu 100; }
+        baai I32 { kaesu 101; }
+        baai U32 { kaesu 102; }
+        baai I64 { kaesu 103; }
+        baai U64 { kaesu 104; }
+        baai F32 { kaesu 105; }
+        baai F64 { kaesu 106; }
+        baai Ptr { kaesu 107; }
+        baai Bool { kaesu 108; }
+    }
+    kaesu 0;
+}
+
+waza value_code(value: Value) -> int64 {
+    awase (value) {
+        baai Void { kaesu 118; }
+        baai I8(x) { kaesu 97; }
+        baai U8(x) { kaesu 98; }
+        baai I16(x) { kaesu 99; }
+        baai U16(x) { kaesu 100; }
+        baai I32(x) { kaesu 101; }
+        baai U32(x) { kaesu 102; }
+        baai I64(x) { kaesu 103; }
+        baai U64(x) { kaesu 104; }
+        baai F32(x) { kaesu 105; }
+        baai F64(x) { kaesu 106; }
+        baai Ptr(x) { kaesu 107; }
+        baai Bool(x) { kaesu 108; }
+    }
+    kaesu 0;
+}
+
+waza bind_prototype(library: Library, name: string, prototype: CPrototype, mio: bool) -> SymbolResult {
+    // Match the compiler's fixed-prototype arity bound.
+    moshi (len(prototype.parameters) > 256) {
+        kaesu SymbolResult { function: mu, error: "too many C parameters" };
+    }
+    kaku codes: []uint8 = [uint8(scalar_code(prototype.result))];
+    kaku at = 0;
+    aida (at < len(prototype.parameters)) {
+        kaku code = scalar_code(prototype.parameters[at]);
+        moshi (code == 118) {
+            kaesu SymbolResult { function: mu, error: "void is only valid as a result" };
+        }
+        array.push(codes, uint8(code));
+        at = at + 1;
+    }
+    kaku signature = string.from_utf8(codes);
+    moshi (signature == mu) { kaesu SymbolResult { function: mu, error: "invalid C prototype" }; }
+    kaesu bind_function(library, name, signature, mio);
+}
+
+// The caller declares the exact C ABI. dyld provides a symbol address.
+koukai waza bind_c(library: Library, name: string, prototype: CPrototype) -> SymbolResult {
+    kaesu bind_prototype(library, name, prototype, iie);
+}
+
+koukai waza bind_mio(library: Library, name: string, prototype: CPrototype) -> SymbolResult {
+    kaesu bind_prototype(library, name, prototype, hai);
+}
+
+// Mio's narrowing conversions check the range. Extract the C slot's low
+// bits before converting so signed stack arguments and narrow returns work.
+waza low_unsigned(bits: int64, range: int64) -> int64 {
+    kaku low = bits - (bits / range) * range;
+    moshi (low < 0) { kaesu low + range; }
+    kaesu low;
+}
+
+waza low_signed(bits: int64, range: int64) -> int64 {
+    kaku low = low_unsigned(bits, range);
+    moshi (low >= range / 2) { kaesu low - range; }
+    kaesu low;
+}
+
+waza pack_integer(frame: cptr, offset: uint64, width: int64, bits: uint64) -> unit {
+    moshi (width == 1) { store_byte(frame, offset, uint8(low_unsigned(int64(bits), 256))); }
+    moshi (width == 2) { store_u16(frame, offset, uint16(low_unsigned(int64(bits), 65536))); }
+    moshi (width == 4) { store_u32(frame, offset, uint32(low_unsigned(int64(bits), 4294967296))); }
+    moshi (width == 8) { store_u64(frame, offset, bits); }
+}
+
+waza pack_argument(frame: cptr, argument: cabi.DarwinArgument, value: Value) -> unit {
+    kaku offset = argument.offset * 8;
+    kaku width = 8;
+    moshi (argument.bank == cabi.darwin_fp) { offset = offset + gp_bytes; }
+    moshi (argument.bank == cabi.darwin_stack) {
+        offset = register_bytes + argument.offset;
+        width = argument.size;
+    }
+    // Narrow signed GP arguments are sign extended, unsigned arguments zero
+    // extended. Stack arguments store only their natural width.
+    kaku at = uint64(offset);
+    awase (value) {
+        baai I8(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai U8(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai I16(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai U16(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai I32(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai U32(x) { pack_integer(frame, at, width, uint64(int64(x))); }
+        baai I64(x) { pack_integer(frame, at, width, uint64(x)); }
+        baai U64(x) { pack_integer(frame, at, width, x); }
+        baai F32(x) { store_f32(frame, at, x); }
+        baai F64(x) { store_f64(frame, at, x); }
+        baai Ptr(x) { store_pointer(frame, at, x); }
+        baai Bool(x) {
+            kaku bits = uint64(0);
+            moshi (x) { bits = uint64(1); }
+            pack_integer(frame, at, width, bits);
+        }
+        baai Void { }
+    }
+}
+
+waza unpack_result(frame: cptr, kind: int64) -> Value {
+    moshi (kind == 118) { kaesu Value.Void(); }
+    moshi (kind == 105) { kaesu Value.F32(load_f32(frame, uint64(gp_bytes))); }
+    moshi (kind == 106) { kaesu Value.F64(load_f64(frame, uint64(gp_bytes))); }
+    moshi (kind == 107) { kaesu Value.Ptr(load_pointer(frame, uint64(0))); }
+    kaku bits = load_word(frame);
+    moshi (kind == 97) { kaesu Value.I8(int8(low_signed(bits, 256))); }
+    moshi (kind == 98) { kaesu Value.U8(uint8(low_unsigned(bits, 256))); }
+    moshi (kind == 99) { kaesu Value.I16(int16(low_signed(bits, 65536))); }
+    moshi (kind == 100) { kaesu Value.U16(uint16(low_unsigned(bits, 65536))); }
+    moshi (kind == 101) { kaesu Value.I32(int32(low_signed(bits, 4294967296))); }
+    moshi (kind == 102) { kaesu Value.U32(uint32(low_unsigned(bits, 4294967296))); }
+    moshi (kind == 103) { kaesu Value.I64(bits); }
+    moshi (kind == 104) { kaesu Value.U64(uint64(bits)); }
+    kaesu Value.Bool(low_unsigned(bits, 256) != 0);
+}
+
+koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
+    kaku entry = function_entry(function);
+    moshi (entry == mu) { kaesu CallResult { value: mu, error: "invalid or released function" }; }
+    kaku codes = string.to_bytes(entry.signature);
+    moshi (len(arguments) != len(codes) - 1) {
+        kaesu CallResult { value: mu, error: "wrong C argument count" };
+    }
+    kaku at = 0;
+    aida (at < len(arguments)) {
+        moshi (value_code(arguments[at]) != int64(codes[at + 1])) {
+            kaesu CallResult { value: mu, error: "wrong C argument type" };
+        }
+        at = at + 1;
+    }
+    // The bridge sees only native storage and scalar values. The frame
+    // contains the two register banks, followed by the outgoing stack area.
+    kaku frame = allocate_zeroed(uint64(1), uint64(register_bytes + entry.layout.stack_bytes));
+    moshi (frame == cptr(0)) { kaesu CallResult { value: mu, error: "cannot allocate C call frame" }; }
+    at = 0;
+    aida (at < len(arguments)) {
+        pack_argument(frame, entry.layout.arguments[at], arguments[at]);
+        at = at + 1;
+    }
+    call_frame(entry.address, frame, uint64(entry.layout.stack_bytes));
+    kaku value = unpack_result(frame, int64(codes[0]));
+    free(frame);
+    kaesu CallResult { value: value, error: "" };
+}

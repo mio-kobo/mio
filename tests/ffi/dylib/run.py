@@ -72,12 +72,13 @@ def main():
 
     libraries = []
     for name, _, _ in MODULES:
-        for check in ("build", "file", "header", "dependencies", "symbols", "sign", "inspect"):
+        for check in ("build", "file", "header", "dependencies", "symbols", "sign", "load-commands", "dyld-exports", "inspect"):
             record(f"{name}-{check}", "NOT_RUN")
     for name in ("data-fixture", "loader-build", "loader-codesign", "loader-run", "loader-gc-build",
                  "loader-gc-run", "loader-verdict", "c-build", "c-run", "reject-missing-export",
                  "reject-runtime-body", "reject-cross-target", "reject-recursion", "reject-duplicate-symbol",
-                 "reject-missing-export-seatbelt"):
+                 "reject-missing-export-seatbelt", "foreign-fixture", "foreign-build", "foreign-run",
+                 "foreign-gc-build", "foreign-gc-run", "foreign-codesign"):
         record(name, "NOT_RUN")
 
     try:
@@ -94,7 +95,9 @@ def main():
             header = run(f"{name}-header", ["otool", "-hv", lib], contains="DYLIB")
             deps = run(f"{name}-dependencies", ["otool", "-L", lib], contains=f"@rpath/{lib.name}")
             symbols = run(f"{name}-symbols", ["nm", "-gU", lib])
-            run(f"{name}-sign", ["codesign", "--verify", "--strict", lib])
+            run(f"{name}-sign", ["codesign", "--verify", "--strict", "--verbose=2", lib])
+            commands = run(f"{name}-load-commands", ["otool", "-l", lib], contains="LC_CODE_SIGNATURE")
+            trie = run(f"{name}-dyld-exports", ["xcrun", "dyld_info", "-exports", lib])
             expected = {"_mio_module_abi_version", "_mio_ffi_v1_g_mio_module_abi_version"}
             for symbol, prototype in exports.values():
                 expected.update({f"_{symbol}", f"_mio_ffi_v1_{prototype}_{symbol}"})
@@ -103,6 +106,8 @@ def main():
             magic, cpu, _, kind = struct.unpack_from("<4I", raw)
             valid = (magic, cpu, kind) == (0xFEEDFACF, 0x100000C, 6) and actual == expected
             valid &= "/usr/lib/libSystem.B.dylib" in deps
+            valid &= all(command in commands for command in ("LC_DYLD_EXPORTS_TRIE", "LC_SYMTAB", "LC_ID_DYLIB"))
+            valid &= {line.split()[-1] for line in trie.splitlines() if line.strip().startswith("0x")} == expected
             record(f"{name}-inspect", "PASS" if valid else "FAIL")
             report["libraries"][name] = dict(
                 file=str(lib), sha256=hashlib.sha256(raw).hexdigest(),
@@ -128,6 +133,16 @@ def main():
         run("c-build", ["xcrun", "clang", "-arch", "arm64", "-Wall", "-Wextra", "-Werror", HERE / "oracle.c",
                         *libraries, "-Wl,-rpath,@loader_path", "-o", oracle])
         run("c-run", [oracle], empty_path=True)
+
+        foreign = artifacts / "libforeign.dylib"
+        run("foreign-fixture", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                               "-Wall", "-Wextra", "-Werror", "-O2", "-dynamiclib", HERE / "foreign.c", "-o", foreign])
+        for suffix, flags in (("", []), ("-gc", ["--gc-stress"])):
+            program = artifacts / f"foreign{suffix}"
+            run(f"foreign{suffix}-build", [mio, "build", HERE / "foreign.mio", *flags,
+                                           "--bunko-root", BUNKO, "-o", program], empty_path=True)
+            run(f"foreign{suffix}-run", [program, foreign, libraries[0]], empty_path=True, contains="Darwin C FFI: ok")
+        run("foreign-codesign", ["codesign", "--verify", "--strict", "--verbose=2", foreign, artifacts / "foreign"])
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]
