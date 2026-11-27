@@ -1,12 +1,17 @@
 name: Mio CI V2 / Quick
 on:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [integration/mio-2.2.0-pr-batch]
+  workflow_dispatch:
   pull_request:
     branches: ['Mio-[0-9]*']
 permissions:
   contents: read
 concurrency:
-  group: ci-quick-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('ci-quick-pr-{0}', github.event.pull_request.number) || format('ci-quick-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   infrastructure:
     name: CI infrastructure
@@ -34,7 +39,10 @@ jobs:
           cache: false
       - id: plan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # A validation push or manual run has no PR diff. An empty comparison selects complete Quick coverage.
+          BASE_SHA: >-
+            ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha ||
+            ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.sha) }}
           HEAD_SHA: ${{ github.sha }}
           # Native Verification stays deferred (NOT_RUN) unless the repository variable is exactly "enabled".
           MIO_NATIVE_VERIFICATION: ${{ vars.MIO_NATIVE_VERIFICATION }}

@@ -1,5 +1,9 @@
 name: Mio CI V2 / Full
 on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+    branches: [Mio-2.2.0]
   push:
     branches: [Mio-2.1]
   workflow_dispatch:
@@ -19,23 +23,43 @@ jobs:
     outputs:
       linux_modules: ${{ steps.plan.outputs.linux_modules }}
       macos_modules: ${{ steps.plan.outputs.macos_modules }}
+      source_sha: ${{ steps.provenance.outputs.source_sha }}
     env:
       # Native Verification stays deferred (NOT_RUN) unless the repository variable is exactly "enabled".
       MIO_NATIVE_VERIFICATION: ${{ vars.MIO_NATIVE_VERIFICATION }}
     steps:
-      - name: Restrict manual native execution to Mio-2.1
+      - name: Restrict Full native execution to trusted release branches
         env:
           EVENT_NAME: ${{ github.event_name }}
-          SOURCE_REF: ${{ github.ref }}
+          SOURCE_REF: >-
+            ${{ github.event.merge_group.base_ref ||
+            (github.event.pull_request.stack.base.ref && format('refs/heads/{0}', github.event.pull_request.stack.base.ref)) ||
+            (github.base_ref && format('refs/heads/{0}', github.base_ref)) || github.ref }}
         run: |
-          if [ "$EVENT_NAME" != schedule ] && [ "$SOURCE_REF" != refs/heads/Mio-2.1 ]; then
-            echo 'NOT_RUN: Full native validation requires Mio-2.1'
-            exit 2
-          fi
+          case "$EVENT_NAME:$SOURCE_REF" in
+            pull_request:refs/heads/Mio-2.2.0|merge_group:refs/heads/Mio-2.2.0) ;;
+            workflow_dispatch:refs/heads/integration/mio-2.2.0-pr-batch) ;;
+            pull_request:*|merge_group:*)
+              echo 'NOT_RUN: Full group validation requires Mio-2.2.0'
+              exit 2
+              ;;
+            *:refs/heads/Mio-2.1|*:refs/heads/Mio-2.2.0) ;;
+            *)
+              echo 'NOT_RUN: Full native validation requires Mio-2.1 or Mio-2.2.0'
+              exit 2
+              ;;
+          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - id: provenance
+        name: Record the triggering source revision
+        run: |
+          SOURCE_SHA=$(git rev-parse --verify HEAD)
+          test "$SOURCE_SHA" = "$GITHUB_SHA"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "requested_ref=$GITHUB_REF resolved_sha=$SOURCE_SHA workflow_ref=$GITHUB_WORKFLOW_REF run_id=$GITHUB_RUN_ID attempt_id=$GITHUB_RUN_ATTEMPT"
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
@@ -75,6 +99,7 @@ jobs:
     uses: ./.github/workflows/native.yml
     with:
       run_examples: true
+      source_sha: ${{ needs.policy.outputs.source_sha }}
   full:
     name: Full / ${{ matrix.target }}
     needs: policy
@@ -95,12 +120,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
+          ref: ${{ needs.policy.outputs.source_sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify immutable source provenance
+        env:
+          REQUESTED_SOURCE_SHA: ${{ needs.policy.outputs.source_sha }}
+        run: python scripts/ci/verify_source_provenance.py --require-sha
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -137,12 +166,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'schedule' && 'Mio-2.1' || github.ref }}
+          ref: ${{ needs.policy.outputs.source_sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
+      - name: Verify immutable source provenance
+        env:
+          REQUESTED_SOURCE_SHA: ${{ needs.policy.outputs.source_sha }}
+        run: python scripts/ci/verify_source_provenance.py --require-sha
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
