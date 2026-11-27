@@ -31,7 +31,10 @@ jobs:
       - name: Restrict Full native execution to trusted release branches
         env:
           EVENT_NAME: ${{ github.event_name }}
-          SOURCE_REF: ${{ github.event.merge_group.base_ref || (github.base_ref && format('refs/heads/{0}', github.base_ref)) || github.ref }}
+          SOURCE_REF: >-
+            ${{ github.event.merge_group.base_ref ||
+            (github.event.pull_request.stack.base.ref && format('refs/heads/{0}', github.event.pull_request.stack.base.ref)) ||
+            (github.base_ref && format('refs/heads/{0}', github.base_ref)) || github.ref }}
         run: |
           case "$EVENT_NAME:$SOURCE_REF" in
             pull_request:refs/heads/Mio-2.2.0|merge_group:refs/heads/Mio-2.2.0) ;;
