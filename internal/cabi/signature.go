@@ -79,6 +79,9 @@ func ParamCode(name string, element string) string {
 // IsReservedLoaderIntrinsic reports whether symbol is one of the internal
 // Darwin dylib loader intrinsics owned by kiso/ffi/darwin.
 func IsReservedLoaderIntrinsic(symbol string) bool {
+	if strings.HasPrefix(symbol, "mio_ffi_darwin_") {
+		return true
+	}
 	switch symbol {
 	case "mio_ffi_store_byte",
 		"mio_ffi_load_byte",

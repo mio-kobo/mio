@@ -152,6 +152,7 @@ chant(ord(1));`
 	}{
 		{"loader_intrinsic", `waza w(x: cptr) -> int64 = c "mio_ffi_load_word"; chant(w(cptr(0)));`},
 		{"loader_call", `waza cg(x: cptr) -> int64 = c "mio_ffi_call_g"; chant(cg(cptr(0)));`},
+		{"dynamic_bridge", `waza call(f: cptr, frame: cptr, stack: uint64) -> unit = c "mio_ffi_darwin_call"; call(cptr(0), cptr(0), uint64(0));`},
 		{"v1_alias", `waza alias() -> int64 = c "mio_ffi_v1_g_foo"; chant(alias());`},
 	}
 	for _, tc := range rejectedCases {

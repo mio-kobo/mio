@@ -2,8 +2,9 @@ name: Mio Core / Full PR candidates
 permissions:
   contents: read
 concurrency:
-  group: distribution-pr-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: >-
+    ${{ github.event_name == 'pull_request' && format('distribution-pr-{0}', github.event.pull_request.number) || format('distribution-dispatch-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   MIO_DISTRIBUTION_STABLE_VERSION: ${{ inputs.stable_version || '' }}
   MIO_DISTRIBUTION_RC_VERSION: ${{ inputs.rc_version || '' }}
