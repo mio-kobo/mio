@@ -51,7 +51,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify source provenance
-        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ inputs.source_sha }}"
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python scripts/ci/verify_source_provenance.py
       # Go is used only for the reference VM host that runs the Stage A lowering and the VM differential.
       - uses: actions/setup-go@v5
         with:
@@ -135,7 +137,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify source provenance
-        run: python scripts/ci/verify_source_provenance.py --requested-sha "${{ inputs.source_sha }}"
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python scripts/ci/verify_source_provenance.py
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.linux.outputs.stage_a_artifact }}
@@ -204,6 +208,10 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
+      - name: Verify source provenance
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 scripts/ci/verify_source_provenance.py
       - uses: actions/download-artifact@v4
         with:
           name: native-compilers-linux-amd64-${{ github.run_id }}-${{ github.run_attempt }}
@@ -240,6 +248,10 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || '' }}
           persist-credentials: false
+      - name: Verify source provenance
+        env:
+          REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 scripts/ci/verify_source_provenance.py
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'

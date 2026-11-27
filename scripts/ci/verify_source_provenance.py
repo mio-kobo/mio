@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Verify that a checked-out job matches the immutable source revision requested."""
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -26,11 +28,15 @@ def verify_provenance(requested_sha: str, repo: str = ".", workflow_ref: str = "
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--requested-sha", default="")
+    parser.add_argument("--requested-sha", default=os.environ.get("REQUESTED_SOURCE_SHA", ""))
+    parser.add_argument("--require-sha", action="store_true")
     parser.add_argument("--repo", default=".")
     args = parser.parse_args(argv)
+    requested_sha = args.requested_sha.strip()
+    if args.require_sha and not requested_sha:
+        parser.error("missing requested source SHA")
     record = verify_provenance(
-        requested_sha=args.requested_sha.strip(),
+        requested_sha=requested_sha or os.environ.get("GITHUB_SHA", ""),
         repo=args.repo,
         workflow_ref=os.environ.get("GITHUB_WORKFLOW_REF", ""),
         run_id=os.environ.get("GITHUB_RUN_ID", ""),
