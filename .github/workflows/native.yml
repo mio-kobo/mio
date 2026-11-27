@@ -31,8 +31,11 @@ on:
 permissions:
   contents: read
 concurrency:
+  # A reusable call sees the calling workflow, so Full and the standalone gate each cancel only their own superseded runs.
   group: >-
-    ${{ github.event_name == 'pull_request' && format('native-pr-{0}', github.event.pull_request.number) || format('native-{0}-{1}-{2}', github.event_name, github.ref, github.run_id) }}
+    ${{ github.event_name == 'pull_request' &&
+    format('native-pr-{0}-{1}', github.workflow, github.event.pull_request.number) ||
+    format('native-{0}-{1}-{2}', github.event_name, github.ref, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   linux:
