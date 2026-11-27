@@ -1,0 +1,164 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+
+waza require(condition: bool, message: string) -> unit {
+    moshi (!condition) { chant(message); os.exit(1); }
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku result = darwin.open(path);
+    kaku library = result.library;
+    moshi (library != mu) { kaesu library; }
+    chant(result.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bind(library: darwin.Library, name: string, result: darwin.Scalar, parameters: []darwin.Scalar) -> darwin.Function {
+    kaku binding = darwin.bind_c(library, name, darwin.CPrototype { result: result, parameters: parameters });
+    kaku function = binding.function;
+    moshi (function != mu) { kaesu function; }
+    chant(name);
+    chant(binding.error);
+    os.exit(1);
+    kaesu bind(library, name, result, parameters);
+}
+
+waza value(function: darwin.Function, arguments: []darwin.Value) -> darwin.Value {
+    kaku result = darwin.invoke(function, arguments);
+    kaku output = result.value;
+    moshi (output != mu) { kaesu output; }
+    chant(result.error);
+    os.exit(1);
+    kaesu darwin.Value.Void();
+}
+
+kata ScalarView { tag: int64; integer: int64; number: float64; pointer: cptr; }
+
+waza scalar_view(result: darwin.Value) -> ScalarView {
+    kaku null = cptr(0);
+    awase (result) {
+        baai Void { kaesu ScalarView { tag: 0, integer: 0, number: 0.0, pointer: null }; }
+        baai I8(x) { kaesu ScalarView { tag: 1, integer: int64(x), number: 0.0, pointer: null }; }
+        baai U8(x) { kaesu ScalarView { tag: 2, integer: int64(x), number: 0.0, pointer: null }; }
+        baai I16(x) { kaesu ScalarView { tag: 3, integer: int64(x), number: 0.0, pointer: null }; }
+        baai U16(x) { kaesu ScalarView { tag: 4, integer: int64(x), number: 0.0, pointer: null }; }
+        baai I32(x) { kaesu ScalarView { tag: 5, integer: int64(x), number: 0.0, pointer: null }; }
+        baai U32(x) { kaesu ScalarView { tag: 6, integer: int64(x), number: 0.0, pointer: null }; }
+        baai I64(x) { kaesu ScalarView { tag: 7, integer: x, number: 0.0, pointer: null }; }
+        baai U64(x) { kaesu ScalarView { tag: 8, integer: int64(x), number: 0.0, pointer: null }; }
+        baai F32(x) { kaesu ScalarView { tag: 9, integer: 0, number: float64(x), pointer: null }; }
+        baai F64(x) { kaesu ScalarView { tag: 10, integer: 0, number: x, pointer: null }; }
+        baai Ptr(x) { kaesu ScalarView { tag: 11, integer: 0, number: 0.0, pointer: x }; }
+        baai Bool(x) {
+            kaku integer = 0;
+            moshi (x) { integer = 1; }
+            kaesu ScalarView { tag: 12, integer: integer, number: 0.0, pointer: null };
+        }
+    }
+    kaesu ScalarView { tag: -1, integer: 0, number: 0.0, pointer: null };
+}
+
+waza check(result: darwin.Value, expected: darwin.Value, name: string) -> unit {
+    kaku a = scalar_view(result);
+    kaku b = scalar_view(expected);
+    require(a.tag == b.tag && a.integer == b.integer && a.number == b.number && a.pointer == b.pointer, name);
+}
+
+kaku args = os.arguments();
+require(len(args) == 3, "expected C fixture and Mio math paths");
+kaku library = open(args[1]);
+kaku mio = open(args[2]);
+kaku same = open(args[1]);
+
+kaku ptr = darwin.Scalar.Ptr();
+kaku u64 = darwin.Scalar.U64();
+kaku i64 = darwin.Scalar.I64();
+kaku f32 = darwin.Scalar.F32();
+kaku f64 = darwin.Scalar.F64();
+kaku boolean = darwin.Scalar.Bool();
+kaku u64_value = uint64(-81985529216486896);
+
+kaku store = bind(library, "foreign_store", darwin.Scalar.Void(), [u64]);
+kaku pointer = bind(library, "foreign_pointer", ptr, []);
+kaku verify = bind(library, "foreign_check_pointer", boolean, [ptr, u64]);
+check(value(store, [darwin.Value.U64(u64_value)]), darwin.Value.Void(), "void result");
+kaku location = scalar_view(value(pointer, [])).pointer;
+require(location != cptr(0), "non-null pointer");
+check(value(verify, [darwin.Value.Ptr(location), darwin.Value.U64(u64_value)]), darwin.Value.Bool(hai), "pointer argument and bool result");
+check(value(verify, [darwin.Value.Ptr(cptr(0)), darwin.Value.U64(u64_value)]), darwin.Value.Bool(iie), "null pointer");
+
+kaku i8 = darwin.Scalar.I8();
+kaku u8 = darwin.Scalar.U8();
+kaku i16 = darwin.Scalar.I16();
+kaku u16 = darwin.Scalar.U16();
+kaku i32 = darwin.Scalar.I32();
+kaku u32 = darwin.Scalar.U32();
+check(value(bind(library, "foreign_i8", i8, [i8]), [darwin.Value.I8(int8(-100))]), darwin.Value.I8(int8(-101)), "signed 8");
+check(value(bind(library, "foreign_u8", u8, [u8]), [darwin.Value.U8(uint8(200))]), darwin.Value.U8(uint8(201)), "unsigned 8");
+check(value(bind(library, "foreign_i16", i16, [i16]), [darwin.Value.I16(int16(-20000))]), darwin.Value.I16(int16(-20001)), "signed 16");
+check(value(bind(library, "foreign_u16", u16, [u16]), [darwin.Value.U16(uint16(65000))]), darwin.Value.U16(uint16(65001)), "unsigned 16");
+check(value(bind(library, "foreign_i32", i32, [i32]), [darwin.Value.I32(int32(-1500000000))]), darwin.Value.I32(int32(-1500000001)), "signed 32");
+check(value(bind(library, "foreign_u32", u32, [u32]), [darwin.Value.U32(uint32(4000000000))]), darwin.Value.U32(uint32(4000000001)), "unsigned 32");
+check(value(bind(library, "foreign_i64", i64, [i64]), [darwin.Value.I64(-5000000000)]), darwin.Value.I64(-5000000001), "signed 64");
+check(value(bind(library, "foreign_u64", u64, [u64]), [darwin.Value.U64(u64_value)]), darwin.Value.U64(uint64(int64(u64_value) + 1)), "unsigned 64");
+check(value(bind(library, "foreign_f32", f32, [f32]), [darwin.Value.F32(float32(3.5))]), darwin.Value.F32(float32(-1.75)), "float32");
+check(value(bind(library, "foreign_f64", f64, [f64]), [darwin.Value.F64(4.5)]), darwin.Value.F64(-2.25), "float64");
+
+kaku stack = bind(library, "foreign_stack", f64, [
+    i64, f64, i64, f32, i64, f64, i64, f32,
+    i64, f64, i64, f32, i64, f64, i64, f32,
+    i8, f32, u16, f64, boolean, ptr, u32
+]);
+check(value(stack, [
+    darwin.Value.I64(10), darwin.Value.F64(0.5), darwin.Value.I64(11), darwin.Value.F32(float32(1.5)),
+    darwin.Value.I64(12), darwin.Value.F64(2.5), darwin.Value.I64(13), darwin.Value.F32(float32(3.5)),
+    darwin.Value.I64(14), darwin.Value.F64(4.5), darwin.Value.I64(15), darwin.Value.F32(float32(5.5)),
+    darwin.Value.I64(16), darwin.Value.F64(6.5), darwin.Value.I64(17), darwin.Value.F32(float32(7.5)),
+    darwin.Value.I8(int8(-13)), darwin.Value.F32(float32(8.5)), darwin.Value.U16(uint16(65000)),
+    darwin.Value.F64(9.5), darwin.Value.Bool(hai), darwin.Value.Ptr(location), darwin.Value.U32(uint32(4275878552))
+]), darwin.Value.F64(42.25), "mixed register banks and aligned stack arguments");
+
+kaku no_arguments = darwin.CPrototype { result: u64, parameters: [] };
+require(darwin.bind_c(library, "fixture_data", no_arguments).function == mu, "reject writable data as a function");
+require(darwin.bind_c(library, "fixture_read_only", no_arguments).function == mu, "reject read-only data as a function");
+require(darwin.bind_c(library, "missing_function", no_arguments).function == mu, "missing function");
+require(darwin.bind_c(library, "foreign_store", darwin.CPrototype {
+    result: darwin.Scalar.Void(), parameters: [darwin.Scalar.Void()]
+}).function == mu, "void parameter");
+require(darwin.invoke(store, []).value == mu, "wrong arity");
+require(darwin.invoke(store, [darwin.Value.I64(0)]).value == mu, "wrong argument tag");
+require(darwin.bind_mio(library, "mio_foreign_fixture", darwin.CPrototype { result: i64, parameters: [] }).error
+    == "unsupported Mio FFI ABI version", "incompatible Mio ABI version");
+require(darwin.bind_mio(mio, "mio_math_add", no_arguments).function == mu, "reject wrong Mio alias");
+kaku general_mio = darwin.bind_mio(mio, "mio_math_add", darwin.CPrototype { result: i64, parameters: [i64, i64] }).function;
+moshi (general_mio != mu) {
+    check(value(general_mio, [darwin.Value.I64(7), darwin.Value.I64(35)]), darwin.Value.I64(42), "generic Mio binding");
+} sore { require(iie, "Mio signature alias"); }
+require(darwin.close(mio) == "", "close Mio image");
+
+kaku independent = bind(same, "foreign_pointer", ptr, []);
+require(darwin.release(pointer) == "" && darwin.release(pointer) != "", "individual release and double release");
+require(darwin.invoke(pointer, []).value == mu, "released function");
+require(darwin.close(library) == "" && darwin.close(library) != "", "close and double close");
+require(darwin.invoke(store, [darwin.Value.U64(u64_value)]).value == mu, "closed library invalidates function");
+check(value(independent, []), darwin.Value.Ptr(location), "independent ticket survives close");
+require(darwin.close(same) == "", "close independent ticket");
+
+kaku system = open("/usr/lib/libSystem.B.dylib");
+kaku pid = scalar_view(value(bind(system, "getpid", i32, []), []));
+require(pid.tag == 5 && pid.integer > 0, "libSystem getpid");
+require(darwin.close(system) == "", "close libSystem");
+kaku zlib = open("/usr/lib/libz.1.dylib");
+kaku zlib_version = scalar_view(value(bind(zlib, "zlibVersion", ptr, []), []));
+require(zlib_version.pointer != cptr(0), "zlib version");
+require(darwin.close(zlib) == "", "close zlib");
+kaku sqlite = open("/usr/lib/libsqlite3.dylib");
+kaku sqlite_version = scalar_view(value(bind(sqlite, "sqlite3_libversion_number", i32, []), []));
+require(sqlite_version.tag == 5 && sqlite_version.integer >= 3000000, "SQLite version");
+require(darwin.close(sqlite) == "", "close SQLite");
+kaku framework = open("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
+kaku seconds = scalar_view(value(bind(framework, "CFAbsoluteTimeGetCurrent", f64, []), []));
+require(seconds.tag == 10 && seconds.number > 0.0, "CoreFoundation clock");
+require(darwin.close(framework) == "", "close CoreFoundation");
+chant("Darwin C FFI: ok");
