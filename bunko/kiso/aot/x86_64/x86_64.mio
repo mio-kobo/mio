@@ -19,6 +19,13 @@ koukai kata Assembler {
     fixups: []Fixup;
     errors: []string;
     table: [][]int64;
+    // PIC mode only (label "pic"): rip-relative references to the data (bss) area, see mov_data.
+    data_refs: []DataRef;
+}
+// A rel32 at `at` that must address `offset` bytes into the zero-filled data area: S + A - P with A = offset - 4.
+koukai kata DataRef {
+    at: int64;
+    offset: int64;
 }
 koukai kata AssembleResult {
     bytes: []uint8;
@@ -55,7 +62,7 @@ koukai teisu cc_g = 15;
 
 koukai waza assembler() -> Assembler {
     kaesu Assembler {
-        bytes: array.with_capacity[uint8](256), labels: array.with_capacity[Label](16), fixups: array.with_capacity[Fixup](16), errors: array.with_capacity[string](1), table: [array.make[int64](256, 0)] };
+        bytes: array.with_capacity[uint8](256), labels: array.with_capacity[Label](16), fixups: array.with_capacity[Fixup](16), errors: array.with_capacity[string](1), table: [array.make[int64](256, 0)], data_refs: array.with_capacity[DataRef](0) };
 }
 
 waza fail(a: Assembler, message: string) -> unit { array.push(a.errors, message); }
@@ -217,6 +224,20 @@ koukai waza mov_ri(a: Assembler, dst: int64, value: int64) -> unit {
     byte(a, 184 + low3(dst));
     imm64(a, value);
 }
+// Loads the absolute data-area address `value` (elf.data_base + offset). Without the label "pic" this is exactly
+// mov_ri, so static images are byte-for-byte unchanged. In PIC mode it is `lea dst, [rip + rel32]` and the rel32 is
+// recorded in data_refs, to become an R_X86_64_PC32 against the data section: no instruction depends on a load address.
+koukai waza mov_data(a: Assembler, dst: int64, value: int64) -> unit {
+    moshi (find_label(a, "pic") < 0) { mov_ri(a, dst, value); kaesu; }
+    moshi (!valid_register(a, dst)) { kaesu; }
+    rex(a, dst, 0);
+    byte(a, 141);
+    modrm(a, 0, dst, 5);
+    array.push(a.data_refs, DataRef { at: len(a.bytes), offset: value - data_area_base });
+    imm32(a, 0);
+}
+// elf.data_base, repeated here because the encoder does not import the ELF writer.
+koukai teisu data_area_base = 268435456;
 koukai waza mov_load(a: Assembler, dst: int64, base: int64, disp: int64) -> unit {
     moshi (!valid_register(a, dst) || !valid_register(a, base)) { kaesu; }
     rex(a, dst, base);
@@ -548,6 +569,7 @@ koukai kata LinkedAssembly {
     bytes: []uint8;
     error: string;
     externals: []ExternalCall;
+    data_refs: []DataRef;
 }
 
 // call rel32 到链接器解析的外部符号。返回时 rel32 位于调用指令末尾 4 字节。
@@ -563,7 +585,7 @@ koukai waza assemble(a: Assembler) -> AssembleResult {
 }
 
 koukai waza assemble_linked(a: Assembler) -> LinkedAssembly {
-    moshi (len(a.errors) > 0) { kaesu LinkedAssembly { bytes: [], error: a.errors[0], externals: [] }; }
+    moshi (len(a.errors) > 0) { kaesu LinkedAssembly { bytes: [], error: a.errors[0], externals: [], data_refs: [] }; }
     kaku output = array.clone(a.bytes);
     kaku externals: []ExternalCall = [];
     kaku i = 0;
@@ -575,15 +597,15 @@ koukai waza assemble_linked(a: Assembler) -> LinkedAssembly {
             kaku n = 4;
             aida (n < len(name_bytes)) { array.push(symbol_bytes, name_bytes[n]); n = n + 1; }
             kaku symbol = string.from_utf8(symbol_bytes);
-            moshi (symbol == mu) { kaesu LinkedAssembly { bytes: [], error: "INVALID_EXTERNAL", externals: [] }; }
+            moshi (symbol == mu) { kaesu LinkedAssembly { bytes: [], error: "INVALID_EXTERNAL", externals: [], data_refs: [] }; }
             array.push(externals, ExternalCall { at: f.at, symbol: symbol });
             i = i + 1;
             tsuzuku;
         }
         kaku target = find_label(a, f.target);
-        moshi (target < 0) { kaesu LinkedAssembly { bytes: [], error: "UNDEFINED_LABEL", externals: [] }; }
+        moshi (target < 0) { kaesu LinkedAssembly { bytes: [], error: "UNDEFINED_LABEL", externals: [], data_refs: [] }; }
         kaku delta = target - (f.at + 4);
-        moshi (delta < -2147483648 || delta > 2147483647) { kaesu LinkedAssembly { bytes: [], error: "BRANCH_OUT_OF_RANGE", externals: [] }; }
+        moshi (delta < -2147483648 || delta > 2147483647) { kaesu LinkedAssembly { bytes: [], error: "BRANCH_OUT_OF_RANGE", externals: [], data_refs: [] }; }
         kaku x = delta;
         moshi (x < 0) {
             x = x + 4294967296;
@@ -596,5 +618,5 @@ koukai waza assemble_linked(a: Assembler) -> LinkedAssembly {
         }
         i = i + 1;
     }
-    kaesu LinkedAssembly { bytes: output, error: "", externals: externals };
+    kaesu LinkedAssembly { bytes: output, error: "", externals: externals, data_refs: a.data_refs };
 }

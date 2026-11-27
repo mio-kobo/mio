@@ -102,19 +102,37 @@ waza emit_extend(code: x86_64.Assembler, reg: int64, descriptor: int64) -> unit 
 // 可变参数函数不生成（定参声明是唯一入口），否则调用点必须把 AL 设为用到的向量寄存器数。
 koukai waza emit_c_bridge(code: x86_64.Assembler, signature: cabi.Signature, parameter_count: int64) -> string {
     moshi (!signature.valid || len(signature.parameters) != parameter_count) { kaesu "INVALID_C_PROTOTYPE"; }
-    kaku layout = classify(signature);
+    // 间接调用：第一个参数是函数指针，其余参数按普通 C 参数分类；Mio 帧中的参数下标整体后移一位。
+    kaku skip = 0;
+    kaku kinds = signature.parameters;
+    moshi (signature.indirect) {
+        moshi (parameter_count < 1 || signature.parameters[0] != 107) { kaesu "INVALID_C_PROTOTYPE"; }
+        skip = 1;
+        kinds = [];
+        kaku k = 1;
+        aida (k < parameter_count) { array.push(kinds, signature.parameters[k]); k = k + 1; }
+    }
+    kaku effective = cabi.Signature { symbol: signature.symbol, result: signature.result, parameters: kinds, valid: hai, indirect: iie };
+    kaku layout = classify(effective);
     kaku registers = integer_registers();
     kaku frame = stack_bytes(layout);
+    // 目标函数指针在对齐之前读取并检查：空指针以 nil 陷阱结束，不会跳转到地址 0。
+    moshi (skip == 1) {
+        x86_64.mov_load(code, x86_64.r11, x86_64.rbp, local_disp(parameter_count, 0));
+        x86_64.test_rr(code, x86_64.r11, x86_64.r11);
+        x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    }
     x86_64.and_ri(code, x86_64.rsp, -16);
     moshi (frame > 0) { x86_64.sub_ri(code, x86_64.rsp, frame); }
     // 先写栈参数，再装寄存器；RAX 只作搬运暂存，不是参数寄存器（AL 仅变参调用使用）。
     kaku at = 0;
-    aida (at < len(signature.parameters)) {
+    aida (at < len(kinds)) {
         kaku place = layout.placements[at];
-        kaku kind = signature.parameters[at];
-        kaku disp = local_disp(parameter_count, at);
+        kaku kind = kinds[at];
+        kaku disp = local_disp(parameter_count, at + skip);
         moshi (place.class == class_memory) {
             x86_64.mov_load(code, x86_64.rax, x86_64.rbp, disp);
+            moshi (kind == 109) { emit_buffer_pointer(code, x86_64.rax); }
             emit_extend(code, x86_64.rax, extension(kind));
             x86_64.mov_store(code, x86_64.rsp, place.index * 8, x86_64.rax);
         }
@@ -125,11 +143,13 @@ koukai waza emit_c_bridge(code: x86_64.Assembler, signature: cabi.Signature, par
         }
         moshi (place.class == class_integer) {
             x86_64.mov_load(code, registers[place.index], x86_64.rbp, disp);
+            moshi (kind == 109) { emit_buffer_pointer(code, registers[place.index]); }
             emit_extend(code, registers[place.index], extension(kind));
         }
         at = at + 1;
     }
-    x86_64.call_external(code, signature.symbol);
+    moshi (skip == 1) { x86_64.call_r(code, x86_64.r11); }
+    sore { x86_64.call_external(code, signature.symbol); }
     // 返回值：窄整数按符号扩展或零扩展回完整的 Mio 槽；float 的位模式原样搬回 RAX；bool 规范为 0/1。
     kaku result = signature.result;
     moshi (result == 105) { x86_64.movd_r_xmm(code, x86_64.rax, 0); }
@@ -141,4 +161,12 @@ koukai waza emit_c_bridge(code: x86_64.Assembler, signature: cabi.Signature, par
     }
     moshi (result != 108 && result != 118) { emit_extend(code, x86_64.rax, extension(result)); }
     kaesu "";
+}
+
+// []uint8 参数：寄存器中是 Mio 数组对象，换成它的数据首地址（数组对象偏移 40）。
+// nil 数组以 nil 陷阱结束；数据区不会被移动（回收器不整理堆），调用期间也没有回收。
+waza emit_buffer_pointer(code: x86_64.Assembler, reg: int64) -> unit {
+    x86_64.test_rr(code, reg, reg);
+    x86_64.jcc(code, x86_64.cc_e, "rt.trap.nil");
+    x86_64.mov_load(code, reg, reg, 40);
 }

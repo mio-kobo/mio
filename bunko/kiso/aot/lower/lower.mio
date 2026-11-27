@@ -1193,9 +1193,12 @@ waza emit_call_value(code: arm64.Assembler, patches: []macho.AddressPatch,
 
 waza emit_call(code: arm64.Assembler, patches: []macho.AddressPatch,
     type_result: types.TypeAnalysis, function_id: int64, entries: []int64,
-    function: mochi.Function) -> bool {
-    kaku shadow_bytes = emit_shadow_push(code, patches, type_result, function_id, entries);
-    moshi (shadow_bytes < 0) { kaesu iie; }
+    function: mochi.Function, scalar_library: bool) -> bool {
+    kaku shadow_bytes = 0;
+    moshi (!scalar_library) {
+        shadow_bytes = emit_shadow_push(code, patches, type_result, function_id, entries);
+        moshi (shadow_bytes < 0) { kaesu iie; }
+    }
     kaku count = function.parameter_count;
     kaku stack_count = count - 8; moshi (stack_count < 0) { stack_count = 0; }
     kaku stack_bytes = stack_count * 8;
@@ -1210,21 +1213,23 @@ waza emit_call(code: arm64.Assembler, patches: []macho.AddressPatch,
         index = index + 1; }
     }
     moshi (count > 0) { emit(code, arm64.sub_imm_x(20, 20, count * 8, iie)); }
-    emit_call_depth(code, hai);
+    moshi (!scalar_library) { emit_call_depth(code, hai); }
     arm64.assembler_bl(code, function_label(function.id));
-    emit_call_depth(code, iie);
+    moshi (!scalar_library) { emit_call_depth(code, iie); }
     moshi (stack_bytes > 0) { emit(code, arm64.add_imm_x(31, 31, stack_bytes, iie)); }
-    emit_shadow_pop(code, shadow_bytes);
+    moshi (!scalar_library) { emit_shadow_pop(code, shadow_bytes); }
     moshi (function.returns_value) { push_register(code, 0); }
     kaesu hai;
 }
 
 waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: mochi.File,
-    type_result: types.TypeAnalysis, ids: []int64, data: []uint8, prefix: string, function_id: int64) -> LowerError? {
+    type_result: types.TypeAnalysis, ids: []int64, data: []uint8, prefix: string, function_id: int64, scalar_library: bool) -> LowerError? {
     kaku offset = 0;
     kaku targets = jump_targets(data); kaku held = iie; kaku run = 0;
     aida (offset < len(data)) {
-        arm64.assembler_label(code, block_label(prefix, offset));
+        // Only jump destinations need a bytecode label. Keeping the label for
+        // every instruction exhausts the bootstrap heap on the full CLI.
+        moshi (targets[offset]) { arm64.assembler_label(code, block_label(prefix, offset)); }
         kaku live_depth = len(type_result.blocks[function_id + 1].entry[offset]);
         kaku capacity = 252; moshi (function_id < 0) { capacity = 508; }
         moshi (live_depth > capacity) { kaesu LowerError.FrameTooLarge(); }
@@ -1463,7 +1468,7 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
                 moshi (kind != types.type_float32 && kind != types.type_float64) { kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode); }
                 pop_register(code, 9); emit_unbox_register(code, type_result, node, 9); emit_float_predicate(code, kind, int64(target.instructions[4]));
             }
-            sore { moshi (!emit_call(code, patches, type_result, function_id, entries, target)) {
+            sore { moshi (!emit_call(code, patches, type_result, function_id, entries, target, scalar_library)) {
                 kaesu LowerError.UnsafeType((function_id + 1) * 1000000 + offset * 100 + opcode);
             } } } }
         }
@@ -1620,7 +1625,7 @@ waza emit_block(code: arm64.Assembler, patches: []macho.AddressPatch, file: moch
         }
         offset = offset + instruction_width;
     }
-    arm64.assembler_label(code, block_label(prefix, len(data)));
+    moshi (targets[len(data)]) { arm64.assembler_label(code, block_label(prefix, len(data))); }
     kaesu mu;
 }
 
@@ -2422,7 +2427,10 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
         kaku function = file.functions[scan];
         moshi (cabi.is_external(function.name)) {
             kaku signature = cabi.signature(function.name, function.parameter_count, function.returns_value);
-            moshi (!allow_c || !signature.valid || len(function.instructions) != 0 ||
+            // 间接调用和 []uint8 数据指针参数只有 Linux x86-64 后端实现。
+            kaku linux_only = signature.indirect; kaku lp = 0;
+            aida (lp < len(signature.parameters)) { moshi (signature.parameters[lp] == 109) { linux_only = hai; } lp = lp + 1; }
+            moshi (!allow_c || !signature.valid || linux_only || len(function.instructions) != 0 ||
                 len(function.captures) != 0 || function.local_count != function.parameter_count) {
                 kaesu failed(LowerError.UnsupportedNative((scan + 1) * 1000000));
             }
@@ -2516,7 +2524,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
     moshi (managed) {
         emit(code, arm64.sub_imm_x(31, 31, 32, iie)); emit(code, arm64.str_x(24, 31, 0)); emit(code, arm64.movz_x(9, 1, 0)); emit(code, arm64.str_x(9, 31, 8)); emit(code, arm64.str_x(31, 31, 16)); emit(code, arm64.add_imm_x(24, 31, 0, iie));
     }
-    kaku problem = emit_block(code, patches, file, type_result, ids, file.instructions, "main_", -1);
+    kaku problem = emit_block(code, patches, file, type_result, ids, file.instructions, "main_", -1, iie);
     moshi (problem != mu) { kaesu failed(problem); }
     arm64.assembler_label(code, "normal_exit");
     // Completion cannot precede outstanding user callbacks or their reports.
@@ -2587,7 +2595,7 @@ waza compile_worker_target(input_file: mochi.File, gc_stress: bool, capacity: in
                 moshi (!emit_native_body(code, patches, type_result, function, native_op)) { kaesu failed(LowerError.UnsupportedNative((id + 1) * 1000000)); }
             }
             sore {
-                problem = emit_block(code, patches, file, type_result, ids, function.instructions, string.concat(function_label(id), "_"), id);
+                problem = emit_block(code, patches, file, type_result, ids, function.instructions, string.concat(function_label(id), "_"), id, iie);
                 moshi (problem != mu) { kaesu failed(problem); }
             }
             } } } emit_function_epilogue(code, id);

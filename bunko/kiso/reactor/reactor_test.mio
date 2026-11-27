@@ -230,6 +230,59 @@ waza test_listener_and_connection_readiness_and_eof() -> unit {
     close(reactor);
 }
 
+waza test_duplicate_listener_registration_preserves_first_operation() -> unit {
+    kaku bound = bind_free(43100);
+    kaku listener = bound.listener;
+    kaku reactor = opened();
+    moshi (listener == mu) {
+        testing.expect(iie, "open listener");
+        moshi (reactor != mu) { close(reactor); }
+        kaesu;
+    }
+    moshi (reactor == mu) {
+        testing.expect(iie, "open reactor");
+        tcp_async.close_listener(listener);
+        kaesu;
+    }
+    kaku first = submit(reactor, listener.handle, readable);
+    kaku operation = first.operation;
+    moshi (operation == mu) {
+        testing.expect(iie, "the first subscription succeeds");
+        close(reactor);
+        tcp_async.close_listener(listener);
+        kaesu;
+    }
+    testing.expect(first.error == mu, "the first operation has no error");
+    kaku duplicate = submit(reactor, listener.handle, readable);
+    testing.expect(duplicate.operation == mu && duplicate.error != mu, "duplicate readability is rejected");
+    duplicate = submit(reactor, listener.handle, writable);
+    testing.expect(duplicate.operation == mu && duplicate.error != mu, "both interests are owned by the first operation");
+    testing.expect(live(reactor, operation), "the original subscription stays live");
+    kaku client = start_client(bound.port);
+    testing.expect(client != mu, "the listener receives a connection");
+    kaku first_poll = poll(reactor, 1000, 8);
+    testing.expect(first_poll.error == mu && len(first_poll.events) == 1 && first_poll.events[0].operation == operation.id
+        && first_poll.events[0].readable && current(reactor, first_poll.events[0]), "readiness is delivered to the original operation");
+    testing.expect(cancel(reactor, operation, listener.handle).error == mu, "cancel releases the subscription");
+    testing.expect(len(poll(reactor, 0, 8).events) == 0, "pending readiness is not delivered after cancel");
+    kaku next = submit(reactor, listener.handle, readable).operation;
+    testing.expect(next != mu, "the same socket can be subscribed again");
+    moshi (next != mu) {
+        testing.expect(next.id != operation.id, "the new subscription has a different operation id");
+        testing.expect(error_code(cancel(reactor, operation, listener.handle).error) == 2, "the stale operation cannot cancel the new one");
+        kaku second_poll = poll(reactor, 1000, 8);
+        testing.expect(second_poll.error == mu && len(second_poll.events) == 1 && second_poll.events[0].operation == next.id
+            && current(reactor, second_poll.events[0]), "only the new operation receives readiness");
+        moshi (len(first_poll.events) == 1) {
+            testing.expect(!current(reactor, first_poll.events[0]), "the old returned event remains stale after resubmission");
+        }
+        testing.expect(close(reactor).error == mu && !live(reactor, next), "close invalidates the live subscription");
+    }
+    sore { close(reactor); }
+    moshi (client != mu) { tcp_async.close(client); }
+    tcp_async.close_listener(listener);
+}
+
 waza test_generations_reject_stale_registrations_and_events() -> unit {
     kaku bound = bind_free(43200);
     kaku maybe_listener = bound.listener;
@@ -605,7 +658,8 @@ waza test_close_with_pending_registration_and_descriptor_reuse() -> unit {
     tcp_async.write(old_client, payload, 0, 1);
     kaku quiet = poll(reactor, 100, 8);
     testing.expect(len(quiet.events) == 0, "a closed socket produces no events");
-    // a new connection very likely reuses the descriptor number and the handle-table slot
+    // The next socket open can reuse the closed server's fd. Watch both ends of the
+    // replacement connection so the test covers reuse even if it is on the client.
     kaku second = connect_pair(listener, bound.port);
     kaku b_client = second.client;
     kaku b_server = second.server;
@@ -623,6 +677,8 @@ waza test_close_with_pending_registration_and_descriptor_reuse() -> unit {
     }
     kaku new_client = b_client;
     kaku new_server = b_server;
+    kaku new_client_op = submit(reactor, new_client.handle, readable).operation;
+    testing.expect(new_client_op != mu, "a replacement client descriptor can be subscribed");
     kaku new_op_result = submit(reactor, new_server.handle, readable).operation;
     moshi (new_op_result == mu) {
         testing.expect(iie, "submit new");
@@ -637,6 +693,7 @@ waza test_close_with_pending_registration_and_descriptor_reuse() -> unit {
     testing.expect(len(ready.events) == 1 && ready.events[0].operation == new_op.id && ready.events[0].readable, "the new connection is reported to its own operation only");
     testing.expect(ready.stale == 0, "nothing stale reached the new owner");
     cancel(reactor, new_op, new_server.handle);
+    moshi (new_client_op != mu) { cancel(reactor, new_client_op, new_client.handle); }
     tcp_async.close(old_client);
     tcp_async.close(new_client);
     tcp_async.close(new_server);

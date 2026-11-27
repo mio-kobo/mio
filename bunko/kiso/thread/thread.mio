@@ -15,7 +15,7 @@ yobu "kiso/array";
 koukai waza start(entry: () -> int64) -> int64 { kaesu runtime.start(entry); }
 
 // 等待目标线程结束并返回 entry 的返回值。
-// 若传入无效句柄（从未分配、已 join、代际过期或伪造），运行时会检测到并返回 -22，不会解引用无效内存。
+// 无效句柄、正在被另一线程 join 的句柄或调用者自己的句柄均返回 -22。
 // 注意：若 entry 本身可能返回负数，无法仅凭返回值区分 -22 与正常业务返回值，此时请使用 join_checked。
 koukai waza join(handle: int64) -> int64 { kaesu runtime.join(handle); }
 
@@ -42,13 +42,13 @@ koukai kata Channel<T> {
     capacity: int64;
 }
 
-// sent == hai 表示写入成功；否则表示通道已关闭，back 为原封不动退回的传入对象。
+// sent == hai 表示写入成功；通道已关闭或不可用时，back 为原封不动退回的传入对象。
 koukai kata SendResult<T> {
     sent: bool;
     back: T;
 }
 
-// closed == hai 表示通道已关闭且队列已排空（此时 item 为 filler）；否则 item 为接收到的值。
+// closed == hai 表示通道已关闭且队列已排空，或通道不可用（此时 item 为 filler）。
 koukai kata Received<T> {
     item: T;
     closed: bool;
@@ -71,24 +71,49 @@ teisu sender_unit = 4294967296;
 // 唤醒全部等待者时使用的唤醒上限（覆盖所有可能并发阻塞的线程数）。
 teisu wake_all_count = 1000000;
 
+// 保留原有构造接口。分配失败时创建不可用的通道，close/destroy 返回分配错误。
+// 需要在构造时处理错误的调用者应使用 channel_new_checked。
 koukai waza channel_new<T>(capacity: int64, filler: T) -> Channel<T> {
+    kaku words = runtime.words_new(8);
+    moshi (words <= 0) {
+        kaesu Channel[T] { words: words, ring: [], filler: filler, capacity: 0 };
+    }
     kaku slots = capacity;
     moshi (slots < 1) { slots = 1; }
-    kaesu Channel[T] { words: runtime.words_new(8), ring: array.make[T](slots, filler), filler: filler, capacity: slots };
+    kaesu Channel[T] { words: words, ring: array.make[T](slots, filler), filler: filler, capacity: slots };
+}
+
+koukai kata ChannelResult<T> {
+    channel: Channel<T>?;
+    error: int64;
+}
+
+// 成功时 error 为 0，失败时 channel 为 mu，error 为负 errno（Darwin ARM64 控制块池耗尽时为 -12）。
+koukai waza channel_new_checked<T>(capacity: int64, filler: T) -> ChannelResult<T> {
+    kaku channel = channel_new[T](capacity, filler);
+    moshi (channel.words < 0) { kaesu ChannelResult[T] { channel: mu, error: channel.words }; }
+    moshi (channel.words == 0) { kaesu ChannelResult[T] { channel: mu, error: -22 }; }
+    kaesu ChannelResult[T] { channel: channel, error: 0 };
 }
 
 // 基于三态互斥字的通道锁：0 空闲，1 已加锁，2 已加锁且存在等待者。
 // 竞争失败的线程通过 word_wait 进入内核休眠（该调用为 GC Safepoint），避免在锁上长时间自旋阻碍 STW 回收。
 waza lock<T>(channel: Channel<T>) -> int64 {
+    moshi (channel.words < 0) { kaesu channel.words; }
+    moshi (channel.words == 0) { kaesu -22; }
     kaku c = runtime.word_cas(channel.words, word_lock, 0, 1);
-    moshi (c == 0) { kaesu 0; }
-    aida (hai) {
+    aida (c == 1 || c == 2) {
         moshi (c != 2) { c = runtime.word_cas(channel.words, word_lock, 1, 2); }
-        moshi (c != 0) { runtime.word_wait(channel.words, word_lock, 2); }
+        moshi (c < 0) { kaesu c; }
+        moshi (c > 2) { kaesu -22; }
+        moshi (c != 0) {
+            kaku status = runtime.word_wait(channel.words, word_lock, 2);
+            moshi (status < 0) { kaesu status; }
+        }
         c = runtime.word_cas(channel.words, word_lock, 0, 2);
-        moshi (c == 0) { kaesu 0; }
     }
-    kaesu 0;
+    moshi (c <= 0) { kaesu c; }
+    kaesu -22;
 }
 
 waza unlock<T>(channel: Channel<T>) -> int64 {
@@ -107,9 +132,9 @@ waza unlock<T>(channel: Channel<T>) -> int64 {
 // 当没有线程等待时，普通发送/接收可完全跳过唤醒系统调用。
 waza sleep_on<T>(channel: Channel<T>, sequence: int64, seen: int64, unit: int64) -> int64 {
     runtime.word_add(channel.words, word_waiters, unit);
-    runtime.word_wait(channel.words, sequence, seen);
+    kaku status = runtime.word_wait(channel.words, sequence, seen);
     runtime.word_add(channel.words, word_waiters, 0 - unit);
-    kaesu 0;
+    kaesu status;
 }
 
 // 若存在正在休眠的接收者，则唤醒其中之一（被唤醒者在持锁后会重新检查队列，因此每次入队唤醒一个即可）。
@@ -140,7 +165,7 @@ waza next_slot(index: int64, capacity: int64) -> int64 { kaesu (index + 1) - ((i
 // 向通道发送元素；若通道已满则阻塞等待。调用时应配合 yuzuru 移交所有权：`thread.send[Graph](channel, yuzuru graph)`。
 koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
     aida (hai) {
-        lock[T](channel);
+        moshi (lock[T](channel) != 0) { nukeru; }
         moshi (runtime.word_get(channel.words, word_closed) != 0) {
             unlock[T](channel);
             kaesu SendResult[T] {
@@ -159,7 +184,7 @@ koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
         }
         kaku seen = runtime.word_get(channel.words, word_send_seq);
         unlock[T](channel);
-        sleep_on[T](channel, word_send_seq, seen, sender_unit);
+        moshi (sleep_on[T](channel, word_send_seq, seen, sender_unit) < 0) { nukeru; }
     }
     kaesu SendResult[T] { sent: iie, back: value };
 }
@@ -167,7 +192,7 @@ koukai waza send<T>(channel: Channel<T>, value: T) -> SendResult<T> {
 // 从通道接收元素；若通道为空且尚未关闭则阻塞等待。
 koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
     aida (hai) {
-        lock[T](channel);
+        moshi (lock[T](channel) != 0) { nukeru; }
         kaku count = runtime.word_get(channel.words, word_count);
         moshi (count > 0) {
             kaku head = runtime.word_get(channel.words, word_head);
@@ -187,14 +212,15 @@ koukai waza receive<T>(channel: Channel<T>) -> Received<T> {
         }
         kaku seen = runtime.word_get(channel.words, word_recv_seq);
         unlock[T](channel);
-        sleep_on[T](channel, word_recv_seq, seen, receiver_unit);
+        moshi (sleep_on[T](channel, word_recv_seq, seen, receiver_unit) < 0) { nukeru; }
     }
     kaesu Received[T] { item: channel.filler, closed: hai };
 }
 
 // 关闭通道：拒绝后续发送（并将传入值退回给发送方），已入队的元素仍可由接收方继续排空，排空后返回 closed == hai。
 koukai waza close<T>(channel: Channel<T>) -> int64 {
-    lock[T](channel);
+    kaku status = lock[T](channel);
+    moshi (status != 0) { kaesu status; }
     runtime.word_set(channel.words, word_closed, 1);
     unlock[T](channel);
     wake_all_waiters[T](channel);
@@ -203,9 +229,10 @@ koukai waza close<T>(channel: Channel<T>) -> int64 {
 
 // 彻底关闭通道并立即丢弃所有尚未消费的排队元素（若需保留排队元素请使用 close 并通过 receive 排空）。
 // 支持从任意线程多次调用；对已销毁通道执行 send/receive 的行为与已关闭通道完全一致。
-// 注意：64 字节离堆控制块会在进程生命周期内刻意保持映射而不释放，以确保正处于 send/receive 路径中的线程永远不会访问到已释放内存。
+// 离堆控制块保留至进程退出。旧通道别名和在途操作仍可使用该块；Darwin ARM64 的分配上限因此按进程累计。
 koukai waza destroy<T>(channel: Channel<T>) -> int64 {
-    lock[T](channel);
+    kaku status = lock[T](channel);
+    moshi (status != 0) { kaesu status; }
     runtime.word_set(channel.words, word_closed, 1);
     runtime.word_set(channel.words, word_count, 0);
     runtime.word_set(channel.words, word_head, 0);

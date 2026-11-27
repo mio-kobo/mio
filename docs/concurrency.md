@@ -393,7 +393,7 @@ and about 19 GiB of garbage through an 8 GiB heap) normally and with `--gc-stres
 wrong result, hang or crash. CI records it as the required check `linux-thread-gc`; every other target records
 `thread-natives-fail-closed`.
 
-Known limits: blocking OS calls other than `join` are not safepoint-aware (a collection waits until such a thread returns); the process
+Blocking Linux TCP connect/read/write/accept and Reactor poll publish roots while a mutator waits in the kernel. Other blocking I/O such as file reads or process waits may hold up collection. The process
 ends when the main thread ends; results are `int64` only (graphs travel through channels in the next milestone); one 1 MiB stack per thread;
 no thread-local allocation buffers (the heap lock is the only allocation synchronisation); the `target.TargetInfo` capability flags
 describe the neutral-IR runtime (M19ef path), which is unchanged, so they still report no threads for Linux.

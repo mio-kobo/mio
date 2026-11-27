@@ -1,0 +1,75 @@
+yobu "../support";
+yobu "kiso/ffi/linux";
+yobu "kiso/string";
+
+// Production handle semantics of kiso/ffi/linux: ownership, release, stale-handle detection across slot reuse,
+// close invalidating exactly its own functions, and leak-free load/resolve/release cycles.
+kaku run = support.begin("test_ffi_handles");
+kaku libraries_before = linux.libraries_open();
+kaku functions_before = linux.functions_live();
+
+kaku math = linux.open(support.absolute("libmio_math.so"));
+kaku buffer = linux.open(support.absolute("libmio_buffer.so"));
+support.expect(run, "two libraries open", linux.is_open(math) && linux.is_open(buffer) && linux.libraries_open() == libraries_before + 2);
+support.expect(run, "path is recorded", linux.path(math) == support.absolute("libmio_math.so"));
+kaku add = linux.symbol(math, "mio_add", "i:ii");
+kaku sub = linux.symbol(math, "mio_sub", "i:ii");
+kaku length = linux.symbol(buffer, "mio_buffer_length", "z:nz");
+support.expect(run, "signature is recorded", linux.signature(add) == "i:ii" && linux.signature(length) == "z:nz");
+support.expect(run, "three live functions", linux.functions_live() == functions_before + 3);
+
+// release: one handle dies, the library and its other functions stay usable
+support.expect(run, "release", linux.release(sub) == "" && !linux.is_live(sub) && linux.resolved(sub));
+support.expect(run, "released handle refused", linux.call_i_ii(sub, int32(5), int32(3)) == int32(0) && string.has_prefix(linux.last_error(), "E_FFI_STALE"));
+support.expect(run, "double release", string.has_prefix(linux.release(sub), "E_FFI_STALE"));
+support.expect(run, "sibling survives release", linux.call_i_ii(add, int32(5), int32(3)) == int32(8) && linux.last_error() == "");
+// the freed slot is reused by the next resolution; the stale handle must not alias the new function
+kaku mul = linux.symbol(math, "mio_multiply", "d:dd");
+support.expect(run, "slot reused", mul.ticket.slot == sub.ticket.slot);
+support.expect(run, "stale handle does not alias the reused slot", linux.call_i_ii(sub, int32(6), int32(7)) == int32(0) && !linux.is_live(sub));
+support.expect(run, "new handle in the reused slot works", linux.call_d_dd(mul, 6.0, 7.0) == 42.0);
+
+// close invalidates exactly the functions of that library
+support.expect(run, "close math", linux.close(math) == "");
+support.expect(run, "math functions die", !linux.is_live(add) && !linux.is_live(mul));
+support.expect(run, "closed function refused", linux.call_i_ii(add, int32(1), int32(1)) == int32(0) && string.has_prefix(linux.last_error(), "E_FFI_CLOSED"));
+support.expect(run, "address of a closed function is null", linux.address(add, "i:ii") == cptr(0));
+support.expect(run, "other library unaffected", linux.call_z_nz(length, string.to_bytes("four")) == uint64(4));
+support.expect(run, "release after close", string.has_prefix(linux.release(add), "E_FFI_CLOSED"));
+// a reopened library takes the freed library slot, the old Library value stays closed
+kaku math2 = linux.open(support.absolute("libmio_math.so"));
+support.expect(run, "library slot reused", math2.ticket.slot == math.ticket.slot && linux.is_open(math2) && !linux.is_open(math));
+support.expect(run, "closed library resolves nothing", string.has_prefix(linux.error(linux.symbol(math, "mio_add", "i:ii")), "E_FFI_CLOSED"));
+support.expect(run, "closing the stale value does not close the new library", string.has_prefix(linux.close(math), "E_FFI_CLOSED") && linux.is_open(math2));
+kaku add2 = linux.symbol(math2, "mio_add", "i:ii");
+support.expect(run, "old function stays dead after reuse", linux.call_i_ii(add, int32(1), int32(1)) == int32(0) && linux.call_i_ii(add2, int32(1), int32(1)) == int32(2));
+
+// open_system goes through the loader search path explicitly
+kaku libc = linux.open_system("libc.so.6");
+kaku strlen = linux.symbol(libc, "strlen", "z:n");
+support.expect(run, "open_system", linux.is_open(libc) && linux.is_live(strlen) && linux.address(strlen, "z:n") != cptr(0));
+support.expect(run, "open_system rejects paths", string.has_prefix(linux.open_system("./libmio_math.so").error, "E_FFI_PATH"));
+support.expect(run, "close libc", linux.close(libc) == "");
+
+support.expect(run, "close buffer and math2", linux.close(buffer) == "" && linux.close(math2) == "");
+support.expect(run, "no leaked handles", linux.libraries_open() == libraries_before && linux.functions_live() == functions_before);
+
+// 2,000 open/resolve/release/close cycles leave no handle behind and never reuse an id
+kaku ok = hai;
+kaku previous = linux.open(support.absolute("libmio_math.so"));
+linux.close(previous);
+kaku cycle = 0;
+aida (cycle < 2000) {
+    kaku lib = linux.open(support.absolute("libmio_math.so"));
+    kaku f = linux.symbol(lib, "mio_add", "i:ii");
+    kaku g = linux.symbol(lib, "mio_sub", "i:ii");
+    moshi (linux.call_i_ii(f, int32(cycle), int32(1)) != int32(cycle + 1)) { ok = iie; }
+    moshi (linux.release(g) != "") { ok = iie; }
+    moshi (linux.close(lib) != "") { ok = iie; }
+    moshi (lib.ticket.id <= previous.ticket.id || linux.is_open(previous)) { ok = iie; }
+    previous = lib;
+    cycle = cycle + 1;
+}
+support.expect(run, "2000 cycles", ok);
+support.expect(run, "no leaked handles after cycles", linux.libraries_open() == libraries_before && linux.functions_live() == functions_before);
+support.finish(run);

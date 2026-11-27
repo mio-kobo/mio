@@ -1,0 +1,251 @@
+yobu "kiso/array";
+yobu "kiso/encoding/binary";
+yobu "kiso/string";
+
+// Names are Mach-O names (including the leading underscore). Words are
+// offsets into __text, relative to the first emitted ARM64 instruction.
+koukai kata DylibExport { name: string; word: int64; }
+koukai kata DylibSpec {
+    image: ImageSpec;
+    install_name: string;
+    exports: []DylibExport;
+}
+
+kata ExportEdge { byte: uint8; child: int64; }
+kata ExportNode { address: []uint8; edges: []ExportEdge; }
+
+waza dylib_failure(layout: Layout, error: MachOError?) -> ImageResult {
+    kaesu ImageResult { bytes: [], layout: layout, error: error };
+}
+
+waza uleb_width(value: int64) -> int64 {
+    kaku width = 1;
+    kaku left = value;
+    aida (left >= 128) { left = left / 128; width = width + 1; }
+    kaesu width;
+}
+
+waza append_uleb(bytes: []uint8, value: int64) -> unit {
+    kaku left = value;
+    aida (left >= 128) {
+        array.push(bytes, uint8(128 + (left - (left / 128) * 128)));
+        left = left / 128;
+    }
+    array.push(bytes, uint8(left));
+}
+
+waza ascii_name(bytes: []uint8) -> bool {
+    kaku index = 0;
+    aida (index < len(bytes)) {
+        moshi (bytes[index] < uint8(33) || bytes[index] > uint8(126)) { kaesu iie; }
+        index = index + 1;
+    }
+    kaesu hai;
+}
+
+waza export_nodes(exports: []DylibExport, word_count: int64) -> []ExportNode {
+    kaku nodes: []ExportNode = [ExportNode { address: [], edges: [] }];
+    kaku index = 0;
+    aida (index < len(exports)) {
+        kaku entry = exports[index];
+        kaku name = string.to_bytes(entry.name);
+        moshi (len(name) < 2 || len(name) > 127 || name[0] != uint8(95) ||
+            !ascii_name(name) || entry.word < 0 || entry.word >= word_count) { kaesu []; }
+        kaku current = 0;
+        kaku at = 0;
+        aida (at < len(name)) {
+            kaku edges = nodes[current].edges;
+            kaku child = -1;
+            kaku ei = 0;
+            aida (ei < len(edges)) {
+                moshi (edges[ei].byte == name[at]) { child = edges[ei].child; nukeru; }
+                ei = ei + 1;
+            }
+            moshi (child < 0) {
+                child = len(nodes);
+                array.push(edges, ExportEdge { byte: name[at], child: child });
+                array.push(nodes, ExportNode { address: [], edges: [] });
+            }
+            current = child;
+            at = at + 1;
+        }
+        moshi (len(nodes[current].address) != 0) { kaesu []; }
+        // A regular export has flags zero and a ULEB128 image-relative address.
+        append_uleb(nodes[current].address, entry_offset + entry.word * 4);
+        index = index + 1;
+    }
+    kaesu nodes;
+}
+
+waza export_trie(nodes: []ExportNode) -> []uint8 {
+    kaku offsets = array.with_capacity[int64](len(nodes));
+    kaku index = 0;
+    aida (index < len(nodes)) { array.push(offsets, 0); index = index + 1; }
+    // Child offsets are ULEB128. Starting at zero grows their widths
+    // monotonically until every node offset agrees with the encoded layout.
+    kaku changed = hai;
+    aida (changed) {
+        changed = iie;
+        kaku offset = 0;
+        kaku index = 0;
+        aida (index < len(nodes)) {
+            moshi (offsets[index] != offset) { changed = hai; offsets[index] = offset; }
+            kaku node = nodes[index];
+            offset = offset + 2;
+            moshi (len(node.address) != 0) { offset = offset + 1 + len(node.address); }
+            kaku ei = 0;
+            aida (ei < len(node.edges)) {
+                offset = offset + 2 + uleb_width(offsets[node.edges[ei].child]);
+                ei = ei + 1;
+            }
+            index = index + 1;
+        }
+    }
+    kaku bytes: []uint8 = [];
+    index = 0;
+    aida (index < len(nodes)) {
+        kaku node = nodes[index];
+        moshi (len(node.address) == 0) { array.push(bytes, uint8(0)); }
+        sore {
+            array.push(bytes, uint8(1 + len(node.address)));
+            array.push(bytes, uint8(0));
+            array.append_all(bytes, node.address);
+        }
+        array.push(bytes, uint8(len(node.edges)));
+        kaku ei = 0;
+        aida (ei < len(node.edges)) {
+            kaku edge = node.edges[ei];
+            array.push(bytes, edge.byte);
+            array.push(bytes, uint8(0));
+            append_uleb(bytes, offsets[edge.child]);
+            ei = ei + 1;
+        }
+        index = index + 1;
+    }
+    kaesu bytes;
+}
+
+waza dylib_words(output: binary.BinaryWriter, values: []int64) -> MachOError? {
+    kaku index = 0;
+    aida (index < len(values)) {
+        kaku failure = put32(output, values[index]);
+        moshi (failure != mu) { kaesu failure; }
+        index = index + 1;
+    }
+    kaesu mu;
+}
+
+waza dylib_name(output: binary.BinaryWriter, command: int64, name: []uint8) -> MachOError? {
+    kaku size = align(24 + len(name) + 1, 8);
+    kaku failure = dylib_words(output, [command, size, 24, 0, 65536, 65536]);
+    moshi (failure != mu) { kaesu failure; }
+    failure = put_bytes(output, name);
+    moshi (failure != mu) { kaesu failure; }
+    kaesu zeros(output, size - 24 - len(name));
+}
+
+// A dependency-free body may use ADRP/ADD image-relative patches. The only
+// dylib dependency is libSystem, required by dyld for a userland image.
+koukai waza dylib(spec: DylibSpec) -> ImageResult {
+    kaku image = spec.image;
+    kaku empty = plan(0, 0, 0);
+    moshi (len(image.words) == 0) { kaesu dylib_failure(empty, MachOError.EmptyText()); }
+    moshi (image.globals < 0 || image.globals > 2052) { kaesu dylib_failure(empty, MachOError.TooManyGlobals()); }
+    moshi (len(image.words) > (maximum_image_size - entry_offset) / 4 || len(image.constants) > maximum_image_size) {
+        kaesu dylib_failure(empty, MachOError.ImageTooLarge());
+    }
+    kaku layout = plan(len(image.words) * 4, len(image.constants), image.globals);
+    kaku name = string.to_bytes(spec.install_name);
+    moshi (len(name) <= 7 || len(name) > 127 || !ascii_name(name) || !string.has_prefix(spec.install_name, "@rpath/") ||
+        len(spec.exports) == 0 || len(spec.exports) > 128) { kaesu dylib_failure(layout, MachOError.InvalidExport()); }
+    kaku nodes = export_nodes(spec.exports, len(image.words));
+    moshi (len(nodes) == 0) { kaesu dylib_failure(layout, MachOError.InvalidExport()); }
+    kaku trie = export_trie(nodes);
+    kaku symoff = align(layout.linkedit_offset + len(trie), 8);
+    kaku stroff = symoff + len(spec.exports) * 16;
+    kaku names = binary.writer(1 + len(spec.exports) * 128);
+    kaku symbols = binary.writer(len(spec.exports) * 16);
+    kaku failure = zeros(names, 1);
+    kaku index = 0;
+    aida (index < len(spec.exports)) {
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+        kaku entry = spec.exports[index];
+        // n_strx, N_SECT|N_EXT, section 1, n_desc, n_value.
+        failure = dylib_words(symbols, [binary.writer_offset(names), 271, entry_offset + entry.word * 4, 0]);
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+        failure = put_bytes(names, string.to_bytes(entry.name));
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+        failure = zeros(names, 1);
+        index = index + 1;
+    }
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    kaku file_size = align(stroff + binary.writer_offset(names), 16);
+    moshi (file_size > maximum_image_size) { kaesu dylib_failure(layout, MachOError.ImageTooLarge()); }
+    layout = Layout { text_size: layout.text_size, const_offset: layout.const_offset, data_offset: layout.data_offset,
+        linkedit_offset: layout.linkedit_offset, file_size: file_size, sections: layout.sections };
+    kaku patched = patch_words(image, layout);
+    moshi (patched.error != mu) { kaesu patched; }
+
+    kaku text_sections = 1;
+    moshi (len(image.constants) > 0) { text_sections = 2; }
+    kaku text_command = 72 + 80 * text_sections;
+    kaku command_size = text_command + 72 + align(25 + len(name), 8) + 56 + 24 + 16 + 24 + 80;
+    kaku count = 8;
+    moshi (image.globals > 0) { command_size = command_size + 152; count = count + 1; }
+    moshi (32 + command_size + 16 > entry_offset) { kaesu dylib_failure(layout, MachOError.LoadCommandsTooLarge()); }
+    kaku output = binary.writer(file_size);
+    // MH_DYLIB with MH_NOUNDEFS and MH_TWOLEVEL. Dylibs are slideable by default.
+    failure = dylib_words(output, [4277009103, 16777228, 0, 6, count, command_size, 133, 0]);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    kaku text_name: []uint8 = [95,95,84,69,88,84];
+    failure = segment(output, text_name, 0, 0, 0, layout.text_size, 0, layout.text_size, 5, 5, text_sections, text_command);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = section(output, [95,95,116,101,120,116], text_name, 0, entry_offset, len(image.words) * 4, entry_offset, 2, 2147484672);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    moshi (len(image.constants) > 0) {
+        failure = section(output, [95,95,99,111,110,115,116], text_name, 0, layout.const_offset, len(image.constants), layout.const_offset, 3, 0);
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    }
+    moshi (image.globals > 0) {
+        kaku data_name: []uint8 = [95,95,68,65,84,65];
+        kaku data_size = layout.linkedit_offset - layout.data_offset;
+        failure = segment(output, data_name, 0, layout.data_offset, 0, data_size, layout.data_offset, data_size, 3, 3, 1, 152);
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+        failure = section(output, [95,95,100,97,116,97], data_name, 0, layout.data_offset, image.globals * 8, layout.data_offset, 3, 0);
+        moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    }
+    kaku payload = file_size - layout.linkedit_offset;
+    failure = segment(output, [95,95,76,73,78,75,69,68,73,84], 0, layout.linkedit_offset, 0,
+        align(payload, page_size), layout.linkedit_offset, payload, 1, 1, 0, 72);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = dylib_name(output, 13, name);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = dylib_name(output, 12, string.to_bytes("/usr/lib/libSystem.B.dylib"));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = dylib_words(output, [50, 24, 1, 720896, 720896, 0, 2147483699, 16, layout.linkedit_offset, len(trie),
+        2, 24, symoff, len(spec.exports), stroff, file_size - stroff, 11, 80, 0, 0, 0, len(spec.exports), len(spec.exports), 0]);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, 48);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, entry_offset - binary.writer_offset(output));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = put_bytes(output, patched.bytes);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, layout.const_offset - binary.writer_offset(output));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = put_bytes(output, image.constants);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, layout.linkedit_offset - binary.writer_offset(output));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = put_bytes(output, trie);
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, symoff - binary.writer_offset(output));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = put_bytes(output, binary.writer_bytes(symbols));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = put_bytes(output, binary.writer_bytes(names));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    failure = zeros(output, file_size - binary.writer_offset(output));
+    moshi (failure != mu) { kaesu dylib_failure(layout, failure); }
+    kaesu ImageResult { bytes: binary.writer_bytes(output), layout: layout, error: mu };
+}

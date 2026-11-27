@@ -1,0 +1,57 @@
+yobu "kiso/array";
+yobu "kiso/os";
+yobu "kiso/thread";
+
+waza churn(worker: int64, ready: thread.Channel<int64>, gate: thread.Channel<int64>) -> () -> int64 {
+    kaesu waza () -> int64 {
+        moshi (!thread.send[int64](ready, worker).sent) { kaesu -6; }
+        moshi (!thread.receive[int64](gate).closed) { kaesu -7; }
+        kaku item = 0;
+        aida (item < 250) {
+            kaku result = thread.channel_new_checked[int64](1, -1);
+            kaku channel = result.channel;
+            moshi (result.error != 0) { kaesu -1; }
+            moshi (channel == mu) { kaesu -1; }
+            kaku expected = worker * 250 + item;
+            moshi (!thread.send[int64](channel, expected).sent) { kaesu -2; }
+            kaku received = thread.receive[int64](channel);
+            moshi (received.closed || received.item != expected) { kaesu -3; }
+            moshi (thread.destroy[int64](channel) != 0) { kaesu -4; }
+            moshi (!thread.receive[int64](channel).closed) { kaesu -5; }
+            item = item + 1;
+        }
+        kaesu item;
+    };
+}
+
+waza main() -> unit {
+    kaku ready = thread.channel_new[int64](8, -1);
+    kaku gate = thread.channel_new[int64](1, -1);
+    kaku handles: []int64 = [];
+    kaku worker = 0;
+    aida (worker < 8) {
+        kaku handle = thread.start(churn(worker, ready, gate));
+        moshi (handle <= 0) { chant("worker start failed"); os.exit(1); }
+        array.push(handles, handle);
+        worker = worker + 1;
+    }
+    worker = 0;
+    aida (worker < len(handles)) {
+        moshi (thread.receive[int64](ready).closed) { chant("worker readiness failed"); os.exit(1); }
+        worker = worker + 1;
+    }
+    moshi (thread.close[int64](gate) != 0) { chant("start gate failed"); os.exit(1); }
+    worker = 0;
+    aida (worker < len(handles)) {
+        kaku result = thread.join_checked(handles[worker]);
+        moshi (!result.ok || result.value != 250) {
+            chant("channel operation failed");
+            chant(result.value);
+            os.exit(1);
+        }
+        worker = worker + 1;
+    }
+    moshi (thread.destroy[int64](ready) != 0 || thread.destroy[int64](gate) != 0) { os.exit(1); }
+    chant("concurrent channel allocation: ok");
+}
+main();

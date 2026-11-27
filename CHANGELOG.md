@@ -4,6 +4,15 @@
 
 # Changelog
 
+## 2.2.0 — Unreleased
+
+- Both frontends reject use of a nullable value when its earlier non-null proof can be invalidated on a loop backedge. A direct non-null loop guard still narrows the value in the body.
+- On Linux AMD64, the native collector can run while another thread blocks in TCP connect, accept, read, write or Reactor poll. References used by the pending system call remain rooted until the thread rejoins the running mutators.
+- On macOS ARM64 and Linux AMD64, an invalid, stale, concurrently claimed or self-join handle returns `-22`. Use `thread.join_checked` to distinguish a join error from a worker that returned `-22`.
+- On macOS ARM64, the process can allocate 16,384 Channel control blocks over its lifetime. `thread.channel_new_checked` returns `channel == mu` and `error == -12` after exhaustion. Previously created channels remain usable. A destroyed Channel's control block stays reserved until process exit.
+- Nonblocking TCP is available on the six native AOT targets. Reactor uses epoll on Linux and kqueue on macOS. Windows Reactor and native threads and Channels outside macOS ARM64 and Linux AMD64 remain unsupported. [Networking and target details](docs/async-networking.md)
+- The stable workflow has an explicit 2.2.0 profile for the pinned native v2.1 seed. Stable artifacts require the tagged branch tip, native fixed points and release attestation. [Stable distribution checks](docs/testing.md#stable-distribution-and-trusted-bootstrap-seeds)
+
 ## 2.1.2 — Unreleased
 
 - **Localized CLI:** every help page, option description, friendly error, warning and human-readable test result is available in 39 locales. Catalogs use BCP 47 tags, normalize POSIX forms such as `zh_CN.UTF-8`, fall back from region to language and finally to `en-US`, and never contact a network service at runtime.

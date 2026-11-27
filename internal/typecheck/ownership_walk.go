@@ -47,6 +47,10 @@ func forEachChild(e ast.Expression, fn func(ast.Expression)) {
 
 // walkAllExpressions 遍历程序中的所有表达式，包括嵌套函数与闭包字面量内部。
 func walkAllExpressions(program *ast.Program, visit func(ast.Expression)) {
+	walkStatements(program.Statements, visit, nil)
+}
+
+func walkStatements(statements []ast.Statement, visit func(ast.Expression), visitStatement func(ast.Statement)) {
 	var expr func(e ast.Expression)
 	var stmt func(s ast.Statement)
 	var block func(b *ast.BlockStatement)
@@ -70,6 +74,9 @@ func walkAllExpressions(program *ast.Program, visit func(ast.Expression)) {
 		}
 	}
 	stmt = func(s ast.Statement) {
+		if visitStatement != nil {
+			visitStatement(s)
+		}
 		switch n := s.(type) {
 		case *ast.LetStatement:
 			expr(n.Value)
@@ -102,7 +109,7 @@ func walkAllExpressions(program *ast.Program, visit func(ast.Expression)) {
 			block(n.Body)
 		}
 	}
-	for _, s := range program.Statements {
+	for _, s := range statements {
 		stmt(s)
 	}
 }

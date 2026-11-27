@@ -1110,13 +1110,24 @@ func (c *Compiler) registerFunctions(program *ast.Program) error {
 			}
 			name = ffi.Key(fn.CDLL, fn.CSymbol, fn.ReturnType.Name, params)
 		} else if fn.CSymbol != "" {
+			packagePath := ""
+			if idx := strings.Index(fn.Name.Name, "::"); idx >= 0 {
+				packagePath = fn.Name.Name[:idx]
+			}
+			if cabi.IsReservedSymbol(fn.CSymbol, packagePath) {
+				return fmt.Errorf("reserved Mio FFI runtime symbol")
+			}
 			var prototype strings.Builder
 			prototype.WriteString(cabi.Prefix)
 			prototype.WriteString(fn.CSymbol)
 			prototype.WriteByte(':')
 			prototype.WriteString(cabi.TypeCode(fn.ReturnType.Name))
 			for _, param := range fn.Parameters {
-				prototype.WriteString(cabi.TypeCode(param.DeclaredType.Name))
+				element := ""
+				if param.DeclaredType.Element != nil {
+					element = param.DeclaredType.Element.Name
+				}
+				prototype.WriteString(cabi.ParamCode(param.DeclaredType.Name, element))
 			}
 			name = prototype.String()
 		}

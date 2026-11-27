@@ -23,6 +23,8 @@ READY = b"hai\nMio TCP server waiting on 127.0.0.1\n"
 PORT_IN_USE = b"iie\nTCP port already in use\n"
 PE_GENERATOR = "windows-amd64/hello.mio"
 PE_EXECUTION = PE_GENERATOR + " (generated PE)"
+FFI_LINUX = "linux-amd64/ffi_libc.mio"
+FFI_MEMORY = "linux-amd64/ffi_memory.mio"
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,9 @@ PROGRAMS = {
     "filesystem_read.mio": Expected(b"Hello from Mio and Mochi!\n"),
     "os_arguments.mio": Expected("3\nMio and Mochi\n日本語\n".encode()),
     PE_GENERATOR: Expected(b""),
+    FFI_LINUX: Expected(b"42\nhai\nhai\n0\nE_FFI_SIGNATURE the call does not match the resolved signature\n\niie\n0\n"
+                        b"E_FFI_CLOSED the library was closed\n\n"),
+    FFI_MEMORY: Expected(b"-7\nhai\nE_FFI_BOUNDS offset 12 length 8 outside a buffer of 16 bytes\n\nE_FFI_STALE the buffer was freed, resized or released\nhai\nMochi\n"),
     TCP[0]: Expected(READY + b"3\nhai\n"),
     TCP[1]: Expected(b"hai\n3\nhai\n3\nhai\n77\n105\n111\n"),
 }
@@ -78,15 +83,22 @@ def host_target():
     return None
 
 
-def tcp_exclusion(target):
+def unsupported(module, target):
     coverage = ROOT / "scripts/ci/bunko_matrix_coverage.json"
-    return json.loads(coverage.read_text(encoding="utf-8"))["unsupported"].get("kiso/net/tcp.*", {}).get(target)
+    return json.loads(coverage.read_text(encoding="utf-8"))["unsupported"].get(module + ".*", {}).get(target)
+
+
+def tcp_exclusion(target):
+    return unsupported("kiso/net/tcp", target)
 
 
 def exclusions(target):
     excluded = {}
     if reason := tcp_exclusion(target):
         excluded.update(dict.fromkeys(TCP, reason))
+    if reason := unsupported("kiso/ffi/linux", target):
+        excluded[FFI_LINUX] = reason
+        excluded[FFI_MEMORY] = reason
     if target == "windows-arm64":
         excluded[PE_EXECUTION] = ("The generated image is an AMD64 PE; Windows on ARM64 could only run it through x64 emulation, which is not "
                                   "native evidence. The ARM64 compiler's own PE output is executed natively by the windows-arm64 image check.")
@@ -360,7 +372,8 @@ class Suite:
             return self.save()
         if not self.tcp_only:
             for name in PROGRAMS:
-                if name not in TCP and time.monotonic() < self.deadline:
+                # Excluded programs (for example the Linux AMD64 FFI example elsewhere) stay NOT_APPLICABLE with their reason.
+                if name not in TCP and self.results[name]["status"] != "NOT_APPLICABLE" and time.monotonic() < self.deadline:
                     self.standalone(name)
             if time.monotonic() < self.deadline:
                 self.mio_test()

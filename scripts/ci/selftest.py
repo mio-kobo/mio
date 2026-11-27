@@ -32,10 +32,58 @@ verify = load("ci_verify", HERE / "verify.py")
 isolation = load("release_isolation", HERE / "release_isolation.py")
 plan = load("ci_plan", HERE / "plan.py")
 native = load("ci_native_platforms", HERE / "native_platforms.py")
+bunko_matrix = load("ci_bunko_matrix", HERE / "bunko_matrix.py")
 thread_bench = load("ci_thread_bench", HERE / "thread_bench.py")
+bunko_matrix = load("ci_bunko_matrix", HERE / "bunko_matrix.py")
 
 
 class ContractTests(unittest.TestCase):
+    def test_native_cli_version_matches_checkout_or_distribution(self):
+        cases = (
+            (None, "2.2.0-dev", "PASS"),
+            (None, "2.1.2-dev", "FAIL"),
+            ("2.2.0-pr.0123456789ab", "2.2.0-pr.0123456789ab", "PASS"),
+            ("2.2.0-pr.0123456789ab", "2.2.0-pr.0123456789ac", "FAIL"),
+            ("2.2.0", "2.2.0", "PASS"),
+            ("2.2.0", "2.2.0-dev", "FAIL"),
+        )
+        for distribution, actual, expected in cases:
+            with self.subTest(distribution=distribution, actual=actual), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "VERSION").write_text("2.2.0\n", encoding="utf-8")
+                if distribution is not None:
+                    (root / "distribution-input.json").write_text(json.dumps({"version": distribution}), encoding="utf-8")
+                with patch.object(native, "ROOT", root):
+                    report = native.Report("linux-amd64", root / "report")
+                    banner = f"mio v{actual} (pure Mio Native AOT)\n"
+                    with patch.object(native, "run", return_value=(0, banner, "", 0)), patch.object(report, "check") as check:
+                        native.cli_checks(report, Path("mio"), report.target, root)
+                status = next(call.args[1] for call in check.call_args_list if call.args[0] == "cli-i18n-version")
+                self.assertEqual(status, expected)
+
+    def test_checked_channel_coverage_uses_both_native_thread_suites(self):
+        row = next(row for row in bunko_matrix.build_inventory()
+                   if (row["module"], row["function"]) == ("kiso/thread", "channel_new_checked"))
+        for target, protocol in (("darwin-arm64", "darwin-thread-programs"), ("linux-amd64", "linux-thread-gc")):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as directory:
+                report = Path(directory) / "report.json"
+                for status, expected in (("PASS", "PASS"), ("NOT_RUN", "UNVERIFIED")):
+                    checks = [dict(name=protocol, status=status, engine="native")]
+                    report.write_text(json.dumps(dict(target=target, checks=checks)))
+                    loaded = bunko_matrix.load_reports(directory)
+                    self.assertEqual(bunko_matrix.verdict(row, target, loaded[target])[0], expected)
+        self.assertEqual(bunko_matrix.verdict(row, "windows-amd64", None)[0], "UNSUPPORTED")
+
+    def test_dynamic_ffi_protocol_preserves_native_report_status(self):
+        row = dict(tests=["protocol windows-dynamic-ffi"], unsupported={}, not_testable="")
+        for status, expected in (("PASS", "PASS"), ("FAIL", "FAIL"), ("NOT_RUN", "UNVERIFIED"), (None, "UNVERIFIED")):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                checks = [] if status is None else [dict(name="windows-dynamic-ffi", status=status, engine="native")]
+                (Path(directory) / "report.json").write_text(json.dumps(dict(target="windows-amd64", checks=checks)))
+                loaded = bunko_matrix.load_reports(directory)
+                actual, _ = bunko_matrix.verdict(row, "windows-amd64", loaded["windows-amd64"])
+                self.assertEqual(actual, expected)
+
     def test_discovery_rejects_malformed_contract(self):
         for extra in (dict(module="../escape"), dict(engine="unknown"), dict(required_checks="native"),
                       dict(suite_checks={"quick": "native"}), dict(targets=["typo"]),
@@ -721,6 +769,46 @@ exit "$result"
                 with patch.object(native, "run", side_effect=self.fake_run(text, code)):
                     native.native_mio_test(report, "mio", skips_allowed=True)
                 self.assertEqual(report.checks[0]["status"], expected, text)
+
+    def test_native_report_selection_uses_latest_attempt_per_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for target, run_id, attempt in (
+                ("linux-amd64", 123, 1),
+                ("windows-amd64", 123, 1),
+                ("darwin-arm64", 123, 2),
+                ("darwin-arm64", 123, 10),
+                ("darwin-arm64", 456, 11),
+            ):
+                artifact = root / f"native-report-{target}-{run_id}-{attempt}"
+                artifact.mkdir()
+                (artifact / "report.json").write_text(str(attempt))
+                (artifact / "runtime-abi").mkdir()
+            # A newer incomplete artifact must not reuse an older passing report.
+            (root / "native-report-linux-amd64-123-10").mkdir()
+            output = root / "selected"
+            args = type("Args", (), dict(reports=root, output=output, run_id=123))
+            self.assertEqual(native.select_reports(args), 0)
+            darwin = output / "native-report-darwin-arm64"
+            self.assertEqual((darwin / "report.json").read_text(), "10")
+            self.assertTrue((darwin / "runtime-abi").is_dir())
+            self.assertEqual((output / "native-report-windows-amd64" / "report.json").read_text(), "1")
+            self.assertFalse((output / "native-report-linux-amd64" / "report.json").exists())
+
+    def test_bunko_matrix_uses_darwin_dylib_verdict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.json"
+            ffi = next(row for row in bunko_matrix.build_inventory()
+                       if row["module"] == "kiso/ffi/darwin" and row["function"] == "open")
+            for status in ("PASS", "FAIL", "NOT_RUN"):
+                with self.subTest(status=status):
+                    report.write_text(json.dumps({
+                        "target": "darwin-arm64",
+                        "checks": [{"name": "darwin-dylib", "status": status}],
+                    }))
+                    results = bunko_matrix.load_reports(directory)
+                    verdict, _ = bunko_matrix.verdict(ffi, "darwin-arm64", results["darwin-arm64"])
+                    self.assertEqual(verdict, "UNVERIFIED" if status == "NOT_RUN" else status)
 
     def test_native_summary_fails_on_missing_or_failed_platform_reports(self):
         with tempfile.TemporaryDirectory() as directory:

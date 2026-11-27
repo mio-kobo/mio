@@ -1,0 +1,23 @@
+yobu "../support";
+yobu "kiso/ffi/linux";
+yobu "kiso/string";
+
+// Exported data symbols are refused before any call: by the executable-mapping check for ordinary layouts, and by the
+// ELF symbol type when read-only data shares the executable segment (-z noseparate-code).
+kaku run = support.begin("test_ffi_symbol_kind");
+kaku files: []string = ["libmio_data.so", "libmio_data_rx.so"];
+kaku at = 0;
+aida (at < len(files)) {
+    kaku lib = linux.open(support.absolute(files[at]));
+    support.expect(run, string.concat("open ", files[at]), linux.is_open(lib));
+    kaku table = linux.symbol(lib, "mio_data_table", "i:i");
+    support.expect(run, string.concat("read-only data refused in ", files[at]), string.has_prefix(linux.error(table), "E_FFI_NOT_FUNCTION mio_data_table"));
+    kaku counter = linux.symbol(lib, "mio_data_counter", "i:i");
+    support.expect(run, string.concat("writable data refused in ", files[at]), string.has_prefix(linux.error(counter), "E_FFI_NOT_FUNCTION mio_data_counter"));
+    support.expect(run, "refused data is never called", linux.call_i_i(table, int32(1)) == int32(0) && !linux.last_call_ok());
+    kaku function = linux.symbol(lib, "mio_data_function", "i:i");
+    support.expect(run, string.concat("the function resolves and runs in ", files[at]), linux.call_i_i(function, int32(1)) == int32(12) && linux.last_call_ok());
+    support.expect(run, "close", linux.close(lib) == "");
+    at = at + 1;
+}
+support.finish(run);

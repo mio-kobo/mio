@@ -27,6 +27,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -64,7 +65,7 @@ TCP_PACKAGE = "bunko/kiso/net/tcp"
 # Packages whose native primitives exist only on some targets (the other targets reject the program at build time or
 # report the operation unsupported). On every other target the package is reported NOT_RUN -- never PASS -- and is not a
 # required check; it becomes required there only when that target's backend lands (see docs/async-networking.md).
-TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",)}
+TARGET_ONLY_PACKAGES = {"bunko/kiso/net/tcp_async": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64", "windows-amd64", "windows-arm64"), "bunko/kiso/reactor": ("linux-amd64", "darwin-arm64", "linux-arm64", "darwin-amd64"), "bunko/kiso/reactor/threaded": ("linux-amd64",), "bunko/kiso/ffi/linux": ("linux-amd64",)}
 ECHO_SERVER = "examples/tcp_echo_server.mio"
 ECHO_CLIENT = "examples/tcp_echo_client.mio"
 
@@ -282,7 +283,12 @@ def cli_checks(report, cli, target, work):
     check("no-color", ["--color=never", "help"], absent=(ansi,), env={"NO_COLOR": None, "CI": None})
     check("auto-no-color", ["help"], absent=(ansi,), env={"NO_COLOR": "1", "CI": None})
     check("unknown-command", ["--lang", "zh-CN", "help", "missing-command"], code=2, contains=("E_COMMAND", "未知命令"))
-    check("version", ["--lang", "en-US", "--version"], contains=("mio v2.1.2",))
+    distribution = report.data.get("distribution_input")
+    if distribution is None:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() + "-dev"
+    else:
+        version = distribution["version"]
+    check("version", ["--lang", "en-US", "--version"], contains=(f"mio v{version} (",))
     bad = work / "i18n-machine-bad.mio"
     bad.write_text('chant(missing_symbol);\n', encoding="utf-8")
     check("machine-json", ["--lang", "ja-JP", "--color=always", "check", str(bad), "--format=json"], code=1,
@@ -423,6 +429,48 @@ chant(len(tcp.ipv4(uint8(127),uint8(0),uint8(0),uint8(1),0).octets));
                  "" if ok else "missing module was accepted", output=brief(err or out))
 
 
+LINUX_FFI_EMBEDDED = """yobu "kiso/ffi/linux";
+kaku libc = linux.open_system("libc.so.6");
+kaku abs = linux.symbol(libc, "abs", "i:i");
+chant(linux.call_i_i(abs, int32(-42)));
+chant(linux.call_i_ii(abs, int32(1), int32(2)));
+chant(linux.last_error());
+chant(linux.close(libc));
+chant(linux.call_i_i(abs, int32(-7)));
+chant(linux.last_error());
+"""
+
+
+def linux_ffi_embedded(report, full, core, work):
+    """kiso/ffi/linux from the Full compiler's embedded Bunko only: an isolated copy of the Full CLI, no MIO_BUNKO and no adjacent tree,
+    builds and runs a program that loads libc by name, makes a gated call, is refused a mismatched call and a call after close. Core, which
+    embeds nothing, must report the package as missing instead of resolving it."""
+    base = work / "linux-ffi-embedded"
+    if base.exists():
+        shutil.rmtree(base)
+    (base / "bin").mkdir(parents=True)
+    cli = base / "bin" / "mio"
+    shutil.copyfile(full, cli)
+    cli.chmod(0o755)
+    source = base / "ffi.mio"
+    source.write_text(LINUX_FFI_EMBEDDED, encoding="utf-8")
+    image = base / "ffi"
+    code, out, err, _ = run(report, "linux-ffi-embedded-build", [cli, "build", source, "-o", image], cwd=base, env={"MIO_BUNKO": None})
+    executed = ""
+    if code == 0 and image.is_file():
+        image.chmod(0o755)
+        code, executed, run_err, _ = run(report, "linux-ffi-embedded-run", [image], cwd=base, env={"MIO_BUNKO": None})
+        err += run_err
+    expected = ["42", "0", "E_FFI_SIGNATURE the call does not match the resolved signature", "", "0", "E_FFI_CLOSED the library was closed"]
+    lines = [line.strip() for line in executed.splitlines()]
+    report.check("linux-ffi-embedded", "PASS" if code == 0 and lines == expected else "FAIL", "native",
+                 "" if code == 0 and lines == expected else "exit %s: %s | %s" % (code, brief(executed), brief(err or out)), output=executed)
+    code, out, err, _ = run(report, "linux-ffi-core-no-embedded", [core, "check", source], cwd=base, env={"MIO_BUNKO": None})
+    ok = code != 0 and "E_BUNKO_MISSING" in out + err
+    report.check("linux-ffi-core-no-embedded", "PASS" if ok else "FAIL", "native",
+                 "" if ok else "Core resolved kiso/ffi/linux without a Bunko tree" if code == 0 else brief(err or out))
+
+
 def smoke(report, cli, target, work, label_prefix=""):
     Path(work).mkdir(parents=True, exist_ok=True)
     code, out, err, _ = run(report, label_prefix + "cli-version", [cli, "--version"])
@@ -458,6 +506,19 @@ def windows_ffi_checks(report, cli):
     except (OSError, ValueError, KeyError):
         pass
     report.check("windows-c-ffi", status, "native", detail)
+    dynamic = report.output / "windows-dynamic-ffi"
+    code, out, err, _ = run(report, "windows-dynamic-ffi", [sys.executable, ROOT / "native-tests/run.py", "--mio", cli, "--output", dynamic, "--check-embedded"], timeout=1800)
+    detail = brief(err or out)
+    status = "FAIL"
+    try:
+        result = json.loads((dynamic / "report.json").read_text(encoding="utf-8"))
+        failures = [c for c in result["checks"] if c["status"] == "FAIL"]
+        status = "PASS" if code == 0 and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+        report.hashes["windows-dynamic-ffi"] = result.get("hashes", {})
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("windows-dynamic-ffi", status, "native", detail)
 
 
 def windows_tcp_pe(report, image, label):
@@ -610,7 +671,8 @@ def native_mio_test(report, cli, skips_allowed, target=""):
             report.check("mio-test " + package, "NOT_RUN", "native", "platform time budget (%ds) exhausted" % BUDGET_SECONDS)
             failures.append(package)
             continue
-        code, out, err, seconds = run(report, label, [cli, "test", package], timeout=900)
+        # This check parses the human-readable summary, so pin its language.
+        code, out, err, seconds = run(report, label, [cli, "test", package, "--lang", "en-US"], timeout=900)
         text = out + err
         passed = count(r"Tests complete: (\d+) passed", text)
         failed = count(r"Tests complete: \d+ passed, (\d+) failed", text)
@@ -633,9 +695,7 @@ def native_mio_test(report, cli, skips_allowed, target=""):
 
 
 def reactor_checks(report, cli, target, work):
-    """The reactor has a backend on linux-amd64 and linux-arm64 (epoll) and darwin-arm64 (kqueue). There: stress (normal and --gc-stress, repeated), a
-    1000-connection load test with an idle-CPU check, and an EINTR test, all natively. Every other target reports NOT_RUN (never PASS),
-    not a required check."""
+    """Run cancellation races, stress, a 1000-connection load test and EINTR on the Linux and Darwin reactor backends."""
     names = {"linux-amd64": "linux-reactor", "linux-arm64": "linux-arm64-reactor", "darwin-arm64": "darwin-reactor", "darwin-amd64": "darwin-amd64-reactor"}
     if target not in names:
         return report.check("reactor", "NOT_RUN", "native", "the reactor backend exists on linux-amd64, linux-arm64, darwin-arm64 and darwin-amd64 only (the primitives fail closed here)", required=False)
@@ -750,9 +810,13 @@ def darwin_thread_programs(report, cli, work):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     names = ["basic", "captures", "nested", "many", "channel_basic", "channel_close", "channel_graphs", "channel_mpmc", "summary_copy",
-             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "creation_limit", "lifecycle_cycles",
+             "gc_stress", "gc_lifecycle", "channel_races", "channel_lifecycle", "invalid_handles", "concurrent_join", "creation_limit", "lifecycle_cycles",
              "shutdown_active", "epoch_retention", "heap_invariants", "alloc_lock", "alloc_lock_stress", "alloc_lock_wait"]
-    stress = ["basic", "nested", "channel_basic", "channel_close", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    stress = ["basic", "nested", "channel_basic", "channel_close", "concurrent_join", "epoch_retention", "heap_invariants", "alloc_lock_stress"]
+    darwin_cases = {"channel_exhaustion": b"channel exhaustion: ok\n"}
+    names.extend(("channel_exhaustion", "channel_concurrent_alloc"))
+    stress.append("channel_concurrent_alloc")
+    expected = {**module.PROGRAMS, **darwin_cases}
     Path(work).mkdir(parents=True, exist_ok=True)
     failures, passed = [], []
     for name in names:
@@ -770,7 +834,7 @@ def darwin_thread_programs(report, cli, work):
             bad = []
             for repeat in range(repeats):
                 code, out, err, seconds = run_sampled(report, "darwin-thread-programs-run-%s-%s-%d" % (name, label, repeat), [image], timeout=180, sample_after=20)
-                if code != 0 or out.encode() != module.PROGRAMS[name]:
+                if code != 0 or out.encode() != expected[name]:
                     bad.append("run %d: exit %s after %.1fs stdout %r stderr %s" % (repeat, code, seconds or 0, out[:80], brief(err, 80)))
                     if name != "creation_limit":
                         break
@@ -846,10 +910,97 @@ def darwin_thread_bench(report, cli, work):
 BASELINE_SHA = "ebff537c86f0b669794000ddcabd45e3cab92b1f"
 
 
+def resolve_git_root(start=ROOT):
+    """Locate the git repository root even when ROOT is a disposable non-git checkout."""
+    for candidate in (Path(start), Path.cwd()):
+        if not candidate.exists():
+            continue
+        proc = subprocess.run(["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return Path(proc.stdout.strip()).resolve()
+    return None
+
+
+def prepare_darwin_baseline(report, cli, work, baseline_sha=BASELINE_SHA, repo_root=None):
+    """Materialize, verify, and build the immutable historical baseline CLI.
+
+    Returns dict(ok=bool, status=str, cli=Path|None, reason=str, baseline_sha=str,
+                 archive_sha256=str, cli_sha256=str).
+    Never silently falls back to candidate-only benchmarking.
+    """
+    import tarfile
+    result = dict(ok=False, status="BASELINE_NOT_AVAILABLE", cli=None, reason="",
+                  baseline_sha=baseline_sha, archive_sha256="", cli_sha256="")
+    if not cli or not Path(cli).is_file():
+        result["reason"] = f"missing compiler executable: {cli}"
+        return result
+    root = Path(repo_root).resolve() if repo_root else resolve_git_root(ROOT)
+    if root is None or not (root / ".git").exists():
+        result["reason"] = "cannot resolve git repository root for baseline archive"
+        return result
+
+    base_dir = Path(work) / "baseline-src"
+    archive_path = Path(work) / "baseline-src.tar"
+    base_cli = Path(work) / "mio-baseline"
+    shutil.rmtree(base_dir, ignore_errors=True)
+    archive_path.unlink(missing_ok=True)
+    base_cli.unlink(missing_ok=True)
+    base_dir.mkdir(parents=True)
+
+    code, out, err, _ = run(report, "darwin-thread-phases-baseline-fetch",
+                            ["git", "-C", str(root), "fetch", "--depth=1", "origin", baseline_sha],
+                            cwd=root, timeout=300)
+    if code != 0:
+        result["reason"] = f"baseline fetch failed (exit {code}): {brief(err or out)}"
+        return result
+
+    code, rev_out, rev_err, _ = run(report, "darwin-thread-phases-baseline-rev",
+                                    ["git", "-C", str(root), "rev-parse", "--verify", f"{baseline_sha}^{{commit}}"],
+                                    cwd=root, timeout=60)
+    resolved_sha = rev_out.strip()
+    if code != 0 or resolved_sha != baseline_sha:
+        result["reason"] = f"baseline SHA mismatch: expected {baseline_sha}, got {resolved_sha or brief(rev_err)}"
+        return result
+
+    code, out, err, _ = run(report, "darwin-thread-phases-baseline-archive",
+                            ["git", "-C", str(root), "archive", "--format=tar", "--output", str(archive_path), baseline_sha],
+                            cwd=root, timeout=300)
+    if code != 0 or not archive_path.is_file():
+        result["reason"] = f"baseline git archive failed (exit {code}): {brief(err or out)}"
+        return result
+
+    result["archive_sha256"] = sha256(archive_path)
+    try:
+        with tarfile.open(archive_path, "r:") as tf:
+            tf.extractall(base_dir)
+    except (OSError, tarfile.TarError) as error:
+        result["reason"] = f"corrupt baseline source archive: {error}"
+        return result
+
+    required_paths = (base_dir / "bunko" / "kiso", base_dir / "selfhost" / "cli" / "main.mio")
+    missing = [str(p.relative_to(base_dir)) for p in required_paths if not p.exists()]
+    if missing:
+        result["reason"] = f"baseline tree missing required sources: {', '.join(missing)}"
+        return result
+
+    ok, reason, _ = cli_build(report, "darwin-thread-phases-baseline-build", cli, "selfhost/cli",
+                              "darwin-arm64", base_cli, extra=("--bunko-root", str(base_dir / "bunko")), cwd=base_dir)
+    if not ok or not base_cli.is_file():
+        result["reason"] = f"baseline compilation failed: {reason}"
+        return result
+
+    result["ok"] = True
+    result["status"] = "PASS"
+    result["cli"] = base_cli
+    result["cli_sha256"] = sha256(base_cli)
+    return result
+
+
 def darwin_thread_phases(report, cli, work):
     """Evidence only (non-required): every benchmark phase of benchmarks/threads/efficiency.mio built and run as its own process with its own budget
     (scripts/ci/thread_bench.py), plus the 10 s mpmc_probe that reports per-worker counts. Unlike darwin-thread-bench, an unfinished mpmc cannot hide
-    start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded)."""
+    start_join, fan_join, pingpong or the alloc_* phases. PASS only if every benchmark phase is COMPLETE (probe excluded) and the baseline materialized."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
     # Weak scaling alloc_1/2/4 (2000000 iterations per thread), strong scaling alloc_s1/alloc_s4 (4000000 in total; alloc_2 is the 2-thread point),
@@ -859,19 +1010,20 @@ def darwin_thread_phases(report, cli, work):
     phases_dir = report.logs / "thread-phases"
     argv = [sys.executable, ROOT / "scripts/ci/thread_bench.py", "--mio", str(cli), "--target", "darwin-arm64", "--repeat", "4", "--budget", "120",
             "--sample-after", "25", "--symbols", "--output", str(phases_dir)]
-    # Baseline compiler: the previous head (BASELINE_SHA) built natively by the compiler under test,
-    # so baseline and candidate images run on the same runner in the same job. If it cannot be built the phases run for the candidate only.
-    base_dir = Path(work) / "baseline-src"
-    base_cli = Path(work) / "mio-baseline"
-    shutil.rmtree(base_dir, ignore_errors=True)
-    base_dir.mkdir(parents=True)
-    code, out, err, _ = run(report, "darwin-thread-phases-baseline-fetch", ["git", "fetch", "--depth=1", "origin", BASELINE_SHA], timeout=300)
-    if code == 0:
-        code, out, err, _ = run(report, "darwin-thread-phases-baseline-archive", ["sh", "-c", "git archive %s | tar -x -C %s" % (BASELINE_SHA, base_dir)], timeout=300)
-    if code == 0:
-        ok, reason, _ = cli_build(report, "darwin-thread-phases-baseline-build", cli, "selfhost/cli", "darwin-arm64", base_cli, extra=("--bunko-root", str(base_dir / "bunko")), cwd=base_dir)
-        if ok:
-            argv += ["--baseline-mio", str(base_cli)]
+    baseline = prepare_darwin_baseline(report, cli, work, BASELINE_SHA)
+    report.check("darwin-thread-phases-baseline", "PASS" if baseline["ok"] else "FAIL", "native",
+                 baseline["reason"] if not baseline["ok"] else f"sha={baseline['baseline_sha'][:12]} archive={baseline['archive_sha256'][:12]}",
+                 required=False, baseline_status=baseline["status"], baseline_sha=baseline["baseline_sha"],
+                 archive_sha256=baseline["archive_sha256"], baseline_cli_sha256=baseline["cli_sha256"])
+    if not baseline["ok"]:
+        report.check("darwin-thread-phases", "FAIL", "native",
+                     f"{baseline['status']}: {baseline['reason']}", required=False,
+                     baseline_status=baseline["status"], incomplete_evidence=True)
+        darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", None)
+        darwin_pthread_burst(report, Path(work) / "pthread-burst")
+        return
+    base_cli = baseline["cli"]
+    argv += ["--baseline-mio", str(base_cli)]
     for phase in phases:
         argv += ["--phase", phase]
     code, out, err, seconds = run(report, "darwin-thread-phases-run", argv, timeout=6600)
@@ -888,7 +1040,7 @@ def darwin_thread_phases(report, cli, work):
     except (OSError, ValueError, KeyError) as problem:
         lines.append("no report: %s" % problem)
     report.check("darwin-thread-phases", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
-    darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", base_cli if base_cli.is_file() else None)
+    darwin_thread_start_repeat(report, cli, Path(work) / "start-repeat", base_cli)
     darwin_pthread_burst(report, Path(work) / "pthread-burst")
 
 
@@ -988,6 +1140,16 @@ def darwin_thread_observe(report, cli, work):
     report.check("darwin-thread-observe", "PASS" if code == 0 else "FAIL", "native", " | ".join(lines)[:9000], required=False)
 
 
+def darwin_dylib(report, cli):
+    output = report.logs / "dylib"
+    code, out, err, seconds = run(
+        report, "darwin-dylib-run",
+        [sys.executable, ROOT / "tests/ffi/dylib/run.py", "--mio", cli, "--output", output],
+        timeout=900,
+    )
+    report.check("darwin-dylib", "PASS" if code == 0 else "FAIL", "native", brief(out + err, 300))
+
+
 def darwin_c_abi(report, cli, work):
     """Darwin ARM64 C ABI acceptance (docs/darwin-arm64-c-ffi.md), non-required until it has a CI history. tests/ffi/darwin-arm64/run.py builds Clang
     objects, an archive and a dylib, links them into signed Mio programs with the compiler built from this source, runs them, and checks the rejections
@@ -997,6 +1159,19 @@ def darwin_c_abi(report, cli, work):
     named in the reason and never counted as a pass. The raw log of every command lands under logs/c-abi."""
     import json
     Path(work).mkdir(parents=True, exist_ok=True)
+    shared = report.logs / "shared-c-fixtures"
+    code, out, err, _ = run(report, "darwin-shared-native-fixtures", [sys.executable, ROOT / "native-tests/darwin.py", "--mio", cli, "--output", shared], timeout=1800)
+    status, detail = "FAIL", brief(err or out)
+    try:
+        checks = json.loads((shared / "report.json").read_text(encoding="utf-8"))["checks"]
+        needed = {"Mio dylib calls normal", "Mio dylib calls gc-stress"}
+        passed = {c["name"] for c in checks if c["status"] == "PASS"}
+        failures = [c for c in checks if c["status"] != "PASS" and c["name"] != "Darwin runtime token loader"]
+        status = "PASS" if code == 0 and needed <= passed and not failures else "FAIL"
+        detail = "; ".join(c["name"] + ":" + c["status"] for c in failures)
+    except (OSError, ValueError, KeyError):
+        pass
+    report.check("darwin-shared-native-fixtures", status, "native", detail)
     output = report.logs / "c-abi"
     code, out, err, seconds = run(report, "darwin-c-abi-run", [sys.executable, ROOT / "tests/ffi/darwin-arm64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
     try:
@@ -1021,6 +1196,69 @@ def darwin_c_abi(report, cli, work):
     detail = "%d PASS, %d FAIL, %d NOT_RUN, %d SKIP%s" % (len(passed), len(failed), len(not_run), len(skipped),
                                                           " (%s, no baseline compiler supplied)" % ", ".join(skipped) if skipped and not unexpected_skips else "")
     report.check("darwin-c-abi", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail, required=False)
+
+
+def linux_shared(report, cli, work):
+    """Required Linux x86-64 shared-library generation check (docs/linux-amd64-shared-libraries.md).
+    tests/shared/linux-amd64/run.py builds four independent libraries and one aggregate from real Mio modules with the compiler built from this
+    source (`mio build --shared`), inspects every file with readelf/nm/objdump/ldd, loads them from a real C host (dlopen, dlsym, calls, dlclose,
+    several libraries at once, a collector stress), runs the negative checks and compares the static executables with the base compiler when one is
+    supplied. The same libraries are also linked by the Mio native linker (`--linker native`, kiso/aot/elfdyn) with only trap programs on PATH,
+    inspected and loaded by the same C host. PASS requires no FAIL; NOT_RUN is limited to tools the host may lack (file, valgrind, strace; the
+    trap-program check covers linker execution without strace) and the optional base-compiler comparison, and is named in the detail. Raw logs
+    land under logs/linux-shared."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    output = report.logs / "linux-shared"
+    code, out, err, seconds = run(report, "linux-shared-run", [sys.executable, ROOT / "tests/shared/linux-amd64/run.py", "--mio", str(cli), "--output", str(output)], timeout=1800)
+    try:
+        checks = json.loads((output / "report.json").read_text(encoding="utf-8"))["checks"]
+    except (OSError, ValueError, KeyError) as problem:
+        report.check("linux-shared", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)))
+        return
+    count = lambda status: [item["name"] for item in checks if item.get("status") == status]
+    passed, failed, not_run = count("PASS"), count("FAIL"), count("NOT_RUN")
+    allowed = ("file(1) reports", "valgrind", "strace execve trace", "byte-identical to the base commit")
+    unexpected = [name for name in not_run if not any(item in name for item in allowed)]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if failed:
+        problems.append("FAIL: %s" % ", ".join(failed))
+    if unexpected:
+        problems.append("NOT_RUN: %s" % ", ".join(unexpected))
+    if not passed:
+        problems.append("no check passed")
+    detail = "%d PASS, %d FAIL, %d NOT_RUN%s" % (len(passed), len(failed), len(not_run), " (tools absent: %s)" % ", ".join(not_run) if not_run and not unexpected else "")
+    report.check("linux-shared", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + detail)
+
+
+def linux_dynamic_libraries(report, cli, work):
+    """Linux AMD64 shared-library loading through the production Bunko package kiso/ffi/linux (docs/linux-dynamic-libraries.md). Required: it
+    has passed on every Linux AMD64 native run since the loader landed, and it is the only native test of several kiso/ffi/linux wrappers
+    (scripts/ci/bunko_matrix_coverage.json). tests/ffi/linux-amd64-dynamic/run.py builds the six native modules (math, buffer, state, zlib, SQLite, OpenSSL) and a dependency pair with `cc -fPIC -shared`, inspects them with readelf/nm/ldd,
+    compiles the Mio end-to-end cases with the compiler built from this source (also with --gc-stress), runs them, and checks the static and dynamic ELF layouts
+    and the benchmark. It needs the zlib, SQLite3 and OpenSSL development packages; without them the module build fails and this check FAILs (never skips).
+    Raw logs, report.json and bench.txt land under logs/linux-dynamic-libraries."""
+    import json
+    Path(work).mkdir(parents=True, exist_ok=True)
+    output = report.logs / "linux-dynamic-libraries"
+    code, out, err, seconds = run(report, "linux-dynamic-libraries-run", [sys.executable, ROOT / "tests/ffi/linux-amd64-dynamic/run.py", "--mio", str(cli), "--output", str(output), "--bench"], timeout=3600)
+    try:
+        results = json.loads((output / "report.json").read_text(encoding="utf-8"))["results"]
+    except (OSError, ValueError, KeyError) as problem:
+        report.check("linux-dynamic-libraries", "FAIL", "native", "no report: %s (exit %s) | %s" % (problem, code, brief(out + err, 300)))
+        return
+    failed = [item["name"] for item in results if item.get("status") != "PASS"]
+    passed = [item["name"] for item in results if item.get("status") == "PASS"]
+    problems = []
+    if code != 0:
+        problems.append("exit %s" % code)
+    if failed:
+        problems.append("FAIL: %s" % ", ".join(failed))
+    if not passed:
+        problems.append("no check passed")
+    report.check("linux-dynamic-libraries", "FAIL" if problems else "PASS", "native", ("; ".join(problems) + " | " if problems else "") + "%d PASS, %d FAIL" % (len(passed), len(failed)))
 
 
 def linux_c_abi(report, cli, work):
@@ -1323,9 +1561,31 @@ def linux(args, target="linux-amd64"):
         return finish(report)
     # CLI: compiler B builds selfhost/cli (CLI A); then the CLI builds itself A -> B -> C -> D
     cli_a = work / ("mio-A" + suffix)
-    code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
-    ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
-    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+    if target in ("linux-arm64", "windows-arm64"):
+        # These AArch64 bootstrap compilers have a 1 GiB arena. Build Core
+        # first so the typed native frontend handles the Full resource table.
+        # Full self-build fixed points and every subsequent check still run.
+        source = Path(tempfile.mkdtemp(prefix="bootstrap-core-source-", dir=work))
+        shutil.copytree(ROOT / "selfhost", source / "selfhost")
+        shutil.copytree(ROOT / "bunko", source / "bunko")
+        (source / "selfhost/resources/bunko_data.mio").write_bytes(EMPTY.encode("utf-8"))
+        core_bootstrap = work / ("mio-bootstrap-core" + suffix)
+        code, out, err, seconds = run(report, "cli-core-bootstrap", [paths["B"]],
+                                      stdin=("selfhost/cli\n%s\n" % core_bootstrap).encode(), cwd=source)
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and core_bootstrap.is_file()
+        if not report.check("cli-core-bootstrap", "PASS" if ok else "FAIL", "native",
+                            "" if ok else "exit %s: %s" % (code, brief(err or out)), built_by="compiler-B"):
+            return finish(report)
+        os.chmod(core_bootstrap, 0o755)
+        report.hashes["cli-core-bootstrap"] = sha256(core_bootstrap)
+        ok, reason, seconds = cli_build(report, "cli-A", core_bootstrap, "selfhost/cli", target, cli_a)
+        built_by = "native-core-bootstrap"
+    else:
+        code, out, err, seconds = run(report, "cli-A", [paths["B"]], stdin=("selfhost/cli\n%s\n" % cli_a).encode())
+        ok = code == 0 and out == profile["tag"] + ": ok\n" and cli_a.is_file()
+        reason = "exit %s: %s" % (code, brief(err or out))
+        built_by = "compiler-B"
+    if not report.check("cli-stage-A", "PASS" if ok else "FAIL", "native", "" if ok else reason, built_by=built_by):
         return finish(report)
     os.chmod(cli_a, 0o755)
     report.hashes["cli-A"] = sha256(cli_a)
@@ -1336,6 +1596,8 @@ def linux(args, target="linux-amd64"):
     if core is None:
         return finish(report)
     embedded_checks(report, cli, core, target, work)
+    if target == "linux-amd64":
+        linux_ffi_embedded(report, cli, core, work)
     smoke(report, cli, target, work)
     mio_run_protocol(report, cli, work)
     os_process_protocol(report, cli, work)
@@ -1345,6 +1607,8 @@ def linux(args, target="linux-amd64"):
     contract(report, cli, target, reference=str(refvm), suite="differential")
     if target == "linux-amd64":
         linux_c_abi(report, cli, work / "linux-c-abi")
+        linux_dynamic_libraries(report, cli, work / "linux-dynamic-libraries")
+        linux_shared(report, cli, work / "linux-shared")
     if target != "linux-amd64":
         # The remaining steps are specific to the amd64 hub: the x86-64 runtime chain and the cross-built Stage A images.
         thread_checks(report, cli, target, work / "threads")
@@ -1455,6 +1719,7 @@ def follower(args, target):
             darwin_thread_phases(report, cli, work / "thread-phases")
             darwin_thread_observe(report, cli, work / "thread-observe")
             darwin_c_abi(report, cli, work / "c-abi")
+            darwin_dylib(report, cli)
         mio_run_protocol(report, cli, work)
         os_process_protocol(report, cli, work)
         mio_test_protocol(report, cli, work)
@@ -1589,6 +1854,26 @@ def finish(report, cli=None):
 
 # ---------------------------------------------------------------------------------------------------- summary
 
+def select_reports(args):
+    """Keep one complete artifact directory per target, even on a partial rerun."""
+    reports = Path(args.reports)
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    for target in TARGETS.values():
+        prefix = f"native-report-{target}-{args.run_id}-"
+        candidates = [
+            (int(attempt), path)
+            for path in reports.glob(prefix + "*")
+            if path.is_dir() and re.fullmatch(r"[1-9][0-9]*", attempt := path.name[len(prefix):])
+        ]
+        if candidates:
+            # Required checks and matrix evidence must both come from this attempt.
+            # If its report is missing or invalid, the gate will fail for that target.
+            _, newest = max(candidates)
+            newest.rename(output / f"native-report-{target}")
+    return 0
+
+
 def summary(args):
     rows, overall, combined = [], "PASS", {}
     found = {}
@@ -1669,6 +1954,10 @@ def main():
     p.add_argument("--reports", required=True)
     p.add_argument("--output", required=True)
     p.add_argument("--targets", default="", help="comma-separated targets that must all have a report (default: the three release targets)")
+    p = sub.add_parser("select-reports")
+    p.add_argument("--reports", required=True)
+    p.add_argument("--output", required=True)
+    p.add_argument("--run-id", required=True, type=int)
     for command in sub.choices.values():
         command.add_argument("--run-examples", action="store_true")
     args = parser.parse_args()
@@ -1682,6 +1971,8 @@ def main():
         return linux(args, "windows-arm64")
     if args.command == "summary":
         return summary(args)
+    if args.command == "select-reports":
+        return select_reports(args)
     return follower(args, TARGETS[args.command])
 
 
