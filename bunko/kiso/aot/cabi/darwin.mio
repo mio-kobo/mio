@@ -5,7 +5,7 @@ koukai teisu darwin_fp = 1;
 koukai teisu darwin_stack = 2;
 
 koukai kata DarwinArgument { bank: int64; offset: int64; size: int64; }
-koukai kata DarwinLayout { arguments: []DarwinArgument; stack_bytes: int64; }
+koukai kata DarwinLayout { arguments: []DarwinArgument; stack_bytes: int64; stack_used: int64; }
 
 koukai waza darwin_scalar_size(kind: int64) -> int64 {
     moshi (kind == 97 || kind == 98 || kind == 108) { kaesu 1; }
@@ -44,5 +44,19 @@ koukai waza darwin_layout(parameters: []int64) -> DarwinLayout {
         } }
         at = at + 1;
     }
-    kaesu DarwinLayout { arguments: arguments, stack_bytes: darwin_align(stack, 16) };
+    kaesu DarwinLayout { arguments: arguments, stack_bytes: darwin_align(stack, 16), stack_used: stack };
+}
+
+// The unnamed arguments in Apple's scalar variadic ABI always occupy
+// 8-byte stack slots after the naturally packed fixed stack arguments.
+koukai waza darwin_variadic_layout(fixed: DarwinLayout, count: int64) -> DarwinLayout {
+    kaku arguments = array.clone(fixed.arguments);
+    kaku stack = darwin_align(fixed.stack_used, 8);
+    kaku index = 0;
+    aida (index < count) {
+        array.push(arguments, DarwinArgument { bank: darwin_stack, offset: stack, size: 8 });
+        stack = stack + 8;
+        index = index + 1;
+    }
+    kaesu DarwinLayout { arguments: arguments, stack_bytes: darwin_align(stack, 16), stack_used: stack };
 }

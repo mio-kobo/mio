@@ -1,0 +1,71 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/array";
+yobu "kiso/string";
+
+koukai kata VariadicFunction { binding: Function; }
+koukai kata VariadicResult { function: VariadicFunction?; error: string; }
+
+// The declared prototype describes the result and only the named parameters.
+koukai waza bind_variadic_c(library: Library, name: string, fixed: CPrototype) -> VariadicResult {
+    moshi (len(fixed.parameters) == 0) {
+        kaesu VariadicResult { function: mu, error: "a variadic C function requires a named parameter" };
+    }
+    kaku result = bind_prototype(library, name, fixed, iie, hai);
+    kaku binding = result.function;
+    moshi (binding == mu) { kaesu VariadicResult { function: mu, error: result.error }; }
+    kaesu VariadicResult { function: VariadicFunction { binding: binding }, error: "" };
+}
+
+koukai waza release_variadic(function: VariadicFunction) -> string { kaesu release(function.binding); }
+
+waza variadic_promotion(value: Value) -> Value {
+    awase (value) {
+        baai I8(x) { kaesu Value.I32(int32(int64(x))); }
+        baai U8(x) { kaesu Value.I32(int32(int64(x))); }
+        baai I16(x) { kaesu Value.I32(int32(int64(x))); }
+        baai U16(x) { kaesu Value.I32(int32(int64(x))); }
+        baai F32(x) { kaesu Value.F64(float64(x)); }
+        baai Bool(x) {
+            moshi (x) { kaesu Value.I32(int32(1)); }
+            kaesu Value.I32(int32(0));
+        }
+        baai I32(x) { kaesu value; }
+        baai U32(x) { kaesu value; }
+        baai I64(x) { kaesu value; }
+        baai U64(x) { kaesu value; }
+        baai F64(x) { kaesu value; }
+        baai Ptr(x) { kaesu value; }
+        baai Void { kaesu value; }
+    }
+    kaesu value;
+}
+
+waza invoke_variadic_entry(entry: FunctionEntry, fixed: []Value, trailing: []Value) -> CallResult {
+    kaku codes = string.to_bytes(entry.signature);
+    kaku error = argument_error(codes, fixed);
+    moshi (error != "") { kaesu CallResult { value: mu, error: error }; }
+    moshi (len(trailing) > 256 - len(fixed)) {
+        kaesu CallResult { value: mu, error: "too many C arguments" };
+    }
+    kaku arguments = array.with_capacity[Value](len(fixed) + len(trailing));
+    array.append_all(arguments, fixed);
+    kaku at = 0;
+    aida (at < len(trailing)) {
+        kaku value = trailing[at];
+        moshi (value_code(value) == 118) {
+            kaesu CallResult { value: mu, error: "void is only valid as a result" };
+        }
+        array.push(arguments, variadic_promotion(value));
+        at = at + 1;
+    }
+    kaku layout = cabi.darwin_variadic_layout(entry.layout, len(trailing));
+    kaesu invoke_frame(entry.address, int64(codes[0]), layout, arguments);
+}
+
+koukai waza invoke_variadic(function: VariadicFunction, fixed: []Value, trailing: []Value) -> CallResult {
+    kaku entry = pin_function(function.binding, "", hai);
+    moshi (entry == mu) { kaesu CallResult { value: mu, error: "invalid or released variadic function" }; }
+    kaku result = invoke_variadic_entry(entry, fixed, trailing);
+    unpin_library(entry.owner);
+    kaesu result;
+}

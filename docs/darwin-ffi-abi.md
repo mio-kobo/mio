@@ -95,7 +95,15 @@ The loader supports Mio workers. Library and function registries are synchronize
 
 The worker path publishes the existing GC roots and uses the direct C ABI's blocking transition. Native results are preserved across mutator reentry. Programs that use workers, extra C declarations, or linker flags use Apple ld to link the same Mio-generated bridge. A standalone loader with fixed libSystem imports uses the native Mach-O writer.
 
-Stateless Mio exports can run concurrently in Mio and C hosts. Mutable module state requires caller-side serialization, and any native dependency's own concurrency contract applies. Callbacks, C aggregate values and variadic functions remain outside the supported loader contract. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+Stateless Mio exports can run concurrently in Mio and C hosts. Mutable module state requires caller-side serialization, and any native dependency's own concurrency contract applies. Callbacks and C aggregate values passed by value remain outside the supported loader contract. Programs with arbitrary C declarations continue to use the [Darwin C ABI build path](darwin-arm64-c-ffi.md).
+
+## Variadic C functions
+
+`bind_variadic_c` takes a `CPrototype` with at least one named parameter and returns a `VariadicFunction`. Pass named and unnamed argument values separately to `invoke_variadic`. Release the binding with `release_variadic`. The caller is responsible for contracts expressed by the named arguments, such as the types specified by a format string.
+
+Mio applies C default promotions to the unnamed arguments. It promotes `float32` to `float64`, and `bool` and narrower integers to `int32`. The fixed parameters use the ordinary register banks and packed stack layout. Each unnamed scalar occupies an eight-byte stack slot after the fixed spill area. Clang's `va_arg` reads that layout directly. This API covers scalar C variadic calls declared at runtime.
+
+[Apple ARM64 calling convention](https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms)
 
 ## Native buffers
 

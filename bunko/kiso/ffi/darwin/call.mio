@@ -89,7 +89,7 @@ waza value_code(value: Value) -> int64 {
     kaesu 0;
 }
 
-waza bind_prototype(library: Library, name: string, prototype: CPrototype, mio: bool) -> SymbolResult {
+waza bind_prototype(library: Library, name: string, prototype: CPrototype, mio: bool, variadic: bool) -> SymbolResult {
     // Match the compiler's fixed-prototype arity bound.
     moshi (len(prototype.parameters) > 256) {
         kaesu SymbolResult { function: mu, error: "too many C parameters" };
@@ -106,16 +106,16 @@ waza bind_prototype(library: Library, name: string, prototype: CPrototype, mio: 
     }
     kaku signature = string.from_utf8(codes);
     moshi (signature == mu) { kaesu SymbolResult { function: mu, error: "invalid C prototype" }; }
-    kaesu bind_function(library, name, signature, mio);
+    kaesu bind_function(library, name, signature, mio, variadic);
 }
 
 // The caller declares the exact C ABI. dyld provides a symbol address.
 koukai waza bind_c(library: Library, name: string, prototype: CPrototype) -> SymbolResult {
-    kaesu bind_prototype(library, name, prototype, iie);
+    kaesu bind_prototype(library, name, prototype, iie, iie);
 }
 
 koukai waza bind_mio(library: Library, name: string, prototype: CPrototype) -> SymbolResult {
-    kaesu bind_prototype(library, name, prototype, hai);
+    kaesu bind_prototype(library, name, prototype, hai, iie);
 }
 
 // Mio's narrowing conversions check the range. Extract the C slot's low
@@ -194,37 +194,43 @@ waza integer_value(bits: int64, kind: int64) -> Value {
     kaesu Value.Bool(low_unsigned(bits, 256) != 0);
 }
 
-waza invoke_entry(entry: FunctionEntry, arguments: []Value) -> CallResult {
-    kaku codes = string.to_bytes(entry.signature);
+waza argument_error(codes: []uint8, arguments: []Value) -> string {
     moshi (len(arguments) != len(codes) - 1) {
-        kaesu CallResult { value: mu, error: "wrong C argument count" };
+        kaesu "wrong C argument count";
     }
     kaku at = 0;
     aida (at < len(arguments)) {
         moshi (value_code(arguments[at]) != int64(codes[at + 1])) {
-            kaesu CallResult { value: mu, error: "wrong C argument type" };
+            kaesu "wrong C argument type";
         }
         at = at + 1;
     }
+    kaesu "";
+}
+
+waza invoke_frame(address: cptr, result: int64, layout: cabi.DarwinLayout, arguments: []Value) -> CallResult {
     // The bridge sees only native storage and scalar values. The frame
     // contains the two register banks, followed by the outgoing stack area.
-    kaku frame = allocate_zeroed(uint64(1), uint64(register_bytes + entry.layout.stack_bytes));
+    kaku frame = allocate_zeroed(uint64(1), uint64(register_bytes + layout.stack_bytes));
     moshi (frame == cptr(0)) { kaesu CallResult { value: mu, error: "cannot allocate C call frame" }; }
-    at = 0;
+    kaku at = 0;
     aida (at < len(arguments)) {
-        pack_argument(frame, entry.layout.arguments[at], arguments[at]);
+        pack_argument(frame, layout.arguments[at], arguments[at]);
         at = at + 1;
     }
-    call_frame(entry.address, frame, uint64(entry.layout.stack_bytes));
-    kaku value = unpack_result(frame, int64(codes[0]));
+    call_frame(address, frame, uint64(layout.stack_bytes));
+    kaku value = unpack_result(frame, result);
     native_free(frame);
     kaesu CallResult { value: value, error: "" };
 }
 
 koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
-    kaku entry = pin_function(function, "");
+    kaku entry = pin_function(function, "", iie);
     moshi (entry == mu) { kaesu CallResult { value: mu, error: "invalid or released function" }; }
-    kaku result = invoke_entry(entry, arguments);
+    kaku codes = string.to_bytes(entry.signature);
+    kaku error = argument_error(codes, arguments);
+    kaku result = CallResult { value: mu, error: error };
+    moshi (error == "") { result = invoke_frame(entry.address, int64(codes[0]), entry.layout, arguments); }
     unpin_library(entry.owner);
     kaesu result;
 }
