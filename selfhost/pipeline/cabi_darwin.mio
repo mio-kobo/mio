@@ -1,5 +1,6 @@
 yobu "kiso/aot/cabi";
 yobu "kiso/aot/lower";
+yobu "kiso/aot/macho";
 yobu "kiso/array";
 yobu "kiso/convert";
 yobu "kiso/encoding/binary";
@@ -16,6 +17,12 @@ koukai waza has_c_declarations(file: mochi.File) -> bool {
         at = at + 1;
     }
     kaesu iie;
+}
+
+kata DarwinLibraryLink {
+    install_name: string;
+    exports: []macho.DylibExport;
+    static_data: []uint8;
 }
 
 waza c_link_error(detail: string) -> NativeBuildResult { kaesu NativeBuildResult { bytes: [], error: detail }; }
@@ -51,7 +58,8 @@ waza assembly_branch(out: string.StringBuilder, opcode: string, symbol: string) 
 
 // 保留 Mio 发出的机器码和内部跳转。只有跨 section 的地址对和
 // BL 外部符号交给系统汇编器，分别生成 PAGE21/PAGEOFF12 和 BRANCH26。
-waza c_assembly(file: mochi.File, lowered: lower.LowerResult, code_path: string, constants_path: string, workers: bool) -> string {
+waza c_assembly(file: mochi.File, lowered: lower.LowerResult, code_path: string,
+    constants_path: string, data_path: string, workers: bool, library: DarwinLibraryLink) -> string {
     kaku count = len(lowered.words);
     kaku patches = array.make[int64](count, 0);
     kaku at = 0;
@@ -83,10 +91,27 @@ waza c_assembly(file: mochi.File, lowered: lower.LowerResult, code_path: string,
         at = at + 1;
     }
 
+    kaku exports = array.make[string](count, "");
+    at = 0;
+    aida (at < len(library.exports)) {
+        kaku entry = library.exports[at];
+        kaku declaration = string.concat(".globl ", string.concat(entry.name, "\n"));
+        kaku label = string.concat(entry.name, ":\n");
+        exports[entry.word] = string.concat(exports[entry.word], string.concat(declaration, label));
+        at = at + 1;
+    }
     kaku out = string.new_builder();
-    string.write_string(out, ".text\n.p2align 2\n.globl _main\n_main:\nL_mio_text:\n");
+    string.write_string(out, ".text\n.p2align 2\n");
+    moshi (library.install_name == "") { string.write_string(out, ".globl _main\n_main:\n"); }
+    string.write_string(out, "L_mio_text:\n");
     kaku start = 0; at = 0;
     aida (at < count) {
+        kaku label = exports[at];
+        moshi (label != "") {
+            assembly_include(out, code_path, start * 4, (at - start) * 4);
+            string.write_string(out, label);
+            start = at;
+        }
         kaku index = patches[at];
         moshi (index != 0 || calls[at] >= 0 || at == exit_word) {
             assembly_include(out, code_path, start * 4, (at - start) * 4);
@@ -107,9 +132,10 @@ waza c_assembly(file: mochi.File, lowered: lower.LowerResult, code_path: string,
     string.write_string(out, ".const\n.p2align 3\nL_mio_const:\n");
     assembly_include(out, constants_path, 0, len(lowered.constants));
     string.write_string(out, ".data\n.p2align 3\nL_mio_data:\n");
-    moshi (lowered.globals > 0) {
+    moshi (len(library.static_data) > 0) { assembly_include(out, data_path, 0, len(library.static_data)); }
+    sore { moshi (lowered.globals > 0) {
         string.write_string(out, string.concat(".space ", string.concat(convert.format_int(lowered.globals * 8), "\n")));
-    }
+    } }
     moshi (workers) {
         kaku imports = darwin.worker_symbols();
         at = 0;
@@ -145,6 +171,12 @@ waza duplicate_c_prototype(file: mochi.File) -> string {
 }
 
 waza link_c_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, options: []string) -> NativeBuildResult {
+    kaesu link_darwin_native(file, lowered, workers, options,
+        DarwinLibraryLink { install_name: "", exports: [], static_data: [] });
+}
+
+waza link_darwin_native(file: mochi.File, lowered: lower.LowerResult, workers: bool,
+    options: []string, library: DarwinLibraryLink) -> NativeBuildResult {
     moshi (host_target() != "darwin-arm64") { kaesu c_link_error("E_CABI linking requires an Apple Silicon macOS host"); }
     kaku invalid = duplicate_c_prototype(file);
     moshi (invalid != "") { kaesu c_link_error(invalid); }
@@ -154,9 +186,10 @@ waza link_c_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, o
     moshi (os.chmod(directory, 448) != 0) {
         os.remove_dir(directory); kaesu c_link_error("E_CABI cannot protect the link directory");
     }
-    kaku result = link_c_in_directory(file, lowered, workers, options, directory);
+    kaku result = link_c_in_directory(file, lowered, workers, options, library, directory);
     os.remove(string.concat(directory, "/code.bin"));
     os.remove(string.concat(directory, "/const.bin"));
+    os.remove(string.concat(directory, "/data.bin"));
     os.remove(string.concat(directory, "/program.s"));
     os.remove(string.concat(directory, "/program"));
     os.remove_dir(directory);
@@ -164,9 +197,10 @@ waza link_c_image(file: mochi.File, lowered: lower.LowerResult, workers: bool, o
 }
 
 waza link_c_in_directory(file: mochi.File, lowered: lower.LowerResult, workers: bool,
-    options: []string, directory: string) -> NativeBuildResult {
+    options: []string, library: DarwinLibraryLink, directory: string) -> NativeBuildResult {
     kaku code = string.concat(directory, "/code.bin");
     kaku constants = string.concat(directory, "/const.bin");
+    kaku data = string.concat(directory, "/data.bin");
     kaku assembly = string.concat(directory, "/program.s");
     kaku image = string.concat(directory, "/program");
     kaku machine = binary.writer(len(lowered.words) * 4);
@@ -179,11 +213,20 @@ waza link_c_in_directory(file: mochi.File, lowered: lower.LowerResult, workers: 
     }
     kaku a = fs.write_all(code, binary.writer_bytes(machine));
     kaku b = fs.write_all(constants, lowered.constants);
-    kaku c = fs.write_all(assembly, string.to_bytes(c_assembly(file, lowered, code, constants, workers)));
-    moshi (a.error != mu || b.error != mu || c.error != mu) { kaesu c_link_error("E_CABI cannot write linker inputs"); }
+    kaku c = fs.write_all(data, library.static_data);
+    kaku d = fs.write_all(assembly, string.to_bytes(c_assembly(file, lowered, code, constants, data, workers, library)));
+    moshi (a.error != mu || b.error != mu || c.error != mu || d.error != mu) { kaesu c_link_error("E_CABI cannot write linker inputs"); }
     kaku tool = "/usr/bin/xcrun";
     kaku arguments = [tool, "--sdk", "macosx", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
         "-Wl,-adhoc_codesign", "-o", image, assembly];
+    moshi (library.install_name != "") {
+        array.append_all(arguments, ["-dynamiclib", "-Xlinker", "-install_name", "-Xlinker", library.install_name]);
+        kaku ei = 0;
+        aida (ei < len(library.exports)) {
+            array.append_all(arguments, ["-Xlinker", "-exported_symbol", "-Xlinker", library.exports[ei].name]);
+            ei = ei + 1;
+        }
+    }
     array.append_all(arguments, options);
     // spawn 直接传递 argv，保留系统链接器的标准错误及退出状态。
     kaku status = os.spawn(tool, arguments);
@@ -191,6 +234,6 @@ waza link_c_in_directory(file: mochi.File, lowered: lower.LowerResult, workers: 
         kaesu c_link_error(string.concat("E_CABI_LINK Apple clang/linker failed with status ", convert.format_int(status)));
     }
     kaku linked = fs.read_all(image);
-    moshi (linked.error != mu || len(linked.data) == 0) { kaesu c_link_error("E_CABI_LINK cannot read linked executable"); }
+    moshi (linked.error != mu || len(linked.data) == 0) { kaesu c_link_error("E_CABI_LINK cannot read linked image"); }
     kaesu NativeBuildResult { bytes: linked.data, error: "" };
 }

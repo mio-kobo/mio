@@ -94,7 +94,11 @@ def main():
                  "foreign-gc-build", "foreign-gc-run", "foreign-codesign",
                  "memory-build", "memory-run", "memory-gc-build", "memory-gc-run", "memory-openssl",
                  "wide-c-build", "wide-c-run", "state-c-build", "state-c-run", "state-other-build",
-                 "reject-dylib-top-level"):
+                 "reject-dylib-top-level", "dependencies-leaf", "dependencies-middle", "dependencies-client",
+                 "dependencies-loader-path-build", "dependencies-loader-path-run", "dependencies-executable-path-build",
+                 "dependencies-executable-path-run", "dependencies-sign", "dependencies-export-list",
+                 "dependencies-commands", "dependencies-loads", "dependencies-imports", "dependencies-fixups",
+                 "dependencies-missing-leaf", "dependencies-undefined-symbol"):
         record(name, "NOT_RUN")
 
     try:
@@ -188,6 +192,53 @@ def main():
                 empty_path=True, contains="Darwin native memory: ok")
         record("memory-openssl", "PASS" if crypto else "NOT_AVAILABLE",
                path=str(crypto) if crypto else None)
+
+        dep = artifacts / "dependency"
+        libdir = dep / "libs"
+        linked = dep / "linked"
+        for directory in (libdir, linked):
+            directory.mkdir(parents=True, exist_ok=True)
+        clang = ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0", "-dynamiclib"]
+        leaf = libdir / "libleaf.dylib"
+        middle = libdir / "libmiddle.dylib"
+        run("dependencies-leaf", [*clang, "-install_name", "@loader_path/libleaf.dylib",
+                                  HERE / "dependency_leaf.c", "-o", leaf])
+        run("dependencies-middle", [*clang, "-install_name", "@rpath/libmiddle.dylib",
+                                    HERE / "dependency_middle.c", leaf, "-o", middle])
+        client = dep / "client"
+        run("dependencies-client", [mio, "build", HERE / "dependency_loader.mio",
+                                    "--bunko-root", BUNKO, "-o", client], empty_path=True)
+        for resolution, rpath in (("loader-path", "@loader_path/../libs"),
+                                  ("executable-path", "@executable_path/libs")):
+            image = linked / f"libmio_{resolution}.dylib"
+            run(f"dependencies-{resolution}-build",
+                [mio, "build", "--kind=dylib", HERE / "dependency.mio", "--export=evaluate=mio_dep_eval",
+                 "--export=clock=mio_dep_clock", "-L", libdir, "-l", "middle", "-framework", "CoreFoundation",
+                 "--rpath", rpath, "--bunko-root", BUNKO, "-o", image])
+            run(f"dependencies-{resolution}-run", [client, image], empty_path=True,
+                contains="Darwin dependency loader: ok")
+        run("dependencies-sign", ["codesign", "--verify", "--strict", "--verbose=2", image])
+        exported = run("dependencies-export-list", ["nm", "-gU", image])
+        expected = {"_mio_dep_eval", "_mio_dep_clock", "_mio_module_abi_version",
+                    "_mio_ffi_v1_gg_mio_dep_eval", "_mio_ffi_v1_j_mio_dep_clock", "_mio_ffi_v1_g_mio_module_abi_version"}
+        if {line.split()[-1] for line in exported.splitlines()} != expected:
+            record("dependencies-export-list", "FAIL", reason="unexpected exports")
+            raise RuntimeError("dependency image exports differ from declared ABI")
+        run("dependencies-commands", ["otool", "-l", image], contains="@executable_path/libs")
+        run("dependencies-loads", ["otool", "-L", image], contains="CoreFoundation.framework")
+        run("dependencies-imports", ["xcrun", "dyld_info", "-imports", image], contains="_mio_dependency_middle")
+        run("dependencies-fixups", ["xcrun", "dyld_info", "-fixups", image], contains="_CFAbsoluteTimeGetCurrent")
+        moved = leaf.with_suffix(".missing")
+        leaf.rename(moved)
+        try:
+            run("dependencies-missing-leaf", [client, image], empty_path=True, success=False, contains="libleaf.dylib")
+        finally:
+            moved.rename(leaf)
+        unresolved = dep / "unresolved.mio"
+        unresolved.write_text('waza external() -> int64 = c "missing_dependency_symbol";\nwaza get() -> int64 { kaesu external(); }\n')
+        run("dependencies-undefined-symbol",
+            [mio, "build", "--kind=dylib", unresolved, "--export=get=mio_dep_missing", "--bunko-root", BUNKO,
+             "-o", linked / "libmio_missing.dylib"], success=False, stderr_contains="missing_dependency_symbol")
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]

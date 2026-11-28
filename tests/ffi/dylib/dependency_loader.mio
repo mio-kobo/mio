@@ -1,0 +1,31 @@
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+
+waza require(condition: bool, message: string) -> unit {
+    moshi (!condition) { chant(message); os.exit(1); }
+}
+
+waza check_library(library: darwin.Library) -> unit {
+    kaku evaluation = darwin.symbol(library, "mio_dep_eval", darwin.Prototype.Int64FromInt64());
+    kaku eval = evaluation.function;
+    moshi (eval != mu) {
+        kaku answer = darwin.invoke_int64_1(eval, 19);
+        require(answer.error == "" && answer.value == 42, "transitive dependency");
+    } sore { require(iie, evaluation.error); }
+    kaku binding = darwin.bind_mio(library, "mio_dep_clock", darwin.CPrototype { result: darwin.Scalar.F64(), parameters: [] });
+    kaku clock = binding.function;
+    moshi (clock != mu) {
+        kaku result = darwin.invoke(clock, []);
+        require(result.error == "" && result.value != mu, "framework dependency");
+    } sore { require(iie, binding.error); }
+    require(darwin.close(library) == "", "close dependency-bearing image");
+    chant("Darwin dependency loader: ok");
+}
+
+kaku args = os.arguments();
+require(len(args) == 2, "Expected linked dylib path");
+kaku opened = darwin.open(args[1]);
+kaku library = opened.library;
+moshi (library != mu) {
+    check_library(library);
+} sore { require(iie, opened.error); }
