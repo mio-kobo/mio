@@ -22,6 +22,7 @@ koukai sentaku PEError {
     InvalidImport;
     InvalidPatch;
     InvalidUnwind;
+    InvalidExport;
 }
 koukai kata ImportLibrary {
     name: string;
@@ -66,6 +67,8 @@ koukai kata ImageSpec {
     patches: []Patch;
     unwind: []UnwindFunction;
 }
+// Export offsets refer to .text. The writer sorts names for GetProcAddress.
+koukai kata Export { name: string; offset: int64; }
 koukai kata Section {
     kind: int64;
     name: string;
@@ -517,6 +520,67 @@ koukai waza executable_placed(spec: ImageSpec, frames: []FrameFunction, stack_re
 
 // COFF machine type: IMAGE_FILE_MACHINE_AMD64 (0x8664) or IMAGE_FILE_MACHINE_ARM64 (0xAA64). Any other value fails closed.
 koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_reserve: int64, data_rva: int64, machine: int64) -> ImageResult {
+    kaesu image_machine(spec, frames, stack_reserve, data_rva, machine, "", []);
+}
+
+// Pure functions need no DllMain and perform no work under the loader lock.
+koukai waza dynamic_library(spec: ImageSpec, frames: []FrameFunction, name: string, exports: []Export) -> ImageResult {
+    moshi (!ascii_name(name) || len(exports) == 0 || len(exports)>4096) { kaesu failure(PEError.InvalidExport()); }
+    kaku i = 0;
+    aida (i<len(exports)) {
+        moshi (!ascii_name(exports[i].name) || exports[i].offset<0 || exports[i].offset>=len(spec.text)) { kaesu failure(PEError.InvalidExport()); }
+        kaku j = 0;
+        aida (j<i) {
+            moshi (exports[j].name == exports[i].name) { kaesu failure(PEError.InvalidExport()); }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    kaesu image_machine(spec, frames, 1048576, 0, machine_amd64, name, exports);
+}
+
+waza export_size(name: string, exports: []Export) -> int64 {
+    kaku size = 40 + len(exports)*10 + string.byte_len(name)+1;
+    kaku i = 0;
+    aida (i<len(exports)) { size = size + string.byte_len(exports[i].name)+1; i = i + 1; }
+    kaesu size;
+}
+waza export_less(a: string, b: string) -> bool {
+    kaku left = string.to_bytes(a); kaku right = string.to_bytes(b); kaku i = 0;
+    aida (i<len(left) && i<len(right)) {
+        moshi (left[i] != right[i]) { kaesu left[i]<right[i]; }
+        i = i + 1;
+    }
+    kaesu len(left)<len(right);
+}
+waza emit_exports(bytes: []uint8, layout: Layout, name: string, exports: []Export) -> unit {
+    kaku ordered: []Export = [];
+    kaku i = 0;
+    aida (i<len(exports)) {
+        array.push(ordered, exports[i]); kaku j = i;
+        aida (j>0 && export_less(ordered[j].name, ordered[j-1].name)) {
+            kaku previous = ordered[j-1]; ordered[j-1] = ordered[j]; ordered[j] = previous; j = j - 1;
+        }
+        i = i + 1;
+    }
+    kaku s = section(layout, 8); kaku at = s.offset; kaku base = s.rva; kaku n = len(ordered);
+    kaku names = 40+10*n;
+    put(bytes, at+12, 4, base+names); put(bytes, at+16, 4, 1);
+    put(bytes, at+20, 4, n); put(bytes, at+24, 4, n);
+    put(bytes, at+28, 4, base+40); put(bytes, at+32, 4, base+40+4*n); put(bytes, at+36, 4, base+40+8*n);
+    copy_bytes(bytes, at+names, string.to_bytes(name)); names = names + string.byte_len(name)+1;
+    i = 0;
+    aida (i<n) {
+        put(bytes, at+40+4*i, 4, section(layout, text_section).rva+ordered[i].offset);
+        put(bytes, at+40+4*n+4*i, 4, base+names); put(bytes, at+40+8*n+2*i, 2, i);
+        copy_bytes(bytes, at+names, string.to_bytes(ordered[i].name)); names = names + string.byte_len(ordered[i].name)+1;
+        i = i + 1;
+    }
+    directory(bytes, 0, base, s.virtual_size);
+}
+
+waza image_machine(spec: ImageSpec, frames: []FrameFunction, stack_reserve: int64, data_rva: int64, machine: int64,
+    dll_name: string, exports: []Export) -> ImageResult {
     moshi (machine != machine_amd64 && machine != machine_arm64) { kaesu failure(PEError.InvalidEntry()); }
     moshi (data_rva<0 || data_rva - (data_rva / 4096) * 4096 != 0 || data_rva>maximum_image_size) { kaesu failure(PEError.InvalidEntry()); }
     moshi (stack_reserve<65536 || stack_reserve>1073741824 || stack_reserve - (stack_reserve / 65536) * 65536 != 0) {
@@ -550,6 +614,7 @@ koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_r
         i = i + 1;
     }
     moshi (has_relocations) { count = count + 1; }
+    moshi (dll_name != "") { count = count + 1; }
     kaku headers = align(392 + count * 40, file_alignment);
     kaku layout = Layout { headers_size: headers, image_size: 4096, file_size: headers, sections: [], iat_rva: 0, iat_size: imports.iat_size };
     // data_rva == 4096 puts .data FIRST (right after the headers, no RVA gap), so its address is a constant independent of code size.
@@ -588,6 +653,7 @@ koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_r
     moshi (!valid_patches(spec, layout, imports)) { kaesu failure(PEError.InvalidPatch()); }
     kaku relocations = relocation_bytes(spec, layout);
     moshi (has_relocations) { layout = add_section(layout, 7, ".reloc", len(relocations), len(relocations), 1107296320); }
+    moshi (dll_name != "") { layout = add_section(layout, 8, ".edata", export_size(dll_name, exports), export_size(dll_name, exports), 1073741888); }
     moshi (layout.file_size>maximum_image_size || layout.image_size>maximum_image_size) { kaesu failure(PEError.ImageTooLarge()); }
     kaku bytes = array.make[uint8](layout.file_size, uint8(0));
     // DOS header and a real DOS exit stub, PE signature, COFF header.
@@ -609,6 +675,7 @@ koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_r
     moshi (has_relocations) {
         characteristics = 34;
     }
+    moshi (dll_name != "") { characteristics = 8226; }
     put(bytes, 150, 2, characteristics);
     kaku text = section(layout, text_section);
     kaku initialized = 0;
@@ -628,7 +695,7 @@ koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_r
     put(bytes, 156, 4, text.raw_size);
     put(bytes, 160, 4, initialized);
     put(bytes, 164, 4, uninitialized);
-    put(bytes, 168, 4, text.rva + spec.entry);
+    moshi (dll_name == "") { put(bytes, 168, 4, text.rva + spec.entry); }
     put(bytes, 172, 4, text.rva);
     put(bytes, 176, 8, image_base);
     put(bytes, 184, 4, section_alignment);
@@ -668,6 +735,7 @@ koukai waza executable_machine(spec: ImageSpec, frames: []FrameFunction, stack_r
     copy_bytes(bytes, text.offset, spec.text);
     moshi (len(spec.rdata)>0) { copy_bytes(bytes, section(layout, rdata_section).offset, spec.rdata); }
     moshi (len(spec.data)>0) { copy_bytes(bytes, section(layout, data_section).offset, spec.data); }
+    moshi (dll_name != "") { emit_exports(bytes, layout, dll_name, exports); }
     emit_imports(bytes, spec, layout, imports);
     emit_unwind(bytes, spec, layout);
     emit_frames(bytes, spec, frames, layout);

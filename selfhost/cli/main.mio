@@ -129,6 +129,15 @@ waza queue_link(queue: []string, option: string, value: string) -> unit {
     array.push(queue, value);
 }
 
+waza dll_basename(value: string) -> string {
+    kaku bytes = string.to_bytes(value); kaku start = 0; kaku i = 0;
+    aida (i<len(bytes)) {
+        moshi (bytes[i] == uint8(47) || bytes[i] == uint8(92)) { start = i+1; }
+        i = i+1;
+    }
+    kaesu slice(bytes, start, len(bytes));
+}
+
 // Global options may appear before or after the command, so they are removed
 // before command parsing. Values of ordinary options are never interpreted as
 // globals; everything after -- belongs to the program under test.
@@ -247,8 +256,14 @@ waza run() -> unit {
     kaku opts=diagnostic.Options {format:"human",color:color,verbose:iie,lang:language,theme:selected_theme};
     kaku entry = ""; kaku host = pipeline.host_target(); kaku target = host; kaku output = "a.out"; kaku bunko = ""; kaku emit_mochi = iie; kaku gc_stress = iie; kaku observe = iie; kaku symbols = ""; kaku program_args: []string = []; kaku link_options: []string = []; kaku link_raw: []string = []; kaku shared = iie; kaku soname = ""; kaku linker = ""; kaku emit_object = iie; kaku entries: []string = []; kaku at = 2;
     kaku build_kind = "exe"; kaku export_sources: []string = []; kaku export_symbols: []string = [];
+    kaku emit_dll = iie;
     aida (at < len(args)) {
         kaku option = args[at];
+        moshi (option == "--emit=dll") {
+            emit_dll = hai;
+            at = at + 1;
+            tsuzuku;
+        }
         moshi (option == "--") {
             moshi (command != "run" && command != "exec") { fail(error_message("E_OPTIONS", i18n.key_err_program_args, ""), 2); kaesu; }
             at = at + 1;
@@ -356,6 +371,11 @@ waza run() -> unit {
     moshi (shared && (command != "build" || build_kind != "exe" || len(export_sources) != 0 || emit_mochi || (target != "linux-amd64") || (emit_object && (soname != "" || linker != "" || len(link_raw) != 0)))) {
         fail(error_message("E_OPTIONS", i18n.key_err_shared_options, ""), 2); kaesu;
     }
+    moshi (emit_dll && (command != "build" || target != "windows-amd64" || build_kind != "exe" ||
+        len(export_sources) != 0 || shared || len(link_raw) != 0 || emit_mochi || gc_stress || observe || symbols != "")) {
+        fail(error_message("E_DLL_OPTIONS", i18n.key_err_dll_options, ""), 2);
+        kaesu;
+    }
     kaku library=bunkopath.resolve(bunko, language); moshi(library.error!=""){fail(library.error,2);kaesu;} bunko=library.root;
     moshi ((command == "run" || command == "exec" || command == "disasm" || command == "check") && emit_mochi) { fail(error_message("E_OPTIONS", i18n.key_err_emit_mochi, ""), 2); kaesu; }
     moshi (len(link_raw) != 0 && !(cabi.supports_target(target) && target == host && !emit_mochi && command == "build")) {
@@ -403,7 +423,9 @@ waza run() -> unit {
     }
     kaku compiled = pipeline.NativeBuildResult { bytes: [], error: "" };
     kaku facade = "";
-    moshi (shared) {
+    moshi (emit_dll) {
+        compiled = pipeline.build_windows_dll(".", entry, bunko, dll_basename(output));
+    } sore { moshi (shared) {
         moshi (len(entries) > 1) {
             facade = shared_facade(entries);
             moshi (string.has_prefix(facade, "E_")) { fail(facade, 2); kaesu; }
@@ -446,6 +468,7 @@ waza run() -> unit {
         moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_mochi(input.data, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_mochi_linked(input.data, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_mochi(input.data); } sore { compiled = pipeline.build_signed_mochi(input.data); } } } } }
     }
     sore { moshi (target == "windows-arm64") { compiled = pipeline.build_windows_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "darwin-amd64") { compiled = pipeline.build_darwin_amd64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-arm64") { compiled = pipeline.build_linux_arm64_source(".", entry, bunko, gc_stress); } sore { moshi (target == "linux-amd64") { compiled = pipeline.build_linux_source_linked(".", entry, bunko, gc_stress, link_options); } sore { moshi (target == "windows-amd64") { compiled = pipeline.build_windows_source_with_options(".", entry, bunko, gc_stress); } sore { compiled = pipeline.build_signed_source_linked(".", entry, bunko, gc_stress, observe, symbols, link_options); } } } } } }
+    }
     }
     moshi (compiled.error != "") {moshi(command=="build" || command=="run"){source_failure(entry,bunko,opts,compiled.error,i18n.text(language, i18n.key_err_analysis));}sore{fs.write_all("/dev/stderr",string.to_bytes(diagnostic.failure_with_cause(compiled.error,i18n.text(language, i18n.key_err_analysis),entry,opts)));os.exit(1);}kaesu;}
     kaku temporary = "";

@@ -6,6 +6,7 @@ yobu "kiso/convert";
 yobu "kiso/encoding/mochi";
 yobu "kiso/encoding/win64c";
 yobu "kiso/aot/win64abi";
+yobu "kiso/encoding/binary";
 yobu "kiso/string";
 
 // Pure Mio Mochi -> Windows AMD64 PE32+ lowering, scalar subset (no heap, no GC).
@@ -536,6 +537,16 @@ waza emit_function(code: x86_64.Assembler, patches: []pe.Patch, frames: []pe.Fra
         kaesu "";
     }
     moshi (len(function.captures) != 0) { kaesu string.concat(function.name, ": UNSUPPORTED_CLOSURE"); }
+    // Type analysis deliberately keeps exact parameter forwarding polymorphic.
+    // Its body copies one raw slot, so it needs no inferred local representation.
+    kaku forwarded = types.forwarded_parameter(function);
+    moshi (forwarded>=0) {
+        kaku begin = open_frame(code, function_label(index), 0);
+        x86_64.mov_load(code, x86_64.rax, x86_64.rbp, local_disp(function.parameter_count, forwarded));
+        emit_epilogue(code);
+        close_frame(code, frames, begin, 0);
+        kaesu "";
+    }
     moshi (win64c.is_external(function.name)) { win64abi.emit(code, patches, frames, function, function_label(index), import_slot); kaesu ""; }
     moshi (len(function.instructions) == 0) {
         moshi (!native_exit(function.name) || function.parameter_count != 1 || function.returns_value) {
@@ -603,5 +614,87 @@ koukai waza compile(file: mochi.File) -> LowerResult {
             imports: plan.libraries,
             patches: patches, unwind: [] }, frames);
     moshi (image.error != mu) { kaesu failed("PE_IMAGE_ERROR"); }
+    kaesu LowerResult { bytes: image.bytes, error: "" };
+}
+
+// Source validation supplies qualified public functions with an int64-only ABI.
+// Synthetic calls are type-analysis roots only; DLLs never execute module code.
+koukai waza compile_dynamic(file: mochi.File, keys: []string, names: []string, dll_name: string) -> LowerResult {
+    moshi (len(keys) == 0 || len(keys) != len(names) || len(keys)>4096 || file.global_count != 0) { kaesu failed("E_DLL_EXPORT invalid exports or mutable module state"); }
+    kaku ids: []int64 = [];
+    kaku roots: []uint8 = [];
+    kaku constants: []mochi.Constant = [];
+    array.append_all(constants, file.constants);
+    moshi (len(constants)>=65536) { kaesu failed("E_DLL_LIMIT constants"); }
+    kaku zero = len(constants);
+    array.push(constants, mochi.Constant { tag: uint8(1), bits: binary.U64 { high: uint32(0), low: uint32(0) }, data: [] });
+    kaku i = 0;
+    aida (i<len(keys)) {
+        kaku id = -1; kaku j = 0;
+        aida (j<len(file.functions)) {
+            moshi (file.functions[j].name == keys[i]) { id = j; }
+            j = j + 1;
+        }
+        moshi (id<0) { kaesu failed(string.concat("E_DLL_SYMBOL ", keys[i])); }
+        moshi (file.functions[id].parameter_count>16) { kaesu failed("E_DLL_ABI at most 16 arguments are supported"); }
+        array.push(ids, id);
+        j = 0;
+        aida (j<file.functions[id].parameter_count) {
+            array.append_all(roots, [uint8(1), uint8(zero/256), uint8(zero-(zero/256)*256)]);
+            j = j + 1;
+        }
+        array.append_all(roots, [uint8(25), uint8(id/256), uint8(id-(id/256)*256), uint8(3)]);
+        i = i + 1;
+    }
+    kaku rooted = mochi.File { version: file.version, constants: constants, global_count: 0, instructions: roots, functions: file.functions };
+    kaku analysis = types.analyze_types(rooted);
+    moshi (analysis.error_detail != 0) { kaesu failed("E_DLL_TYPES invalid scalar function graph"); }
+    kaku reached = types.reachable_functions(rooted);
+    kaku code = x86_64.assembler(); kaku patches: []pe.Patch = []; kaku frames: []pe.FrameFunction = [];
+    kaku exports: []pe.Export = [];
+    i = 0;
+    aida (i<len(ids)) {
+        kaku id = ids[i]; kaku n = file.functions[id].parameter_count;
+        // RBP is the sole nonvolatile register used by generated scalar functions.
+        // Incoming fifth argument: [entry RSP+40] == [RBP+48].
+        kaku alloc = 32 + (n-(n/2)*2)*8;
+        kaku begin = open_frame(code, string.concat("export.", names[i]), alloc);
+        array.push(exports, pe.Export { name: names[i], offset: begin });
+        kaku j = 0;
+        aida (j<n) {
+            kaku reg = x86_64.rax;
+            moshi (j == 0) { reg = x86_64.rcx; }
+            moshi (j == 1) { reg = x86_64.rdx; }
+            moshi (j == 2) { reg = x86_64.r8; }
+            moshi (j == 3) { reg = x86_64.r9; }
+            moshi (j>=4) { x86_64.mov_load(code, reg, x86_64.rbp, 48+(j-4)*8); }
+            x86_64.push_r(code, reg); j = j + 1;
+        }
+        x86_64.call(code, function_label(id)); emit_epilogue(code); close_frame(code, frames, begin, alloc);
+        i = i + 1;
+    }
+    i = 0;
+    aida (i<len(file.functions)) {
+        moshi (reached[i]) {
+            moshi (file.functions[i].local_count>256 || file.functions[i].parameter_count>16) { kaesu failed("E_DLL_LIMIT scalar stack frame too large"); }
+            // Heap operations, native imports and printing are outside the pure DLL contract.
+            kaku at = 0; kaku data = file.functions[i].instructions;
+            aida (at<len(data)) {
+                kaku op = int64(data[at]); kaku width = types.type_instruction_width(op);
+                moshi (width == 0 || op == 21 || op == 22 || op == 19 || op == 20) { kaesu failed("E_DLL_BODY unsupported side effect"); }
+                at = at + width;
+            }
+            kaku error = emit_function(code, patches, frames, rooted, analysis, i, hai, -1);
+            moshi (error != "") { kaesu failed(error); }
+        }
+        i = i + 1;
+    }
+    emit_runtime(code, patches, frames);
+    emit_string_constants(code, rooted);
+    kaku assembled = x86_64.assemble(code);
+    moshi (assembled.error != "") { kaesu failed(assembled.error); }
+    kaku image = pe.dynamic_library(pe.ImageSpec { text: assembled.bytes, rdata: [], data: [], zero_fill: 0, entry: 0,
+        imports: [pe.ImportLibrary { name: "KERNEL32.dll", symbols: ["GetStdHandle", "WriteFile", "ExitProcess"] }], patches: patches, unwind: [] }, frames, dll_name, exports);
+    moshi (image.error != mu) { kaesu failed("E_DLL_PE invalid library image"); }
     kaesu LowerResult { bytes: image.bytes, error: "" };
 }

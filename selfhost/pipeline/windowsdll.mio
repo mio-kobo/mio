@@ -1,0 +1,62 @@
+yobu "selfhost/frontend";
+yobu "selfhost/parser";
+yobu "selfhost/codegen";
+yobu "kiso/aot/lowerwin";
+yobu "kiso/encoding/mochi";
+yobu "kiso/array";
+yobu "kiso/string";
+yobu "kiso/convert";
+
+// Entry-package koukai functions become undecorated exports. Imported public
+// functions retain normal module visibility and need an entry-package wrapper.
+koukai waza build_windows_dll(root: string, entry: string, bunko: string, name: string) -> NativeBuildResult {
+    kaku source = frontend.analyze_source(root, entry, bunko, [], iie);
+    moshi (source.error != "" || len(source.diagnostics)>0 || len(source.resolved) == 0) {
+        kaesu NativeBuildResult { bytes: [], error: "E_DLL_SOURCE source analysis failed" };
+    }
+    kaku keys: []string = []; kaku names: []string = [];
+    kaku pi = 0;
+    aida (pi<len(source.resolved)) {
+        kaku package = source.resolved[pi]; kaku fi = 0;
+        aida (fi<len(package.files)) {
+            kaku file = package.files[fi]; kaku nodes = file.ast.nodes; kaku children = nodes[file.root].children; kaku si = 0;
+            aida (si<len(children)) {
+                kaku node = nodes[children[si]];
+                kaku kind = parser.node_kind_code(node.kind);
+                moshi (kind != 1 && kind != 32) {
+                    kaesu NativeBuildResult { bytes: [], error: string.concat("E_DLL_INITIALIZER only function declarations and imports are supported: ", string.concat(package.package_path, string.concat(" ", convert.format_int(parser.node_kind_code(node.kind))))) };
+                }
+                moshi (pi == len(source.resolved)-1 && kind == 32 && node.flag) {
+                    moshi (node.integer != 0 || len(node.children) != node.operator+2) {
+                        kaesu NativeBuildResult { bytes: [], error: "E_DLL_ABI exports require explicit int64 parameters and return type" };
+                    }
+                    kaku ti = 0;
+                    aida (ti<=node.operator) {
+                        kaku type_id = node.children[ti];
+                        moshi (ti<node.operator) {
+                            kaku parameter = nodes[type_id];
+                            moshi (len(parameter.children) != 1) { kaesu NativeBuildResult { bytes: [], error: "E_DLL_ABI missing parameter type" }; }
+                            type_id = parameter.children[0];
+                        }
+                        moshi (parser.node_kind_code(nodes[type_id].kind) != 39 || nodes[type_id].text != "int64") {
+                            kaesu NativeBuildResult { bytes: [], error: "E_DLL_ABI only int64 is supported at the C boundary" };
+                        }
+                        ti = ti + 1;
+                    }
+                    array.push(keys, string.concat(package.package_path, string.concat("::", node.text)));
+                    array.push(names, node.text);
+                }
+                si = si + 1;
+            }
+            fi = fi + 1;
+        }
+        pi = pi + 1;
+    }
+    kaku compiled = codegen.compile_native_modules(source.resolved, source.checked, [], hai);
+    moshi (!compiled.success) { kaesu NativeBuildResult { bytes: [], error: "E_DLL_CODEGEN module compilation failed" }; }
+    kaku decoded = mochi.decode(compiled.bytes); kaku file = decoded.value;
+    moshi (decoded.error != mu) { kaesu NativeBuildResult { bytes: [], error: "E_DLL_IR invalid module" }; }
+    moshi (file == mu) { kaesu NativeBuildResult { bytes: [], error: "E_DLL_IR missing module" }; }
+    kaku lowered = lowerwin.compile_dynamic(file, keys, names, name);
+    kaesu NativeBuildResult { bytes: lowered.bytes, error: lowered.error };
+}
