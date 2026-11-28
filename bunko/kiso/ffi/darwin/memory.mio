@@ -1,0 +1,357 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/array";
+yobu "kiso/string";
+
+waza posix_memalign(out: cptr, alignment: uint64, size: uint64) -> int32 = c "posix_memalign";
+waza move_memory(destination: cptr, source: cptr, length: uint64) -> cptr = c "memmove";
+waza set_memory(destination: cptr, byte: int32, length: uint64) -> cptr = c "memset";
+waza advance_pointer(base: cptr, offset: uint64) -> cptr = c "mio_ffi_darwin_advance";
+waza load_u16(base: cptr, offset: uint64) -> uint16 = c "mio_ffi_darwin_load_u16";
+waza load_u32(base: cptr, offset: uint64) -> uint32 = c "mio_ffi_darwin_load_u32";
+
+koukai kata Buffer { ticket: Ticket; slot: int64; }
+koukai kata BufferResult { buffer: Buffer?; error: string; }
+koukai kata BytesResult { bytes: []uint8; error: string; }
+koukai kata PointerResult { value: cptr; error: string; }
+koukai kata StringResult { value: string; error: string; }
+
+kata BufferEntry {
+    id: int64;
+    address: cptr;
+    length: int64;
+    writable: bool;
+    alignment: int64;
+    owned: bool;
+    root_slot: int64;
+    root_id: int64;
+}
+
+kaku buffers: []BufferEntry = [];
+kaku available_slots: []int64 = [];
+
+teisu max_buffer_bytes = 1099511627776;
+
+waza empty_buffer_slot() -> BufferEntry {
+    kaesu BufferEntry { id: 0, address: cptr(0), length: 0, writable: iie, alignment: 0,
+        owned: iie, root_slot: -1, root_id: 0 };
+}
+
+waza buffer_error(error: string) -> BufferResult { kaesu BufferResult { buffer: mu, error: error }; }
+
+waza handle_error() -> string { kaesu "invalid, released, or stale native buffer"; }
+
+waza insert_buffer(entry: BufferEntry) -> BufferResult {
+    kaku slot = len(buffers);
+    moshi (len(available_slots) > 0) {
+        slot = available_slots[len(available_slots) - 1];
+        array.truncate(available_slots, len(available_slots) - 1);
+        buffers[slot] = entry;
+    } sore { array.push(buffers, entry); }
+    kaesu BufferResult { buffer: Buffer { ticket: Ticket { id: entry.id }, slot: slot }, error: "" };
+}
+
+waza buffer_slot(buffer: Buffer) -> int64 {
+    kaku slot = buffer.slot;
+    moshi (slot < 0 || slot >= len(buffers)) { kaesu -1; }
+    kaku id = buffers[slot].id;
+    moshi (id == 0 || id != buffer.ticket.id) { kaesu -1; }
+    kaesu slot;
+}
+
+waza live_buffer(buffer: Buffer) -> BufferEntry? {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaesu mu; }
+    kaku entry = buffers[slot];
+    kaku root = entry.root_slot;
+    moshi (root >= 0 && (root >= len(buffers) || buffers[root].id != entry.root_id)) { kaesu mu; }
+    kaesu entry;
+}
+
+waza drop_buffer(slot: int64) -> unit {
+    buffers[slot] = empty_buffer_slot();
+    array.push(available_slots, slot);
+}
+
+waza valid_size(length: int64) -> bool { kaesu length >= 0 && length <= max_buffer_bytes; }
+
+waza valid_alignment(alignment: int64) -> bool {
+    moshi (alignment < 8 || alignment > max_buffer_bytes) { kaesu iie; }
+    kaku left = alignment;
+    aida (left > 1) {
+        kaku half = left / 2;
+        moshi (half * 2 != left) { kaesu iie; }
+        left = half;
+    }
+    kaesu hai;
+}
+
+waza valid_range(length: int64, offset: int64, count: int64) -> bool {
+    kaesu offset >= 0 && count >= 0 && offset <= length && count <= length - offset;
+}
+
+waza access_error(entry: BufferEntry?, offset: int64, length: int64, write: bool) -> string {
+    moshi (entry == mu) { kaesu handle_error(); }
+    moshi (!valid_range(entry.length, offset, length)) { kaesu "native buffer range is out of bounds"; }
+    moshi (write && !entry.writable) { kaesu "native buffer is read-only"; }
+    kaesu "";
+}
+
+waza allocate_native(length: int64, alignment: int64, zeroed: bool) -> cptr {
+    kaku bytes = uint64(length);
+    moshi (length == 0) { bytes = uint64(1); }
+    moshi (alignment > 0) {
+        kaku out = malloc(uint64(8));
+        moshi (out == cptr(0)) { kaesu out; }
+        kaku pointer = cptr(0);
+        moshi (posix_memalign(out, uint64(alignment), bytes) == int32(0)) {
+            pointer = load_pointer(out, uint64(0));
+        }
+        native_free(out);
+        kaesu pointer;
+    }
+    moshi (zeroed) { kaesu allocate_zeroed(uint64(1), bytes); }
+    kaesu malloc(bytes);
+}
+
+waza allocate_buffer(length: int64, alignment: int64, zeroed: bool) -> BufferResult {
+    moshi (!valid_size(length)) { kaesu buffer_error("invalid native buffer length"); }
+    kaku id = take_id();
+    moshi (id == 0) { kaesu buffer_error("FFI ticket space exhausted"); }
+    kaku address = allocate_native(length, alignment, zeroed);
+    moshi (address == cptr(0)) { kaesu buffer_error("native allocation failed"); }
+    kaesu insert_buffer(BufferEntry { id: id, address: address, length: length,
+        writable: hai, alignment: alignment, owned: hai, root_slot: -1, root_id: 0 });
+}
+
+koukai waza alloc(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, iie); }
+
+koukai waza alloc_zeroed(length: int64) -> BufferResult { kaesu allocate_buffer(length, 0, hai); }
+
+koukai waza alloc_aligned(length: int64, alignment: int64) -> BufferResult {
+    moshi (!valid_alignment(alignment)) { kaesu buffer_error("invalid native buffer alignment"); }
+    kaesu allocate_buffer(length, alignment, iie);
+}
+
+koukai waza resize(buffer: Buffer, length: int64) -> BufferResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu buffer_error(handle_error()); }
+    moshi (!entry.owned) { kaesu buffer_error("resize requires an owned buffer"); }
+    moshi (!valid_size(length)) { kaesu buffer_error("invalid native buffer length"); }
+    kaku id = take_id();
+    moshi (id == 0) { kaesu buffer_error("FFI ticket space exhausted"); }
+    // Allocate before releasing the original. Allocation failure leaves the
+    // original buffer and its views valid, and alignment survives every resize.
+    kaku address = allocate_native(length, entry.alignment, iie);
+    moshi (address == cptr(0)) { kaesu buffer_error("native allocation failed"); }
+    kaku common = entry.length;
+    moshi (length < common) { common = length; }
+    move_memory(address, entry.address, uint64(common));
+    native_free(entry.address);
+    kaku slot = buffer.slot;
+    buffers[slot] = BufferEntry { id: id, address: address, length: length,
+        writable: hai, alignment: entry.alignment, owned: hai, root_slot: -1, root_id: 0 };
+    kaesu BufferResult { buffer: Buffer { ticket: Ticket { id: id }, slot: slot }, error: "" };
+}
+
+koukai waza free(buffer: Buffer) -> string {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu handle_error(); }
+    moshi (!entry.owned) { kaesu "free requires an owned native buffer"; }
+    drop_buffer(buffer.slot);
+    native_free(entry.address);
+    kaesu "";
+}
+
+// Borrowed ranges belong to foreign code. The caller vouches that the entire
+// range is mapped and remains valid until the borrow and its views are released.
+koukai waza unsafe_borrow(address: cptr, length: int64, writable: bool) -> BufferResult {
+    kaku bits = pointer_offset(address, cptr(0));
+    moshi (!valid_size(length) || bits <= 0 || bits > 9223372036854775807 - length) {
+        kaesu buffer_error("invalid borrowed native range");
+    }
+    kaku id = take_id();
+    moshi (id == 0) { kaesu buffer_error("FFI ticket space exhausted"); }
+    kaesu insert_buffer(BufferEntry { id: id, address: address, length: length,
+        writable: writable, alignment: 0, owned: iie, root_slot: -1, root_id: 0 });
+}
+
+koukai waza release_buffer(buffer: Buffer) -> string {
+    kaku slot = buffer_slot(buffer);
+    moshi (slot < 0) { kaesu handle_error(); }
+    moshi (buffers[slot].owned) { kaesu "release requires a borrowed buffer or view"; }
+    drop_buffer(slot);
+    kaesu "";
+}
+
+waza buffer_view(buffer: Buffer, entry: BufferEntry, offset: int64, length: int64, writable: bool) -> BufferResult {
+    kaku id = take_id();
+    moshi (id == 0) { kaesu buffer_error("FFI ticket space exhausted"); }
+    kaku root = entry.root_slot;
+    kaku root_id = entry.root_id;
+    moshi (root < 0) { root = buffer.slot; root_id = entry.id; }
+    kaesu insert_buffer(BufferEntry { id: id, address: advance_pointer(entry.address, uint64(offset)),
+        length: length, writable: writable, alignment: 0, owned: iie, root_slot: root, root_id: root_id });
+}
+
+koukai waza slice(buffer: Buffer, offset: int64, length: int64) -> BufferResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu buffer_error(handle_error()); }
+    moshi (!valid_range(entry.length, offset, length)) { kaesu buffer_error("native buffer range is out of bounds"); }
+    kaesu buffer_view(buffer, entry, offset, length, entry.writable);
+}
+
+koukai waza read_only(buffer: Buffer) -> BufferResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu buffer_error(handle_error()); }
+    kaesu buffer_view(buffer, entry, 0, entry.length, iie);
+}
+
+koukai waza pointer(buffer: Buffer) -> PointerResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu PointerResult { value: cptr(0), error: handle_error() }; }
+    moshi (!entry.writable) { kaesu PointerResult { value: cptr(0), error: "native buffer is read-only" }; }
+    kaesu PointerResult { value: entry.address, error: "" };
+}
+
+koukai waza read(buffer: Buffer, offset: int64, length: int64) -> BytesResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu BytesResult { bytes: [], error: handle_error() }; }
+    kaku error = access_error(entry, offset, length, iie);
+    moshi (error != "") { kaesu BytesResult { bytes: [], error: error }; }
+    kaku bytes = array.make[uint8](length, uint8(0));
+    kaku at = 0;
+    aida (at < length) {
+        bytes[at] = load_byte(entry.address, uint64(offset + at));
+        at = at + 1;
+    }
+    kaesu BytesResult { bytes: bytes, error: "" };
+}
+
+koukai waza write(buffer: Buffer, offset: int64, bytes: []uint8) -> string {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu handle_error(); }
+    kaku error = access_error(entry, offset, len(bytes), hai);
+    moshi (error != "") { kaesu error; }
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        store_byte(entry.address, uint64(offset + at), bytes[at]);
+        at = at + 1;
+    }
+    kaesu "";
+}
+
+koukai waza fill(buffer: Buffer, offset: int64, length: int64, byte: uint8) -> string {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu handle_error(); }
+    kaku error = access_error(entry, offset, length, hai);
+    moshi (error != "") { kaesu error; }
+    set_memory(advance_pointer(entry.address, uint64(offset)), int32(int64(byte)), uint64(length));
+    kaesu "";
+}
+
+koukai waza copy(destination: Buffer, to: int64, source: Buffer, from: int64, length: int64) -> string {
+    kaku out = live_buffer(destination);
+    kaku input = live_buffer(source);
+    moshi (out == mu) { kaesu handle_error(); }
+    moshi (input == mu) { kaesu handle_error(); }
+    kaku error = access_error(out, to, length, hai);
+    moshi (error != "") { kaesu error; }
+    error = access_error(input, from, length, iie);
+    moshi (error != "") { kaesu error; }
+    move_memory(advance_pointer(out.address, uint64(to)), advance_pointer(input.address, uint64(from)), uint64(length));
+    kaesu "";
+}
+
+waza read_integer(address: cptr, offset: uint64, width: int64) -> int64 {
+    moshi (width == 1) { kaesu int64(load_byte(address, offset)); }
+    moshi (width == 2) { kaesu int64(load_u16(address, offset)); }
+    moshi (width == 4) { kaesu int64(load_u32(address, offset)); }
+    kaesu load_word(advance_pointer(address, offset));
+}
+
+koukai waza read_scalar(buffer: Buffer, offset: int64, kind: Scalar) -> CallResult {
+    kaku code = scalar_code(kind);
+    moshi (code == 118 || code == 107) { kaesu CallResult { value: mu, error: "expected a numeric or bool scalar" }; }
+    kaku width = cabi.darwin_scalar_size(code);
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu CallResult { value: mu, error: handle_error() }; }
+    kaku error = access_error(entry, offset, width, iie);
+    moshi (error != "") { kaesu CallResult { value: mu, error: error }; }
+    kaku at = uint64(offset);
+    moshi (code == 105) { kaesu CallResult { value: Value.F32(load_f32(entry.address, at)), error: "" }; }
+    moshi (code == 106) { kaesu CallResult { value: Value.F64(load_f64(entry.address, at)), error: "" }; }
+    kaesu CallResult { value: integer_value(read_integer(entry.address, at, width), code), error: "" };
+}
+
+koukai waza write_scalar(buffer: Buffer, offset: int64, value: Value) -> string {
+    kaku code = value_code(value);
+    moshi (code == 118) { kaesu "void has no in-memory representation"; }
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu handle_error(); }
+    kaku width = cabi.darwin_scalar_size(code);
+    kaku error = access_error(entry, offset, width, hai);
+    moshi (error != "") { kaesu error; }
+    moshi (code == 107 && !aligned_pointer(entry.address, offset)) { kaesu "misaligned native pointer field"; }
+    pack_value(entry.address, uint64(offset), width, value);
+    kaesu "";
+}
+
+waza aligned_pointer(address: cptr, offset: int64) -> bool {
+    kaku bits = pointer_offset(address, cptr(0)) + offset;
+    kaesu bits - (bits / 8) * 8 == 0;
+}
+
+// Pointer fields must have been initialized by a native pointer producer.
+// The buffer bounds check covers the field, while the pointee is foreign-owned.
+koukai waza unsafe_read_pointer(buffer: Buffer, offset: int64) -> PointerResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu PointerResult { value: cptr(0), error: handle_error() }; }
+    kaku error = access_error(entry, offset, 8, iie);
+    moshi (error != "") { kaesu PointerResult { value: cptr(0), error: error }; }
+    moshi (!aligned_pointer(entry.address, offset)) {
+        kaesu PointerResult { value: cptr(0), error: "misaligned native pointer field" };
+    }
+    kaku value = load_pointer(entry.address, uint64(offset));
+    moshi (pointer_offset(value, cptr(0)) < 0) {
+        kaesu PointerResult { value: cptr(0), error: "pointer is outside Darwin user space" };
+    }
+    kaesu PointerResult { value: value, error: "" };
+}
+
+koukai waza c_string_buffer(value: string) -> BufferResult {
+    kaku bytes = string.to_bytes(value);
+    kaku at = 0;
+    aida (at < len(bytes)) {
+        moshi (bytes[at] == uint8(0)) { kaesu buffer_error("C string contains an embedded NUL"); }
+        at = at + 1;
+    }
+    kaku allocated = alloc_zeroed(len(bytes) + 1);
+    kaku buffer = allocated.buffer;
+    moshi (buffer == mu) { kaesu allocated; }
+    kaku error = write(buffer, 0, bytes);
+    moshi (error != "") { free(buffer); kaesu buffer_error(error); }
+    kaesu allocated;
+}
+
+koukai waza read_utf8(buffer: Buffer, offset: int64, length: int64) -> StringResult {
+    kaku result = read(buffer, offset, length);
+    moshi (result.error != "") { kaesu StringResult { value: "", error: result.error }; }
+    kaku value = string.from_utf8(result.bytes);
+    moshi (value == mu) { kaesu StringResult { value: "", error: "native buffer contains invalid UTF-8" }; }
+    kaesu StringResult { value: value, error: "" };
+}
+
+koukai waza read_c_string(buffer: Buffer, offset: int64, limit: int64) -> StringResult {
+    kaku entry = live_buffer(buffer);
+    moshi (entry == mu) { kaesu StringResult { value: "", error: handle_error() }; }
+    kaku error = access_error(entry, offset, limit, iie);
+    moshi (error != "") { kaesu StringResult { value: "", error: error }; }
+    kaku at = 0;
+    aida (at < limit) {
+        moshi (load_byte(entry.address, uint64(offset + at)) == uint8(0)) {
+            kaesu read_utf8(buffer, offset, at);
+        }
+        at = at + 1;
+    }
+    kaesu StringResult { value: "", error: "C string has no NUL within its byte limit" };
+}

@@ -78,7 +78,8 @@ def main():
                  "loader-gc-run", "loader-verdict", "c-build", "c-run", "reject-missing-export",
                  "reject-runtime-body", "reject-cross-target", "reject-recursion", "reject-duplicate-symbol",
                  "reject-missing-export-seatbelt", "foreign-fixture", "foreign-build", "foreign-run",
-                 "foreign-gc-build", "foreign-gc-run", "foreign-codesign"):
+                 "foreign-gc-build", "foreign-gc-run", "foreign-codesign",
+                 "memory-build", "memory-run", "memory-gc-build", "memory-gc-run", "memory-openssl"):
         record(name, "NOT_RUN")
 
     try:
@@ -144,6 +145,19 @@ def main():
             run(f"foreign{suffix}-run", [program, foreign, libraries[0]], empty_path=True, contains="Darwin C FFI: ok")
         run("foreign-codesign", ["codesign", "--verify", "--strict", "--verbose=2", foreign, artifacts / "foreign"])
 
+        crypto = next((path for path in (
+            Path("/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib"),
+            Path("/opt/homebrew/opt/openssl/lib/libcrypto.dylib"),
+        ) if path.is_file()), None)
+        for suffix, flags in (("", []), ("-gc", ["--gc-stress"])):
+            program = artifacts / f"memory{suffix}"
+            run(f"memory{suffix}-build", [mio, "build", HERE / "memory.mio", *flags,
+                                           "--bunko-root", BUNKO, "-o", program], empty_path=True)
+            run(f"memory{suffix}-run", [program, foreign, *([crypto] if crypto else [])],
+                empty_path=True, contains="Darwin native memory: ok")
+        record("memory-openssl", "PASS" if crypto else "NOT_AVAILABLE",
+               path=str(crypto) if crypto else None)
+
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]
         run("reject-missing-export", [*build, HERE / "math.mio"], success=False, contains="--export")
@@ -165,7 +179,9 @@ def main():
         print(error, file=sys.stderr)
     finally:
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    return int(any(check["status"] != "PASS" for check in checks.values()) or "error" in report)
+    return int(any(check["status"] != "PASS" for name, check in checks.items()
+                   if not (name == "memory-openssl" and check["status"] == "NOT_AVAILABLE"))
+               or "error" in report)
 
 
 if __name__ == "__main__":

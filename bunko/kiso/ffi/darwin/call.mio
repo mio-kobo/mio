@@ -149,7 +149,10 @@ waza pack_argument(frame: cptr, argument: cabi.DarwinArgument, value: Value) -> 
     }
     // Narrow signed GP arguments are sign extended, unsigned arguments zero
     // extended. Stack arguments store only their natural width.
-    kaku at = uint64(offset);
+    pack_value(frame, uint64(offset), width, value);
+}
+
+waza pack_value(frame: cptr, at: uint64, width: int64, value: Value) -> unit {
     awase (value) {
         baai I8(x) { pack_integer(frame, at, width, uint64(int64(x))); }
         baai U8(x) { pack_integer(frame, at, width, uint64(int64(x))); }
@@ -176,7 +179,10 @@ waza unpack_result(frame: cptr, kind: int64) -> Value {
     moshi (kind == 105) { kaesu Value.F32(load_f32(frame, uint64(gp_bytes))); }
     moshi (kind == 106) { kaesu Value.F64(load_f64(frame, uint64(gp_bytes))); }
     moshi (kind == 107) { kaesu Value.Ptr(load_pointer(frame, uint64(0))); }
-    kaku bits = load_word(frame);
+    kaesu integer_value(load_word(frame), kind);
+}
+
+waza integer_value(bits: int64, kind: int64) -> Value {
     moshi (kind == 97) { kaesu Value.I8(int8(low_signed(bits, 256))); }
     moshi (kind == 98) { kaesu Value.U8(uint8(low_unsigned(bits, 256))); }
     moshi (kind == 99) { kaesu Value.I16(int16(low_signed(bits, 65536))); }
@@ -213,6 +219,6 @@ koukai waza invoke(function: Function, arguments: []Value) -> CallResult {
     }
     call_frame(entry.address, frame, uint64(entry.layout.stack_bytes));
     kaku value = unpack_result(frame, int64(codes[0]));
-    free(frame);
+    native_free(frame);
     kaesu CallResult { value: value, error: "" };
 }

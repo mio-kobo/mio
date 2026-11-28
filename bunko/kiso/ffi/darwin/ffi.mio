@@ -7,7 +7,7 @@ waza dlsym(image: cptr, name: cptr) -> cptr = c "dlsym";
 waza dlclose(image: cptr) -> int32 = c "dlclose";
 waza dlerror() -> cptr = c "dlerror";
 waza malloc(size: uint64) -> cptr = c "malloc";
-waza free(pointer: cptr) -> unit = c "free";
+waza native_free(pointer: cptr) -> unit = c "free";
 waza dladdr(address: cptr, info: cptr) -> int32 = c "dladdr";
 waza getsectiondata(image: cptr, segment: cptr, section: cptr, size: cptr) -> cptr = c "getsectiondata";
 waza load_pointer(pointer: cptr, offset: uint64) -> cptr = c "mio_ffi_load_pointer";
@@ -112,7 +112,7 @@ waza lookup(image: cptr, name: string) -> LookupResult {
     kaku problem = dlerror();
     kaku error = "";
     moshi (problem != cptr(0) || address == cptr(0)) { error = error_text(problem, "symbol has no address"); }
-    free(buffer);
+    native_free(buffer);
     kaesu LookupResult { address: address, error: error };
 }
 
@@ -121,7 +121,7 @@ koukai waza open(path: string) -> OpenResult {
     moshi (buffer == cptr(0)) { kaesu OpenResult { library: mu, error: "invalid or unallocatable library path" }; }
     kaku id = take_id();
     moshi (id == 0) {
-        free(buffer);
+        native_free(buffer);
         kaesu OpenResult { library: mu, error: "FFI ticket space exhausted" };
     }
     dlerror();
@@ -129,7 +129,7 @@ koukai waza open(path: string) -> OpenResult {
     kaku image = dlopen(buffer, int32(262));
     kaku error = "";
     moshi (image == cptr(0)) { error = error_text(dlerror(), "cannot open dynamic library"); }
-    free(buffer);
+    native_free(buffer);
     moshi (error != "") { kaesu OpenResult { library: mu, error: error }; }
     array.push(libraries, LibraryEntry { id: id, address: image, abi_checked: iie });
     kaesu OpenResult { library: Library { ticket: Ticket { id: id } }, error: "" };
@@ -150,7 +150,7 @@ waza prototype_code(prototype: Prototype) -> string {
 waza text_entry(address: cptr) -> bool {
     kaku info = malloc(uint64(32));
     moshi (info == cptr(0)) { kaesu iie; }
-    moshi (dladdr(address, info) == int32(0)) { free(info); kaesu iie; }
+    moshi (dladdr(address, info) == int32(0)) { native_free(info); kaesu iie; }
     // Dl_info's second pointer is the image header. Reuse the allocation for
     // getsectiondata's size_t output after fetching that pointer.
     kaku image = load_pointer(info, uint64(8));
@@ -164,9 +164,9 @@ waza text_entry(address: cptr) -> bool {
             valid = offset >= 0 && offset < load_word(info) && offset - (offset / 4) * 4 == 0;
         }
     }
-    free(section);
-    free(segment);
-    free(info);
+    native_free(section);
+    native_free(segment);
+    native_free(info);
     kaesu valid;
 }
 
