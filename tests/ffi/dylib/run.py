@@ -98,7 +98,9 @@ def main():
                  "dependencies-loader-path-build", "dependencies-loader-path-run", "dependencies-executable-path-build",
                  "dependencies-executable-path-run", "dependencies-sign", "dependencies-export-list",
                  "dependencies-commands", "dependencies-loads", "dependencies-imports", "dependencies-fixups",
-                 "dependencies-missing-leaf", "dependencies-undefined-symbol"):
+                 "dependencies-missing-leaf", "dependencies-undefined-symbol",
+                 "threaded-build", "threaded-run", "threaded-gc-build", "threaded-gc-run", "threaded-sign",
+                 "threaded-c-build", "threaded-c-run"):
         record(name, "NOT_RUN")
 
     try:
@@ -239,6 +241,20 @@ def main():
         run("dependencies-undefined-symbol",
             [mio, "build", "--kind=dylib", unresolved, "--export=get=mio_dep_missing", "--bunko-root", BUNKO,
              "-o", linked / "libmio_missing.dylib"], success=False, stderr_contains="missing_dependency_symbol")
+
+        for suffix, flags in (("", []), ("-gc", ["--gc-stress"])):
+            program = artifacts / f"threaded{suffix}"
+            run(f"threaded{suffix}-build", [mio, "build", HERE / "threaded.mio", *flags,
+                                            "--rpath", "@loader_path", "--bunko-root", BUNKO, "-o", program])
+            run(f"threaded{suffix}-run", [program, foreign, libraries[0]], empty_path=True,
+                contains="Darwin threaded FFI: ok")
+        run("threaded-sign", ["codesign", "--verify", "--strict", "--verbose=2",
+                              artifacts / "threaded", artifacts / "threaded-gc"])
+        threaded_c = artifacts / "threaded-oracle"
+        run("threaded-c-build", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                                 "-Wall", "-Wextra", "-Werror", HERE / "threaded_oracle.c",
+                                 libraries[0], libraries[3], "-Wl,-rpath,@loader_path", "-o", threaded_c])
+        run("threaded-c-run", [threaded_c], empty_path=True)
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]

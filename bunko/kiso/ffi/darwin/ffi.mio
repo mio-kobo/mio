@@ -1,5 +1,6 @@
 yobu "kiso/aot/cabi";
 yobu "kiso/array";
+yobu "kiso/math";
 yobu "kiso/string";
 
 waza dlopen(path: cptr, flags: int32) -> cptr = c "dlopen";
@@ -8,6 +9,8 @@ waza dlclose(image: cptr) -> int32 = c "dlclose";
 waza dlerror() -> cptr = c "dlerror";
 waza malloc(size: uint64) -> cptr = c "malloc";
 waza native_free(pointer: cptr) -> unit = c "free";
+waza native_lock(pointer: cptr) -> unit = c "os_unfair_lock_lock";
+waza native_unlock(pointer: cptr) -> unit = c "os_unfair_lock_unlock";
 waza dladdr(address: cptr, info: cptr) -> int32 = c "dladdr";
 waza getsectiondata(image: cptr, segment: cptr, section: cptr, size: cptr) -> cptr = c "getsectiondata";
 waza load_pointer(pointer: cptr, offset: uint64) -> cptr = c "mio_ffi_load_pointer";
@@ -40,7 +43,15 @@ koukai sentaku Prototype {
     BoolFromInt64;
 }
 
-kata LibraryEntry { id: int64; address: cptr; abi_checked: bool; }
+kata LibraryEntry {
+    id: int64;
+    address: cptr;
+    state: []int64;
+}
+teisu active_calls = 0;
+teisu close_in_progress = 1;
+teisu abi_is_checked = 2;
+
 kata FunctionEntry {
     id: int64;
     owner: int64;
@@ -51,6 +62,15 @@ kata FunctionEntry {
 kaku libraries: []LibraryEntry = [];
 kaku functions: []FunctionEntry = [];
 kaku next_id: int64 = 1;
+// os_unfair_lock uses one zero-initialized native word for its unlocked state.
+kaku registry_guard = allocate_zeroed(uint64(1), uint64(8));
+
+waza registry_lock() -> unit {
+    moshi (registry_guard == cptr(0)) { math.fail("cannot allocate Darwin FFI registry lock"); }
+    native_lock(registry_guard);
+}
+
+waza registry_unlock() -> unit { native_unlock(registry_guard); }
 
 waza take_id() -> int64 {
     moshi (next_id == 9223372036854775807) { kaesu 0; }
@@ -94,13 +114,32 @@ waza error_text(address: cptr, fallback: string) -> string {
     kaesu value;
 }
 
-waza library_slot(library: Library) -> int64 {
+waza library_slot(id: int64) -> int64 {
     kaku at = 0;
     aida (at < len(libraries)) {
-        moshi (libraries[at].id == library.ticket.id) { kaesu at; }
+        moshi (libraries[at].id == id) { kaesu at; }
         at = at + 1;
     }
     kaesu -1;
+}
+
+// Registry entries may move when another ticket closes. Pin by identity.
+waza pin_library(library: Library) -> LibraryEntry? {
+    registry_lock();
+    kaku slot = library_slot(library.ticket.id);
+    moshi (slot < 0 || libraries[slot].state[close_in_progress] != 0) { registry_unlock(); kaesu mu; }
+    kaku entry = libraries[slot];
+    entry.state[active_calls] = entry.state[active_calls] + 1;
+    registry_unlock();
+    kaesu entry;
+}
+
+waza unpin_library(id: int64) -> unit {
+    registry_lock();
+    kaku slot = library_slot(id);
+    kaku entry = libraries[slot];
+    entry.state[active_calls] = entry.state[active_calls] - 1;
+    registry_unlock();
 }
 
 kata LookupResult { address: cptr; error: string; }
@@ -119,7 +158,9 @@ waza lookup(image: cptr, name: string) -> LookupResult {
 koukai waza open(path: string) -> OpenResult {
     kaku buffer = c_string(path);
     moshi (buffer == cptr(0)) { kaesu OpenResult { library: mu, error: "invalid or unallocatable library path" }; }
+    registry_lock();
     kaku id = take_id();
+    registry_unlock();
     moshi (id == 0) {
         native_free(buffer);
         kaesu OpenResult { library: mu, error: "FFI ticket space exhausted" };
@@ -131,7 +172,9 @@ koukai waza open(path: string) -> OpenResult {
     moshi (image == cptr(0)) { error = error_text(dlerror(), "cannot open dynamic library"); }
     native_free(buffer);
     moshi (error != "") { kaesu OpenResult { library: mu, error: error }; }
-    array.push(libraries, LibraryEntry { id: id, address: image, abi_checked: iie });
+    registry_lock();
+    array.push(libraries, LibraryEntry { id: id, address: image, state: [0, 0, 0] });
+    registry_unlock();
     kaesu OpenResult { library: Library { ticket: Ticket { id: id } }, error: "" };
 }
 
@@ -170,9 +213,11 @@ waza text_entry(address: cptr) -> bool {
     kaesu valid;
 }
 
-waza validate_mio_abi(slot: int64) -> string {
-    kaku entry = libraries[slot];
-    moshi (entry.abi_checked) { kaesu ""; }
+waza validate_mio_abi(entry: LibraryEntry) -> string {
+    registry_lock();
+    kaku checked = entry.state[abi_is_checked] != 0;
+    registry_unlock();
+    moshi (checked) { kaesu ""; }
     kaku name = "mio_module_abi_version";
     kaku version = lookup(entry.address, name);
     kaku marker = lookup(entry.address, cabi.dylib_marker(name, "g", ""));
@@ -181,20 +226,14 @@ waza validate_mio_abi(slot: int64) -> string {
         kaesu "invalid Mio FFI ABI version export";
     }
     moshi (call_g(version.address) != 1) { kaesu "unsupported Mio FFI ABI version"; }
-    libraries[slot] = LibraryEntry { id: entry.id, address: entry.address, abi_checked: hai };
+    registry_lock();
+    entry.state[abi_is_checked] = 1;
+    registry_unlock();
     kaesu "";
 }
 
-waza bind_function(library: Library, name: string, signature: string, mio: bool) -> SymbolResult {
-    kaku slot = library_slot(library);
-    moshi (slot < 0) { kaesu SymbolResult { function: mu, error: "library is closed" }; }
-    moshi (mio && (!cabi.valid_symbol(name) || !string.has_prefix(name, "mio_"))) {
-        kaesu SymbolResult { function: mu, error: "invalid Mio FFI symbol" };
-    }
-    moshi (!mio && name != "main" && !cabi.valid_symbol(name)) {
-        kaesu SymbolResult { function: mu, error: "invalid C FFI symbol" };
-    }
-    kaku image = libraries[slot].address;
+waza resolve_function(entry: LibraryEntry, name: string, signature: string, mio: bool) -> SymbolResult {
+    kaku image = entry.address;
     kaku found = lookup(image, name);
     moshi (found.error != "") { kaesu SymbolResult { function: mu, error: found.error }; }
     moshi (!text_entry(found.address)) {
@@ -205,11 +244,9 @@ waza bind_function(library: Library, name: string, signature: string, mio: bool)
         moshi (marker.error != "" || marker.address != found.address) {
             kaesu SymbolResult { function: mu, error: "Mio FFI function signature mismatch" };
         }
-        kaku error = validate_mio_abi(slot);
+        kaku error = validate_mio_abi(entry);
         moshi (error != "") { kaesu SymbolResult { function: mu, error: error }; }
     }
-    kaku id = take_id();
-    moshi (id == 0) { kaesu SymbolResult { function: mu, error: "FFI ticket space exhausted" }; }
     kaku codes = string.to_bytes(signature);
     kaku parameters = array.with_capacity[int64](len(codes) - 1);
     kaku at = 1;
@@ -217,11 +254,29 @@ waza bind_function(library: Library, name: string, signature: string, mio: bool)
         array.push(parameters, int64(codes[at]));
         at = at + 1;
     }
+    kaku layout = cabi.darwin_layout(parameters);
+    registry_lock();
+    kaku id = take_id();
+    moshi (id == 0) { registry_unlock(); kaesu SymbolResult { function: mu, error: "FFI ticket space exhausted" }; }
     array.push(functions, FunctionEntry {
-        id: id, owner: library.ticket.id, address: found.address, signature: signature,
-        layout: cabi.darwin_layout(parameters)
+        id: id, owner: entry.id, address: found.address, signature: signature, layout: layout
     });
+    registry_unlock();
     kaesu SymbolResult { function: Function { ticket: Ticket { id: id } }, error: "" };
+}
+
+waza bind_function(library: Library, name: string, signature: string, mio: bool) -> SymbolResult {
+    moshi (mio && (!cabi.valid_symbol(name) || !string.has_prefix(name, "mio_"))) {
+        kaesu SymbolResult { function: mu, error: "invalid Mio FFI symbol" };
+    }
+    moshi (!mio && name != "main" && !cabi.valid_symbol(name)) {
+        kaesu SymbolResult { function: mu, error: "invalid C FFI symbol" };
+    }
+    kaku entry = pin_library(library);
+    moshi (entry == mu) { kaesu SymbolResult { function: mu, error: "library is closed or closing" }; }
+    kaku result = resolve_function(entry, name, signature, mio);
+    unpin_library(entry.id);
+    kaesu result;
 }
 
 koukai waza symbol(library: Library, name: string, prototype: Prototype) -> SymbolResult {
@@ -229,21 +284,39 @@ koukai waza symbol(library: Library, name: string, prototype: Prototype) -> Symb
 }
 
 koukai waza close(library: Library) -> string {
-    kaku slot = library_slot(library);
-    moshi (slot < 0) { kaesu "library is closed"; }
-    dlerror();
-    moshi (dlclose(libraries[slot].address) != int32(0)) {
-        kaesu error_text(dlerror(), "cannot close dynamic library");
+    registry_lock();
+    kaku slot = library_slot(library.ticket.id);
+    moshi (slot < 0) { registry_unlock(); kaesu "library is closed"; }
+    kaku entry = libraries[slot];
+    moshi (entry.state[close_in_progress] != 0 || entry.state[active_calls] != 0) {
+        registry_unlock();
+        kaesu "library is busy";
     }
+    entry.state[close_in_progress] = 1;
+    registry_unlock();
+
+    dlerror();
+    kaku error = "";
+    moshi (dlclose(entry.address) != int32(0)) {
+        error = error_text(dlerror(), "cannot close dynamic library");
+    }
+    registry_lock();
+    moshi (error != "") {
+        entry.state[close_in_progress] = 0;
+        registry_unlock();
+        kaesu error;
+    }
+    slot = library_slot(entry.id);
     libraries[slot] = libraries[len(libraries) - 1];
     array.truncate(libraries, len(libraries) - 1);
     kaku at = 0;
     aida (at < len(functions)) {
-        moshi (functions[at].owner == library.ticket.id) {
+        moshi (functions[at].owner == entry.id) {
             functions[at] = functions[len(functions) - 1];
             array.truncate(functions, len(functions) - 1);
         } sore { at = at + 1; }
     }
+    registry_unlock();
     kaesu "";
 }
 
@@ -256,60 +329,74 @@ waza function_slot(function: Function) -> int64 {
     kaesu -1;
 }
 
-waza function_entry(function: Function) -> FunctionEntry? {
+waza pin_function(function: Function, signature: string) -> FunctionEntry? {
+    registry_lock();
     kaku slot = function_slot(function);
-    moshi (slot < 0) { kaesu mu; }
-    kaesu functions[slot];
+    moshi (slot < 0) { registry_unlock(); kaesu mu; }
+    kaku entry = functions[slot];
+    moshi (signature != "" && entry.signature != signature) { registry_unlock(); kaesu mu; }
+    kaku owner = library_slot(entry.owner);
+    moshi (owner < 0 || libraries[owner].state[close_in_progress] != 0) { registry_unlock(); kaesu mu; }
+    kaku library = libraries[owner];
+    library.state[active_calls] = library.state[active_calls] + 1;
+    registry_unlock();
+    kaesu entry;
 }
 
 koukai waza release(function: Function) -> string {
+    registry_lock();
     kaku slot = function_slot(function);
-    moshi (slot < 0) { kaesu "function is released"; }
+    moshi (slot < 0) { registry_unlock(); kaesu "function is released"; }
     functions[slot] = functions[len(functions) - 1];
     array.truncate(functions, len(functions) - 1);
+    registry_unlock();
     kaesu "";
 }
 
-waza function_address(function: Function, prototype: Prototype) -> cptr {
-    kaku slot = function_slot(function);
-    moshi (slot >= 0 && functions[slot].signature == prototype_code(prototype)) {
-        kaesu functions[slot].address;
-    }
-    kaesu cptr(0);
-}
-
 koukai waza invoke_int64(function: Function) -> IntResult {
-    kaku address = function_address(function, Prototype.Int64());
-    moshi (address == cptr(0)) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
-    kaesu IntResult { value: call_g(address), error: "" };
+    kaku entry = pin_function(function, "g");
+    moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
+    kaku value = call_g(entry.address);
+    unpin_library(entry.owner);
+    kaesu IntResult { value: value, error: "" };
 }
 
 koukai waza invoke_int64_1(function: Function, a: int64) -> IntResult {
-    kaku address = function_address(function, Prototype.Int64FromInt64());
-    moshi (address == cptr(0)) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
-    kaesu IntResult { value: call_gg(address, a), error: "" };
+    kaku entry = pin_function(function, "gg");
+    moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
+    kaku value = call_gg(entry.address, a);
+    unpin_library(entry.owner);
+    kaesu IntResult { value: value, error: "" };
 }
 
 koukai waza invoke_int64_2(function: Function, a: int64, b: int64) -> IntResult {
-    kaku address = function_address(function, Prototype.Int64FromTwoInt64());
-    moshi (address == cptr(0)) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
-    kaesu IntResult { value: call_ggg(address, a, b), error: "" };
+    kaku entry = pin_function(function, "ggg");
+    moshi (entry == mu) { kaesu IntResult { value: 0, error: "invalid function or signature" }; }
+    kaku value = call_ggg(entry.address, a, b);
+    unpin_library(entry.owner);
+    kaesu IntResult { value: value, error: "" };
 }
 
 koukai waza invoke_float64(function: Function, a: float64) -> FloatResult {
-    kaku address = function_address(function, Prototype.Float64FromFloat64());
-    moshi (address == cptr(0)) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
-    kaesu FloatResult { value: call_jj(address, a), error: "" };
+    kaku entry = pin_function(function, "jj");
+    moshi (entry == mu) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
+    kaku value = call_jj(entry.address, a);
+    unpin_library(entry.owner);
+    kaesu FloatResult { value: value, error: "" };
 }
 
 koukai waza invoke_float64_from_ints(function: Function, a: int64, b: int64) -> FloatResult {
-    kaku address = function_address(function, Prototype.Float64FromTwoInt64());
-    moshi (address == cptr(0)) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
-    kaesu FloatResult { value: call_jgg(address, a, b), error: "" };
+    kaku entry = pin_function(function, "jgg");
+    moshi (entry == mu) { kaesu FloatResult { value: 0.0, error: "invalid function or signature" }; }
+    kaku value = call_jgg(entry.address, a, b);
+    unpin_library(entry.owner);
+    kaesu FloatResult { value: value, error: "" };
 }
 
 koukai waza invoke_bool(function: Function, a: int64) -> BoolResult {
-    kaku address = function_address(function, Prototype.BoolFromInt64());
-    moshi (address == cptr(0)) { kaesu BoolResult { value: iie, error: "invalid function or signature" }; }
-    kaesu BoolResult { value: call_lg(address, a), error: "" };
+    kaku entry = pin_function(function, "lg");
+    moshi (entry == mu) { kaesu BoolResult { value: iie, error: "invalid function or signature" }; }
+    kaku value = call_lg(entry.address, a);
+    unpin_library(entry.owner);
+    kaesu BoolResult { value: value, error: "" };
 }

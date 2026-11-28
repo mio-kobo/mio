@@ -543,12 +543,12 @@ koukai waza enum_read_tag(file: mochi.File, data: []uint8, at: int64) -> int64 {
             }
         }
         moshi (binding >= 0 && cursor == binding) {
-            moshi (cursor + 9 <= len(data) && (op == 20 || op == 24) && data[cursor + 3] == uint8(40) &&
-                (data[cursor + 6] == uint8(19) || data[cursor + 6] == uint8(23))) {
-                moshi (at == cursor + 3) {
-                    kaesu tag;
-                }
-                binding = cursor + 9;
+            kaku store = cursor + 6;
+            moshi (store < len(data) && data[store] == uint8(66)) { store = store + 2; }
+            moshi (store + 3 <= len(data) && (op == 20 || op == 24) && data[cursor + 3] == uint8(40) &&
+                (data[store] == uint8(19) || data[store] == uint8(23))) {
+                moshi (at == cursor + 3) { kaesu tag; }
+                binding = store + 3;
             } sore { binding = -1; }
         }
         cursor = cursor + width;
