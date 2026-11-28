@@ -1,0 +1,74 @@
+// Recycled thread stacks: a joined thread's stack mapping (with its mutator record, which holds the thread's allocation cache) is reused by the
+// next thread that starts. Two hundred rounds of three threads each allocate objects of every cached size class and verify them while collections
+// run; a recycled record that was not reset, a stack handed to two threads, or a stack freed while still in use shows up as a mismatch or a crash.
+yobu "kiso/thread";
+yobu "kiso/array";
+
+kata A { a: int64; }
+kata B { a: int64; b: int64; }
+kata C { a: int64; b: int64; c: int64; }
+kata D { a: int64; b: int64; c: int64; d: int64; }
+kata E { a: int64; b: int64; c: int64; d: int64; e: int64; }
+
+waza mix(seed: int64, i: int64, k: int64) -> int64 { kaesu (seed * 1000003 + i * 7919 + k * 131) - ((seed * 1000003 + i * 7919 + k * 131) / 1000000007) * 1000000007; }
+
+// deep recursion so the thread really uses (and dirties) its stack
+waza depth(n: int64) -> int64 { moshi (n == 0) { kaesu 1; } kaesu depth(n - 1) + 1; }
+
+waza worker(seed: int64) -> int64 {
+    kaku ring_a: []A = []; kaku ring_c: []C = []; kaku ring_e: []E = []; kaku ring_b: []B = []; kaku ring_d: []D = [];
+    kaku n = 0;
+    aida (n < 8) {
+        array.push(ring_a, A { a: 0 }); array.push(ring_b, B { a: 0, b: 0 }); array.push(ring_c, C { a: 0, b: 0, c: 0 });
+        array.push(ring_d, D { a: 0, b: 0, c: 0, d: 0 }); array.push(ring_e, E { a: 0, b: 0, c: 0, d: 0, e: 0 }); n = n + 1;
+    }
+    kaku sum = depth(300);
+    kaku bad = 0;
+    kaku i = 0;
+    aida (i < 4000) {
+        kaku slot = i - (i / 8) * 8;
+        kaku kind = i - (i / 5) * 5;
+        moshi (i >= 40) {
+            kaku old = i - 40;
+            moshi (kind == 0) { moshi (ring_a[slot].a != mix(seed, old, 1)) { bad = bad + 1; } sum = sum + ring_a[slot].a; }
+            moshi (kind == 1) { moshi (ring_b[slot].b != mix(seed, old, 2)) { bad = bad + 1; } sum = sum + ring_b[slot].b; }
+            moshi (kind == 2) { moshi (ring_c[slot].c != mix(seed, old, 3)) { bad = bad + 1; } sum = sum + ring_c[slot].c; }
+            moshi (kind == 3) { moshi (ring_d[slot].d != mix(seed, old, 4)) { bad = bad + 1; } sum = sum + ring_d[slot].d; }
+            moshi (kind == 4) { moshi (ring_e[slot].e != mix(seed, old, 5)) { bad = bad + 1; } sum = sum + ring_e[slot].e; }
+        }
+        moshi (kind == 0) { ring_a[slot] = A { a: mix(seed, i, 1) }; }
+        moshi (kind == 1) { ring_b[slot] = B { a: 1, b: mix(seed, i, 2) }; }
+        moshi (kind == 2) { ring_c[slot] = C { a: 1, b: 2, c: mix(seed, i, 3) }; }
+        moshi (kind == 3) { ring_d[slot] = D { a: 1, b: 2, c: 3, d: mix(seed, i, 4) }; }
+        moshi (kind == 4) { ring_e[slot] = E { a: 1, b: 2, c: 3, d: 4, e: mix(seed, i, 5) }; }
+        i = i + 1;
+    }
+    kaesu bad * 1000000000000 + sum - (sum / 1000000007) * 1000000007;
+}
+
+waza run() -> int64 {
+    kaku wrong = 0;
+    kaku round = 0;
+    aida (round < 200) {
+        kaku handles: []int64 = [];
+        kaku seeds: []int64 = [];
+        kaku t = 0;
+        aida (t < 3) {
+            kaku seed = round * 3 + t + 1;
+            array.push(seeds, seed);
+            array.push(handles, thread.start(waza () -> int64 { kaesu worker(seed); }));
+            t = t + 1;
+        }
+        t = 0;
+        aida (t < 3) {
+            kaku got = thread.join(handles[t]);
+            moshi (got != worker(seeds[t])) { wrong = wrong + 1; }
+            t = t + 1;
+        }
+        round = round + 1;
+    }
+    chant(wrong);
+    chant(round);
+    kaesu 0;
+}
+run();

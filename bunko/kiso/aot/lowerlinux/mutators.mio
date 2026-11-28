@@ -20,7 +20,7 @@ yobu "kiso/array";
 //   * 回收：首个在轮询中发现分配量超过阈值（或 stop 标志已置位）的线程通过 lock cmpxchg 抢占 stop 标志，
 //     等待其余已注册 Mutator 全部离开运行态后，标记全局变量、各 Mutator 发布的帧链及入口闭包，
 //     随后清扫（sweep）、清空每线程分配缓存、清除 stop 标志并唤醒所有停靠线程（futex）。
-//   * 线程退出时在锁保护下从链表摘除记录；joiner 在内核清零 tid 字后 munmap 其栈映射。
+//   * 线程退出时在锁保护下从链表摘除记录；joiner 等待内核清零 tid，再回收或解除栈映射。
 // rt.blk_enter 与 rt.blk_leave 在 socket/reactor 系统调用期间发布并保留 rec_pin0/rec_pin1。
 // 文件、进程等待等其他阻塞系统调用尚未接入 Safepoint 协议。
 
@@ -37,6 +37,13 @@ koukai teisu mut_slab_end = 136;
 // Set by the allocator (under the heap lock) when the allocation volume reaches the threshold, cleared when the collector resumes the world: a
 // poll reads this word instead of the volume and threshold words, which every allocation writes.
 koukai teisu mut_want = 144;
+// Pool of the stack mappings of joined threads (a joined thread's mapping, guard page included, is kept for the next start instead of being unmapped
+// and mapped again). Both words are protected by the heap lock; the pool is a list of the dead mutator records linked through record word 128 (the
+// free bytes above the 128-byte record), and holds at most stack_pool_max mappings.
+koukai teisu mut_stackpool = 152;
+koukai teisu mut_stackcount = 160;
+koukai teisu rec_poolnext = 128;
+koukai teisu stack_pool_max = 64;
 koukai teisu thread_slots = 4096;
 koukai teisu mut_main_record = 256;      // offset from gc_state(): the main thread's record
 
@@ -637,6 +644,47 @@ waza emit_slot_routines(code: x86_64.Assembler) -> unit {
     x86_64.ret(code);
 }
 
+// rt.stack_pool_take -> rax = the record of a pooled stack mapping (removed from the pool), or 0. Clobbers rcx, rdx.
+// rt.stack_pool_put: rdi = the dead record of a joined thread -> rax = 1 when the mapping was pooled, 0 when the pool is full (the caller unmaps).
+waza emit_stack_pool(code: x86_64.Assembler) -> unit {
+    x86_64.label(code, "rt.stack_pool_take");
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_stackpool);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.stack_pool_take.release");
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rax, rec_poolnext);
+    x86_64.mov_store(code, x86_64.rcx, mut_stackpool, x86_64.rdx);
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stackcount);
+    x86_64.sub_ri(code, x86_64.rdx, 1);
+    x86_64.mov_store(code, x86_64.rcx, mut_stackcount, x86_64.rdx);
+    x86_64.label(code, "rt.stack_pool_take.release");
+    x86_64.push_r(code, x86_64.rax);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.pop_r(code, x86_64.rax);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.stack_pool_put");
+    x86_64.push_r(code, x86_64.rdi);
+    x86_64.call(code, "rt.mut_lock_acquire");
+    x86_64.pop_r(code, x86_64.rdi);
+    x86_64.mov_ri(code, x86_64.rcx, mut_state_address());
+    x86_64.mov_load(code, x86_64.rdx, x86_64.rcx, mut_stackcount);
+    x86_64.cmp_ri(code, x86_64.rdx, stack_pool_max);
+    x86_64.jcc(code, x86_64.cc_ae, "rt.stack_pool_put.full");
+    x86_64.mov_load(code, x86_64.rax, x86_64.rcx, mut_stackpool);
+    x86_64.mov_store(code, x86_64.rdi, rec_poolnext, x86_64.rax);
+    x86_64.mov_store(code, x86_64.rcx, mut_stackpool, x86_64.rdi);
+    x86_64.add_ri(code, x86_64.rdx, 1);
+    x86_64.mov_store(code, x86_64.rcx, mut_stackcount, x86_64.rdx);
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.mov_ri(code, x86_64.rax, 1);
+    x86_64.ret(code);
+    x86_64.label(code, "rt.stack_pool_put.full");
+    x86_64.call(code, "rt.mut_lock_release");
+    x86_64.mov_ri(code, x86_64.rax, 0);
+    x86_64.ret(code);
+}
+
 // rt.thread_start: rdi = closure (0 parameters, returns int64). Returns a handle (positive), or a negative errno: -11 no free slot,
 // -12 out of memory, or the error of mmap / clone. Nothing is left registered or mapped when it fails.
 waza emit_thread_start(code: x86_64.Assembler) -> unit {
@@ -649,6 +697,12 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.test_rr(code, x86_64.rax, x86_64.rax);
     x86_64.jcc(code, x86_64.cc_l, "rt.thread_start.return");
     x86_64.mov_rr(code, x86_64.r14, x86_64.rax);
+    x86_64.call(code, "rt.stack_pool_take");             // a recycled mapping (its guard page is still in place), or 0
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_e, "rt.thread_start.fresh");
+    x86_64.mov_load(code, x86_64.r13, x86_64.rax, rec_base);
+    x86_64.jmp(code, "rt.thread_start.have_stack");
+    x86_64.label(code, "rt.thread_start.fresh");
     x86_64.mov_ri(code, x86_64.rdi, 0);
     x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
     x86_64.mov_ri(code, x86_64.rdx, 3);
@@ -666,9 +720,19 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.mov_ri(code, x86_64.rdx, 0);
     x86_64.mov_eax_imm(code, 10);                        // mprotect(PROT_NONE) on the lowest page: the stack guard
     x86_64.syscall(code);
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_l, "rt.thread_start.guard_failed");
+    x86_64.label(code, "rt.thread_start.have_stack");
     x86_64.lea(code, x86_64.r8, x86_64.r13, thread_stack_bytes - 256);
     x86_64.mov_ri(code, x86_64.rcx, -16);
     x86_64.and_rr(code, x86_64.r8, x86_64.rcx);
+    // Reset the recycled record, including the allocation cache and blocking GC pins.
+    x86_64.mov_ri(code, x86_64.rcx, 0);
+    kaku record_offset = 0;
+    aida (record_offset <= rec_pin1) {
+        x86_64.mov_store(code, x86_64.r8, record_offset, x86_64.rcx);
+        record_offset = record_offset + 8;
+    }
     x86_64.mov_store(code, x86_64.r8, rec_self, x86_64.r8);
     x86_64.mov_store(code, x86_64.r8, rec_entry, x86_64.r12);
     x86_64.mov_store(code, x86_64.r8, rec_base, x86_64.r13);
@@ -710,6 +774,10 @@ waza emit_thread_start(code: x86_64.Assembler) -> unit {
     x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
     x86_64.mov_rr(code, x86_64.rdi, x86_64.r8);
     x86_64.call(code, "rt.mut_unlink");
+    x86_64.jmp(code, "rt.thread_start.unmap");
+    x86_64.label(code, "rt.thread_start.guard_failed");
+    x86_64.mov_rr(code, x86_64.r12, x86_64.rax);
+    x86_64.label(code, "rt.thread_start.unmap");
     x86_64.mov_rr(code, x86_64.rdi, x86_64.r13);
     x86_64.mov_ri(code, x86_64.rsi, thread_stack_bytes);
     x86_64.mov_eax_imm(code, 11);                        // munmap
@@ -833,10 +901,15 @@ waza emit_thread_join(code: x86_64.Assembler) -> unit {
     x86_64.call(code, "rt.gc.park");
     x86_64.label(code, "rt.thread_join.ready");
     x86_64.mov_load(code, x86_64.r13, x86_64.r12, rec_result);
+    x86_64.mov_rr(code, x86_64.rdi, x86_64.r12);
+    x86_64.call(code, "rt.stack_pool_put");              // keep the mapping for the next start (the record lives in it) ...
+    x86_64.test_rr(code, x86_64.rax, x86_64.rax);
+    x86_64.jcc(code, x86_64.cc_ne, "rt.thread_join.pooled");
     x86_64.mov_load(code, x86_64.rdi, x86_64.r12, rec_base);
     x86_64.mov_load(code, x86_64.rsi, x86_64.r12, rec_size);
-    x86_64.mov_eax_imm(code, 11);                        // munmap the stack (the record lives in it)
+    x86_64.mov_eax_imm(code, 11);                        // ... unless the pool is full: munmap
     x86_64.syscall(code);
+    x86_64.label(code, "rt.thread_join.pooled");
     x86_64.mov_rr(code, x86_64.rdi, x86_64.r14);
     x86_64.call(code, "rt.mut_slot_release");            // the handle is dead from here on: a second join is detected
     fs_self(code, x86_64.rax);
@@ -1000,6 +1073,7 @@ koukai waza emit_mutator_support(code: x86_64.Assembler) -> unit {
     emit_chain_scan(code);
     emit_unlink(code);
     emit_slot_routines(code);
+    emit_stack_pool(code);
     emit_thread_start(code);
     emit_thread_join(code);
     emit_word_natives(code);

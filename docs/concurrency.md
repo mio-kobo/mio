@@ -502,3 +502,21 @@ wake-up) are unchanged and remain the next candidates; allocations above 56 byte
 `tests/threads/alloc_cache.mio` (five threads, every cached size class, rings of live objects verified after collections; a build that forgets to empty
 the caches after a sweep hangs or corrupts it, which was checked by mutation).
 
+### Efficiency: thread start and join on Linux x86-64
+
+Starting and joining a thread cost about 32 microseconds. Each start mapped a fresh 1 MiB stack (mmap), protected its guard page (mprotect) and cloned
+the thread; each join unmapped the stack (munmap, which also has to shoot down the other cores' TLB entries of the shared address space).
+
+A joined thread's stack mapping, guard page included, is now kept in a pool of at most 64 mappings and the next start reuses one instead of mapping a
+new one (`rt.stack_pool_take` / `rt.stack_pool_put`, protected by the heap lock; a full pool unmaps as before). The mutator record lives in the stack
+mapping and holds the thread's allocation cache, so a recycled record is reset to zero before the new thread starts, exactly like a fresh mapping.
+
+| benchmark (ms, median of 3, 8 hardware threads) | before | after |
+|---|---|---|
+| 20000 threads started and joined one after the other | 650 | 365 |
+| 200 rounds of 32 threads started together and joined | 135 | 60 |
+
+Regression test: `tests/threads/stack_reuse.mio` (200 rounds of three threads that recurse, allocate every cached size class and verify the objects
+while collections run, on stacks that were used by earlier threads). A build that does not reset the recycled record faults on it, which was checked
+by mutation. Not claimed: one machine's numbers; the remaining cost is the clone itself and the kernel's thread teardown.
+
