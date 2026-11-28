@@ -84,11 +84,12 @@ class ArtifactRerunTests(unittest.TestCase):
         self.assertEqual((self.destination / "mio-B").read_text(encoding="utf-8"), "the successful producer")
         self.assertEqual(len(list(self.destination.iterdir())), 1)
         jobs = load("distribution-pr.yml")["jobs"]
-        self.assertTrue(any(
-            step.get("uses") == "./.github/actions/download-run-artifact"
-            and step["with"]["artifact"] == "distribution-compiler-${{ matrix.target }}"
-            for step in jobs["candidates"]["steps"]
-        ))
+        for job_name, target in (("candidate-darwin", "darwin-arm64"), ("candidate-windows", "windows-amd64")):
+            self.assertTrue(any(
+                step.get("uses") == "./.github/actions/download-run-artifact"
+                and step["with"]["artifact"] == f"distribution-compiler-{target}"
+                for step in jobs[job_name]["steps"]
+            ))
 
     def test_summary_uses_latest_numeric_attempt_and_keeps_reused_reports(self):
         self.artifact("native-report-linux-amd64-125-2", "report.json", "old")
