@@ -1,0 +1,84 @@
+yobu "kiso/aot/cabi";
+yobu "kiso/array";
+
+koukai kata CLayout { size: int64; alignment: int64; offsets: []int64; }
+koukai kata LayoutResult { layout: CLayout?; error: string; }
+
+waza bad_layout(error: string) -> LayoutResult { kaesu LayoutResult { layout: mu, error: error }; }
+
+waza layout_result(size: int64, alignment: int64, offsets: []int64) -> LayoutResult {
+    kaesu LayoutResult { layout: CLayout { size: size, alignment: alignment, offsets: offsets }, error: "" };
+}
+
+waza aligned_size(value: int64, alignment: int64) -> int64 {
+    kaesu ((value + alignment - 1) / alignment) * alignment;
+}
+
+waza valid_layout(layout: CLayout) -> bool {
+    kaku alignment = layout.alignment;
+    kaesu layout.size > 0 && layout.size <= max_buffer_bytes &&
+        (alignment == 1 || alignment == 2 || alignment == 4 || alignment == 8) &&
+        aligned_size(layout.size, alignment) == layout.size;
+}
+
+koukai waza scalar_layout(kind: Scalar) -> LayoutResult {
+    kaku code = scalar_code(kind);
+    moshi (code == 118) { kaesu bad_layout("void has no native storage layout"); }
+    kaku size = cabi.darwin_scalar_size(code);
+    kaesu layout_result(size, size, []);
+}
+
+koukai waza array_layout(element: CLayout, count: int64) -> LayoutResult {
+    moshi (!valid_layout(element)) { kaesu bad_layout("invalid array element layout"); }
+    moshi (count <= 0 || count > max_buffer_bytes / element.size) {
+        kaesu bad_layout("native array size is out of range");
+    }
+    kaesu layout_result(element.size * count, element.alignment, []);
+}
+
+waza field_layout(fields: []CLayout, union: bool) -> LayoutResult {
+    moshi (len(fields) == 0) { kaesu bad_layout("native struct or union requires a field"); }
+    kaku offsets = array.with_capacity[int64](len(fields));
+    kaku size = 0;
+    kaku alignment = 1;
+    kaku index = 0;
+    aida (index < len(fields)) {
+        kaku field = fields[index];
+        moshi (!valid_layout(field)) { kaesu bad_layout("invalid C field layout"); }
+        moshi (field.alignment > alignment) { alignment = field.alignment; }
+        moshi (union) {
+            array.push(offsets, 0);
+            moshi (field.size > size) { size = field.size; }
+        } sore {
+            kaku offset = aligned_size(size, field.alignment);
+            moshi (offset > max_buffer_bytes - field.size) { kaesu bad_layout("native structure size is out of range"); }
+            array.push(offsets, offset);
+            size = offset + field.size;
+        }
+        index = index + 1;
+    }
+    size = aligned_size(size, alignment);
+    moshi (size > max_buffer_bytes) { kaesu bad_layout("native aggregate size is out of range"); }
+    kaesu layout_result(size, alignment, offsets);
+}
+
+koukai waza struct_layout(fields: []CLayout) -> LayoutResult { kaesu field_layout(fields, iie); }
+
+koukai waza union_layout(fields: []CLayout) -> LayoutResult { kaesu field_layout(fields, hai); }
+
+koukai waza field_offset(layout: CLayout, index: int64) -> IntResult {
+    moshi (!valid_layout(layout) || index < 0 || index >= len(layout.offsets)) {
+        kaesu IntResult { value: 0, error: "native aggregate field is out of range" };
+    }
+    kaku offset = layout.offsets[index];
+    moshi (offset < 0 || offset >= layout.size) {
+        kaesu IntResult { value: 0, error: "invalid C field offset" };
+    }
+    kaesu IntResult { value: offset, error: "" };
+}
+
+koukai waza alloc_aggregate(layout: CLayout) -> BufferResult {
+    moshi (!valid_layout(layout)) { kaesu buffer_error("invalid native aggregate layout"); }
+    // malloc-family scalar alignment covers all layouts supported above.
+    kaesu alloc_zeroed(layout.size);
+}
