@@ -9,6 +9,7 @@ import platform
 import struct
 import subprocess
 import sys
+import time
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -44,6 +45,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mio", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--embedded-bunko", action="store_true",
+                        help="let the Full CLI select embedded Bunko instead of passing an external tree")
     args = parser.parse_args()
     mio = args.mio.resolve()
     output = args.output.resolve()
@@ -56,6 +59,7 @@ def main():
         "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "host": f"{platform.system()} {platform.machine()}",
         "mio_sha256": hashlib.sha256(mio.read_bytes()).hexdigest(),
+        "bunko": "embedded" if args.embedded_bunko else "external",
         "checks": {}, "libraries": {},
     }
     checks = report["checks"]
@@ -65,12 +69,17 @@ def main():
 
     def run(name, argv, *, empty_path=False, success=True, contains=None, stderr_contains=None):
         argv = list(map(str, argv))
+        if args.embedded_bunko and "--bunko-root" in argv:
+            at = argv.index("--bunko-root")
+            del argv[at:at + 2]
         env = dict(os.environ, PATH="") if empty_path else None
+        started = time.perf_counter_ns()
         try:
             result = subprocess.run(argv, cwd=ROOT, env=env, capture_output=True, timeout=180)
         except (OSError, subprocess.TimeoutExpired) as error:
             record(name, "FAIL", command=argv, error=str(error))
             raise
+        duration_ns = time.perf_counter_ns() - started
         (logs / f"{name}.stdout").write_bytes(result.stdout)
         (logs / f"{name}.stderr").write_bytes(result.stderr)
         valid = (result.returncode == 0) == success
@@ -78,7 +87,7 @@ def main():
             valid &= contains.encode() in result.stdout + result.stderr
         if stderr_contains is not None:
             valid &= stderr_contains.encode() in result.stderr
-        record(name, "PASS" if valid else "FAIL", command=argv, exit_code=result.returncode)
+        record(name, "PASS" if valid else "FAIL", command=argv, exit_code=result.returncode, duration_ns=duration_ns)
         if not valid:
             raise RuntimeError(f"{name} failed, see {logs}")
         return result.stdout.decode()
@@ -102,7 +111,8 @@ def main():
                  "threaded-build", "threaded-run", "threaded-gc-build", "threaded-gc-run", "threaded-sign",
                  "threaded-c-build", "threaded-c-run", "variadic-build", "variadic-run",
                  "variadic-gc-build", "variadic-gc-run", "aggregate-fixture", "aggregate-build",
-                 "aggregate-run", "aggregate-gc-build", "aggregate-gc-run"):
+                 "aggregate-run", "aggregate-gc-build", "aggregate-gc-run",
+                 "hardened-build", "hardened-sign", "hardened-verify", "hardened-load"):
         record(name, "NOT_RUN")
 
     try:
@@ -273,6 +283,14 @@ def main():
                                              "--bunko-root", BUNKO, "-o", program], empty_path=True)
             run(f"aggregate{suffix}-run", [program, aggregate], empty_path=True,
                 contains="Darwin aggregate layout: ok")
+
+        hardened = artifacts / "hardened-host"
+        run("hardened-build", ["xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=11.0",
+                                "-Wall", "-Wextra", "-Werror", HERE / "hardened.c", "-o", hardened])
+        # Require library validation explicitly on the ad-hoc signed host.
+        run("hardened-sign", ["codesign", "--force", "--sign", "-", "--options", "runtime,library", hardened])
+        run("hardened-verify", ["codesign", "--verify", "--strict", "--verbose=2", hardened])
+        run("hardened-load", [hardened, libraries[0]], empty_path=True, contains="Darwin library validation: ok")
 
         invalid = artifacts / "libinvalid.dylib"
         build = [mio, "build", "--kind=dylib", "--bunko-root", BUNKO, "-o", invalid]

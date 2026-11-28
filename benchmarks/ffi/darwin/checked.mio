@@ -1,0 +1,141 @@
+yobu "kiso/array";
+yobu "kiso/ffi/darwin";
+yobu "kiso/os";
+
+waza clock_nanoseconds(clock: int32) -> uint64 = c "clock_gettime_nsec_np";
+waza now() -> int64 { kaesu int64(clock_nanoseconds(int32(8))); }
+
+waza require(ok: bool, detail: string) -> unit {
+    moshi (!ok) { chant(detail); os.exit(1); }
+}
+
+waza open(path: string) -> darwin.Library {
+    kaku opened = darwin.open(path);
+    kaku library = opened.library;
+    moshi (library != mu) { kaesu library; }
+    chant(opened.error);
+    os.exit(1);
+    kaesu open(path);
+}
+
+waza bound(result: darwin.SymbolResult) -> darwin.Function {
+    kaku function = result.function;
+    moshi (function != mu) { kaesu function; }
+    chant(result.error);
+    os.exit(1);
+    kaesu bound(result);
+}
+
+waza owned(result: darwin.BufferResult) -> darwin.Buffer {
+    kaku buffer = result.buffer;
+    moshi (buffer != mu) { kaesu buffer; }
+    chant(result.error);
+    os.exit(1);
+    kaesu owned(result);
+}
+
+waza integer(result: darwin.CallResult) -> int64 {
+    kaku value = result.value;
+    moshi (value == mu) { require(iie, result.error); kaesu 0; }
+    awase (value) {
+        baai I64(x) { kaesu x; }
+        baai Void { }
+        baai Bool(x) { }
+        baai I8(x) { }
+        baai U8(x) { }
+        baai I16(x) { }
+        baai U16(x) { }
+        baai I32(x) { }
+        baai U32(x) { }
+        baai U64(x) { }
+        baai F32(x) { }
+        baai F64(x) { }
+        baai Ptr(x) { }
+    }
+    require(iie, "unexpected benchmark result");
+    kaesu 0;
+}
+
+waza observation(name: string, start: int64) -> unit {
+    kaku elapsed = now() - start;
+    chant(name);
+    chant(elapsed);
+}
+
+kaku args = os.arguments();
+require(len(args) == 2, "expected a benchmark library path");
+kaku start = now();
+kaku library = open(args[1]);
+observation("first_load", start);
+
+kaku warm: []darwin.Library = [];
+kaku at = 0;
+start = now();
+aida (at < 256) { array.push(warm, open(args[1])); at = at + 1; }
+observation("warm_open_256", start);
+at = 0;
+start = now();
+aida (at < len(warm)) { require(darwin.close(warm[at]) == "", "close redundant reference"); at = at + 1; }
+observation("warm_close_256", start);
+
+kaku proto = darwin.Prototype.Int64FromTwoInt64();
+kaku bindings: []darwin.Function = [];
+at = 0;
+start = now();
+aida (at < 256) {
+    array.push(bindings, bound(darwin.symbol(library, "mio_math_add", proto)));
+    at = at + 1;
+}
+observation("symbol_lookup_256", start);
+kaku legacy = bindings[0];
+start = now();
+kaku first = darwin.invoke_int64_2(legacy, 20, 22);
+observation("first_call", start);
+require(first.error == "" && first.value == 42, "first checked call");
+
+kaku kind = darwin.Scalar.I64();
+kaku general = bound(darwin.bind_mio(library, "mio_math_add", darwin.CPrototype {
+    result: kind, parameters: [kind, kind]
+}));
+kaku values = [darwin.Value.I64(20), darwin.Value.I64(22)];
+kaku sum = 0;
+at = 0;
+start = now();
+aida (at < 10000) { sum = sum + darwin.invoke_int64_2(legacy, 20, 22).value; at = at + 1; }
+observation("legacy_call_10000", start);
+require(sum == 420000, "legacy sum");
+
+sum = 0;
+at = 0;
+start = now();
+aida (at < 10000) { sum = sum + integer(darwin.invoke(general, values)); at = at + 1; }
+observation("scalar_call_10000", start);
+require(sum == 420000, "general scalar sum");
+start = now();
+require(darwin.close(library) == "", "close benchmark library");
+observation("final_close", start);
+
+start = now();
+at = 0;
+aida (at < 1024) {
+    kaku buffer = owned(darwin.alloc(4096));
+    require(darwin.free(buffer) == "", "free benchmark buffer");
+    at = at + 1;
+}
+observation("allocate_free_4096x1024", start);
+kaku source = owned(darwin.alloc_zeroed(1048576));
+kaku target = owned(darwin.alloc(1048576));
+start = now();
+at = 0;
+aida (at < 128) {
+    require(darwin.copy(target, 0, source, 0, 1048576) == "", "native copy");
+    at = at + 1;
+}
+observation("native_copy_1mibx128", start);
+kaku input = array.make[uint8](65536, uint8(77));
+start = now();
+require(darwin.write(source, 0, input) == "", "write managed input");
+kaku result = darwin.read(source, 0, len(input));
+observation("managed_round_trip_64kib", start);
+require(result.error == "" && result.bytes[65535] == uint8(77), "read native output");
+require(darwin.free(source) == "" && darwin.free(target) == "", "free benchmark roots");
